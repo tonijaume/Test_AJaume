@@ -1,0 +1,858 @@
+OBJECT Report 7009725 Venta Excursiones x Hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=18/04/15;
+    Time=[ 9:10:06];
+    Modified=Yes;
+    Version List=AIC2009,GOC-OC-12033;
+  }
+  PROPERTIES
+  {
+    LeftMargin=1000;
+    OnInitReport=BEGIN
+                   rParPer.FINDFIRST;
+                   rPar.FINDFIRST;
+                   rEmp.FINDFIRST;
+                   wMostrarDetalle := TRUE;
+                 END;
+
+    Orientation=Landscape;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7010162;
+        DataItemTableView=WHERE(Anulada=CONST(No));
+        MaxIteration=1;
+        DataItemVarName=Filtros;
+        OnPreDataItem=VAR
+                        lwCnt@1100253000 : Integer;
+                        lrRes@1100253001 : Record 7010162;
+                      BEGIN
+                        IF (wFiltroFechas[1]=0D) OR (wFiltroFechas[2]=0D) THEN
+                          ERROR(Text001);
+
+                        IF (wFiltroFechas[1] > wFiltroFechas[2]) THEN
+                          ERROR(Text002);
+
+                        // Fechas Periodo Anterior
+                        wFechasAnt[1] := CALCDATE('<-1Y>', wFiltroFechas[1]);
+                        wFechasAnt[2] := CALCDATE('<-1Y>', wFiltroFechas[2]);
+
+                        // 1 Periodo Actual. 2 Periodo Anterior
+                        FOR lwCnt := 1 TO 2 DO BEGIN
+                          CLEAR(lrRes);
+                          lrRes.COPY(Filtros);
+                          CASE lwCnt OF
+                            1:
+                            BEGIN
+                              IF wTipoFechas = wTipoFechas::Servicio THEN
+                                lrRes.SETRANGE("Fecha Excursion", wFiltroFechas[1], wFiltroFechas[2])
+                              ELSE
+                                lrRes.SETRANGE("Fecha Venta", wFiltroFechas[1], wFiltroFechas[2]);
+                            END;
+                            2:
+                            BEGIN
+                              IF wTipoFechas = wTipoFechas::Servicio THEN
+                                lrRes.SETRANGE("Fecha Excursion", wFechasAnt[1], wFechasAnt[2])
+                              ELSE
+                                lrRes.SETRANGE("Fecha Venta", wFechasAnt[1], wFechasAnt[2]);
+                            END;
+                          END;
+
+                          //+$003 <
+                          IF lrRes.GETFILTER(Producto) = '' THEN
+                            lrRes.SETFILTER(Producto, '<>%1', '');
+                          IF lrRes.GETFILTER(TourOperador) = '' THEN
+                            lrRes.SETFILTER(TourOperador, '<>%1', '');
+                          IF lrRes.GETFILTER("Guia Venta") = '' THEN
+                            lrRes.SETFILTER("Guia Venta", '<>%1', '');
+                          //+$003 >
+                          IF lrRes.FINDSET THEN BEGIN
+                            wVent.OPEN(STRSUBSTNO(Text003, lwCnt) + ' @1@@@@@@@@@@');
+                            wTotal := lrRes.COUNT;
+                            CLEAR(wCont);
+                            REPEAT
+                              IF ControlSuplemento(lrRes) THEN //+$006
+                              BEGIN
+                                CASE lwCnt OF
+                                  1: SetTemp(rTemp1, lrRes);
+                                  2: SetTemp(rTemp2, lrRes);
+                                END;
+                              END;
+                              wCont +=1;
+                              IF (wCont MOD 10 =0) THEN
+                                wVent.UPDATE(1, ROUND(wCont / wTotal * 10000, 1));
+                            UNTIL lrRes.NEXT=0;
+                            wVent.CLOSE;
+                          END;
+                        END;
+
+                        // Linea de Total General
+                        CLEAR(rTemp);
+                        rTemp.Delegacion := 'ZZZZZZZZZZ'; // Para que aparezca en ultimo lugar
+                        rTemp."N§ Periodo"   := 4;
+                        rTemp.INSERT;
+                      END;
+
+        ReqFilterFields=Hotel Cliente,Zona Hotel,Producto,Guia Venta;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(1..));
+        DataItemVarName=Int;
+        OnPreDataItem=BEGIN
+
+                        CLEAR(wTotalPersonasE); // Total de personas entradas
+                        CLEAR(wPersonasE); // Personas Entradas
+
+                        CLEAR(rTemp);
+                        rTemp.SETCURRENTKEY(Delegacion,"Guia Venta",Producto,"Fecha Excursion");
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lwEnc@1100253000 : Boolean;
+                           lwPer@1100253001 : Integer;
+                         BEGIN
+
+                           IF Number = 1 THEN
+                             lwEnc := rTemp.FINDSET
+                           ELSE
+                             lwEnc := rTemp.NEXT <> 0;
+
+                           CLEAR(wExcVend);   // Excursiones Vendidas
+                           CLEAR(wProEntradas); // % Sobre Entradas
+                           CLEAR(wVentas);    // Ventas Excursiones
+                           CLEAR(wProVentas); // Ventas per capita
+                           CLEAR(wProVentasEntradas); // Per capita llegadas
+
+                           lwPer             :=  rTemp."N§ Periodo";
+                           IF lwPer = 1 THEN BEGIN // Total por Hotel
+                             wPersonasE[1] := SumarPersEntrt(rTemp,1);
+                             wPersonasE[2] := SumarPersEntrt(rTemp,2);
+                             wTotalPersonasE[1] += wPersonasE[1];
+                             wTotalPersonasE[2] += wPersonasE[2];
+                           END;
+                           IF lwPer = 4 THEN BEGIN // Total General
+                             wPersonasE[1] := wTotalPersonasE[1];
+                             wPersonasE[2] := wTotalPersonasE[2];
+                           END;
+
+                           InsertaImportes(rTemp1, rTemp, 1);
+                           InsertaImportes(rTemp2, rTemp, 2);
+
+                           CASE lwPer OF
+                             1: wRotulo :=  STRSUBSTNO('%1 - %2', rTemp."Hotel Cliente",  cNom.nom_hotel(rTemp."Hotel Cliente"));
+                             2: wRotulo :=  STRSUBSTNO('%1 - %2', rTemp."Guia Venta",  cNom.nom_Representante(rTemp."Guia Venta"));
+                             3: wRotulo :=  STRSUBSTNO('%1 - %2', rTemp.Producto,  cNom.nom_producto(rTemp.Producto));
+                             4: wRotulo :=  Text005;
+                           END;
+
+                           IF (NOT lwEnc) THEN
+                             CurrReport.BREAK;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=25950;
+            SectionHeight=2961;
+          }
+          CONTROLS
+          {
+            { 1100253001;Label  ;18900;0    ;7050 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones por Hotel }
+            { 1100253008;Label  ;7200 ;1692 ;1200 ;846  ;ParentControl=1100253007;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas }
+            { 1100253010;Label  ;8550 ;1692 ;1200 ;846  ;ParentControl=1100253009;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Personas Entradas }
+            { 1100253012;Label  ;9900 ;1692 ;1200 ;846  ;ParentControl=1100253011;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=% sobre Entradas }
+            { 1100253015;Label  ;11250;1692 ;1950 ;846  ;ParentControl=1100253013;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones }
+            { 1100253017;Label  ;13350;1692 ;1500 ;846  ;ParentControl=1100253016;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Ventas per Capita }
+            { 1100253019;Label  ;15000;1692 ;1500 ;846  ;ParentControl=1100253018;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas }
+            { 1100253014;Shape  ;7200 ;2538 ;18750;423  ;ShapeStyle=HorzLine }
+            { 1100253026;Label  ;24600;1692 ;1350 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas }
+            { 1100253027;Label  ;23100;1692 ;1350 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Ventas per Capita }
+            { 1100253028;Label  ;21000;1692 ;1950 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones }
+            { 1100253029;Label  ;19650;1692 ;1200 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=% sobre Entradas }
+            { 1100253030;Label  ;18300;1692 ;1200 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Personas Entradas }
+            { 1100253031;Label  ;16950;1692 ;1200 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas }
+            { 1100253058;TextBox;7200 ;1269 ;9300 ;423  ;SourceExpr=STRSUBSTNO('%1..%2', wFiltroFechas[1], wFiltroFechas[2]) }
+            { 1100253059;TextBox;16950;1269 ;9000 ;423  ;SourceExpr=STRSUBSTNO('%1..%2', wFechasAnt[1], wFechasAnt[2]) }
+            { 1100253064;TextBox;0    ;0    ;6300 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         SourceExpr=rEmp.Name }
+            { 1100253065;Shape  ;0    ;423  ;25950;423  ;ShapeStyle=HorzLine }
+            { 1100253066;TextBox;23250;846  ;2700 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=wVerImportes }
+            { 1100253067;TextBox;0    ;846  ;23100;423  ;SourceExpr=Filtros.GETFILTERS }
+            { 1100253002;Shape  ;16500;1269 ;450  ;1692 ;ShapeStyle=VertLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=25950;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTemp."N§ Periodo" =1); // Total x Hotel
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1100253032;TextBox;0    ;423  ;7050 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         SourceExpr=wRotulo }
+            { 1100253033;TextBox;7200 ;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[1] }
+            { 1100253034;TextBox;8550 ;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[1] }
+            { 1100253035;TextBox;9900 ;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[1] }
+            { 1100253036;TextBox;11250;423  ;1950 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[1] }
+            { 1100253037;TextBox;13350;423  ;1500 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[1] }
+            { 1100253038;TextBox;15000;423  ;1500 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[1] }
+            { 1100253039;TextBox;24600;423  ;1350 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[2] }
+            { 1100253040;TextBox;23100;423  ;1350 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[2] }
+            { 1100253041;TextBox;21000;423  ;1950 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[2] }
+            { 1100253042;TextBox;19650;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[2] }
+            { 1100253043;TextBox;18300;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[2] }
+            { 1100253044;TextBox;16950;423  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[2] }
+            { 1100253003;Shape  ;16500;0    ;450  ;846  ;ShapeStyle=VertLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=25950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTemp."N§ Periodo" =2); // Total x Guia
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1100253000;TextBox;750  ;0    ;6300 ;423  ;FontSize=8;
+                                                         FontBold=No;
+                                                         LeaderDots=Yes;
+                                                         SourceExpr=wRotulo }
+            { 1100253007;TextBox;7200 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[1] }
+            { 1100253009;TextBox;8550 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[1] }
+            { 1100253011;TextBox;9900 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[1] }
+            { 1100253013;TextBox;11250;0    ;1950 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[1] }
+            { 1100253016;TextBox;13350;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[1] }
+            { 1100253018;TextBox;15000;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[1] }
+            { 1100253020;TextBox;24600;0    ;1350 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[2] }
+            { 1100253021;TextBox;23100;0    ;1350 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[2] }
+            { 1100253022;TextBox;21000;0    ;1950 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[2] }
+            { 1100253023;TextBox;19650;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[2] }
+            { 1100253024;TextBox;18300;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[2] }
+            { 1100253025;TextBox;16950;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[2] }
+            { 1100253004;Shape  ;16500;0    ;450  ;423  ;ShapeStyle=VertLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=25950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTemp."N§ Periodo" =3); // Detalle Producto
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1100253045;TextBox;1800 ;0    ;5250 ;423  ;FontSize=8;
+                                                         FontBold=No;
+                                                         LeaderDots=Yes;
+                                                         SourceExpr=wRotulo }
+            { 1100253046;TextBox;7200 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[1] }
+            { 1100253047;TextBox;8550 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[1] }
+            { 1100253048;TextBox;9900 ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[1] }
+            { 1100253049;TextBox;11250;0    ;1950 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[1] }
+            { 1100253050;TextBox;13350;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[1] }
+            { 1100253051;TextBox;15000;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[1] }
+            { 1100253052;TextBox;24600;0    ;1350 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[2] }
+            { 1100253053;TextBox;23100;0    ;1350 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[2] }
+            { 1100253054;TextBox;21000;0    ;1950 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[2] }
+            { 1100253055;TextBox;19650;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[2] }
+            { 1100253056;TextBox;18300;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[2] }
+            { 1100253057;TextBox;16950;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[2] }
+            { 1100253005;Shape  ;16500;0    ;450  ;423  ;ShapeStyle=VertLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=25950;
+            SectionHeight=1269;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTemp."N§ Periodo" =4); // Total General
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1100253006;TextBox;0    ;846  ;7050 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         SourceExpr=wRotulo }
+            { 1100253068;TextBox;7200 ;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[1] }
+            { 1100253069;TextBox;8550 ;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[1] }
+            { 1100253070;TextBox;9900 ;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[1] }
+            { 1100253071;TextBox;11250;846  ;1950 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[1] }
+            { 1100253072;TextBox;13350;846  ;1500 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[1] }
+            { 1100253073;TextBox;15000;846  ;1500 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[1] }
+            { 1100253074;TextBox;24600;846  ;1350 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Per Capita Llegadas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentasEntradas[2] }
+            { 1100253075;TextBox;23100;846  ;1350 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas per Capita;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProVentas[2] }
+            { 1100253076;TextBox;21000;846  ;1950 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Ventas Excursiones;
+                                                         SourceExpr=wVentas[2] }
+            { 1100253077;TextBox;19650;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% sobre Entradas;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wProEntradas[2] }
+            { 1100253078;TextBox;18300;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Personas Entradas;
+                                                         SourceExpr=wPersonasE[2] }
+            { 1100253079;TextBox;16950;846  ;1200 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Excursiones Vendidas;
+                                                         SourceExpr=wExcVend[2] }
+            { 1100253080;Shape  ;16500;0    ;450  ;1269 ;ShapeStyle=VertLine }
+            { 1100253081;Shape  ;0    ;423  ;25950;423  ;ShapeStyle=HorzLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            PrintOnEveryPage=Yes;
+            PlaceInBottom=Yes;
+            SectionWidth=25950;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1100253060;TextBox;8100 ;423  ;10200;423  ;HorzAlign=Center;
+                                                         SourceExpr=FORMAT(TODAY,0,4) + ' / ' + FORMAT(TIME,0,0) + ' / ' + USERID }
+            { 1100253061;TextBox;22800;423  ;3150 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=Text004 + FORMAT(CurrReport.PAGENO) }
+            { 1100253062;Shape  ;0    ;0    ;25950;423  ;ShapeStyle=HorzLine }
+            { 1100253063;TextBox;0    ;423  ;3600 ;423  ;SourceExpr=cNom.nom_delegacion(rPar.Delegacion) }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=10560;
+      Height=5500;
+      OnOpenForm=BEGIN
+                   wVerImportes := wVerImportes::"Sin Impuestos";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1100253005;OptionButton;440;3080;3740;440 ;ParentControl=1100253004;
+                                                   InFrame=Yes;
+                                                   InPage=-1;
+                                                   CaptionML=ESP=Con Impuestos;
+                                                   SourceExpr=wVerImportes;
+                                                   OptionValue=Con Impuestos }
+      { 1100253006;OptionButton;440;3740;3740;440 ;ParentControl=1100253004;
+                                                   InFrame=Yes;
+                                                   CaptionML=ESP=Sin Impuestos;
+                                                   SourceExpr=wVerImportes;
+                                                   OptionValue=Sin Impuestos }
+      { 1100253000;TextBox;3630 ;220  ;1980 ;440  ;InPage=-1;
+                                                   CaptionML=ESP=Fecha Desde;
+                                                   SourceExpr=wFiltroFechas[1] }
+      { 1100253001;Label  ;220  ;220  ;3300 ;440  ;ParentControl=1100253000 }
+      { 1100253002;TextBox;3630 ;770  ;1980 ;440  ;InPage=-1;
+                                                   CaptionML=ESP=Fecha Hasta;
+                                                   SourceExpr=wFiltroFechas[2] }
+      { 1100253003;Label  ;220  ;770  ;3300 ;440  ;ParentControl=1100253002 }
+      { 1100253004;Frame  ;220  ;2530 ;4290 ;1980 ;InPage=-1;
+                                                   CaptionML=ESP=Ver Importes }
+      { 1100253007;CheckBox;3630;1870 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=ESP=Mostrar Detalle;
+                                                   SourceExpr=wMostrarDetalle }
+      { 1100253008;Label  ;220  ;1870 ;3300 ;440  ;ParentControl=1100253007;
+                                                   InPage=-1 }
+      { 1100217000;TextBox;3630 ;1320 ;1980 ;440  ;CaptionML=[ENU=Dates type;
+                                                              ESP=Tipo fechas];
+                                                   SourceExpr=wTipoFechas }
+      { 1100217001;Label  ;220  ;1320 ;3300 ;440  ;ParentControl=1100217000;
+                                                   InPage=-1 }
+      { 1100217002;TextBox;3630 ;4620 ;2640 ;440  ;CaptionML=ESP=Suplemento de control;
+                                                   SourceExpr=wSuplementoControl;
+                                                   TableRelation="Suplemento Excursiones" }
+      { 1100217003;Label  ;220  ;4620 ;3300 ;440  ;ParentControl=1100217002;
+                                                   InPage=-1 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      rEmp@1100253025 : Record 79;
+      rPar@1100253026 : Record 7009700;
+      rTemp@1100253000 : TEMPORARY Record 7010162;
+      rTemp1@1100253001 : TEMPORARY Record 7010162;
+      rTemp2@1100253016 : TEMPORARY Record 7010162;
+      rHot@1100253004 : Record 7009724;
+      rParPer@1100253017 : Record 7009701;
+      rCont@1100217001 : Record 7010142;
+      cNom@1100253015 : Codeunit 7009702;
+      cFunExc@1100217000 : Codeunit 7010141;
+      wMostrarDetalle@1100253002 : Boolean;
+      wVerImportes@1100253003 : 'Con Impuestos,Sin Impuestos';
+      wTipoFechas@1100217002 : 'Servicio,Venta';
+      wFiltroFechas@1100253005 : ARRAY [2] OF Date;
+      Text001@1100253006 : TextConst 'ESP=Debe de Rellenar obligatoriamente el rango de fechas';
+      Text002@1100253007 : TextConst 'ESP="""Fecha Desde"" No puede ser posterior a ""Fecha Hasta"""';
+      wFechasAnt@1100253022 : ARRAY [2] OF Date;
+      wProEntradas@1100253008 : ARRAY [2] OF Decimal;
+      wProVentas@1100253009 : ARRAY [2] OF Decimal;
+      wProVentasEntradas@1100253010 : ARRAY [2] OF Decimal;
+      wVent@1100253011 : Dialog;
+      wTotal@1100253012 : Integer;
+      wCont@1100253013 : Integer;
+      Text003@1100253014 : TextConst 'ESP=Creando Temporal %1';
+      wCntTmp@1100253018 : Integer;
+      wPersonasE@1100253019 : ARRAY [2] OF Integer;
+      wTotalPersonasE@1100253027 : ARRAY [2] OF Integer;
+      wExcVend@1100253020 : ARRAY [2] OF Integer;
+      wVentas@1100253021 : ARRAY [2] OF Decimal;
+      wRotulo@1100253023 : Text[1024];
+      Text004@1100253024 : TextConst 'ESP="P gina  "';
+      Text005@1100253028 : TextConst 'ESP=TOTAL';
+      wSuplementoControl@1100217003 : Code[10];
+
+    PROCEDURE SetTemp@1100253011(VAR prTemp@1100253000 : TEMPORARY Record 7010162;pResv@1100253002 : Record 7010162);
+    VAR
+      lwCnt@1100253003 : Integer;
+      lwCnt2@1100253001 : Integer;
+    BEGIN
+      // SetTemp
+
+      // Detalle
+      CLEAR(prTemp);
+      prTemp.SETRANGE("Hotel Cliente", pResv."Hotel Cliente");
+      prTemp.SETRANGE("Guia Venta"   , pResv."Guia Venta");
+      IF wMostrarDetalle THEN
+        prTemp.SETRANGE(Producto     , pResv.Producto);
+
+      IF NOT prTemp.FINDFIRST THEN BEGIN // Linea Total x Codigo Excursion
+        prTemp := pResv;
+        prTemp.Delegacion        := pResv."Hotel Cliente";
+        prTemp."Ingreso reserva" := 0;
+        prTemp."N§ Personas"     := 0;
+        prTemp.INSERT;
+      END;
+
+      prTemp."N§ Personas" += pResv.Adultos + pResv.Ni¤os - pResv."Adultos Reembolsados" - pResv."Ni¤os Reembolsados"; // $008
+
+      CASE wVerImportes OF
+        wVerImportes::"Con Impuestos" : prTemp."Ingreso reserva" += pResv."Ingreso Adulto" + pResv."Ingreso Ni¤o" -
+                                                       pResv."Importe reembolsado adultos" - pResv."Importe reembolsado ni¤os"; // $008
+        wVerImportes::"Sin Impuestos" : prTemp."Ingreso reserva" += pResv."Ingreso adulto neto" + pResv."Ingreso ni¤o neto" -
+                                                        pResv."Importe neto reemb adultos" - pResv."Importe neto reemb ni¤os";  // $008
+      END;
+
+      //$002 <
+      cFunExc.GetContratoTouroperador(pResv, rCont);
+      IF rCont."Aplica comision en factura" THEN
+        prTemp."Ingreso reserva" += pResv."Comision Touroperador"; //. Sumamos porque esta en negativo en el campo
+      //$002 <
+
+      prTemp.MODIFY;
+
+      // General ********************************
+      // Ser  la guia para mostrar la informaci¢n
+      // Creamos un temporal total por Hotel / Hotel/Guia Venta / Hotel/Guia Venta/Excursion
+      IF wMostrarDetalle THEN
+        lwCnt2 := 3
+      ELSE
+        lwCnt2 := 2;
+
+      // lwCnt2: 1 = Hotel, 2=  Hotel/Guia Venta 3= Hotel/Guia Venta/Excursion
+      FOR lwCnt := 1 TO lwCnt2 DO BEGIN
+        CLEAR(rTemp);
+        rTemp.SETCURRENTKEY(Delegacion, "Guia Venta",Producto,"Fecha Excursion");
+        rTemp.SETRANGE(Delegacion   , pResv."Hotel Cliente");
+        rTemp.SETRANGE("N§ Periodo" , lwCnt);
+        IF lwCnt>=2 THEN
+          rTemp.SETRANGE("Guia Venta", pResv."Guia Venta");
+        IF lwCnt=3 THEN
+          rTemp.SETRANGE(Producto,  pResv.Producto);
+        IF NOT rTemp.FINDFIRST THEN BEGIN // Linea Total x Codigo Excursion
+          CLEAR(rTemp);
+          wCntTmp +=1;
+          rTemp."N§ Reserva" := wCntTmp;
+          rTemp.Delegacion     := pResv."Hotel Cliente";
+          rTemp."Hotel Cliente":= pResv."Hotel Cliente";
+          IF lwCnt >= 2 THEN
+            rTemp."Guia Venta" := pResv."Guia Venta";
+          IF lwCnt=3 THEN
+            rTemp.Producto     :=  pResv.Producto;
+          rTemp."N§ Periodo"   := lwCnt; // Aqui delimitamos que tipo de total se trata
+          rTemp.INSERT;
+        END;
+      END;
+    END;
+
+    PROCEDURE SumarPersEntrt@1(pResv@1100253001 : Record 7010162;pwPer@1100253002 : Integer) : Integer;
+    VAR
+      lrPeriodoReserva@1100217000 : Record 7009742;
+      lrAcomp@1100217001 : Record 7009748;
+      lwPersEntr@1100253000 : Integer;
+    BEGIN
+      // SumarPersEntrt
+      { $007 -
+      CLEAR(lrRsvH);
+      lrRsvH.SETCURRENTKEY("Hotel booking",
+                         "Fecha entrada",
+                         "Fecha salida");
+
+      lrRsvH.SETRANGE ("Hotel booking" , pResv."Hotel Cliente");
+      CASE pwPer OF
+        1 : BEGIN  // Periodo Actual
+              lrRsvH.SETFILTER ("Fecha entrada", '<=%1', wFiltroFechas[2]);
+              lrRsvH.SETFILTER ("Fecha salida" , '>%1' , wFiltroFechas[1]);
+            END;
+        2 : BEGIN // Periodo Anterior
+              lrRsvH.SETFILTER ("Fecha entrada", '<=%1', wFechasAnt[2]);
+              lrRsvH.SETFILTER ("Fecha salida" , '>%1' , wFechasAnt[1]);
+            END;
+      END;
+      lrRsvH.SETFILTER ("Tipo Persona" , '%1|%2', rParPer."Codigo Adulto", rParPer."Codigo Ni¤o");
+      lwPersEntr := lrRsvH.COUNT;
+      $007 + }
+
+      CLEAR(lrPeriodoReserva);
+      lrPeriodoReserva.SETCURRENTKEY("Hotel Booking","Fecha entrada",Delegacion,
+                                     "N§ Interno","N§ Periodo");
+      lrPeriodoReserva.SETRANGE("Hotel Booking", pResv."Hotel Cliente");
+      CASE pwPer OF
+        1 : BEGIN  // Periodo Actual
+              lrPeriodoReserva.SETFILTER ("Fecha entrada", '<=%1', wFiltroFechas[2]);
+              lrPeriodoReserva.SETFILTER ("Fecha salida" , '>%1' , wFiltroFechas[1]);
+            END;
+        2 : BEGIN // Periodo Anterior
+              lrPeriodoReserva.SETFILTER ("Fecha entrada", '<=%1', wFechasAnt[2]);
+              lrPeriodoReserva.SETFILTER ("Fecha salida" , '>%1' , wFechasAnt[1]);
+            END;
+      END;
+      IF lrPeriodoReserva.FINDSET THEN REPEAT
+        CLEAR(lrAcomp);
+        lrAcomp.SETRANGE(Delegacion,   lrPeriodoReserva.Delegacion);
+        lrAcomp.SETRANGE("N§ Interno", lrPeriodoReserva."N§ Interno");
+        lrAcomp.SETFILTER("Tipo Persona", '%1|%2', rParPer."Codigo Adulto", rParPer."Codigo Ni¤o");
+        lwPersEntr += lrAcomp.COUNT;
+      UNTIL lrPeriodoReserva.NEXT = 0;
+
+      EXIT(lwPersEntr);
+    END;
+
+    PROCEDURE InsertaImportes@1100253023(VAR prTemp@1100253000 : TEMPORARY Record 7010162;prLin@1100253002 : TEMPORARY Record 7010162;pwPer@1100253001 : Integer);
+    BEGIN
+      // InsertaImportes
+
+      CLEAR(prTemp);
+      prTemp.SETCURRENTKEY(Delegacion,"Guia Venta",Producto,"Fecha Excursion");
+      IF (prLin."N§ Periodo" <> 4) THEN BEGIN // Si no es TOTAL GENERAL
+        prTemp.SETRANGE(Delegacion, prLin.Delegacion);
+        IF (prLin."N§ Periodo" > 1) THEN // Por Guia Vena
+          prTemp.SETRANGE("Guia Venta", prLin."Guia Venta");
+        IF (prLin."N§ Periodo" > 2) THEN // Por Producto
+          prTemp.SETRANGE(Producto, prLin.Producto);
+      END;
+
+      IF prTemp.FINDSET THEN BEGIN
+        REPEAT
+          wExcVend[pwPer]    += prTemp."N§ Personas";
+          wVentas[pwPer]     += prTemp."Ingreso reserva";
+        UNTIL prTemp.NEXT=0;
+      END;
+
+      // wPersonasE[pwPer]  := // No lo rellenamos aqui
+
+      IF wPersonasE[pwPer] <> 0 THEN
+        wProEntradas[pwPer]       := wExcVend[pwPer] * 100 / wPersonasE[pwPer];
+
+      IF wExcVend[pwPer] <> 0 THEN
+        wProVentas[pwPer]         := wVentas[pwPer]  / wExcVend[pwPer];
+
+      IF wPersonasE[pwPer] <> 0 THEN
+        wProVentasEntradas[pwPer] := wVentas[pwPer]  / wPersonasE[pwPer];
+    END;
+
+    PROCEDURE ControlSuplemento@1100217000(prRsv@1100217000 : Record 7010162) : Boolean;
+    VAR
+      lrSuplRsv@1100217001 : Record 7010165;
+    BEGIN
+      // ControlSuplemento
+
+      IF wSuplementoControl = '' THEN
+        EXIT(TRUE);
+
+      lrSuplRsv.RESET;
+      lrSuplRsv.SETRANGE(Delegacion         , prRsv.Delegacion);
+      lrSuplRsv.SETRANGE("N§ Reserva"       , prRsv."N§ Reserva");
+      lrSuplRsv.SETRANGE("Codigo Suplemento", wSuplementoControl);
+      EXIT(NOT lrSuplRsv.ISEMPTY);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 08052012 La opcion por defecto para los importes ser  "Importe sin impuestos"
+
+      $002 AJS 14112012 La comision del touroperador se descuenta del ingreso en funcion del contrato
+                        del touroperador
+
+      $003 AJS 15112012 Aseguramos filtros minimos para evitar errores de ejecucion en el informe
+
+      $004 AJS 27122012 Amplio los campos de ventas excursiones para evitar errores de visualizacion
+
+      $005 AJS 14022013 Nuevo campo opcion para indicar si el filtro de fechas es sobre fecha de servicio o de venta
+
+      $006 AJS 28042013 Nueva opcion para filtrar las reservas que tienen un suplemento
+
+      $007 MNC 30062014 SumarPersEntr no vaya a resv hotel, sino a Periodo reserva/Acompa¤ante Reserva
+
+      $008 ARM 29072014 Reembolsos CNT-OC-14047
+
+      $009 AJS 18042015 Cambio en el campo No aplicar comision
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

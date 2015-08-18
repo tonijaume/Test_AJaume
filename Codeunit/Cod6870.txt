@@ -1,0 +1,222 @@
+OBJECT Codeunit 6870 EP Trust Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=VAR
+            EncodeXML@1000000000 : Codeunit 6814;
+            XMLConfig@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+          BEGIN
+            IF IsRunning THEN BEGIN
+              IF GUIALLOWED THEN
+                MESSAGE(Text003);
+              EXIT;
+            END;
+
+            GetNASSetup;
+
+            CREATE(XMLConfig);
+            EncodeXML.CreateListenerConfig(XMLConfig,NASID,TRUE);
+            CREATE(QueueListener);
+            IF NOT QueueListener.StartListen(XMLConfig) THEN BEGIN
+              CLEAR(QueueListener);
+              CLEAR(XMLConfig);
+              ERROR(Text004,NASSetup."Key Exchange Request Queue");
+            END;
+            CLEAR(XMLConfig);
+
+            CREATE(TrustTimer);
+            IF NOT TrustTimer.StartTimerInitSeconds(10) THEN BEGIN
+              CLEAR(TrustTimer);
+              ERROR(Text000);
+            END;
+
+            IsRunning := TRUE;
+
+            MESSAGE(Text002);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NASSetup@1000000006 : Record 6870;
+      QueueListener@1006 : Automation "{10E1E859-EEEA-4676-808B-F3A8A89B4DB2} 2.0:{1E2E223F-CC93-4629-8EA5-9593EF40D072}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      QueueSender@1000000001 : Automation "{10E1E859-EEEA-4676-808B-F3A8A89B4DB2} 2.0:{55DD38AA-8C73-429D-BFC6-F04701BC0D0F}:Unknown Automation Server.Unknown Class";
+      Text001@1000000009 : TextConst 'ENU=Could not find the configuration for %1.;ESP=No se pudo encontrar la configuraci¢n para %1.';
+      Text002@1000000010 : TextConst 'ENU=Employee Portal Trust Appl. Server has been started.;ESP=Se ha iniciado Employee Portal Trust Appl. Server.';
+      TrustTimer@1000000011 : Automation "{10E1E859-EEEA-4676-808B-F3A8A89B4DB2} 2.0:{E4243914-FB10-4FE1-A91B-F04648F7E4A4}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      Text000@1000 : TextConst 'ENU=There is a problem with the trust timer.;ESP=Hay un problema con el programador de confianza.';
+      Text003@1001 : TextConst 'ENU=The NAS has already been started for Employee Portal.;ESP=Ya se inici¢ NAS para Employee Portal.';
+      Text004@1002 : TextConst 'ENU=The queue listener could not open the queue %1.;ESP=La escucha de cola no pudo abrir la cola %1.';
+      NASID@1004 : Code[20];
+      IsRunning@1005 : Boolean;
+      Text007@1000000003 : TextConst 'ENU=Error receiving Backend private key.;ESP=Error al recibir clave privada servidor.';
+      Text008@1000000002 : TextConst 'ENU=Error receiving Frontend public key.;ESP=Error al recibir clave privada cliente.';
+
+    PROCEDURE SetNASID@1000000003(ID@1000000000 : Code[20]);
+    BEGIN
+      NASID := ID;
+    END;
+
+    LOCAL PROCEDURE GetNASSetup@1000000000();
+    BEGIN
+      IF NOT NASSetup.GET(NASID) THEN
+        ERROR(Text001,NASID);
+    END;
+
+    PROCEDURE ProcessReqType@1000000001(VAR XMLDocIn@1000000004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XMLDocOut@1000000003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      DecodeXML@1000000002 : Codeunit 6813;
+      TrustMgt@1000000001 : Codeunit 6871;
+      RequestType@1000000000 : Code[50];
+    BEGIN
+      // Get the request type from the Inbound Document
+      DecodeXML.GetRequestTypeStatic(XMLDocIn,RequestType);
+
+      CASE RequestType OF
+        'GETBACKENDPUBLIC':
+          BEGIN
+            TrustMgt.GetBackendPublic(XMLDocIn,XMLDocOut);
+          END;
+        'REGISTER':
+          BEGIN
+            TrustMgt.ReceiveTrustRequest(XMLDocIn);
+          END;
+      END;
+    END;
+
+    PROCEDURE GetBackendKey@1000000008(VAR XMLDoc@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      EPSetup@1000000001 : Record 6800;
+      OutStream@1000000002 : OutStream;
+    BEGIN
+      EPSetup.GET;
+      EPSetup.CALCFIELDS("Back End Private Key");
+      IF NOT EPSetup."Back End Private Key".HASVALUE THEN
+        ERROR(Text007);
+
+      EPSetup."Back End Private Key".CREATEOUTSTREAM(OutStream);
+      XMLDoc.load(OutStream);
+    END;
+
+    PROCEDURE GetPublicKey@1000000009(VAR XMLDoc@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";PartnerID@1000000000 : Text[50]);
+    VAR
+      TrustedSites@1000000002 : Record 6872;
+      OutStream@1000000003 : OutStream;
+    BEGIN
+      TrustedSites.SETCURRENTKEY("Site Identifier");
+      TrustedSites.SETRANGE("Site Identifier",PartnerID);
+      IF NOT TrustedSites.FIND('-') THEN
+        ERROR(Text008);
+
+      TrustedSites.CALCFIELDS("Partner Public Key");
+      IF TrustedSites."Partner Public Key".HASVALUE AND TrustedSites."Site Trust" THEN BEGIN
+        TrustedSites."Partner Public Key".CREATEOUTSTREAM(OutStream);
+        XMLDoc.load(OutStream);
+      END ELSE
+        ERROR(Text008);
+    END;
+
+    EVENT TrustTimer@1000000011::CTimerEvent@2();
+    VAR
+      EPTrustedPartners@1001 : Record 6872;
+      TrustMgt@1000 : Codeunit 6871;
+      XMLDocOut@1000000002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLKey1@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLKey2@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+    BEGIN
+      GetNASSetup;
+
+      CLEAR(EPTrustedPartners);
+
+      EPTrustedPartners.RESET;
+      EPTrustedPartners.SETCURRENTKEY("Answer Sent");
+      EPTrustedPartners.SETRANGE("Answer Sent",FALSE);
+      IF NOT EPTrustedPartners.FIND('-') THEN
+        EXIT;
+
+      REPEAT
+        IF EPTrustedPartners."Site Trust" THEN BEGIN
+          CREATE(XMLDocOut);
+          IF TrustMgt.CreateAckDoc(EPTrustedPartners,XMLDocOut) THEN BEGIN
+            IF ISCLEAR(QueueSender) THEN
+              CREATE(QueueSender);
+
+            CREATE(XMLKey1);
+            CREATE(XMLKey2);
+
+            GetBackendKey(XMLKey1);
+            GetPublicKey(XMLKey2,EPTrustedPartners."Site Identifier");
+
+            IF NOT QueueSender.WriteToMessageQueue(NASSetup."Key Exchange Reply Queue",XMLDocOut,FALSE,
+              TRUE,FALSE,XMLKey2,XMLKey1,TRUE) THEN
+                ERROR(Text004,NASSetup."Key Exchange Reply Queue");
+
+            CLEAR(QueueSender);
+            CLEAR(XMLKey1);
+            CLEAR(XMLKey2);
+
+            EPTrustedPartners."Answer Sent" := TRUE;
+            EPTrustedPartners."Sent Date" := WORKDATE;
+            EPTrustedPartners."Sent Time" := TIME;
+            EPTrustedPartners.MODIFY;
+          END;
+          CLEAR(XMLDocOut);
+        END;
+      UNTIL EPTrustedPartners.NEXT = 0;
+      COMMIT;
+    END;
+
+    EVENT QueueListener@1006::ComMessageReceived@1(incomingMessage@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF95-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMDocument2");
+    VAR
+      XMLDocIn@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOut@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNode@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      PartnerID@1003 : Text[50];
+      XMLKey1@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLKey2@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+    BEGIN
+      GetNASSetup;
+      IF ISCLEAR(XMLDocIn) THEN
+        CREATE(XMLDocIn);
+      IF ISCLEAR(XMLDocOut) THEN
+        CREATE(XMLDocOut);
+
+      XMLDocIn := incomingMessage;
+      PartnerID := QueueListener.SiteId;
+
+      // Process Document
+      ProcessReqType(XMLDocIn,XMLDocOut);
+      XMLNode := XMLDocOut.documentElement;
+
+      // Answer
+      IF NOT ISCLEAR(XMLNode) THEN BEGIN
+        CREATE(QueueSender);
+
+        CREATE(XMLKey1);
+        CREATE(XMLKey2);
+
+        IF NOT QueueSender.WriteToMessageQueue(NASSetup."Key Exchange Reply Queue",XMLDocOut,FALSE,
+          FALSE,FALSE,XMLKey2,XMLKey1,TRUE) THEN
+            ERROR(Text004,NASSetup."Key Exchange Reply Queue");
+
+        CLEAR(QueueSender);
+        CLEAR(XMLKey1);
+        CLEAR(XMLKey2);
+
+      END;
+      CLEAR(XMLDocIn);
+      CLEAR(XMLDocOut);
+    END;
+
+    BEGIN
+    END.
+  }
+}

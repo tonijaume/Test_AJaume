@@ -1,0 +1,700 @@
+OBJECT Codeunit 7010316 Actualiza Registro Actividad
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/01/15;
+    Time=11:46:55;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text002@1100244007 : TextConst 'ESP="El parte "';
+      Text003@1100244008 : TextConst 'ESP=" no ha sido asignado. ¨Validar de todos modos?"';
+      vNombreAbr@1100244000 : Code[20];
+      vNombre@1100244001 : Text[30];
+      vApellidos@1100244002 : Text[30];
+      vTestActualizar@1100244003 : Boolean;
+      vMatrizTS@1100244004 : ARRAY [10] OF Code[10];
+      rPar@1103350000 : Record 7010311;
+      wSaltarControlPartes@1103355000 : Boolean;
+
+    PROCEDURE Actualizacion@14(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date);
+    VAR
+      rPar@1100244002 : Record 7010311;
+      lrPeriodo@1100244003 : Record 7010338;
+      lrPeriodo2@1000000000 : Record 7010338;
+      vNumDietas@1100244004 : Decimal;
+      vHorasServicio@1100244005 : Decimal;
+      vHorasExtras@1100244006 : Decimal;
+      rHorasCond@1100244007 : Record 7010332;
+      vTipoAcuerdo@1100244008 : Code[10];
+      vViajes@1100244009 : Decimal;
+      vMaletas@1100244010 : Decimal;
+      cFunCond@1100244011 : Codeunit 7010313;
+      vAccionMinima@1100244012 : Boolean;
+    BEGIN
+      //Validamos todos los periodos introducidos.
+      Validacion(pFecha, pConductor);
+
+      rPar.FINDFIRST;
+      vAccionMinima := rPar."Tipo Calculo Conductores" = rPar."Tipo Calculo Conductores"::Ninguno;
+
+      cFunCond.BorrarAsociacionPartes(pFecha,pConductor);
+
+      rHorasCond.RESET;
+      rHorasCond.SETCURRENTKEY(Conductor, Fecha);
+      rHorasCond.SETRANGE(Conductor, pConductor);
+      rHorasCond.SETRANGE(Fecha    , pFecha);
+      IF rHorasCond.FINDFIRST THEN
+      BEGIN
+        vTipoAcuerdo := rHorasCond."Tipo Acuerdo";
+        CalculaHoras(vTipoAcuerdo,pConductor,pFecha,vNumDietas,vHorasServicio,vHorasExtras);
+
+        //Si no estamos seguros de que los partes van a tener al menos la hora de inicio,
+        //no tiene sentido intentar ligar los partes.
+        //IF NOT vAccionMinima THEN BEGIN
+          OtrosCalculos(rHorasCond.Garaje,vTipoAcuerdo,pConductor,pFecha,TRUE);
+          //Ning£n parte del d¡a para este conductor puede continuar sin estar asignado.
+          IF NOT wSaltarControlPartes THEN
+            TestPartes(pConductor,pFecha);
+        //END;
+
+        rHorasCond."Horas Servicio" := vHorasServicio;
+        rHorasCond."Horas Extra"    := vHorasExtras;
+        rHorasCond.Dietas           := vNumDietas;
+
+        rHorasCond.Validado := TRUE;
+        rHorasCond."Fecha modificaci¢n" := TODAY;
+        rHorasCond."Hora modificaci¢n"  := TIME;
+        rHorasCond.Usuario              := USERID;
+
+        rHorasCond.MODIFY;
+
+        //Anotamos que se ha validado el periodo, para que la pantalla gr fica se pueda refrescar.
+        cFunCond.CambioRegistroActividad(TRUE);
+
+        //Apuntamos los periodos como validados.
+        lrPeriodo.RESET;
+        lrPeriodo.SETCURRENTKEY(Conductor, Fecha);
+        lrPeriodo.SETRANGE(Conductor, pConductor);
+        lrPeriodo.SETRANGE(Fecha    , pFecha);
+        IF lrPeriodo.FINDSET(TRUE) THEN
+          REPEAT //+$001
+            lrPeriodo2 := lrPeriodo;
+            lrPeriodo2.Validado := TRUE;
+            lrPeriodo2.MODIFY;  //SIN PARAMETRO.IMPORTANTE.
+          UNTIL lrPeriodo.NEXT = 0;
+
+        //Borraremos los registros de error que pudiera haber.
+        cFunCond.BorraRegError(pConductor,pFecha);
+
+      END;
+    END;
+
+    PROCEDURE CalculaHoras@3(pTipoAcuerdo@1100244000 : Code[10];pConductor@1100244001 : Code[10];pFecha@1100244002 : Date;VAR vNumDietas@1100244003 : Decimal;VAR vHorasServicio@1100244004 : Decimal;VAR vHorasExtras@1100244005 : Decimal);
+    VAR
+      rPeriodo@1100244006 : Record 7010338;
+      rTipoAcuerdo@1100244007 : Record 7010334;
+      SoloHorasExtras@1100244008 : Boolean;
+      vAuxHoras@1100244009 : Decimal;
+      whoraFinAnt@1103350000 : Time;
+      lwDif@1103350001 : Integer;
+    BEGIN
+      //CalculaHoras
+
+      rPar.FINDFIRST;
+
+      vNumDietas     := 0;
+      vHorasExtras   := 0;
+      vHorasServicio := 0;
+
+      rPeriodo.RESET;
+      rPeriodo.SETCURRENTKEY(Conductor,Fecha,"Fecha Real","Hora Inicio");
+      rPeriodo.SETRANGE(Conductor,pConductor);
+      rPeriodo.SETRANGE(Fecha,pFecha);
+      IF rPeriodo.FINDSET THEN BEGIN
+        CLEAR(whoraFinAnt);
+        IF rTipoAcuerdo.GET(pTipoAcuerdo) THEN BEGIN
+
+          IF rPar."Empresa Real" = rPar."Empresa Real"::UEX THEN BEGIN
+            rTipoAcuerdo.TESTFIELD("Ruptura Actividad Desde (Mins)");
+            rTipoAcuerdo.TESTFIELD("Ruptura Actividad Hasta (Mins)");
+          END;
+          SoloHorasExtras := FALSE;
+          REPEAT
+
+            // JPT 07/06/05 Si la ruptura no est  en el rango establecido no se considera ruptura
+            IF whoraFinAnt <> 0T THEN BEGIN
+              IF  whoraFinAnt < rPeriodo."Hora Inicio" THEN
+                // Optenemos la diferencia en milisegundos
+                lwDif := rPeriodo."Hora Inicio" - whoraFinAnt
+              ELSE
+                lwDif := ( 235959T - whoraFinAnt) + (rPeriodo."Hora Inicio" - 000000T);
+              lwDif := lwDif DIV 60000; // Lo pasamos a minutos
+              IF (lwDif < rTipoAcuerdo."Ruptura Actividad Desde (Mins)") OR
+                 ((lwDif > rTipoAcuerdo."Ruptura Actividad Hasta (Mins)") AND (rTipoAcuerdo."Ruptura Actividad Hasta (Mins)" <> 0)) THEN
+                rPeriodo."Hora Inicio" := whoraFinAnt;
+            END;
+
+            IF rPeriodo."Hora Inicio" <= rPeriodo."Hora Fin" THEN
+               vAuxHoras := rPeriodo."Hora Fin" - rPeriodo."Hora Inicio"
+            ELSE
+               vAuxHoras := (235959T - rPeriodo."Hora Inicio") + (rPeriodo."Hora Fin" - 000000T);
+
+            vNumDietas  := vNumDietas + TestDietas(rPeriodo.Fecha,rPeriodo."Hora Inicio",
+                                                rPeriodo."Hora Fin",pTipoAcuerdo);
+
+            whoraFinAnt := rPeriodo."Hora Fin";
+
+            //Miramos si tenemos que acumular las horas a las horas de servicio o a las extras.
+            IF SoloHorasExtras THEN
+               vHorasExtras  := vHorasExtras + vAuxHoras
+            ELSE BEGIN
+              vHorasServicio := vHorasServicio + vAuxHoras;
+              IF (rTipoAcuerdo."Maximo Horas Periodo" >0) AND
+                 (rTipoAcuerdo."Maximo Horas Periodo" < ROUND(vAuxHoras / 3600000,0.01,'=')) THEN
+               SoloHorasExtras := TRUE;
+            END;
+
+          UNTIL rPeriodo.NEXT=0;
+
+          //Calculo de las horas extras, por si se pasado de horas de servicio seg£n establece
+          //el convenio.
+          vHorasExtras  := ROUND(vHorasExtras / 3600000,0.01,'=');
+          vHorasServicio:= ROUND(vHorasServicio / 3600000,0.01,'=');
+          IF (rTipoAcuerdo."Hora Extra Desde">0) AND
+             (vHorasServicio > rTipoAcuerdo."Hora Extra Desde") THEN BEGIN
+            vAuxHoras      := vHorasServicio - rTipoAcuerdo."Hora Extra Desde";
+            vHorasExtras  := vHorasExtras    + vAuxHoras;
+            vHorasServicio:= vHorasServicio  - vAuxHoras;
+          END;
+          // JPT- 06/05/05 Si no tiene dieta y pasa de   horas le corresponde una dieta
+          IF vNumDietas = 0 THEN BEGIN
+            IF (rTipoAcuerdo."Horas Jornada Prolongada"<>0) AND
+                             (vHorasServicio + vHorasExtras >= rTipoAcuerdo."Horas Jornada Prolongada") THEN
+              vNumDietas := 1;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE TestDietas@1(pFecha@1100244000 : Date;pHoraIni@1100244001 : Time;pHoraFin@1100244002 : Time;pTipoAcuerdo@1100244003 : Code[10]) : Integer;
+    VAR
+      rHorarios@1100244004 : Record 7010337;
+      Result@1100244005 : Integer;
+      vHoraIniPeriodo@1100244006 : Decimal;
+      vHoraFinPeriodo@1100244007 : Decimal;
+      vHoraIniDieta@1100244008 : Decimal;
+      vHoraFinDieta@1100244009 : Decimal;
+    BEGIN
+      //TestDietas(pHoraIni,pHoraFin,pTipoAcuerdo)
+      Result := 0;
+      rHorarios.RESET;
+      rHorarios.SETCURRENTKEY("Tipo Acuerdo");
+      rHorarios.SETRANGE("Tipo Acuerdo",pTipoAcuerdo);
+      IF rHorarios.FINDSET THEN
+        REPEAT
+          //Miramos si es valido.
+          IF (pFecha >= rHorarios."Fecha Inicio Validez") AND
+             ( (pFecha <= rHorarios."Fecha Fin Validez") OR (rHorarios."Fecha Fin Validez" = 0D)) THEN BEGIN
+
+            //Realizamos las conversiones necesarios para asegurarnos de procesar bien el caso en que
+            //la hora final sea menor que la hora de inicio.
+
+            vHoraIniPeriodo := pHoraIni - 000000T;
+            IF pHoraFin < pHoraIni THEN
+              vHoraFinPeriodo := (235959T - 000000T) + (pHoraFin-000000T)
+            ELSE
+              vHoraFinPeriodo := pHoraFin - 000000T;
+
+            vHoraIniDieta := rHorarios."Hora Inicio" - 000000T;
+            IF rHorarios."Hora Fin" < rHorarios."Hora Inicio" THEN
+              vHoraFinDieta := (235959T - 000000T) + (rHorarios."Hora Fin"-000000T)
+            ELSE
+              vHoraFinDieta := rHorarios."Hora Fin" - 000000T;
+
+            //Testeamos si esta dentro del horario de la dieta.
+            IF (vHoraIniPeriodo < vHoraIniDieta) AND (vHoraFinPeriodo > vHoraFinDieta) THEN
+              Result := Result + 1;
+          END;
+        UNTIL rHorarios.NEXT = 0;
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE OtrosCalculos@4(pGaraje@1100244000 : Code[10];pTipoAcuerdo@1100244001 : Code[10];pConductor@1100244002 : Code[10];pFecha@1100244003 : Date;pMostrarError@1100244004 : Boolean);
+    VAR
+      stMaletas@1100244005 : Boolean;
+      stViajes@1100244006 : Boolean;
+      rPeriodo@1100244007 : Record 7010338;
+      vFechaIni@1100244008 : Date;
+      vFechaFin@1100244009 : Date;
+      rPar@1100244010 : Record 7010311;
+      FALTAN_PARAMETROS@1100244011 : TextConst 'ESP=En la ficha de parametros falta indicar el concepto variable de maletas o de viajes.';
+    BEGIN
+      //OtrosCalculos(pGaraje,pTipoAcuerdo,pConductor,pFecha,vMaletas,vViajes);
+
+      rPar.FINDFIRST;
+      IF (rPar."Codigo Maletas" = '') OR (rPar."Codigo Viajes" = '') THEN
+        ERROR(FALTAN_PARAMETROS);
+
+      //Para no tener que en cada parte acceder a la tabla Tipos de Servicio.
+      LlenarMatrizTS();
+
+      stMaletas:= TestVariable(pGaraje,rPar."Codigo Maletas",pConductor,pTipoAcuerdo,pFecha);
+      stViajes := TestVariable(pGaraje,rPar."Codigo Viajes",pConductor,pTipoAcuerdo,pFecha);
+
+      //Si ya hay datos de viajes, no dejaremos sobreescribir.
+      IF stViajes AND TestModifManual('V', pFecha, pConductor) THEN
+        stViajes := FALSE;
+      IF stViajes THEN
+       //Borramos los viajes que pueda haber para recalcular.
+       BorrarLineas('V', pFecha, pConductor);
+
+      //Si ya hay datos de maletas, no dejaremos sobreescribir.
+      IF stMaletas AND TestModifManual('M',pFecha,pConductor) THEN
+        stMaletas := FALSE;
+      IF stMaletas THEN
+       //Borramos las maletas que pueda haber para recalcular.
+       BorrarLineas('M',pFecha,pConductor);
+
+
+      rPeriodo.RESET;
+      rPeriodo.SETCURRENTKEY(Conductor,Fecha,"Fecha Real","Hora Inicio");
+      rPeriodo.SETRANGE(Conductor,pConductor);
+      rPeriodo.SETRANGE(Fecha,pFecha);
+      IF rPeriodo.FINDSET THEN REPEAT
+        vFechaIni := rPeriodo."Fecha Real";
+        IF rPeriodo."Hora Fin" < rPeriodo."Hora Inicio" THEN
+
+          // AJS 15.07.2005
+          // Ultramar solo trabaja con los partes del dia ya que para los madrugones utiliza el concepto del dia
+          // siguiente
+
+          CASE rPar."Empresa Real" OF
+            rPar."Empresa Real"::UEX:
+            BEGIN
+              vFechaFin := rPeriodo."Fecha Real";
+            END
+            ELSE BEGIN
+              vFechaFin := rPeriodo."Fecha Real" + 1;
+            END;
+          END
+        ELSE
+          vFechaFin := vFechaIni;
+        LigarPartes(rPeriodo.Conductor,pGaraje,pFecha,vFechaIni,vFechaFin,rPeriodo."Hora Inicio",
+                    rPeriodo."Hora Fin",stMaletas,stViajes,pMostrarError);
+      UNTIL rPeriodo.NEXT=0;
+    END;
+
+    PROCEDURE TestHayViajes@11(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10]) : Boolean;
+    VAR
+      rHorasCond@1100244002 : Record 7010332;
+      Result@1100244003 : Boolean;
+    BEGIN
+      //TestHayViajes().
+      Result := FALSE;
+      IF rHorasCond.GET(pFecha,pConductor) THEN BEGIN
+        rHorasCond.CALCFIELDS("N§ Viajes");
+        IF rHorasCond."N§ Viajes" <> 0 THEN BEGIN
+            Result := TRUE;
+        END;
+      END;
+      EXIT(Result);
+    END;
+
+    PROCEDURE TestVariable@9(pGaraje@1100244000 : Code[10];pCodigo@1100244001 : Code[10];pConductor@1100244002 : Code[10];pTipoAcuerdo@1100244003 : Code[10];pFecha@1100244004 : Date) : Boolean;
+    VAR
+      rAtipic@1100244005 : Record 7010330;
+    BEGIN
+      //TestVariable(pGaraje,pCodigo,pConductor,pTipoAcuerdo,pFecha);
+
+      rAtipic.RESET;
+      rAtipic.SETCURRENTKEY(Garaje,"Concepto variable");
+      rAtipic.SETRANGE(Garaje,pGaraje);
+      rAtipic.SETRANGE("Concepto variable",pCodigo);
+      rAtipic.SETFILTER(Valor,'%1|%2',pTipoAcuerdo,pConductor);
+      rAtipic.SETFILTER("Fecha desde",'<=%1',pFecha);
+      rAtipic.SETFILTER("Fecha hasta",'>=%1|%2',pFecha,0D);
+      rAtipic.SETRANGE(Confirmado,TRUE);
+      IF rAtipic.FINDFIRST THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE LigarPartes@6(pConductor@1100244000 : Code[10];pGaraje@1100244001 : Code[10];pFecha@1100244002 : Date;pFechaIni@1100244003 : Date;pFechaFin@1100244004 : Date;pHoraIni@1100244005 : Time;pHoraFin@1100244006 : Time;stMaletas@1100244007 : Boolean;stViajes@1100244008 : Boolean;pMostrarError@1100244009 : Boolean);
+    VAR
+      rParte@1100244010 : Record 7010360;
+      rTParte@1100244012 : Record 7010343;
+      vHIniParte@1100244013 : Time;
+      cCond@1100244014 : Codeunit 7010313;
+      PARTE_YA_ASIGNADO@1100244015 : TextConst 'ESP=Se ha detectado un parte del d¡a %2 del conductor %1 ligado ya a la actividad del d¡a  %3';
+      PARTE_YA_ASIGNADO2@1100244016 : TextConst 'ESP=Parte ya asignado a otro registro de actividad';
+      cGenAct@1100244017 : Codeunit 7010314;
+      vAux@1100244018 : Time;
+      cFunCond@1100244019 : Codeunit 7010313;
+    BEGIN
+      //LigarPartes(pConductor,pFecha,pFechaIni,pFechaFin,pHoraIni,pHoraFin,stMaletas,stViajes)
+      //Si la llamada es desde la generaci¢n de actividad ya tendremos actualizada la tabla.
+      cFunCond.ActTemporalCalculo(pConductor,pFecha,1);
+      rTParte.RESET;
+      rTParte.SETCURRENTKEY(Usuario,"Cod Conductor",Fecha,"Hora Inicio");
+      rTParte.SETRANGE(Usuario,USERID);
+      rTParte.SETRANGE("Cod Conductor",pConductor);
+      rTParte.SETRANGE(Fecha,pFechaIni,pFechaFin);
+      IF rTParte.FINDSET THEN
+        REPEAT
+          vHIniParte := rTParte."Hora Inicio";
+          IF vHIniParte <> 0T THEN BEGIN
+            IF cCond.InterseccionHoras(pFechaIni,pFechaFin,rTParte.Fecha,rTParte.Fecha,
+                                       pHoraIni,pHoraFin,vHIniParte,vHIniParte) THEN BEGIN
+
+              IF stMaletas THEN
+                //Miraremos si la maletas debe considerarse para este este tipo de servicio.
+                IF TestMaletasTS(rTParte."Tipo Servicio") THEN
+                  AcumularxConcepto('M', rTParte, pFecha, pMostrarError);
+
+              IF stViajes THEN
+                //No testeamos la condicion variable del viajes. Si en el c lculo de ingresos
+                //se aprecia alg£n fallo, ya se llenar  la ficha correspondientes.
+                AcumularxConcepto('V',rTParte,pFecha,pMostrarError);
+
+              //Para evitar confusiones, ser  mejor poner la siguiente validaci¢n.
+              //....
+              IF (rTParte."Fecha Conductor" <> 0D) AND (rTParte."Fecha Conductor" <> pFecha) THEN BEGIN
+                IF pMostrarError THEN
+                  ERROR(PARTE_YA_ASIGNADO,rTParte.Conductor,rTParte.Fecha,
+                                           FORMAT(rTParte."Fecha Conductor"))
+                ELSE
+                  //... Estamos en el proceso de generaci¢n. Lo que hacemos es grabar un error.
+                  cCond.CreaRegistroError(PARTE_YA_ASIGNADO2,rTParte."Cod Conductor",rTParte.Conductor,
+                                             rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE);
+
+              END
+              ELSE BEGIN
+                ActFechaConductor(rTParte,pFecha);
+              END;
+
+            END;
+          END;
+        UNTIL rTParte.NEXT=0;
+    END;
+
+    PROCEDURE AcumularxConcepto@10(pConcepto@1100244000 : Text[1];rTParte@1100244001 : Record 7010343;pFecha@1100244002 : Date;pMostrarError@1100244003 : Boolean);
+    VAR
+      rRCA@1100244004 : Record 7035336;
+      rPar@1100244005 : Record 7010311;
+      FALTA_ZONA_FISICA@1100244006 : TextConst 'ESP=No se ha podido determinar la zona f¡sica del parte %1';
+      FALTA_ZONA_FISICA2@1100244007 : TextConst 'ESP=No se ha podido determinar la zona f¡sica';
+      lrVeh@1103350000 : Record 7010346;
+      cCond@1100244009 : Codeunit 7010313;
+      FALTA_TIPO_VEHICULO@1100244010 : TextConst 'ESP=No se ha podido determinar el tipo de vehiculo del parte %1';
+      FALTA_TIPO_VEHICULO2@1100244011 : TextConst 'ESP=No se ha podido determinar el tipo de vehiculo';
+    BEGIN
+      // AcumularxConcepto()
+      rPar.FINDFIRST;
+
+
+      rRCA.INIT;
+      rRCA.VALIDATE(Conductor , rTParte."Cod Conductor");
+      rRCA.Fecha            := pFecha;
+      rRCA."N§ Parte"       := rTParte."N§ Parte";
+
+      IF pConcepto='V' THEN BEGIN
+        rRCA.Concepto           := rPar."Codigo Viajes";
+        rRCA.Cantidad           := rTParte."N§ Viajes";
+        rRCA."Indicador Viajes" := TRUE;
+      END
+      ELSE BEGIN
+        rRCA.Concepto            := rPar."Codigo Maletas";
+        rRCA.Cantidad            := rTParte.Adultos + rTParte.Ni¤os;
+        rRCA."Indicador Maletas" := TRUE;
+      END;
+      rRCA."Cantidad C lculo"    := rRCA.Cantidad;
+      rRCA."Pax Transportado"    := rTParte.Adultos + rTParte.Ni¤os;
+      rRCA."Tipo Vehiculo"       := rTParte."Tipo Vehiculo";
+      rRCA.Garaje                := rTParte.Garaje;
+
+      //Calculamos la zona fisica que debemos introducir.
+      rRCA."Zona f¡sica" := CalcularZonaFisica(rTParte."N§ Parte",rTParte."Cod Conductor");
+
+      IF lrVeh.GET(rTParte.Matricula) THEN
+        rRCA."Num Vehiculo"  := lrVeh.Numero;
+
+      rRCA.INSERT(TRUE);
+
+      IF rRCA."Zona f¡sica"='' THEN BEGIN
+        IF pMostrarError THEN
+          ERROR(FALTA_ZONA_FISICA,rTParte."N§ Parte")
+        ELSE
+          //... Estamos en el proceso de generaci¢n. Lo que hacemos es grabar un error.
+          cCond.CreaRegistroError(FALTA_ZONA_FISICA2,rTParte."Cod Conductor",rTParte.Conductor,
+                                rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE);
+      END;
+
+      IF rRCA."Tipo Vehiculo"='' THEN BEGIN
+        IF pMostrarError THEN
+          ERROR(FALTA_TIPO_VEHICULO,rTParte."N§ Parte")
+        ELSE
+          //... Estamos en el proceso de generaci¢n. Lo que hacemos es grabar un error.
+          cCond.CreaRegistroError(FALTA_TIPO_VEHICULO2,rTParte."Cod Conductor",rTParte.Conductor,
+                                rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE);
+      END;
+    END;
+
+    PROCEDURE ActFechaConductor@21(rTParte@1100244000 : Record 7010343;pFecha@1100244001 : Date);
+    VAR
+      rParte@1100244002 : Record 7010360;
+    BEGIN
+      //ActFechaConductor.
+      //Marcamos que el parte ha sido asociado a esa fecha de actividad del conductor.
+
+      IF rParte.GET(rTParte."N§ Parte") THEN
+      BEGIN
+        rParte."Fecha conductor" := pFecha;
+        rParte.MODIFY;
+      END;
+    END;
+
+    PROCEDURE Validacion@2(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10]);
+    VAR
+      rPeriodo@1100244002 : Record 7010338;
+      ERROR_FALTAN_HORAS@1100244003 : TextConst 'ESP=Hay que introducir todas las horas.';
+      ERROR_FALTA_FECHA@1100244004 : TextConst 'ESP=Hay que introducir las fechas reales.';
+      SOLAPE_DETECTADO@1100244005 : TextConst 'ESP="Hay un periodo que se solapa con el periodo: %1 "';
+      cCond@1100244006 : Codeunit 7010313;
+      vPeriodoSolape@1100244007 : Text[40];
+      ERROR_SOLAPE_HERMANO@1100244008 : TextConst 'ESP=Se ha detectatado un solapamiento horario entre estos periodos';
+      ERROR_CONTIGUIDAD@1100244009 : TextConst 'ESP=Se ha detectado una incongruencia de contiguidad con el periodo %1';
+    BEGIN
+      //Validacion(pFecha,pConductor).
+      //Validaremos en una primera fase que no falten datos y en una segunda que no haya solapamiento.
+
+      //QUE NO FALTEN DATOS BASICOS.
+      rPeriodo.RESET;
+      rPeriodo.SETCURRENTKEY(Conductor, Fecha, "Fecha Real", "Hora Inicio");
+      rPeriodo.SETRANGE(Conductor, pConductor);
+      rPeriodo.SETRANGE(Fecha    , pFecha);
+      IF rPeriodo.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF (rPeriodo."Hora Inicio" = 0T) AND (rPeriodo."Hora Fin" = 0T) THEN
+            //Sin duda, no hab¡a intencionalidad de crear este registro.
+            ERROR(ERROR_FALTAN_HORAS)
+          ELSE
+          BEGIN
+            IF rPeriodo."Fecha Real" = 0D THEN
+              ERROR(ERROR_FALTA_FECHA);
+
+            IF (rPeriodo."Hora Inicio" = 0T) OR (rPeriodo."Hora Fin" = 0T) THEN
+              ERROR(ERROR_FALTAN_HORAS);
+          END;
+        UNTIL rPeriodo.NEXT=0;
+      END;
+
+      //QUE NO HAYA SOLAPAMIENTO CON LOS MISMOS PERIODOS-HERMANOS.
+      vPeriodoSolape := '';
+      IF rPeriodo.FINDSET THEN
+      BEGIN
+        REPEAT
+          //Revisamos que no solape con alguno de los otros periodos.
+          IF cCond.TestSolapePeriodosHermanos(rPeriodo,vPeriodoSolape) THEN
+            ERROR(ERROR_SOLAPE_HERMANO);
+        UNTIL rPeriodo.NEXT=0;
+      END;
+
+      //QUE NO HAYA SOLAPAMIENTO CON OTROS PERIDOS YA VALIDADOS.
+      IF rPeriodo.FINDSET THEN
+      BEGIN
+        REPEAT
+          //Revisamos que no solape con alguno de los otros periodos.
+          IF cCond.TestSolapePeriodo(rPeriodo,vPeriodoSolape) THEN
+            ERROR(SOLAPE_DETECTADO,vPeriodoSolape);
+
+          //Revisamos que no haya periodos cronologicamente superiores asignados a una fecha
+          //de actividad anterior. Lo mismo para los cronologicamente anteriores con una
+          //fecha superior.
+          IF NOT cCond.TestContiguidad(rPeriodo,vPeriodoSolape) THEN
+            ERROR(ERROR_CONTIGUIDAD,vPeriodoSolape);
+        UNTIL rPeriodo.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE TestMaletasTS@7(pTS@1100244000 : Code[10]) : Boolean;
+    VAR
+      i@1100244001 : Integer;
+    BEGIN
+      // TestMaletasTS
+      //
+      FOR i := 1 TO 10 DO BEGIN
+        IF vMatrizTS[i] <> '' THEN
+          IF pTS = vMatrizTS[i] THEN
+            EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE LlenarMatrizTS@12();
+    VAR
+      rTS@1100244000 : Record 7010319;
+      Contador@1100244001 : Integer;
+      DEMASIADOS_TS@1100244002 : TextConst 'ESP="Se han definido m s de 10 tipos de servicio. "';
+    BEGIN
+      Contador := 0;
+      rTS.RESET;
+      IF rTS.FINDSET THEN REPEAT
+        IF rTS."Calcular Maletas" THEN BEGIN
+          Contador := Contador + 1;
+          IF Contador > 10 THEN
+            ERROR(DEMASIADOS_TS);
+          vMatrizTS[Contador] := rTS.Codigo;
+        END;
+      UNTIL rTS.NEXT=0;
+    END;
+
+    PROCEDURE TestPartes@5(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date);
+    VAR
+      VALIDACION_INTERRUMPIDA@1100244002 : TextConst 'ESP=Validaci¢n interrumpida';
+      rParte@1100244003 : Record 7010360;
+      SIN_PARTES@1100244004 : TextConst 'ESP=No se ha validado el registro de actividad';
+      AVISO_SIN_PARTES@1100244005 : TextConst 'ESP=No se ha encontrado ning£n parte asignado a este registro de actividad. ¨Validar de todos modos?';
+      rRA@1100244007 : Record 7010332;
+    BEGIN
+      // TestPartes.
+      // Si el registro de actividad est  confirmado no podemos permitir que un parte
+      // correspondiente a este conductor haya quedado sin asignar.
+      rParte.RESET;
+      rParte.SETCURRENTKEY("Cod Conductor",Fecha);
+      rParte.SETRANGE(rParte."Cod Conductor",pConductor);
+      rParte.SETRANGE(Fecha,pFecha);
+      rParte.SETRANGE("Fecha conductor",0D);
+      IF rParte.FINDFIRST THEN
+        IF NOT CONFIRM(Text002+rParte."N§ Parte"+Text003) THEN
+          ERROR(VALIDACION_INTERRUMPIDA);
+
+
+      //Si no hay ning£n parte asignable para este d¡a, damos un mensaje por pantalla y
+      //dejamos continuar o no.
+      //Tengamos en cuenta que puede ocurrir que NO siempre el parte refleje al conductor.
+      //Por ejemplo, cuando un conductor se pone enfermo a medio parte, etc.
+      rRA.RESET;
+      rRA.SETCURRENTKEY(Conductor,Fecha);
+      rRA.SETRANGE(Conductor,pConductor);
+      rRA.SETRANGE(Fecha,pFecha);
+      IF rRA.FINDFIRST THEN BEGIN
+        rRA.CALCFIELDS("N§ Partes");
+        IF rRA."N§ Partes" = 0 THEN BEGIN
+          IF NOT CONFIRM(AVISO_SIN_PARTES) THEN
+            ERROR(SIN_PARTES);
+        END;
+      END;
+    END;
+
+    PROCEDURE TestModifManual@8(pConcepto@1100244000 : Char;pFecha@1100244001 : Date;pConductor@1100244002 : Code[10]) : Boolean;
+    VAR
+      rRA@1100244003 : Record 7010332;
+    BEGIN
+      // TestModifManual.
+      IF rRA.GET(pFecha,pConductor) THEN BEGIN
+        IF pConcepto = 'V' THEN BEGIN
+          rRA.CALCFIELDS("Viajes modif. manualmente","N§ Viajes");
+          IF (rRA."Viajes modif. manualmente") AND (rRA."N§ Viajes" <> 0) THEN
+            EXIT(TRUE);
+        END
+        ELSE BEGIN
+          rRA.CALCFIELDS("Maletas modif. manualmente",Maletas);
+          IF (rRA."Maletas modif. manualmente") AND (rRA.Maletas <> 0) THEN
+            EXIT(TRUE);
+        END;
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE BorrarLineas@13(pConcepto@1100244000 : Text[1];pFecha@1100244001 : Date;pConductor@1100244002 : Code[10]);
+    VAR
+      rRCA@1100244003 : Record 7035336;
+    BEGIN
+      // BorrarLineas.
+      // Como los viajes es posible que se recalculen entonces borramos los que pudiera haber.
+      rRCA.RESET;
+      rRCA.SETCURRENTKEY(Conductor,Fecha);
+      rRCA.SETRANGE(Conductor,pConductor);
+      rRCA.SETRANGE(Fecha,pFecha);
+      IF pConcepto='V' THEN
+        rRCA.SETRANGE("Indicador Viajes",TRUE)
+      ELSE
+        rRCA.SETRANGE("Indicador Maletas",TRUE);
+
+      rRCA.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE CalcularZonaFisica@15(pNumParte@1100244000 : Code[10];pConductor@1100244001 : Code[10]) : Code[10];
+    VAR
+      rSP@1100244004 : Record 7010359;
+      vResult@1100244005 : Code[10];
+      vOrden@1100244006 : Decimal;
+      vAuxOrden@1100244007 : Integer;
+      vAuxZF@1100244008 : Code[10];
+    BEGIN
+      // CalcularZonaFisica(rTParte."N§ Parte",rTParte."Tabla Auxiliar");
+      vResult := '';
+      vOrden  := -1;
+
+      rSP.RESET;
+      rSP.SETCURRENTKEY("N§ Parte");
+      rSP.SETRANGE("N§ Parte",pNumParte);
+      IF rSP.FINDSET THEN REPEAT
+        ObtenerZonaFisica(rSP."Punto recogida",vAuxOrden,vAuxZF);
+        IF vAuxOrden > vOrden THEN BEGIN
+          vOrden  := vAuxOrden;
+          vResult := vAuxZF;
+        END;
+      UNTIL rSP.NEXT=0;
+
+      EXIT(vResult);
+    END;
+
+    PROCEDURE ObtenerZonaFisica@18(pPR@1100244000 : Code[10];VAR vAuxOrden@1100244001 : Integer;VAR vAuxZF@1100244002 : Code[10]);
+    VAR
+      rPR@1100244003 : Record 7010315;
+      rZF@1100244004 : Record 7010314;
+    BEGIN
+      //ObtenerZonaFisica(pPR,vAuxOrden,vAuxZF);
+      vAuxOrden := -1;
+      vAuxZF    := '';
+      IF rPR.GET(pPR) THEN BEGIN
+        IF rZF.GET(rPR."Zona fisica") THEN BEGIN
+          vAuxOrden := rZF.Orden;
+          vAuxZF    := rZF.Codigo;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetSaltarControlPartes@1103355000(pwSaltar@1103355000 : Boolean);
+    BEGIN
+      // SetSaltarControlPartes
+      // JPT 30/08/06 Se da valor a la variable que sirve para no hacer el test de partes
+      // necesario para macro Invisa
+
+      wSaltarControlPartes := pwSaltar;
+    END;
+
+    BEGIN
+    {
+      // AJS En la rutina AcumularxConcepto hay que descontar los paxes de las ayudas
+
+      $001 AJS 26012015 He modificado las funciones que modifican registros para que trabajen con dos apuntadores
+    }
+    END.
+  }
+}

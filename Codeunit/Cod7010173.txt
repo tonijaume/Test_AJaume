@@ -1,0 +1,610 @@
+OBJECT Codeunit 7010173 Generar pre-liquidaciones excu
+{
+  OBJECT-PROPERTIES
+  {
+    Date=18/12/14;
+    Time=[ 3:26:41];
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            GenerarInformes;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rPar@1100217000 : Record 7009700;
+      wDialog@1100217001 : Dialog;
+      Text001@1100217002 : TextConst 'ENU=Creating preliquidations : #1###########################;ESP=Generando preliquidaciones : #1###########################';
+      wColCobro@1100217003 : Integer;
+      wColPrimerCobro@1100217004 : Integer;
+      Text002@1100217005 : TextConst 'ENU=SALES PERIOD;ESP="PERIODO VENTA "';
+      Text003@1100217006 : TextConst 'ENU=CURRENCY DATE;ESP=FECHA CAMBIO';
+      Text004@1100217007 : TextConst 'ENU=TICKET;ESP=CUPON';
+      Text005@1100217008 : TextConst 'ENU=SERVICE;ESP=SERVICIO';
+      Text006@1100217009 : TextConst 'ENU=PAX;ESP=PAX';
+      Text007@1100217010 : TextConst 'ENU=SERVICE DATE;ESP=FECHA SERVICIO';
+      Text008@1100217011 : TextConst 'ENU=SALE DATE;ESP=FECHA VENTA';
+      Text009@1100217012 : TextConst 'ENU=AMOUNT;ESP=IMPORTE';
+      Text010@1100217013 : TextConst 'ENU=PAYMENTS;ESP=COBROS';
+      Text011@1100217014 : TextConst 'ENU=DISCOUNTS / SUPPLEMENTS;ESP=DESCUENTOS / SUPLEMENTOS';
+      Text012@1100217015 : TextConst 'ENU=PRELIQUIDATION REPORT;ESP=INFORME PRELIQUIDACION';
+      Text013@1100217016 : TextConst 'ENU=REFUND / CANCEL DATE;ESP=FECHA ANULACION / REEMBOLSO';
+      Text014@1100217017 : TextConst 'ENU=S;ESP=V';
+      Text015@1100217018 : TextConst 'ENU=C;ESP=A';
+      Text016@1100217019 : TextConst 'ENU=R;ESP=R';
+      Text017@1100217020 : TextConst 'ENU=Created day;ESP=Creado dia';
+      pwd@1100217021 : TextConst 'ENU=ATNSEC;ESP=ATNSEC';
+      Text018@1100217022 : TextConst 'ENU=PAYMENTS SUMMARY;ESP=RESUMEN COBROS';
+      Text019@1100217023 : TextConst 'ENU=HOTEL;ESP=HOTEL';
+      Text020@1100217024 : TextConst 'ENU=ADULTS;ESP=ADULTOS';
+      Text021@1100217025 : TextConst 'ENU=CHILDS;ESP=NI¥OS';
+      Text022@1100217026 : TextConst 'ENU=ADULTS PRICE;ESP=PRECIO ADULTOS';
+      Text023@1100217027 : TextConst 'ENU=CHILDS PRICE;ESP=PRECIO NI¥OS';
+
+    PROCEDURE GenerarInformes@1100217000();
+    VAR
+      lrRep@1100217000 : Record 7010241;
+      lrUser@1100217001 : Record 91;
+      lrRsv@1100217002 : Record 7010162;
+      lcExcursion@1100217003 : Codeunit 7010141;
+    BEGIN
+      // GenerarInformes
+
+      rPar.FINDFIRST;
+
+      lrUser.GET(USERID);
+
+      //+$001 <
+      //. Desmarcamos el campo seleccionado para que procesos anteriores no ocasionen problemas
+      lrRep.RESET;
+      lrRep.MODIFYALL(Seleccionado, FALSE);
+      COMMIT;
+      lcExcursion.SeleccionRepresentantes;
+      //+$001 >
+
+      //. Para los cobros habra tantas columnas como combinaciones de Divisa y Forma de pago
+      //. Aqui guardamos cual sera la primera columna a partir de la cual ir poniendo los cobros de cada reserva
+      //-$003wColPrimerCobro := 11;
+      wColPrimerCobro := 16;
+
+      //. Recorremos todos los representantes para comprobar si tienen al menos una reserva sin liquidar
+      lrRep.RESET;
+      lrRep.SETRANGE(Bloqueado          , FALSE);
+      lrRep.SETRANGE("Trabaja a credito", FALSE);
+      IF (lrUser."Oficina Excursiones" <> '') OR (rPar."Control tickets x oficina") THEN
+        lrRep.SETRANGE("Oficina ventas", lrUser."Oficina Excursiones");
+      lrRep.SETRANGE(Seleccionado, TRUE); //$001
+      IF lrRep.FINDSET THEN
+      BEGIN
+        wDialog.OPEN(Text001);
+        REPEAT
+          wDialog.UPDATE(1, lrRep.Nombre);
+
+          lrRsv.RESET;
+          lrRsv.SETCURRENTKEY("Guia Venta");
+          lrRsv.SETRANGE ("Guia Venta"          , lrRep.Codigo);
+          lrRsv.SETRANGE ("Liquidado GV"        , FALSE);
+          lrRsv.SETFILTER("Fecha Venta"         , '<>%1', 0D);
+          lrRsv.SETFILTER("N§ Ticket"           , '<>%1', '');
+          lrRsv.SETRANGE ("Cobros con problemas", FALSE); //+$004
+          IF NOT lrRsv.ISEMPTY THEN
+          BEGIN
+            IF rPar."Facturar tickets x fecha venta" THEN
+              _InformeGuia(lrRep.Codigo)
+            ELSE
+              _InformeMesVenta(lrRep.Codigo, 010199D, TODAY);
+          END;
+        UNTIL lrRep.NEXT = 0;
+        wDialog.CLOSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE _InformeGuia@1100217002(pwGuia@1100217000 : Code[20]);
+    VAR
+      lrMesVentaTMP@1100217001 : TEMPORARY Record 2000000007;
+      lrRsv@1100217002 : Record 7010162;
+      lwFecha@1100217004 : Date;
+    BEGIN
+      // _InformeGuia
+
+      //. Esta funcion busca dentro de las reservas de un guia si hay distinto meses de venta
+
+      //. Vaciar la tabla temporal
+      lrMesVentaTMP.RESET;
+      lrMesVentaTMP.DELETEALL;
+
+      //. Recorrer las reservas del guia para crear un temporal de meses de venta
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Guia Venta");
+      lrRsv.SETRANGE ("Guia Venta"          , pwGuia);
+      lrRsv.SETRANGE ("Liquidado GV"        , FALSE);
+      lrRsv.SETFILTER("Fecha Venta"         , '<>%1', 0D);
+      lrRsv.SETFILTER("N§ Ticket"           , '<>%1', '');
+      lrRsv.SETRANGE ("Cobros con problemas", FALSE); //+$004
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Las reembolsadas las voy a colocar en el mes de reembolso
+          //. Las ventas normales las voy a colocar en el mes de venta
+          IF (lrRsv.Reembolsada) OR (lrRsv.Anulada) THEN //+$002
+            lwFecha := lrRsv."Fecha anulaci¢n/Reembolso"
+          ELSE
+            lwFecha := lrRsv."Fecha Venta";
+
+          lrMesVentaTMP.RESET;
+          lrMesVentaTMP.SETRANGE("Period Type" , lrMesVentaTMP."Period Type"::Month);
+          lrMesVentaTMP.SETRANGE("Period Start", _PrimDiaMes(lwFecha));
+          IF NOT lrMesVentaTMP.FINDFIRST THEN
+          BEGIN
+            lrMesVentaTMP.INIT;
+            lrMesVentaTMP."Period Type"  := lrMesVentaTMP."Period Type"::Month;
+            lrMesVentaTMP."Period Start" := _PrimDiaMes(lwFecha);
+            lrMesVentaTMP."Period End"   := _UltimoDiaMes(lrMesVentaTMP."Period Start");
+            lrMesVentaTMP.INSERT;
+
+            _InformeMesVenta(pwGuia, lrMesVentaTMP."Period Start", lrMesVentaTMP."Period End");
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _InformeMesVenta@1100217003(pwGuia@1100217000 : Code[20];pwFechaDesde@1100217001 : Date;pwFechaHasta@1100217002 : Date);
+    VAR
+      lrFechaCambioTMP@1100217004 : TEMPORARY Record 2000000007;
+      lrRsv@1100217003 : Record 7010162;
+    BEGIN
+      // _InformeMesVenta
+
+      //. Esta funcion busca dentro de un mes de venta, si hay distintas fechas de cambio divisa
+
+      //. Vaciar la tabla temporal
+      lrFechaCambioTMP.RESET;
+      lrFechaCambioTMP.DELETEALL;
+
+      //. Recorrer las reservas del guia y mes de venta para crear un temporal de fechas de cambio divisa
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Guia Venta");
+      lrRsv.SETRANGE ("Guia Venta"          , pwGuia);
+      lrRsv.SETRANGE ("Fecha Venta"         , pwFechaDesde, pwFechaHasta);
+      lrRsv.SETRANGE ("Liquidado GV"        , FALSE);
+      lrRsv.SETFILTER("N§ Ticket"           , '<>%1', '');
+      lrRsv.SETRANGE ("Cobros con problemas", FALSE); //+$004
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Para el temporal de fechas de cambio no importa el estado de la reserva
+          lrFechaCambioTMP.RESET;
+          lrFechaCambioTMP.SETRANGE("Period Type" , lrFechaCambioTMP."Period Type"::Date);
+          lrFechaCambioTMP.SETRANGE("Period Start", lrRsv."Fecha cambio");
+          IF NOT lrFechaCambioTMP.FINDFIRST THEN
+          BEGIN
+            lrFechaCambioTMP.INIT;
+            lrFechaCambioTMP."Period Type"  := lrFechaCambioTMP."Period Type"::Date;
+            lrFechaCambioTMP."Period Start" := lrRsv."Fecha cambio";
+            lrFechaCambioTMP.INSERT;
+
+            _InformeFechaCambio(pwGuia, pwFechaDesde, pwFechaHasta, lrFechaCambioTMP."Period Start");
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END
+      //. Pueden existir periodos en los que solo hay reservas reembolsadas
+      ELSE
+      BEGIN
+        lrRsv.SETRANGE("Fecha Venta");
+        lrRsv.SETRANGE("Fecha anulaci¢n/Reembolso", pwFechaDesde, pwFechaHasta);
+        IF lrRsv.FINDSET THEN
+        BEGIN
+          REPEAT
+            //. Para el temporal de fechas de cambio no importa el estado de la reserva
+            lrFechaCambioTMP.RESET;
+            lrFechaCambioTMP.SETRANGE("Period Type" , lrFechaCambioTMP."Period Type"::Date);
+            lrFechaCambioTMP.SETRANGE("Period Start", lrRsv."Fecha cambio");
+            IF NOT lrFechaCambioTMP.FINDFIRST THEN
+            BEGIN
+              lrFechaCambioTMP.INIT;
+              lrFechaCambioTMP."Period Type"  := lrFechaCambioTMP."Period Type"::Date;
+              lrFechaCambioTMP."Period Start" := lrRsv."Fecha cambio";
+              lrFechaCambioTMP.INSERT;
+
+              _InformeFechaCambio(pwGuia, pwFechaDesde, pwFechaHasta, lrFechaCambioTMP."Period Start");
+            END;
+          UNTIL lrRsv.NEXT = 0;
+        END
+      END;
+    END;
+
+    PROCEDURE _InformeFechaCambio@1100217007(pwGuia@1100217000 : Code[20];pwFechaDesde@1100217001 : Date;pwFechaHasta@1100217002 : Date;pwFechaCambio@1100217003 : Date);
+    VAR
+      lrRsv@1100217004 : Record 7010162;
+      lrRsvTMP@1100217005 : TEMPORARY Record 7010162;
+      lrCobrosTMP@1100217006 : TEMPORARY Record 7010240;
+    BEGIN
+      // _InformeFechaCambio
+
+      //. Esta funcion va a crear un temporal de reservas y cobros para exportar despues al excel
+
+      //. Borramos la tabla temporal
+      lrRsvTMP.RESET;
+      lrRsvTMP.DELETEALL;
+
+      lrCobrosTMP.RESET;
+      lrCobrosTMP.DELETEALL;
+
+      wColCobro    := wColPrimerCobro;
+
+      //. Recorrer las reservas del guia y mes de venta para crear un temporal de fechas de cambio divisa
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Guia Venta");
+      lrRsv.SETRANGE ("Guia Venta"          , pwGuia);
+      lrRsv.SETRANGE ("Fecha Venta"         , pwFechaDesde, pwFechaHasta);
+      lrRsv.SETRANGE ("Fecha cambio"        , pwFechaCambio);
+      lrRsv.SETRANGE ("Liquidado GV"        , FALSE);
+      lrRsv.SETFILTER("N§ Ticket"           , '<>%1', '');
+      lrRsv.SETRANGE ("Cobros con problemas", FALSE); //+$004
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsvTMP := lrRsv;
+          lrRsvTMP.INSERT;
+
+          _GestionTemporalCobros(lrCobrosTMP, lrRsv.Delegacion, lrRsv."N§ Reserva");
+        UNTIL lrRsv.NEXT = 0;
+      END;
+
+      //. Recorremos tambien las reservas que se reembolsaron en ese periodo para incluirlas en el temporal
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Guia Venta");
+      lrRsv.SETRANGE("Guia Venta"               , pwGuia);
+      lrRsv.SETRANGE("Fecha anulaci¢n/Reembolso", pwFechaDesde, pwFechaHasta);
+      lrRsv.SETRANGE("Fecha cambio"             , pwFechaCambio);
+      lrRsv.SETRANGE("Liquidado GV"             , FALSE);
+      lrRsv.SETFILTER("N§ Ticket"   , '<>%1', '');
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsvTMP := lrRsv;
+          IF NOT lrRsvTMP.FIND THEN
+          BEGIN
+            lrRsvTMP.INSERT;
+
+            _GestionTemporalCobros(lrCobrosTMP, lrRsv.Delegacion, lrRsv."N§ Reserva");
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+
+      _GenerarExcel(pwGuia, pwFechaDesde, pwFechaHasta, pwFechaCambio, lrRsvTMP, lrCobrosTMP);
+    END;
+
+    LOCAL PROCEDURE _GestionTemporalCobros@1100217009(VAR prCobrosTMP@1100217000 : TEMPORARY Record 7010240;pwDelegacion@1100217002 : Code[10];pwReserva@1100217001 : Integer);
+    VAR
+      lrCobro@1100217003 : Record 7010240;
+    BEGIN
+      // _GestionTemporalCobros
+
+      //. Guardar cada combinacion de divisa/forma pago
+
+      lrCobro.RESET;
+      lrCobro.SETRANGE (Delegacion   , pwDelegacion);
+      lrCobro.SETRANGE ("Num Reserva", pwReserva);
+      lrCobro.SETFILTER("Importe Recibido", '<>%1', 0);
+      IF lrCobro.FINDSET THEN
+      BEGIN
+        REPEAT
+          prCobrosTMP.SETRANGE("Forma de Pago", lrCobro."Forma de Pago");
+          prCobrosTMP.SETRANGE("Cod. Divisa"  , lrCobro."Cod. Divisa");
+          IF NOT prCobrosTMP.FINDFIRST THEN
+          BEGIN
+            prCobrosTMP.INIT;
+            prCobrosTMP."ID Cobro"      := wColCobro;
+            prCobrosTMP."Forma de Pago" := lrCobro."Forma de Pago";
+            prCobrosTMP."Cod. Divisa"   := lrCobro."Cod. Divisa";
+            prCobrosTMP.INSERT;
+
+            wColCobro += 1;
+          END;
+
+          IF lrCobro.Reembolsado THEN
+            prCobrosTMP."Importe Recibido" -= lrCobro."Importe Recibido"
+          ELSE
+            prCobrosTMP."Importe Recibido" += lrCobro."Importe Recibido";
+          prCobrosTMP.MODIFY;
+        UNTIL lrCobro.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GenerarExcel@1100217016(pwGuia@1100217003 : Code[20];pwFechaDesde@1100217002 : Date;pwFechaHasta@1100217001 : Date;pwFechaCambio@1100217000 : Date;VAR prRsvTMP@1100217004 : TEMPORARY Record 7010162;VAR prCobrosTMP@1100217005 : TEMPORARY Record 7010240);
+    VAR
+      lrRep@1100217008 : Record 7010241;
+      lrExc@1100217010 : Record 7009710;
+      lrCobro@1100217012 : Record 7010240;
+      lrCompanyInfo@1100217016 : Record 79;
+      lcExcel@1100217006 : Codeunit 7009755;
+      lcNom@1100217015 : Codeunit 7009702;
+      lwFila@1100217007 : Integer;
+      lwSigno@1100217013 : Integer;
+      lwEstado@1100217009 : Text[2];
+      lwTextoSuplementos@1100217011 : Text[250];
+      lwTexto@1100217014 : Text[30];
+      lwTotalVenta@1000000000 : Decimal;
+      lwTextFormula@1000000001 : Text[30];
+    BEGIN
+      // _GenerarExcel
+
+      lrCompanyInfo.FINDFIRST; //+$004
+      lwTotalVenta := 0; //+$005
+
+      //. Vamos a crear un libro excel y rellenarlo con las reservas del temporal
+
+      lcExcel.Nuevo;
+
+      //-$004lcExcel.ValorCelda(1, 1, COMPANYNAME, FALSE, FALSE, FALSE);
+      lcExcel.ValorCelda(1, 1, lrCompanyInfo.Name, FALSE, FALSE, FALSE); //+$004
+
+      lrRep.GET(pwGuia);
+      lcExcel.ValorCelda(1, 4, lrRep.Nombre, TRUE, FALSE, FALSE);
+      lcExcel.Rango(1, 4, 1, 7);
+      lcExcel.CombinarCeldas;
+      lcExcel.ValorCelda(1, wColCobro - 2, Text017, TRUE, FALSE, FALSE);
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.ValorCelda(1, wColCobro - 1, FORMAT(WORKDATE), FALSE, FALSE, FALSE);
+
+      lcExcel.ValorCelda(2, 4, Text012, TRUE, FALSE, FALSE);
+      lcExcel.Rango(2, 4, 2, 7);
+      lcExcel.CombinarCeldas;
+
+      lcExcel.ValorCelda(4, 4, Text002, TRUE, FALSE, FALSE);
+      lcExcel.Rango(4, 4, 4, 5);
+      lcExcel.CombinarSinCentrar;
+      lcExcel.ValorCelda(4, 6, FORMAT(pwFechaDesde), FALSE, FALSE, FALSE);
+      lcExcel.ValorCelda(4, 7, FORMAT(pwFechaHasta), FALSE, FALSE, FALSE);
+
+      lcExcel.ValorCelda(5, 4, Text003, TRUE, FALSE, FALSE);
+      lcExcel.Rango(5, 4, 5, 5);
+      lcExcel.CombinarSinCentrar;
+      lcExcel.ValorCelda(5, 6, FORMAT(pwFechaCambio), FALSE, FALSE, FALSE);
+
+      lcExcel.ValorCelda(7, 1, Text004, TRUE, FALSE, FALSE); //. TICKET
+      lcExcel.AnchoColumna(12);
+      lcExcel.ValorCelda(7, 2, Text005, TRUE, FALSE, FALSE); //. EXCURSION
+      lcExcel.AnchoColumna(40);
+      //+$003 <
+      lcExcel.ValorCelda(7, 3, Text019, TRUE, FALSE, FALSE); //. HOTEL
+      lcExcel.AnchoColumna(40);
+      lcExcel.ValorCelda(7, 4, Text020, TRUE, FALSE, FALSE); //. ADULTOS
+      lcExcel.AnchoColumna(8);
+      lcExcel.CentrarTexto;
+      lcExcel.ValorCelda(7, 5, Text021, TRUE, FALSE, FALSE); //. NI¥OS
+      lcExcel.AnchoColumna(8);
+      lcExcel.CentrarTexto;
+      //+$003 >
+      lcExcel.ValorCelda(7, 6, Text006, TRUE, FALSE, FALSE); //. PERSONAS
+      lcExcel.CentrarTexto;
+      lcExcel.AnchoColumna(10);
+      lcExcel.ValorCelda(7, 7, Text007, TRUE, FALSE, FALSE); //. FECHA SERVICIO
+      lcExcel.AnchoColumna(10);
+      lcExcel.AjustarTexto;
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.ValorCelda(7, 8, Text008, TRUE, FALSE, FALSE); //. FECHA VENTA
+      lcExcel.AnchoColumna(10);
+      lcExcel.AjustarTexto;
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.ValorCelda(7, 9, Text013, TRUE, FALSE, FALSE); //. FECHA ANULACION/REEMBOLSO
+      lcExcel.AnchoColumna(12);
+      lcExcel.AjustarTexto;
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      //+$003 <
+      lcExcel.ValorCelda(7, 10, Text022, TRUE, FALSE, FALSE); //. PRECIO ADULTOS
+      lcExcel.AnchoColumna(10);
+      lcExcel.AjustarTexto;
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.ValorCelda(7, 11, Text023, TRUE, FALSE, FALSE); //. PRECIO NI¥OS
+      lcExcel.AnchoColumna(10);
+      lcExcel.AjustarTexto;
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      //+$003 >
+      lcExcel.ValorCelda(7, 12, Text009, TRUE, FALSE, FALSE); //. IMPORTE
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.AnchoColumna(10);
+      lcExcel.ValorCelda(7, 13, Text010, TRUE, FALSE, FALSE); //. COBROS
+      lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+      lcExcel.AnchoColumna(10);
+      lcExcel.ValorCelda(7, 14, Text011, TRUE, FALSE, FALSE); //. DESCUENTOS/SUPLEMENTOS
+      lcExcel.AnchoColumna(30);
+      lcExcel.ValorCelda(7, 15, prRsvTMP.FIELDCAPTION(TourOperador), TRUE, FALSE, FALSE); //. TOUROPERADOR
+      lcExcel.AnchoColumna(14);
+
+      //. Cabeceras de los cobros
+      prCobrosTMP.RESET;
+      IF prCobrosTMP.FINDSET THEN
+      BEGIN
+        REPEAT
+          lcExcel.ValorCelda(7, prCobrosTMP."ID Cobro", prCobrosTMP."Forma de Pago" + ' / ' + prCobrosTMP."Cod. Divisa",
+                             TRUE, FALSE, FALSE);
+          lcExcel.Rango(7, prCobrosTMP."ID Cobro", 7, prCobrosTMP."ID Cobro");
+          lcExcel.AnchoColumna(10);
+          lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+          lcExcel.AjustarTexto;
+        UNTIL prCobrosTMP.NEXT = 0;
+      END;
+
+      lwFila := 7;
+
+      prRsvTMP.RESET;
+      prRsvTMP.SETCURRENTKEY("N§ Ticket");
+      prRsvTMP.FINDSET;
+      lcExcel.ValorCelda(5, 7, FORMAT(prRsvTMP."Tipo cambio"), FALSE, FALSE, FALSE);
+      REPEAT
+        IF prRsvTMP.Reembolsada THEN
+          lwSigno := -1
+        ELSE
+          lwSigno := 1;
+
+        lwFila += 1;
+
+        lwEstado := Text014 + ' ';
+        IF prRsvTMP.Anulada THEN
+          lwEstado := Text015 + ' ';
+        IF prRsvTMP.Reembolsada THEN
+          lwEstado := Text016 + ' ';
+
+        prRsvTMP.CALCFIELDS("Importe cobros");
+
+        lwTextoSuplementos := _GetTextoSuplementos(prRsvTMP.Delegacion, prRsvTMP."N§ Reserva");
+
+        lcExcel.ValorCelda(lwFila, 1, lwEstado + prRsvTMP."N§ Ticket", FALSE, FALSE, FALSE); //. TICKET
+        lcExcel.ValorCelda(lwFila, 2, lcNom.nom_producto(prRsvTMP.Producto), FALSE, FALSE, FALSE); //. EXCURSION
+        //+$003 <
+        lcExcel.ValorCelda(lwFila, 3, lcNom.nom_hotel(prRsvTMP."Hotel Cliente"), FALSE, FALSE, FALSE); //. HOTEL
+        lcExcel.ValorCelda(lwFila, 4, FORMAT(prRsvTMP.Adultos), FALSE, FALSE, FALSE); //. ADULTOS
+        lcExcel.CentrarTexto;
+        lcExcel.ValorCelda(lwFila, 5, FORMAT(prRsvTMP.Ni¤os) , FALSE, FALSE, FALSE); //. NI¥OS
+        lcExcel.CentrarTexto;
+        //+$003 >
+        lcExcel.ValorCelda(lwFila, 6, FORMAT(prRsvTMP.Adultos) + '.' +  FORMAT(prRsvTMP.Ni¤os) , FALSE, FALSE, FALSE); //. PERSONAS
+        lcExcel.CentrarTexto;
+        lcExcel.ValorCelda(lwFila, 7, FORMAT(prRsvTMP."Fecha Excursion"), FALSE, FALSE, FALSE); //. FECHA SERVICIO
+        lcExcel.ValorCelda(lwFila, 8, FORMAT(prRsvTMP."Fecha Venta"), FALSE, FALSE, FALSE); //. FECHA VENTA
+        lcExcel.ValorCelda(lwFila, 9, FORMAT(prRsvTMP."Fecha anulaci¢n/Reembolso"), FALSE, FALSE, FALSE); //. FECHA VENTA
+        //+$003 <
+        lcExcel.ValorCelda(lwFila, 10, FORMAT(prRsvTMP."Precio Adulto"), FALSE, FALSE, FALSE); //. PRECIO ADULTOS
+        lcExcel.ValorCelda(lwFila, 11, FORMAT(prRsvTMP."Precio Ni¤o") , FALSE, FALSE, FALSE); //. PRECIO NI¥OS
+        //+$003 >
+        lcExcel.ValorCelda(lwFila, 12, FORMAT(lwSigno * prRsvTMP."Ingreso comisionable"), FALSE, FALSE, FALSE); //. IMPORTE
+
+        lwTotalVenta += (lwSigno * prRsvTMP."Ingreso comisionable"); //+$005
+
+        lcExcel.ValorCelda(lwFila, 13, FORMAT(lwSigno * prRsvTMP."Importe cobros"), FALSE, FALSE, FALSE); //. COBROS
+        lcExcel.ValorCelda(lwFila, 14, lwTextoSuplementos, FALSE, FALSE, FALSE); //. DESCUENTOS/SUPLEMENTOS
+        lcExcel.ValorCelda(lwFila, 15, prRsvTMP.TourOperador, FALSE, FALSE, FALSE); //. TOUROPERADOR
+
+        //. Desglosar los cobros
+        lrCobro.SETRANGE (Delegacion        , prRsvTMP.Delegacion);
+        lrCobro.SETRANGE ("Num Reserva"     , prRsvTMP."N§ Reserva");
+        lrCobro.SETFILTER("Importe Recibido", '<>%1', 0);
+        IF lrCobro.FINDSET THEN
+        BEGIN
+          REPEAT
+            prCobrosTMP.SETRANGE("Forma de Pago", lrCobro."Forma de Pago");
+            prCobrosTMP.SETRANGE("Cod. Divisa"  , lrCobro."Cod. Divisa");
+            IF prCobrosTMP.FINDFIRST THEN
+              lcExcel.ValorCelda(lwFila, prCobrosTMP."ID Cobro", FORMAT(lwSigno * lrCobro."Importe Recibido"),
+                                 FALSE, FALSE, FALSE); //. COBROS
+          UNTIL lrCobro.NEXT = 0;
+        END;
+      UNTIL prRsvTMP.NEXT = 0;
+
+      //. Incluir Total de las ventas
+      //+$005 <
+      lwFila += 1;
+      //lcExcel.ValorCelda(lwFila, 12, FORMAT(lwTotalVenta), TRUE, FALSE, FALSE);
+
+      //+$006 <
+      IF COPYSTR(lcExcel.GetNombreHoja, 1, 5) = 'Sheet' THEN
+        lwTextFormula := '=SUM(L8..L' + FORMAT(lwFila-1) + ')'
+      ELSE
+        lwTextFormula := '=SUMA(L8..L' + FORMAT(lwFila-1) + ')';
+      //+$006 >
+      lcExcel.ValorCelda(lwFila, 12, lwTextFormula, TRUE, FALSE, FALSE);
+
+      //+$005 >
+
+      lwFila += 3;
+
+      //. Totalizar los cobros
+      prCobrosTMP.RESET;
+      IF prCobrosTMP.FINDSET THEN
+      BEGIN
+        lcExcel.ValorCelda(lwFila, 1, Text018, TRUE, FALSE, FALSE);
+        lcExcel.Rango(lwFila, 1, lwFila, 2);
+        lcExcel.CombinarSinCentrar;
+
+        lwFila += 1;
+        lcExcel.ValorCelda(lwFila, 1, prCobrosTMP.FIELDCAPTION("Forma de Pago"), TRUE, FALSE, FALSE);
+        lcExcel.AnchoColumna(14);
+        lcExcel.ValorCelda(lwFila, 2, prCobrosTMP.FIELDCAPTION("Cod. Divisa"), TRUE, FALSE, FALSE);
+        lcExcel.ValorCelda(lwFila, 3, prCobrosTMP.FIELDCAPTION("Importe Recibido"), TRUE, FALSE, FALSE);
+        lcExcel.AjustarTexto;
+        lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+        REPEAT
+          lwFila += 1;
+
+          lcExcel.ValorCelda(lwFila, 1, prCobrosTMP."Forma de Pago", FALSE, FALSE, FALSE);
+          lcExcel.ValorCelda(lwFila, 2, prCobrosTMP."Cod. Divisa", FALSE, FALSE, FALSE);
+          lcExcel.ValorCelda(lwFila, 3, FORMAT(prCobrosTMP."Importe Recibido"), FALSE, FALSE, FALSE);
+          lcExcel.FormatoTexto('', 0, 0, 0, 4, 0);
+        UNTIL prCobrosTMP.NEXT = 0;
+      END;
+
+      //. Proteger y Mostrar al usuario
+      lcExcel.ProtegerHoja(pwd);
+      lcExcel.Mostrar;
+    END;
+
+    LOCAL PROCEDURE _GetTextoSuplementos@1100217030(pwDelegacion@1100217000 : Code[10];pwReserva@1100217001 : Integer) : Text[250];
+    VAR
+      lrSupRsv@1100217002 : Record 7010165;
+      lwTexto@1100217003 : Text[250];
+    BEGIN
+      // _GetTextoSuplementos
+
+      lwTexto := '';
+
+      lrSupRsv.RESET;
+      lrSupRsv.SETRANGE(Delegacion  , pwDelegacion);
+      lrSupRsv.SETRANGE("N§ Reserva", pwReserva);
+      IF lrSupRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lwTexto = '' THEN
+            lwTexto := lrSupRsv."Codigo Suplemento"
+          ELSE
+            lwTexto := lwTexto + ', ' + lrSupRsv."Codigo Suplemento";
+        UNTIL lrSupRsv.NEXT = 0;
+      END;
+
+      EXIT(lwTexto);
+    END;
+
+    LOCAL PROCEDURE _PrimDiaMes@1100217005(pwFecha@1100217000 : Date) : Date;
+    BEGIN
+      // _PrimDiaMes
+
+      EXIT( DMY2DATE(1, DATE2DMY(pwFecha, 2), DATE2DMY(pwFecha, 3)) );
+    END;
+
+    LOCAL PROCEDURE _UltimoDiaMes@1100217011(pwFecha@1100217000 : Date) : Date;
+    VAR
+      lwFecha@1100217001 : Date;
+    BEGIN
+      // _UltimoDiaMes
+
+      lwFecha := CALCDATE('1M-1D', pwFecha);
+      IF lwFecha > TODAY THEN
+        lwFecha := TODAY;
+      EXIT( lwFecha );
+    END;
+
+    BEGIN
+    {
+      $000 Hay una TEXTCONSTANT que contiene la contrase¤a para desbloquear la hoja excel
+
+      $001 AJS 03052014 El proceso tiene que permitir seleccionar Guias de venta
+
+      $002 AJS 19062014 Tenemos que tratar las reservas anuladas igual que las reembolsadas
+
+      $003 AJS 25062014 Nuevas columnas Nombre hotel, Adultos, Ni¤os, Precio adulto y Precio ni¤o
+
+      $004 AJS 06102014 Las reservas con problemas de cobro no saldran
+
+      $005 AJS 07102014 Agregar un total de ventas al final del informe
+
+      $006 AJS 17122014 Multiidioma en la formula de suma para totalizar
+    }
+    END.
+  }
+}

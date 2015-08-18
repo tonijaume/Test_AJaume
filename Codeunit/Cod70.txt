@@ -1,0 +1,275 @@
+OBJECT Codeunit 70 Purch.-Calc.Discount
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01,NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=39;
+    OnRun=VAR
+            TempPurchHeader@1000 : Record 38;
+            TempPurchLine@1001 : Record 39;
+          BEGIN
+            PurchLine.COPY(Rec);
+
+            TempPurchHeader.GET("Document Type","Document No.");
+            TemporaryHeader := FALSE;
+            CalculateInvoiceDiscount(TempPurchHeader,TempPurchLine);
+
+            Rec := PurchLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Service Charge;ESP=Cargo servicio';
+      PurchLine@1001 : Record 39;
+      VendInvDisc@1002 : Record 24;
+      VendPostingGr@1003 : Record 93;
+      Currency@1004 : Record 4;
+      InvDiscBase@1006 : Decimal;
+      ChargeBase@1007 : Decimal;
+      CurrencyDate@1009 : Date;
+      TemporaryHeader@1010 : Boolean;
+      GLSetup@1100000 : Record 98;
+      VendInvDiscFound@1100001 : Boolean;
+      InvAllow@1100100 : Boolean;
+
+    PROCEDURE CalculateInvoiceDiscount@1(VAR PurchHeader@1000 : Record 38;VAR PurchLine2@1001 : Record 39);
+    VAR
+      TempVATAmountLine@1002 : TEMPORARY Record 290;
+      PurchSetup@1003 : Record 312;
+      TempServiceChargeLine@1005 : TEMPORARY Record 39;
+      GLAcc@1100000 : Record 15;
+    BEGIN
+      PurchSetup.GET;
+      WITH PurchLine DO BEGIN
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+        PurchHeader.TESTFIELD("Vendor Posting Group");
+        VendPostingGr.GET(PurchHeader."Vendor Posting Group");
+
+        PurchLine2.RESET;
+        PurchLine2.SETRANGE("Document Type","Document Type");
+        PurchLine2.SETRANGE("Document No.","Document No.");
+        PurchLine2.SETFILTER(Type,'<>0');
+        PurchLine2.SETRANGE("System-Created Entry",TRUE);
+        PurchLine2.SETRANGE(Type,PurchLine2.Type::"G/L Account");
+        PurchLine2.SETRANGE("No.",VendPostingGr."Service Charge Acc.");
+        IF PurchLine2.FINDSET(TRUE,FALSE) THEN
+          REPEAT
+            PurchLine2.VALIDATE("Direct Unit Cost",0);
+            PurchLine2.MODIFY;
+            TempServiceChargeLine := PurchLine2;
+            TempServiceChargeLine.INSERT;
+          UNTIL PurchLine2.NEXT = 0;
+
+        PurchLine2.RESET;
+        PurchLine2.SETRANGE("Document Type","Document Type");
+        PurchLine2.SETRANGE("Document No.","Document No.");
+        PurchLine2.SETFILTER(Type,'<>0');
+        IF PurchLine2.FIND('-') THEN;
+        PurchLine2.CalcVATAmountLines(0,PurchHeader,PurchLine2,TempVATAmountLine);
+        InvDiscBase :=
+          TempVATAmountLine.GetTotalInvDiscBaseAmount(
+            PurchHeader."Prices Including VAT",PurchHeader."Currency Code");
+        ChargeBase :=
+          TempVATAmountLine.GetTotalLineAmount(
+            PurchHeader."Prices Including VAT",PurchHeader."Currency Code");
+
+        IF NOT TemporaryHeader THEN BEGIN
+          IF NOT RECORDLEVELLOCKING THEN
+            PurchLine2.LOCKTABLE(TRUE,TRUE);
+          PurchHeader.MODIFY;
+        END;
+
+        IF ("Document Type" IN ["Document Type"::"Blanket Order","Document Type"::Quote]) AND
+           (PurchHeader."Posting Date" = 0D)
+        THEN
+          CurrencyDate := WORKDATE
+        ELSE
+          CurrencyDate := PurchHeader."Posting Date";
+
+        VendInvDiscFound := FALSE;
+
+        VendInvDisc.GetRec(
+          PurchHeader."Invoice Disc. Code",PurchHeader."Currency Code",CurrencyDate,ChargeBase,VendInvDiscFound);
+
+        IF VendInvDiscFound AND (VendInvDisc."Service Charge" <> 0) THEN BEGIN
+          VendPostingGr.TESTFIELD("Service Charge Acc.");
+          IF PurchHeader."Currency Code" = '' THEN
+            Currency.InitRoundingPrecision
+          ELSE
+            Currency.GET(PurchHeader."Currency Code");
+          IF TemporaryHeader THEN
+            PurchLine2.SetPurchHeader(PurchHeader);
+          IF NOT TempServiceChargeLine.ISEMPTY THEN BEGIN
+            TempServiceChargeLine.FINDLAST;
+            PurchLine2.GET("Document Type","Document No.",TempServiceChargeLine."Line No.");
+            IF PurchHeader."Prices Including VAT" THEN
+              PurchLine2.VALIDATE(
+                "Direct Unit Cost",
+                ROUND(
+                  (1 + PurchLine2."VAT %" / 100) * VendInvDisc."Service Charge",
+                  Currency."Unit-Amount Rounding Precision"))
+            ELSE
+              PurchLine2.VALIDATE("Direct Unit Cost",VendInvDisc."Service Charge");
+            PurchLine2.MODIFY;
+          END ELSE BEGIN
+            PurchLine2.RESET;
+            PurchLine2.SETRANGE("Document Type","Document Type");
+            PurchLine2.SETRANGE("Document No.","Document No.");
+            PurchLine2.FIND('+');
+            PurchLine2.INIT;
+            IF TemporaryHeader THEN
+              PurchLine2.SetPurchHeader(PurchHeader);
+            PurchLine2."Line No." := PurchLine2."Line No." + 10000;
+            PurchLine2.Type := PurchLine2.Type::"G/L Account";
+            PurchLine2.VALIDATE("No.",VendPostingGr."Service Charge Acc.");
+            PurchLine2.Description := Text000;
+            PurchLine2.VALIDATE(Quantity,1);
+            IF PurchLine2."Document Type" IN
+               [PurchLine2."Document Type"::"Return Order",PurchLine2."Document Type"::"Credit Memo"] THEN
+              PurchLine2.VALIDATE("Return Qty. to Ship",PurchLine2.Quantity)
+            ELSE
+              PurchLine2.VALIDATE("Qty. to Receive",PurchLine2.Quantity);
+            IF PurchHeader."Prices Including VAT" THEN
+              PurchLine2.VALIDATE(
+                "Direct Unit Cost",
+                ROUND(
+                  (1 + PurchLine2."VAT %" / 100) * VendInvDisc."Service Charge",
+                  Currency."Unit-Amount Rounding Precision"))
+            ELSE
+              PurchLine2.VALIDATE("Direct Unit Cost",VendInvDisc."Service Charge");
+            PurchLine2."System-Created Entry" := TRUE;
+            PurchLine2.INSERT;
+          END;
+          PurchLine2.CalcVATAmountLines(0,PurchHeader,PurchLine2,TempVATAmountLine);
+        END ELSE
+          IF TempServiceChargeLine.FINDSET(FALSE,FALSE) THEN
+            REPEAT
+              IF (TempServiceChargeLine."Receipt No." = '') AND (TempServiceChargeLine."Qty. Rcd. Not Invoiced (Base)" = 0) THEN BEGIN
+                PurchLine2 := TempServiceChargeLine;
+                PurchLine2.DELETE(TRUE);
+              END;
+            UNTIL TempServiceChargeLine.NEXT = 0;
+
+        GLSetup.GET;
+        IF GLSetup."Payment Discount Type" <> GLSetup."Payment Discount Type"::"Calc. Pmt. Disc. on Lines"
+        THEN
+         PurchLine2.SETRANGE("Allow Invoice Disc.",TRUE);
+        IF PurchLine2.FIND('-') THEN
+          REPEAT
+            InvAllow := FALSE;
+            IF PurchLine2.Type = PurchLine2.Type::"G/L Account" THEN
+              InvAllow := GLAcc.InvoiceDiscountAllowed(PurchLine2."No.");
+            IF (PurchLine2.Quantity <> 0) AND NOT InvAllow THEN BEGIN
+              PurchLine2."Pmt. Disc. Rcd. Amount" := 0;
+              IF (PurchLine2.Type <> PurchLine2.Type::"Charge (Item)") AND
+                (PurchLine2."Prepayment %" = 0)
+              THEN
+                PurchLine2.VALIDATE("Inv. Discount Amount");
+              IF PurchLine2."Allow Invoice Disc." THEN
+                CASE GLSetup."Discount Calculation" OF
+                  GLSetup."Discount Calculation"::" ",
+                  GLSetup."Discount Calculation"::"Line Disc. * Inv. Disc. + Payment Disc.",
+                  GLSetup."Discount Calculation"::"Line Disc. * Inv. Disc. * Payment Disc.":
+                    PurchLine2."Inv. Discount Amount" :=
+                      ROUND(PurchLine2."Line Amount" * VendInvDisc."Discount %" / 100,0.01);
+                  GLSetup."Discount Calculation"::"Line Disc. + Inv. Disc. + Payment Disc.",
+                  GLSetup."Discount Calculation"::"Line Disc. + Inv. Disc. * Payment Disc.":
+                    PurchLine2."Inv. Discount Amount" :=
+                      ROUND(
+                        (PurchLine2."Line Amount" + PurchLine2."Line Discount Amount" ) *
+                        VendInvDisc."Discount %" / 100,0.01);
+                END;
+              IF GLSetup."Payment Discount Type" =
+                 GLSetup."Payment Discount Type"::"Calc. Pmt. Disc. on Lines"
+              THEN BEGIN
+                 GLSetup.TESTFIELD("Discount Calculation");
+                 CASE GLSetup."Discount Calculation" OF
+                   GLSetup."Discount Calculation"::"Line Disc. + Inv. Disc. + Payment Disc.",
+                   GLSetup."Discount Calculation"::"Line Disc. * Inv. Disc. + Payment Disc.":
+                     PurchLine2."Pmt. Disc. Rcd. Amount" :=
+                       ROUND(
+                         (PurchLine2."Line Amount" + PurchLine2."Line Discount Amount") *
+                         PurchHeader."Payment Discount %" / 100,0.01);
+                   GLSetup."Discount Calculation"::"Line Disc. + Inv. Disc. * Payment Disc.",
+                   GLSetup."Discount Calculation"::"Line Disc. * Inv. Disc. * Payment Disc.":
+                      PurchLine2."Pmt. Disc. Rcd. Amount" :=
+                        ROUND(
+                          (PurchLine2."Line Amount" - PurchLine2."Inv. Discount Amount") *
+                          PurchHeader."Payment Discount %" / 100,0.01);
+                   END;
+                 END;
+
+                IF (PurchLine2.Type <> PurchLine2.Type::"Charge (Item)") AND
+                  (PurchLine2."Prepayment %"=0)
+                THEN
+                  PurchLine2.VALIDATE("Inv. Discount Amount");
+                PurchLine2.MODIFY;
+              END;
+          UNTIL PurchLine2.NEXT = 0;
+        PurchLine2 := PurchLine;
+
+        IF VendInvDiscRecExists(PurchHeader."Invoice Disc. Code") THEN BEGIN
+          IF InvDiscBase <> ChargeBase THEN
+            VendInvDisc.GetRec(
+              PurchHeader."Invoice Disc. Code",PurchHeader."Currency Code",CurrencyDate,InvDiscBase,VendInvDiscFound);
+
+          PurchHeader."Invoice Discount Calculation" := PurchHeader."Invoice Discount Calculation"::"%";
+          PurchHeader."Invoice Discount Value" := VendInvDisc."Discount %";
+          IF NOT TemporaryHeader THEN
+            PurchHeader.MODIFY;
+
+          TempVATAmountLine.SetInvoiceDiscountPercent(
+            VendInvDisc."Discount %",PurchHeader."Currency Code",
+            PurchHeader."Prices Including VAT",PurchSetup."Calc. Inv. Disc. per VAT ID",
+            PurchHeader."VAT Base Discount %");
+
+          PurchLine2.UpdateVATOnLines(0,PurchHeader,PurchLine2,TempVATAmountLine);
+        END ELSE BEGIN
+          PurchHeader."Invoice Discount Calculation" := PurchHeader."Invoice Discount Calculation"::"%";
+          PurchHeader."Invoice Discount Value" := VendInvDisc."Discount %";
+          IF NOT TemporaryHeader THEN
+            PurchHeader.MODIFY;
+
+          TempVATAmountLine.SetInvoiceDiscountPercent(
+            VendInvDisc."Discount %",PurchHeader."Currency Code",
+            PurchHeader."Prices Including VAT",PurchSetup."Calc. Inv. Disc. per VAT ID",
+            PurchHeader."VAT Base Discount %");
+
+          PurchLine2.UpdateVATOnLines(0,PurchHeader,PurchLine2,TempVATAmountLine);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE VendInvDiscRecExists@3(InvDiscCode@1000 : Code[20]) : Boolean;
+    VAR
+      VendInvDisc@1001 : Record 24;
+    BEGIN
+      VendInvDisc.SETRANGE(Code,InvDiscCode);
+      EXIT(VendInvDisc.FIND('-'));
+    END;
+
+    PROCEDURE CalculateIncDiscForHeader@2(VAR PurchHeader@1002 : Record 38);
+    VAR
+      PurchSetup@1000 : Record 312;
+    BEGIN
+      PurchSetup.GET;
+      IF NOT PurchSetup."Calc. Inv. Discount" THEN EXIT;
+      WITH PurchHeader DO BEGIN
+        PurchLine."Document Type" := "Document Type";
+        PurchLine."Document No." := "No.";
+        CalculateInvoiceDiscount(PurchHeader,PurchLine);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

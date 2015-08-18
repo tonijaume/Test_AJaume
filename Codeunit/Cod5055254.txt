@@ -1,0 +1,320 @@
+OBJECT Codeunit 5055254 Liq. Jnl. - Post Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=LIQEM5.00;
+  }
+  PROPERTIES
+  {
+    TableNo=5055256;
+    Permissions=TableData 5055255=imd;
+    OnRun=BEGIN
+            LiqJnlLine.COPY(Rec);
+            Code;
+            Rec := LiqJnlLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text1140000@1140000 : TextConst 'ENU=cannot exceed %1 characters;ESP=no puede superar %1 caracteres';
+      Text1140001@1140001 : TextConst 'ENU=Journal Batch Name    #1##########\\;ESP=Nombre secci¢n diario #1##########\\';
+      Text1140002@1140002 : TextConst 'ENU=Checking lines        #2######\;ESP=Comprobando l¡neas    #2######\';
+      Text1140003@1140003 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@\;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@\';
+      Text1140004@1140004 : TextConst 'ENU=Updating lines        #5###### @6@@@@@@@@@@@@@;ESP=Actualizando l¡ns.    #5###### @6@@@@@@@@@@@@@';
+      Text1140005@1140005 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@';
+      Text1140006@1140006 : TextConst 'ENU=A maximum of %1 posting number series can be used in each journal.;ESP=Se puede utilizar un m ximo de %1 n£meros de serie de registro en cada diario.';
+      Text1140007@1140007 : TextConst 'ENU=<Month Text>;ESP=<Month Text>';
+      LiqJnlTemplate@1140008 : Record 5055254;
+      LiqJnlName@1140009 : Record 5055255;
+      LiqJnlLine@1140010 : Record 5055256;
+      LiqJnlLine2@1140011 : Record 5055256;
+      LiqJnlLine3@1140012 : Record 5055256;
+      LiqLedgEntry@1140013 : Record 5055257;
+      LiqReg@1140014 : Record 5055258;
+      NoSeries@1140015 : TEMPORARY Record 308;
+      LedgEntryDim@1140016 : Record 355;
+      LicPermission@1140017 : Record 2000000043;
+      CheckLiqJnlLine@1140018 : Codeunit 5055255;
+      PostLiqJnlLine@1140019 : Codeunit 5055256;
+      NoSeriesMgt@1140020 : Codeunit 396;
+      NoSeriesMgt2@1140021 : ARRAY [10] OF Codeunit 396;
+      DimMgt@1140022 : Codeunit 408;
+      Window@1140023 : Dialog;
+      LiqRegNo@1140024 : Integer;
+      StartLineNo@1140025 : Integer;
+      Day@1140026 : Integer;
+      Week@1140027 : Integer;
+      Month@1140028 : Integer;
+      MonthText@1140029 : Text[30];
+      AccountingPeriod@1140030 : Record 50;
+      LineCount@1140031 : Integer;
+      NoOfRecords@1140032 : Integer;
+      LastDocNo@1140033 : Code[20];
+      LastDocNo2@1140034 : Code[20];
+      LastPostedDocNo@1140035 : Code[20];
+      NoOfPostingNoSeries@1140036 : Integer;
+      PostingNoSeriesNo@1140037 : Integer;
+
+    LOCAL PROCEDURE Code@1140000();
+    VAR
+      JnlLineDim@1140000 : Record 356;
+      TempJnlLineDim@1140001 : TEMPORARY Record 356;
+      UpdateLiqAnalysisView@1140002 : Codeunit 5055265;
+    BEGIN
+      WITH LiqJnlLine DO BEGIN
+        SETRANGE("Journal Template Name","Journal Template Name");
+        SETRANGE("Journal Batch Name","Journal Batch Name");
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+
+        LiqJnlTemplate.GET("Journal Template Name");
+        LiqJnlName.GET("Journal Template Name","Journal Batch Name");
+        IF STRLEN(INCSTR(LiqJnlName.Name)) > MAXSTRLEN(LiqJnlName.Name) THEN
+          LiqJnlName.FIELDERROR(
+            Name,
+            STRSUBSTNO(
+              Text1140000,
+              MAXSTRLEN(LiqJnlName.Name)));
+
+        IF LiqJnlTemplate.Recurring THEN BEGIN
+          SETRANGE("Liquidity Date",0D,WORKDATE);
+          SETFILTER("Expiration Date",'%1 | %2..',0D,WORKDATE);
+        END;
+
+        IF NOT FIND('=><') THEN BEGIN
+          "Line No." := 0;
+          COMMIT;
+          EXIT;
+        END;
+
+        IF LiqJnlTemplate.Recurring THEN
+          Window.OPEN(
+            Text1140001 +
+            Text1140002 +
+            Text1140003 +
+            Text1140004)
+        ELSE
+          Window.OPEN(
+            Text1140001 +
+            Text1140002 +
+            Text1140005);
+        Window.UPDATE(1,"Journal Batch Name");
+
+        // Check lines
+        LineCount := 0;
+        StartLineNo := "Line No.";
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(2,LineCount);
+          CheckRecurringLine(LiqJnlLine);
+          JnlLineDim.SETRANGE("Table ID",DATABASE::"Liq. Journal Line");
+          JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+          JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+          JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+          JnlLineDim.SETRANGE("Allocation Line No.",0);
+          TempJnlLineDim.DELETEALL;
+          DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+          CheckLiqJnlLine.RunCheck(LiqJnlLine,TempJnlLineDim);
+          IF NEXT = 0 THEN
+            FIND('-');
+        UNTIL "Line No." = StartLineNo;
+        NoOfRecords := LineCount;
+
+        // Find next register no.
+        LedgEntryDim.LOCKTABLE;
+        LiqLedgEntry.LOCKTABLE;
+        IF RECORDLEVELLOCKING THEN
+          IF LiqLedgEntry.FIND('+') THEN;
+        LiqReg.LOCKTABLE;
+        IF LiqReg.FIND('+') AND (LiqReg."To Entry No." = 0) THEN
+          LiqRegNo := LiqReg."No."
+        ELSE
+          LiqRegNo := LiqReg."No." + 1;
+
+        // Post lines
+        LineCount := 0;
+        LastDocNo := '';
+        LastDocNo2 := '';
+        LastPostedDocNo := '';
+        FIND('-');
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(3,LineCount);
+          Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+          IF NOT EmptyLine AND
+             (LiqJnlName."No. Series" <> '') AND
+             ("Document No." <> LastDocNo2)
+          THEN
+            TESTFIELD("Document No.",NoSeriesMgt.GetNextNo(LiqJnlName."No. Series","Posting Date",FALSE));
+          LastDocNo2 := "Document No.";
+          MakeRecurringTexts(LiqJnlLine);
+          IF "Posting No. Series" = '' THEN
+            "Posting No. Series" := LiqJnlName."No. Series"
+          ELSE
+            IF NOT EmptyLine THEN
+              IF "Document No." = LastDocNo THEN
+                "Document No." := LastPostedDocNo
+              ELSE BEGIN
+                IF NOT NoSeries.GET("Posting No. Series") THEN BEGIN
+                  NoOfPostingNoSeries := NoOfPostingNoSeries + 1;
+                  IF NoOfPostingNoSeries > ARRAYLEN(NoSeriesMgt2) THEN
+                    ERROR(
+                      Text1140006,
+                      ARRAYLEN(NoSeriesMgt2));
+                  NoSeries.Code := "Posting No. Series";
+                  NoSeries.Description := FORMAT(NoOfPostingNoSeries);
+                  NoSeries.INSERT;
+                END;
+                LastDocNo := "Document No.";
+                EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+                "Document No." := NoSeriesMgt2[PostingNoSeriesNo].GetNextNo("Posting No. Series","Posting Date",FALSE);
+                LastPostedDocNo := "Document No.";
+              END;
+          JnlLineDim.SETRANGE("Table ID",DATABASE::"Liq. Journal Line");
+          JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+          JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+          JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+          JnlLineDim.SETRANGE("Allocation Line No.",0);
+          TempJnlLineDim.DELETEALL;
+          DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+          PostLiqJnlLine.RunWithCheck(LiqJnlLine,TempJnlLineDim);
+        UNTIL NEXT = 0;
+
+        // Copy register no. and current journal batch name to the liq. journal
+        IF NOT LiqReg.FIND('+') OR (LiqReg."No." <> LiqRegNo) THEN
+          LiqRegNo := 0;
+
+        INIT;
+        "Line No." := LiqRegNo;
+
+        // Update/delete lines
+        IF LiqRegNo <> 0 THEN BEGIN
+          IF NOT RECORDLEVELLOCKING THEN BEGIN
+            JnlLineDim.LOCKTABLE(TRUE,TRUE);
+            LOCKTABLE(TRUE,TRUE);
+          END;
+          IF LiqJnlTemplate.Recurring THEN BEGIN
+            // Recurring journal
+            LineCount := 0;
+            LiqJnlLine2.COPYFILTERS(LiqJnlLine);
+            LiqJnlLine2.FIND('-');
+            REPEAT
+              LineCount := LineCount + 1;
+              Window.UPDATE(5,LineCount);
+              Window.UPDATE(6,ROUND(LineCount / NoOfRecords * 10000,1));
+              IF LiqJnlLine2."Liquidity Date" <> 0D THEN
+                LiqJnlLine2.VALIDATE("Liquidity Date",CALCDATE(LiqJnlLine2."Recurring Frequency",LiqJnlLine2."Liquidity Date"));
+              IF LiqJnlLine2."Posting Date" <> 0D THEN
+                LiqJnlLine2.VALIDATE("Posting Date",CALCDATE(LiqJnlLine2."Recurring Frequency",LiqJnlLine2."Posting Date"));
+              IF LiqJnlLine2."Due Date" <> 0D THEN
+                LiqJnlLine2.VALIDATE("Due Date",CALCDATE(LiqJnlLine2."Recurring Frequency",LiqJnlLine2."Due Date"));
+              LiqJnlLine2.MODIFY;
+            UNTIL LiqJnlLine2.NEXT = 0;
+          END ELSE BEGIN
+            // Not a recurring journal
+            LiqJnlLine2.COPYFILTERS(LiqJnlLine);
+            LiqJnlLine2.SETFILTER("Liquidity No.",'<>%1','');
+            IF LiqJnlLine2.FIND('+') THEN; //Posting lines         #3###### @4@@@@@@@@@@@@@
+            JnlLineDim.SETRANGE("Table ID",DATABASE::"Liq. Journal Line");
+            JnlLineDim.COPYFILTER("Journal Template Name","Journal Template Name");
+            JnlLineDim.COPYFILTER("Journal Batch Name","Journal Batch Name");
+            JnlLineDim.SETRANGE("Allocation Line No.",0);
+            LiqJnlLine3.COPY(LiqJnlLine);
+            IF LiqJnlLine3.FIND('-') THEN
+              REPEAT
+                JnlLineDim.SETRANGE("Journal Line No.",LiqJnlLine3."Line No.");
+                JnlLineDim.DELETEALL;
+                LiqJnlLine3.DELETE;
+              UNTIL LiqJnlLine3.NEXT = 0;
+            LiqJnlLine3.RESET;
+            LiqJnlLine3.SETRANGE("Journal Template Name","Journal Template Name");
+            LiqJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF NOT LiqJnlLine3.FIND('+') THEN
+              IF INCSTR("Journal Batch Name") <> '' THEN BEGIN
+                LiqJnlName.DELETE;
+                LiqJnlName.Name := INCSTR("Journal Batch Name");
+                IF LiqJnlName.INSERT THEN;
+                "Journal Batch Name" := LiqJnlName.Name;
+              END;
+
+            LiqJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF (LiqJnlName."No. Series" = '') AND NOT LiqJnlLine3.FIND('+') THEN BEGIN
+              LiqJnlLine3.INIT;
+              LiqJnlLine3."Journal Template Name" := "Journal Template Name";
+              LiqJnlLine3."Journal Batch Name" := "Journal Batch Name";
+              LiqJnlLine3."Line No." := 10000;
+              LiqJnlLine3.INSERT;
+              LiqJnlLine3.SetUpNewLine(LiqJnlLine2);
+              LiqJnlLine3.MODIFY;
+            END;
+          END;
+        END;
+        IF LiqJnlName."No. Series" <> '' THEN
+          NoSeriesMgt.SaveNoSeries;
+        IF NoSeries.FIND('-') THEN
+          REPEAT
+            EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+            NoSeriesMgt2[PostingNoSeriesNo].SaveNoSeries;
+          UNTIL NoSeries.NEXT = 0;
+
+        COMMIT;
+      END;
+
+      LicPermission.GET(
+        LicPermission."Object Type"::Codeunit,
+        CODEUNIT::"Update Liquidity Analysis View");
+      IF LicPermission."Execute Permission" = LicPermission."Execute Permission"::Yes THEN BEGIN
+        UpdateLiqAnalysisView.UpdateAll(TRUE);
+        COMMIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckRecurringLine@1140001(VAR LiqJnlLine2@1140000 : Record 5055256);
+    BEGIN
+      WITH LiqJnlLine2 DO BEGIN
+        IF "Liquidity No." <> '' THEN
+          IF LiqJnlTemplate.Recurring THEN BEGIN
+            TESTFIELD("Recurring Method");
+            TESTFIELD("Recurring Frequency");
+          END ELSE BEGIN
+            TESTFIELD("Recurring Method",0);
+            TESTFIELD("Recurring Frequency",'');
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MakeRecurringTexts@1140002(VAR LiqJnlLine2@1140000 : Record 5055256);
+    BEGIN
+      WITH LiqJnlLine2 DO BEGIN
+        IF ("Liquidity No." <> '') AND ("Recurring Method" <> 0) THEN BEGIN // Not recurring
+          Day := DATE2DMY("Liquidity Date",1);
+          Week := DATE2DWY("Liquidity Date",2);
+          Month := DATE2DMY("Liquidity Date",2);
+          MonthText := FORMAT("Liquidity Date",0,Text1140007);
+          AccountingPeriod.SETRANGE("Starting Date",0D,"Liquidity Date");
+          IF NOT AccountingPeriod.FIND('+') THEN
+            AccountingPeriod.Name := '';
+          "Document No." :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO("Document No.",Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN("Document No.")),
+              '>');
+          Description :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO(Description,Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN(Description)),
+              '>');
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

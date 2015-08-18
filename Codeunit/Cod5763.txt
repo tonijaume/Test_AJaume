@@ -1,0 +1,898 @@
+OBJECT Codeunit 5763 Whse.-Post Shipment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.10;
+  }
+  PROPERTIES
+  {
+    TableNo=7321;
+    Permissions=TableData 6550=r,
+                TableData 7322=im,
+                TableData 7323=i;
+    OnRun=BEGIN
+            WhseShptLine.COPY(Rec);
+            Code;
+            Rec := WhseShptLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=The source document %1 %2 is not released.;ESP=No se ha lanzado el documento origen %1 %2.';
+      Text001@1001 : TextConst 'ENU=There is nothing to post.;ESP=No hay nada que registrar.';
+      Text003@1003 : TextConst 'ENU=Number of source documents posted: %1 out of a total of %2.;ESP=N£mero documentos origen registrados: %1 de un total de %2.';
+      Text004@1004 : TextConst 'ENU=Ship lines have been posted.;ESP=Se han reg. las l¡neas envio.';
+      Text005@1005 : TextConst 'ENU=Some ship lines remain.;ESP=Quedan algunas l¡n. env¡o.';
+      WhseRqst@1006 : Record 5765;
+      WhseShptHeader@1047 : Record 7320;
+      WhseShptLine@1007 : Record 7321;
+      WhseShptLineBuf@1041 : TEMPORARY Record 7321;
+      SalesHeader@1010 : Record 36;
+      PurchHeader@1009 : Record 38;
+      TransHeader@1008 : Record 5740;
+      ItemUnitOfMeasure@1086 : Record 5404;
+      ReportSelection@1017 : Record 77;
+      SalesShptHeader@1018 : Record 110;
+      SalesInvHeader@1019 : Record 112;
+      ReturnShptHeader@1020 : Record 6650;
+      PurchCrMemHeader@1021 : Record 124;
+      TransShptHeader@1022 : Record 5744;
+      TempWhseJnlLine@1046 : TEMPORARY Record 7311;
+      Location@1034 : Record 14;
+      NoSeriesMgt@1014 : Codeunit 396;
+      ItemTrackingMgt@1016 : Codeunit 6500;
+      WhseJnlRegisterLine@1045 : Codeunit 7301;
+      WMSMgt@1049 : Codeunit 7302;
+      LastShptNo@1031 : Code[20];
+      PostingDate@1048 : Date;
+      CounterSourceDocOK@1039 : Integer;
+      CounterSourceDocTotal@1040 : Integer;
+      Print@1043 : Boolean;
+      Invoice@1035 : Boolean;
+      Text006@1015 : TextConst 'ENU=%1, %2 %3: you cannot ship more than have been picked for the item tracking lines.;ESP=%1, %2 %3: no puede enviar m s de lo que se ha preparado pedido para las l¡ns. seguim. pdto.';
+      Text007@1102601000 : TextConst 'ENU=is not within your range of allowed posting dates;ESP=no est  dentro del periodo de fechas de registro permitidas';
+
+    PROCEDURE Code@9();
+    BEGIN
+      WITH WhseShptLine DO BEGIN
+        SETCURRENTKEY("No.");
+        SETRANGE("No.","No.");
+        SETFILTER("Qty. to Ship",'>0');
+        IF FIND('-') THEN
+          REPEAT
+            TESTFIELD("Unit of Measure Code");
+            IF "Shipping Advice" = "Shipping Advice"::Complete THEN
+              TESTFIELD("Qty. (Base)","Qty. to Ship (Base)" + "Qty. Shipped (Base)");
+            WhseRqst.GET(
+              WhseRqst.Type::Outbound,"Location Code","Source Type","Source Subtype","Source No.");
+            IF WhseRqst."Document Status" <> WhseRqst."Document Status"::Released THEN
+              ERROR(Text000,"Source Document","Source No.");
+            GetLocation("Location Code");
+            IF Location."Require Pick" THEN
+              CheckItemTrkg(WhseShptLine);
+          UNTIL NEXT = 0
+        ELSE
+          ERROR(Text001);
+
+        CounterSourceDocOK := 0;
+        CounterSourceDocTotal := 0;
+
+        GetLocation("Location Code");
+        WhseShptHeader.GET("No.");
+        WhseShptHeader.TESTFIELD("Posting Date");
+        IF WhseShptHeader."Shipping No." = '' THEN BEGIN
+          WhseShptHeader.TESTFIELD("Shipping No. Series");
+          WhseShptHeader."Shipping No." :=
+            NoSeriesMgt.GetNextNo(
+              WhseShptHeader."Shipping No. Series",WhseShptHeader."Posting Date",TRUE);
+        END;
+        WhseShptHeader."Create Posted Header" := TRUE;
+        WhseShptHeader.MODIFY;
+        COMMIT;
+
+        SETCURRENTKEY("No.","Source Type","Source Subtype","Source No.","Source Line No.");
+        FINDSET(TRUE,TRUE);
+        REPEAT
+          SETRANGE("Source Type","Source Type");
+          SETRANGE("Source Subtype","Source Subtype");
+          SETRANGE("Source No.","Source No.");
+          GetSourceDocument;
+          MakePreliminaryChecks;
+
+          EnsureAuthorization(SalesHeader);
+          InitSourceDocumentLines(WhseShptLine);
+          InitSourceDocumentHeader;
+          COMMIT;
+
+          CounterSourceDocTotal := CounterSourceDocTotal + 1;
+          PostSourceDocument(WhseShptLine);
+
+          IF FINDLAST THEN;
+          SETRANGE("Source Type");
+          SETRANGE("Source Subtype");
+          SETRANGE("Source No.");
+        UNTIL NEXT = 0;
+      END;
+
+      CLEAR(WMSMgt);
+      CLEAR(WhseJnlRegisterLine);
+
+      WhseShptLine.RESET;
+    END;
+
+    LOCAL PROCEDURE GetSourceDocument@19();
+    BEGIN
+      WITH WhseShptLine DO BEGIN
+        CASE "Source Type" OF
+          DATABASE::"Sales Line":
+            SalesHeader.GET("Source Subtype","Source No.");
+          DATABASE::"Purchase Line": // Return Order
+            PurchHeader.GET("Source Subtype","Source No.");
+          DATABASE::"Transfer Line":
+            TransHeader.GET("Source No.");
+        END;
+      END;
+    END;
+
+    PROCEDURE MakePreliminaryChecks@1102601000();
+    VAR
+      GenJnlCheckLine@1102601000 : Codeunit 11;
+    BEGIN
+      WITH WhseShptHeader DO BEGIN
+        IF GenJnlCheckLine.DateNotAllowed("Posting Date") THEN
+          FIELDERROR("Posting Date",Text007);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitSourceDocumentHeader@2();
+    VAR
+      SalesRelease@1001 : Codeunit 414;
+      PurchRelease@1002 : Codeunit 415;
+      ModifyHeader@1000 : Boolean;
+    BEGIN
+      WITH WhseShptLine DO BEGIN
+        CASE "Source Type" OF
+          DATABASE::"Sales Line":
+            BEGIN
+              IF (SalesHeader."Posting Date" = 0D) OR
+                 (SalesHeader."Posting Date" < WhseShptHeader."Posting Date")
+              THEN BEGIN
+                SalesRelease.Reopen(SalesHeader);
+                SalesHeader.SetHideValidationDialog(TRUE);
+                SalesHeader.VALIDATE("Posting Date",WhseShptHeader."Posting Date");
+                SalesRelease.RUN(SalesHeader);
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                 (WhseShptHeader."Shipment Date" <> SalesHeader."Shipment Date")
+              THEN BEGIN
+                SalesHeader."Shipment Date" := WhseShptHeader."Shipment Date";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."External Document No." <> '') AND
+                 (WhseShptHeader."External Document No." <> SalesHeader."External Document No.")
+              THEN BEGIN
+                SalesHeader."External Document No." := WhseShptHeader."External Document No.";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipping Agent Code" <> '') AND
+                 (WhseShptHeader."Shipping Agent Code" <> SalesHeader."Shipping Agent Code")
+              THEN BEGIN
+                SalesHeader."Shipping Agent Code" := WhseShptHeader."Shipping Agent Code";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipping Agent Service Code" <> '') AND
+                 (WhseShptHeader."Shipping Agent Service Code" <>
+                  SalesHeader."Shipping Agent Service Code")
+              THEN BEGIN
+                SalesHeader."Shipping Agent Service Code" :=
+                  WhseShptHeader."Shipping Agent Service Code";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Method Code" <> '') AND
+                 (WhseShptHeader."Shipment Method Code" <> SalesHeader."Shipment Method Code")
+              THEN BEGIN
+                SalesHeader."Shipment Method Code" := WhseShptHeader."Shipment Method Code";
+                ModifyHeader := TRUE;
+              END;
+              IF ModifyHeader THEN
+                SalesHeader.MODIFY;
+            END;
+          DATABASE::"Purchase Line": // Return Order
+            BEGIN
+              IF (PurchHeader."Posting Date" = 0D) OR
+                 (PurchHeader."Posting Date" < WhseShptHeader."Posting Date")
+              THEN BEGIN
+                PurchRelease.Reopen(PurchHeader);
+                PurchHeader.SetHideValidationDialog(TRUE);
+                PurchHeader.VALIDATE("Posting Date",WhseShptHeader."Posting Date");
+                PurchRelease.RUN(PurchHeader);
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                 (WhseShptHeader."Shipment Date" <> PurchHeader."Expected Receipt Date")
+              THEN BEGIN
+                PurchHeader."Expected Receipt Date" := WhseShptHeader."Shipment Date";
+                ModifyHeader := TRUE;
+              END;
+              IF WhseShptHeader."External Document No." <> '' THEN BEGIN
+                PurchHeader."Vendor Authorization No." := WhseShptHeader."External Document No.";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Method Code" <> '') AND
+                 (WhseShptHeader."Shipment Method Code" <> PurchHeader."Shipment Method Code")
+              THEN BEGIN
+                PurchHeader."Shipment Method Code" := WhseShptHeader."Shipment Method Code";
+                ModifyHeader := TRUE;
+              END;
+              IF ModifyHeader THEN
+                PurchHeader.MODIFY;
+            END;
+          DATABASE::"Transfer Line":
+            BEGIN
+              IF (TransHeader."Posting Date" = 0D) OR
+                 (TransHeader."Posting Date" < WhseShptHeader."Posting Date")
+              THEN BEGIN
+                TransHeader.CalledFromWarehouse(TRUE);
+                TransHeader.VALIDATE("Posting Date",WhseShptHeader."Posting Date");
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                 (TransHeader."Shipment Date" <> WhseShptHeader."Shipment Date")
+              THEN BEGIN
+                TransHeader."Shipment Date" := WhseShptHeader."Shipment Date";
+                ModifyHeader := TRUE;
+              END;
+              IF WhseShptHeader."External Document No." <> '' THEN BEGIN
+                TransHeader."External Document No." := WhseShptHeader."External Document No.";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipping Agent Code" <> '') AND
+                 (WhseShptHeader."Shipping Agent Code" <> TransHeader."Shipping Agent Code")
+              THEN BEGIN
+                TransHeader."Shipping Agent Code" := WhseShptHeader."Shipping Agent Code";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipping Agent Service Code" <> '') AND
+                 (WhseShptHeader."Shipping Agent Service Code" <>
+                  TransHeader."Shipping Agent Service Code")
+              THEN BEGIN
+                TransHeader."Shipping Agent Service Code" :=
+                  WhseShptHeader."Shipping Agent Service Code";
+                ModifyHeader := TRUE;
+              END;
+              IF (WhseShptHeader."Shipment Method Code" <> '') AND
+                 (WhseShptHeader."Shipment Method Code" <> TransHeader."Shipment Method Code")
+              THEN BEGIN
+                TransHeader."Shipment Method Code" := WhseShptHeader."Shipment Method Code";
+                ModifyHeader := TRUE;
+              END;
+              IF ModifyHeader THEN
+                TransHeader.MODIFY;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitSourceDocumentLines@3(VAR WhseShptLine@1002 : Record 7321);
+    VAR
+      WhseShptLine2@1004 : Record 7321;
+      SalesLine@1005 : Record 37;
+      PurchLine@1003 : Record 39;
+      TransLine@1001 : Record 5741;
+      ModifyLine@1000 : Boolean;
+    BEGIN
+      WhseShptLine2.COPY(WhseShptLine);
+      WITH WhseShptLine2 DO BEGIN
+        CASE "Source Type" OF
+          DATABASE::"Sales Line":
+            BEGIN
+              SalesLine.SETRANGE("Document Type","Source Subtype");
+              SalesLine.SETRANGE("Document No.","Source No.");
+              IF SalesLine.FIND('-') THEN
+                REPEAT
+                  SETRANGE("Source Line No.",SalesLine."Line No.");
+                  IF FIND('-') THEN BEGIN
+                    IF "Source Document" = "Source Document"::"Sales Order" THEN BEGIN
+                      ModifyLine := SalesLine."Qty. to Ship" <> "Qty. to Ship";
+                      IF ModifyLine THEN BEGIN
+                        SalesLine.VALIDATE("Qty. to Ship","Qty. to Ship");
+                        SalesLine."Qty. to Ship (Base)" := "Qty. to Ship (Base)";
+                        IF Invoice THEN
+                          SalesLine.VALIDATE(
+                            "Qty. to Invoice",
+                            "Qty. to Ship" + SalesLine."Quantity Shipped" - SalesLine."Quantity Invoiced");
+
+                      END;
+                    END ELSE BEGIN
+                      ModifyLine := SalesLine."Return Qty. to Receive" <> -"Qty. to Ship";
+                      IF ModifyLine THEN BEGIN
+                        SalesLine.VALIDATE("Return Qty. to Receive",-"Qty. to Ship");
+                        IF Invoice THEN
+                          SalesLine.VALIDATE(
+                            "Qty. to Invoice",
+                            -"Qty. to Ship" + SalesLine."Return Qty. Received" - SalesLine."Quantity Invoiced");
+                      END;
+                    END;
+
+                    IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                       (SalesLine."Shipment Date" <> WhseShptHeader."Shipment Date") AND
+                       ("Qty. to Ship" = "Qty. Outstanding")
+                    THEN BEGIN
+                      SalesLine."Shipment Date" := WhseShptHeader."Shipment Date";
+                      ModifyLine := TRUE;
+                    END;
+                    IF SalesLine."Bin Code" <> "Bin Code" THEN BEGIN
+                      SalesLine."Bin Code" := "Bin Code";
+                      ModifyLine := TRUE;
+                    END;
+                  END ELSE BEGIN
+                    ModifyLine :=
+                      ((SalesHeader."Shipping Advice" <> SalesHeader."Shipping Advice"::Complete) OR
+                       (SalesLine.Type = SalesLine.Type::Item)) AND
+                      ((SalesLine."Qty. to Ship" <> 0) OR
+                       (SalesLine."Return Qty. to Receive" <> 0) OR
+                       (SalesLine."Qty. to Invoice" <> 0));
+
+                    IF ModifyLine THEN BEGIN
+                      IF "Source Document" = "Source Document"::"Sales Order" THEN
+                        SalesLine.VALIDATE("Qty. to Ship",0)
+                      ELSE
+                        SalesLine.VALIDATE("Return Qty. to Receive",0);
+                      SalesLine.VALIDATE("Qty. to Invoice",0);
+                    END;
+                  END;
+                  IF ModifyLine THEN
+                    SalesLine.MODIFY;
+                UNTIL SalesLine.NEXT = 0;
+            END;
+          DATABASE::"Purchase Line": // Return Order
+            BEGIN
+              PurchLine.SETRANGE("Document Type","Source Subtype");
+              PurchLine.SETRANGE("Document No.","Source No.");
+              IF PurchLine.FIND('-') THEN
+                REPEAT
+                  SETRANGE("Source Line No.",PurchLine."Line No.");
+                  IF FIND('-') THEN BEGIN
+                    IF "Source Document" = "Source Document"::"Purchase Order" THEN BEGIN
+                      ModifyLine := PurchLine."Qty. to Receive" <> -"Qty. to Ship";
+                      IF ModifyLine THEN BEGIN
+                        PurchLine.VALIDATE("Qty. to Receive",-"Qty. to Ship");
+                        IF Invoice THEN
+                          PurchLine.VALIDATE(
+                            "Qty. to Invoice",
+                            -"Qty. to Ship" + PurchLine."Quantity Received" - PurchLine."Quantity Invoiced");
+                      END;
+                    END ELSE BEGIN
+                      ModifyLine := PurchLine."Return Qty. to Ship" <> "Qty. to Ship";
+                      IF ModifyLine THEN BEGIN
+                        PurchLine.VALIDATE("Return Qty. to Ship","Qty. to Ship");
+                        IF Invoice THEN
+                          PurchLine.VALIDATE(
+                            "Qty. to Invoice",
+                            "Qty. to Ship" + PurchLine."Return Qty. Shipped" - PurchLine."Quantity Invoiced");
+                      END;
+                    END;
+                    IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                       (PurchLine."Expected Receipt Date" <> WhseShptHeader."Shipment Date") AND
+                       ("Qty. to Ship" = "Qty. Outstanding")
+                    THEN BEGIN
+                      PurchLine."Expected Receipt Date" := WhseShptHeader."Shipment Date";
+                      ModifyLine := TRUE;
+                    END;
+                    IF PurchLine."Bin Code" <> "Bin Code" THEN BEGIN
+                      PurchLine."Bin Code" := "Bin Code";
+                      ModifyLine := TRUE;
+                    END;
+                  END ELSE BEGIN
+                    ModifyLine :=
+                      (PurchLine."Qty. to Receive" <> 0) OR
+                      (PurchLine."Return Qty. to Ship" <> 0) OR
+                      (PurchLine."Qty. to Invoice" <> 0);
+                    IF ModifyLine THEN BEGIN
+                      IF "Source Document" = "Source Document"::"Purchase Order" THEN
+                        PurchLine.VALIDATE("Qty. to Receive",0)
+                      ELSE
+                        PurchLine.VALIDATE("Return Qty. to Ship",0);
+                      PurchLine.VALIDATE("Qty. to Invoice",0);
+                    END;
+                  END;
+                  IF ModifyLine THEN
+                    PurchLine.MODIFY;
+                UNTIL PurchLine.NEXT = 0;
+            END;
+          DATABASE::"Transfer Line":
+            BEGIN
+              TransLine.SETRANGE("Document No.","Source No.");
+              TransLine.SETRANGE("Derived From Line No.",0);
+              IF TransLine.FIND('-') THEN
+                REPEAT
+                  SETRANGE("Source Line No.",TransLine."Line No.");
+                  IF FIND('-') THEN BEGIN
+                    ModifyLine := TransLine."Qty. to Ship" <> "Qty. to Ship";
+                    IF ModifyLine THEN
+                      TransLine.VALIDATE("Qty. to Ship","Qty. to Ship");
+                    IF (WhseShptHeader."Shipment Date" <> 0D) AND
+                       (TransLine."Shipment Date" <> WhseShptHeader."Shipment Date") AND
+                       ("Qty. to Ship" = "Qty. Outstanding")
+                    THEN BEGIN
+                      TransLine."Shipment Date" := WhseShptHeader."Shipment Date";
+                      ModifyLine := TRUE;
+                    END;
+                    IF TransLine."Transfer-from Bin Code" <> "Bin Code" THEN BEGIN
+                      TransLine."Transfer-from Bin Code" := "Bin Code";
+                      ModifyLine := TRUE;
+                    END;
+                  END ELSE BEGIN
+                    ModifyLine := TransLine."Qty. to Ship" <> 0;
+                    IF ModifyLine THEN BEGIN
+                      TransLine.VALIDATE("Qty. to Ship",0);
+                      TransLine.VALIDATE("Qty. to Receive",0);
+                    END;
+                  END;
+
+                  IF ModifyLine THEN
+                    TransLine.MODIFY;
+                UNTIL TransLine.NEXT = 0;
+            END;
+        END;
+        SETRANGE("Source Line No.");
+      END;
+    END;
+
+    PROCEDURE PostSourceDocument@5(WhseShptLine@1000 : Record 7321);
+    VAR
+      WhseSetup@1005 : Record 5769;
+      WhseShptHeader@1001 : Record 7320;
+      SalesPost@1004 : Codeunit 80;
+      PurchPost@1003 : Codeunit 90;
+      TransferPostShipment@1002 : Codeunit 5704;
+    BEGIN
+      WITH WhseShptLine DO BEGIN
+        WhseShptHeader.GET("No.");
+        CASE "Source Type" OF
+          DATABASE::"Sales Line":
+            BEGIN
+              IF "Source Document" = "Source Document"::"Sales Order" THEN
+                SalesHeader.Ship := TRUE
+              ELSE
+                SalesHeader.Receive := TRUE;
+              SalesHeader.Invoice := Invoice;
+
+              SalesPost.SetWhseShptHeader(WhseShptHeader);
+              CASE WhseSetup."Shipment Posting Policy" OF
+                WhseSetup."Shipment Posting Policy"::"Posting errors are not processed":
+                  BEGIN
+                    SalesPost.RUN(SalesHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+                WhseSetup."Shipment Posting Policy"::"Stop and show the first posting error":
+                  BEGIN
+                    SalesPost.RUN(SalesHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+              END;
+
+              IF Print THEN
+                IF "Source Document" = "Source Document"::"Sales Order" THEN BEGIN
+                  SalesShptHeader."No." := SalesHeader."Last Shipping No.";
+                  SalesShptHeader.SETRECFILTER;
+                  PrintReport(ReportSelection.Usage::"S.Shipment");
+                  IF Invoice THEN BEGIN
+                    SalesInvHeader."No." := SalesHeader."Last Posting No.";
+                    SalesInvHeader.SETRECFILTER;
+                    PrintReport(ReportSelection.Usage::"S.Invoice");
+                  END;
+                END;
+              CLEAR(SalesPost);
+            END;
+          DATABASE::"Purchase Line": // Return Order
+            BEGIN
+              IF "Source Document" = "Source Document"::"Purchase Order" THEN
+                PurchHeader.Receive := TRUE
+              ELSE
+                PurchHeader.Ship := TRUE;
+              PurchHeader.Invoice := Invoice;
+
+              PurchPost.SetWhseShptHeader(WhseShptHeader);
+              CASE WhseSetup."Shipment Posting Policy" OF
+                WhseSetup."Shipment Posting Policy"::"Posting errors are not processed":
+                  BEGIN
+                    PurchPost.RUN(PurchHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+                WhseSetup."Shipment Posting Policy"::"Stop and show the first posting error":
+                  BEGIN
+                    PurchPost.RUN(PurchHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+              END;
+
+              IF Print THEN
+                IF "Source Document" = "Source Document"::"Purchase Return Order" THEN BEGIN
+                  ReturnShptHeader."No." := PurchHeader."Last Return Shipment No.";
+                  ReturnShptHeader.SETRECFILTER;
+                  PrintReport(ReportSelection.Usage::"P.Ret.Shpt.");
+                  IF Invoice THEN BEGIN
+                    PurchCrMemHeader."No." := PurchHeader."Last Posting No.";
+                    PurchCrMemHeader.SETRECFILTER;
+                    PrintReport(ReportSelection.Usage::"P.Cr.Memo");
+                  END;
+                END;
+              CLEAR(PurchPost);
+            END;
+          DATABASE::"Transfer Line":
+            BEGIN
+              TransferPostShipment.SetWhseShptHeader(WhseShptHeader);
+              CASE WhseSetup."Shipment Posting Policy" OF
+                WhseSetup."Shipment Posting Policy"::"Posting errors are not processed":
+                  BEGIN
+                    TransferPostShipment.RUN(TransHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+                WhseSetup."Shipment Posting Policy"::"Stop and show the first posting error":
+                  BEGIN
+                    TransferPostShipment.RUN(TransHeader);
+                    CounterSourceDocOK := CounterSourceDocOK + 1;
+                  END;
+              END;
+
+              IF Print THEN BEGIN
+                TransShptHeader."No." := TransHeader."Last Shipment No.";
+                TransShptHeader.SETRECFILTER;
+                TransShptHeader.PrintRecords(FALSE);
+              END;
+              CLEAR(TransferPostShipment);
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE PrintReport@6(ReportUsage@1000 : Integer);
+    BEGIN
+      ReportSelection.RESET;
+      ReportSelection.SETRANGE(Usage,ReportUsage);
+      ReportSelection.FIND('-');
+      REPEAT
+        ReportSelection.TESTFIELD("Report ID");
+        CASE ReportUsage OF
+          ReportSelection.Usage::"S.Shipment":
+            REPORT.RUN(ReportSelection."Report ID",FALSE,FALSE,SalesShptHeader);
+          ReportSelection.Usage::"S.Invoice":
+            REPORT.RUN(ReportSelection."Report ID",FALSE,FALSE,SalesInvHeader);
+          ReportSelection.Usage::"P.Ret.Shpt.":
+            REPORT.RUN(ReportSelection."Report ID",FALSE,FALSE,ReturnShptHeader);
+          ReportSelection.Usage::"P.Cr.Memo":
+            REPORT.RUN(ReportSelection."Report ID",FALSE,FALSE,PurchCrMemHeader);
+          ReportSelection.Usage::Inv2:
+            REPORT.RUN(ReportSelection."Report ID",FALSE,FALSE,TransShptHeader);
+        END;
+      UNTIL ReportSelection.NEXT = 0;
+    END;
+
+    PROCEDURE SetPrint@4(Print2@1000 : Boolean);
+    BEGIN
+      Print := Print2;
+    END;
+
+    PROCEDURE PostUpdateWhseDocuments@14(VAR WhseShptHeader@1000 : Record 7320);
+    VAR
+      WhseShptLine2@1003 : Record 7321;
+    BEGIN
+      WITH WhseShptLineBuf DO
+        IF FIND('-') THEN BEGIN
+          REPEAT
+            WhseShptLine2.GET("No.","Line No.");
+            IF "Qty. Outstanding" = "Qty. to Ship" THEN
+              WhseShptLine2.DELETE
+            ELSE BEGIN
+              WhseShptLine2."Qty. Shipped" := "Qty. Shipped" + "Qty. to Ship";
+              WhseShptLine2.VALIDATE("Qty. Outstanding","Qty. Outstanding" - "Qty. to Ship");
+              WhseShptLine2."Qty. Shipped (Base)" := "Qty. Shipped (Base)" + "Qty. to Ship (Base)";
+              WhseShptLine2."Qty. Outstanding (Base)" := "Qty. Outstanding (Base)" - "Qty. to Ship (Base)";
+              WhseShptLine2.Status := WhseShptLine2.CalcStatusShptLine;
+              WhseShptLine2.MODIFY;
+            END;
+          UNTIL NEXT = 0;
+          DELETEALL;
+        END;
+
+      WhseShptLine2.SETRANGE("No.",WhseShptHeader."No.");
+      IF NOT WhseShptLine2.FIND('-') THEN BEGIN
+        WhseShptHeader.DeleteRelatedLines;
+        WhseShptHeader.DELETE;
+      END ELSE BEGIN
+        WhseShptHeader."Document Status" := WhseShptHeader.GetDocumentStatus(0);
+        IF WhseShptHeader."Create Posted Header" THEN BEGIN
+          WhseShptHeader."Last Shipping No." := WhseShptHeader."Shipping No.";
+          WhseShptHeader."Shipping No." := '';
+          WhseShptHeader."Create Posted Header" := FALSE;
+        END;
+        WhseShptHeader.MODIFY;
+      END;
+    END;
+
+    PROCEDURE GetResultMessage@10();
+    VAR
+      MessageText@1000 : Text[250];
+    BEGIN
+      MessageText := Text003;
+      IF CounterSourceDocOK > 0 THEN
+        MessageText := MessageText + '\\' + Text004;
+      IF CounterSourceDocOK < CounterSourceDocTotal THEN
+        MessageText := MessageText + '\\' + Text005;
+      MESSAGE(MessageText,CounterSourceDocOK,CounterSourceDocTotal);
+    END;
+
+    PROCEDURE SetPostingSettings@1(PostInvoice@1001 : Boolean);
+    BEGIN
+      Invoice := PostInvoice;
+    END;
+
+    PROCEDURE CreatePostedShptHeader@7(VAR PostedWhseShptHeader@1001 : Record 7322;VAR WhseShptHeader@1003 : Record 7320;LastShptNo2@1000 : Code[20];PostingDate2@1002 : Date);
+    VAR
+      WhseComment@1005 : Record 5770;
+      WhseComment2@1004 : Record 5770;
+    BEGIN
+      LastShptNo := LastShptNo2;
+      PostingDate := PostingDate2;
+
+      IF NOT WhseShptHeader."Create Posted Header" THEN BEGIN
+        PostedWhseShptHeader.GET(WhseShptHeader."Last Shipping No.");
+        EXIT;
+      END;
+
+      PostedWhseShptHeader.INIT;
+      PostedWhseShptHeader."No." := WhseShptHeader."Shipping No.";
+      PostedWhseShptHeader."Location Code" := WhseShptHeader."Location Code";
+      PostedWhseShptHeader."Assigned User ID" := WhseShptHeader."Assigned User ID";
+      PostedWhseShptHeader."Assignment Date" := WhseShptHeader."Assignment Date";
+      PostedWhseShptHeader."Assignment Time" := WhseShptHeader."Assignment Time";
+      PostedWhseShptHeader."No. Series" := WhseShptHeader."No. Series";
+      PostedWhseShptHeader."Bin Code" := WhseShptHeader."Bin Code";
+      PostedWhseShptHeader."Zone Code" := WhseShptHeader."Zone Code";
+      PostedWhseShptHeader."Posting Date" := WhseShptHeader."Posting Date";
+      PostedWhseShptHeader."Shipment Date" := WhseShptHeader."Shipment Date";
+      PostedWhseShptHeader."Shipping Agent Code" := WhseShptHeader."Shipping Agent Code";
+      PostedWhseShptHeader."Shipping Agent Service Code" :=
+        WhseShptHeader."Shipping Agent Service Code";
+      PostedWhseShptHeader."Shipment Method Code" := WhseShptHeader."Shipment Method Code";
+      PostedWhseShptHeader.Comment := WhseShptHeader.Comment;
+      PostedWhseShptHeader."Whse. Shipment No." := WhseShptHeader."No.";
+      PostedWhseShptHeader."External Document No." := WhseShptHeader."External Document No.";
+      PostedWhseShptHeader.INSERT;
+
+      WhseComment.SETRANGE("Table Name",WhseComment."Table Name"::"Whse. Shipment");
+      WhseComment.SETRANGE(Type,WhseComment.Type::" ");
+      WhseComment.SETRANGE("No.",WhseShptHeader."No.");
+      IF WhseComment.FIND('-') THEN BEGIN
+        REPEAT
+          WhseComment2.INIT;
+          WhseComment2 := WhseComment;
+          WhseComment2."Table Name" := WhseComment2."Table Name"::"Posted Whse. Shipment";
+          WhseComment2."No." := PostedWhseShptHeader."No.";
+          WhseComment2.INSERT;
+        UNTIL WhseComment.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CreatePostedShptLine@48(VAR WhseShptLine@1000 : Record 7321;VAR PostedWhseShptHeader@1003 : Record 7322;VAR PostedWhseShptLine@1002 : Record 7323;VAR TempHandlingSpecification@1004 : Record 336);
+    BEGIN
+      UpdateWhseShptLineBuf(WhseShptLine);
+      WITH PostedWhseShptLine DO BEGIN
+        INIT;
+        TRANSFERFIELDS(WhseShptLine);
+        "No." := PostedWhseShptHeader."No.";
+        Quantity := WhseShptLine."Qty. to Ship";
+        "Qty. (Base)" := WhseShptLine."Qty. to Ship (Base)";
+        IF WhseShptHeader."Shipment Date" <> 0D THEN
+          "Shipment Date" := PostedWhseShptHeader."Shipment Date";
+        "Source Type" := WhseShptLine."Source Type";
+        "Source Subtype" := WhseShptLine."Source Subtype";
+        "Source No." := WhseShptLine."Source No.";
+        "Source Line No." := WhseShptLine."Source Line No.";
+        "Source Document" := WhseShptLine."Source Document";
+        CASE "Source Document" OF
+          "Source Document"::"Purchase Order":
+             "Posted Source Document" := "Posted Source Document"::"Posted Receipt";
+          "Source Document"::"Sales Order":
+             "Posted Source Document" := "Posted Source Document"::"Posted Shipment";
+          "Source Document"::"Purchase Return Order":
+             "Posted Source Document" := "Posted Source Document"::"Posted Return Shipment";
+          "Source Document"::"Sales Return Order":
+             "Posted Source Document" := "Posted Source Document"::"Posted Return Receipt";
+          "Source Document"::"Outbound Transfer":
+             "Posted Source Document" := "Posted Source Document"::"Posted Transfer Shipment";
+        END;
+        "Posted Source No." := LastShptNo;
+        "Posting Date" := PostingDate;
+        "Whse. Shipment No." := WhseShptLine."No.";
+        "Whse Shipment Line No." := WhseShptLine."Line No.";
+        INSERT;
+      END;
+
+      PostWhseJnlLine(PostedWhseShptLine,TempHandlingSpecification);
+    END;
+
+    LOCAL PROCEDURE UpdateWhseShptLineBuf@16(WhseShptLine2@1000 : Record 7321);
+    BEGIN
+      WITH WhseShptLine2 DO BEGIN
+        WhseShptLineBuf."No." := "No.";
+        WhseShptLineBuf."Line No." := "Line No.";
+        IF NOT WhseShptLineBuf.FIND THEN BEGIN
+          WhseShptLineBuf.INIT;
+          WhseShptLineBuf := WhseShptLine2;
+          WhseShptLineBuf.INSERT;
+        END;
+      END;
+    END;
+
+    PROCEDURE PostWhseJnlLine@12(VAR PostedWhseShptLine@1001 : Record 7323;VAR TempHandlingSpecification@1002 : Record 336);
+    VAR
+      TempWhseJnlLine2@1003 : TEMPORARY Record 7311;
+    BEGIN
+      WITH PostedWhseShptLine DO BEGIN
+        GetLocation("Location Code");
+        IF Location."Bin Mandatory" THEN BEGIN
+          InsertTempWhseJnlLine(PostedWhseShptLine);
+
+          TempWhseJnlLine.GET('','',"Location Code","Line No.");
+          TempWhseJnlLine."Line No." := 0;
+          TempWhseJnlLine."Reference No." := LastShptNo;
+          TempWhseJnlLine."Registering Date" := PostingDate;
+          TempWhseJnlLine."Whse. Document No." := "No.";
+
+          ItemTrackingMgt.SplitWhseJnlLine(TempWhseJnlLine,TempWhseJnlLine2,TempHandlingSpecification,FALSE);
+          IF TempWhseJnlLine2.FIND('-') THEN
+            REPEAT
+              WhseJnlRegisterLine.RUN(TempWhseJnlLine2);
+            UNTIL TempWhseJnlLine2.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE InsertTempWhseJnlLine@11(PostedWhseShptLine@1001 : Record 7323);
+    VAR
+      SourceCodeSetup@1000 : Record 242;
+    BEGIN
+      WITH PostedWhseShptLine DO BEGIN
+        TempWhseJnlLine.INIT;
+        TempWhseJnlLine."Entry Type" := TempWhseJnlLine."Entry Type":: "Negative Adjmt.";
+        TempWhseJnlLine."Line No." := "Line No.";
+        TempWhseJnlLine."Location Code" := "Location Code";
+        TempWhseJnlLine."From Zone Code" := "Zone Code";
+        TempWhseJnlLine."From Bin Code" := "Bin Code";
+        TempWhseJnlLine."Item No." := "Item No.";
+        TempWhseJnlLine.Description := Description;
+        TempWhseJnlLine."Qty. (Absolute)" := Quantity;
+        TempWhseJnlLine."Qty. (Absolute, Base)" := "Qty. (Base)";
+        TempWhseJnlLine."User ID" := USERID;
+        TempWhseJnlLine."Variant Code" := "Variant Code";
+        TempWhseJnlLine."Unit of Measure Code" := "Unit of Measure Code";
+        TempWhseJnlLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+        TempWhseJnlLine."Source Type" := "Source Type";
+        TempWhseJnlLine."Source Subtype" := "Source Subtype";
+        TempWhseJnlLine."Source No." := "Source No.";
+        TempWhseJnlLine."Source Line No." := "Source Line No.";
+        TempWhseJnlLine."Source Document" := "Source Document";
+        TempWhseJnlLine."Whse. Document Type" := TempWhseJnlLine."Whse. Document Type"::Shipment;
+        TempWhseJnlLine."Whse. Document No." := "No.";
+        TempWhseJnlLine."Whse. Document Line No." := "Line No.";
+        GetItemUnitOfMeasure2("Item No.","Unit of Measure Code");
+        TempWhseJnlLine.Cubage := TempWhseJnlLine."Qty. (Absolute)" * ItemUnitOfMeasure.Cubage;
+        TempWhseJnlLine.Weight := TempWhseJnlLine."Qty. (Absolute)" * ItemUnitOfMeasure.Weight;
+        SourceCodeSetup.GET;
+        CASE "Source Document" OF
+          "Source Document"::"Purchase Order":
+             BEGIN
+               TempWhseJnlLine."Source Code" := SourceCodeSetup.Purchases;
+               TempWhseJnlLine."Reference Document" :=
+                 TempWhseJnlLine."Reference Document"::"Posted Rcpt.";
+             END;
+          "Source Document"::"Sales Order":
+             BEGIN
+               TempWhseJnlLine."Source Code" := SourceCodeSetup.Sales;
+               TempWhseJnlLine."Reference Document" :=
+                 TempWhseJnlLine."Reference Document"::"Posted Shipment";
+             END;
+          "Source Document"::"Purchase Return Order":
+             BEGIN
+               TempWhseJnlLine."Source Code" := SourceCodeSetup.Purchases;
+               TempWhseJnlLine."Reference Document" :=
+                 TempWhseJnlLine."Reference Document"::"Posted Rtrn. Shipment";
+             END;
+          "Source Document"::"Sales Return Order":
+             BEGIN
+               TempWhseJnlLine."Source Code" := SourceCodeSetup.Sales;
+               TempWhseJnlLine."Reference Document" :=
+                 TempWhseJnlLine."Reference Document"::"Posted Rtrn. Rcpt.";
+             END;
+          "Source Document"::"Outbound Transfer":
+             BEGIN
+               TempWhseJnlLine."Source Code" := SourceCodeSetup.Transfer;
+               TempWhseJnlLine."Reference Document" :=
+                 TempWhseJnlLine."Reference Document"::"Posted T. Shipment";
+             END;
+        END;
+
+        WMSMgt.CheckWhseJnlLine(TempWhseJnlLine,0,0,FALSE);
+        TempWhseJnlLine.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemUnitOfMeasure2@15(ItemNo@1000 : Code[20];UOMCode@1001 : Code[10]);
+    BEGIN
+      IF (ItemUnitOfMeasure."Item No." <> ItemNo) OR
+         (ItemUnitOfMeasure.Code <> UOMCode)
+      THEN
+        IF NOT ItemUnitOfMeasure.GET(ItemNo,UOMCode) THEN
+          ItemUnitOfMeasure.INIT;
+    END;
+
+    LOCAL PROCEDURE GetLocation@13(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        Location.INIT
+      ELSE
+        IF LocationCode <> Location.Code THEN
+          Location.GET(LocationCode);
+    END;
+
+    PROCEDURE EnsureAuthorization@17(SalesHeader@1000 : Record 36);
+    VAR
+      PaymentMgt@1050 : Codeunit 825;
+    BEGIN
+      IF NOT SalesHeader.ISEMPTY THEN BEGIN
+        IF PaymentMgt.IsValidPaymentMethod(SalesHeader."Payment Method Code") AND PaymentMgt.IsAuthorizationRequired THEN
+          PaymentMgt.AuthorizeSalesDoc(SalesHeader,0,TRUE);
+      END;
+    END;
+
+    PROCEDURE CheckItemTrkg@8(WhseShptLine@1000 : Record 7321);
+    VAR
+      ReservationEntry@1001 : Record 337;
+      WhseItemTrkgLine@1002 : Record 6550;
+      QtyPickedBase@1003 : Decimal;
+      WhseSNRequired@1004 : Boolean;
+      WhseLNRequired@1005 : Boolean;
+    BEGIN
+      ItemTrackingMgt.CheckWhseItemTrkgSetup(WhseShptLine."Item No.",WhseSNRequired,WhseLNRequired,FALSE);
+      IF NOT (WhseSNRequired OR WhseLNRequired) THEN
+        EXIT;
+      ReservationEntry.SETCURRENTKEY(
+        "Source ID","Source Ref. No.","Source Type","Source Subtype");
+      ReservationEntry.SETRANGE("Source ID",WhseShptLine."Source No.");
+      ReservationEntry.SETRANGE("Source Ref. No.",WhseShptLine."Source Line No.");
+      ReservationEntry.SETRANGE("Source Type",WhseShptLine."Source Type");
+      ReservationEntry.SETRANGE("Source Subtype",WhseShptLine."Source Subtype");
+      IF ReservationEntry.FIND('-') THEN
+        REPEAT
+          IF (ReservationEntry."Serial No." <> '')  OR
+             (ReservationEntry."Lot No." <> '')
+          THEN BEGIN
+            QtyPickedBase := 0;
+            WhseItemTrkgLine.SETCURRENTKEY("Serial No.","Lot No.");
+            WhseItemTrkgLine.SETRANGE("Serial No.",ReservationEntry."Serial No.");
+            WhseItemTrkgLine.SETRANGE("Lot No.",ReservationEntry."Lot No.");
+            WhseItemTrkgLine.SETRANGE("Source Type",DATABASE::"Warehouse Shipment Line");
+            WhseItemTrkgLine.SETRANGE("Source ID",WhseShptLine."No.");
+            WhseItemTrkgLine.SETRANGE("Source Ref. No.",WhseShptLine."Line No.");
+            IF WhseItemTrkgLine.FIND('-') THEN
+              REPEAT
+                QtyPickedBase := QtyPickedBase + WhseItemTrkgLine."Qty. Registered (Base)";
+              UNTIL WhseItemTrkgLine.NEXT = 0;
+            IF QtyPickedBase < ABS(ReservationEntry."Qty. to Handle (Base)") THEN
+              ERROR(Text006,
+                WhseShptLine."No.",WhseShptLine.FIELDCAPTION("Line No."),WhseShptLine."Line No.");
+          END;
+        UNTIL ReservationEntry.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}

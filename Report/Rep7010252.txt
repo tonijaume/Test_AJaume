@@ -1,0 +1,274 @@
+OBJECT Report 7010252 CNT - Conciliacion cobros tarj
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/07/14;
+    Time=12:15:45;
+    Modified=Yes;
+    Version List=AIC2009,CNT-OC-14047;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 271=rimd;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF (dataIni = 0D) OR (dataFi = 0D) THEN
+                    ERROR(Text002, tMovPagos.TABLENAME);
+                  IF dataIni > dataFi THEN
+                    ERROR(Text003, tMovPagos.TABLENAME);
+                END;
+
+    OnPostReport=BEGIN
+                   MESSAGE(Text001);
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table270;
+        DataItemTableView=SORTING(No.);
+        OnAfterGetRecord=BEGIN
+                           wMargenPermitido := 0.5;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table7009915;
+        DataItemVarName=diMovTarjeta;
+        OnPreDataItem=BEGIN
+                        // Obtenir ID de per conciliar
+                        IDLiq := USERID;
+                        IF IDLiq = '' THEN
+                          IDLiq := '***';
+
+                        SETRANGE("N§ conciliaci¢n", 0); // Nom‚s conciliar l¡nies no casades amb cap Mov. Pago
+
+                        dlgEstat.OPEN('Conciliando #1#### registros de #2####.');
+                        dlgEstat.UPDATE(2, COUNT);
+                        numReg := 0;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           // Concilia un sol moviment amb la l¡nia d'extracte en base a certs criteris de conciliaci¢.
+                           // T‚ preferŠncia sa concilici¢ per data sobre sa d'import.
+
+                           numReg := numReg + 1;
+
+                           dlgEstat.UPDATE(1, numReg);
+                           EndMovsPago := (NOT tMovPagos.FINDFIRST) AND (NOT tMovReemb.FINDFIRST);
+                           IF EndMovsPago THEN
+                             CurrReport.SKIP;
+
+                           concilia := FALSE;
+                           ConciliarMoviment_Step1;
+                           ConciliarMoviment_Step2;
+                           IF concilia THEN BEGIN
+                             "Liq. por Id." := IDLiq;
+                             MODIFY;
+                             cuConciliacio.ConciliarSeleccio("Bank Account", "Tipo conciliaci¢n"::Autom tica)
+                           END
+                         END;
+
+        ReqFilterFields=Fecha;
+        DataItemLink=Banco=FIELD(No.);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=9020;
+      Height=3410;
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;4180 ;220  ;1650 ;440  ;InPage=-1;
+                                                   SourceExpr=dataIni }
+      { 2   ;Label        ;220  ;220  ;3850 ;440  ;ParentControl=1;
+                                                   CaptionML=ESP=Fecha inicio cobros }
+      { 3   ;TextBox      ;4180 ;880  ;1650 ;440  ;InPage=-1;
+                                                   SourceExpr=dataFi }
+      { 4   ;Label        ;220  ;880  ;3850 ;440  ;ParentControl=3;
+                                                   CaptionML=ESP=Fecha fin cobros }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      tConfiguracio@1100244000 : Record 7009862;
+      tMovPagos@1100244001 : Record 7010240;
+      concilia@1100244002 : Boolean;
+      EndMovsPago@1100244003 : Boolean;
+      dataIni@1100244004 : Date;
+      dataFi@1100244005 : Date;
+      IDLiq@1100244006 : Code[10];
+      numReg@1100244007 : Integer;
+      cuConciliacio@1100244008 : Codeunit 7009739;
+      dlgEstat@1100244009 : Dialog;
+      Text001@1103355000 : TextConst 'ESP=La conciliaci¢n autom tica ha finalizado.';
+      rRsvExcursion@1100217000 : Record 7010162;
+      PagosPdtesConciliar@1100217001 : Integer;
+      wMargenPermitido@1100217002 : Decimal;
+      Text002@1100217003 : TextConst 'ESP=Indique las fechas de inicio y fin para %1.';
+      Text003@1100217004 : TextConst 'ESP=Corrija las fechas de inicio y fin para %1.';
+      tMovReemb@1000000000 : Record 7010267;
+
+    PROCEDURE ConciliarMoviment_Step1@4();
+    VAR
+      lwTicketCobro@1100217001 : Code[10];
+      lwTicketBanco@1100217002 : Code[10];
+      lwDiferencia@1100217003 : Decimal;
+    BEGIN
+      //Intentamos conciliar por tres
+
+      WITH diMovTarjeta DO
+      BEGIN
+        tMovPagos.RESET;
+        tMovPagos.SETRANGE("N§ conciliaci¢n", 0);
+        tMovPagos.SETRANGE("Fecha venta"    , dataIni, dataFi);
+        IF tMovPagos.FINDSET(TRUE) THEN
+        REPEAT
+          tMovPagos.CALCFIELDS(Ticket);
+          lwDiferencia := ABS(tMovPagos."Importe Recibido" - Importe); //+$001
+          //-$001IF (tMovPagos."Importe Recibido" = Importe) AND
+          IF (lwDiferencia <= wMargenPermitido) AND //+$001
+             (tMovPagos."Fecha venta" = Fecha) AND
+             (STRPOS(tMovPagos.Ticket, Ticket) <> 0) THEN
+          BEGIN
+            concilia := TRUE;
+            tMovPagos."Autorizacion operacion" := diMovTarjeta.Operacion;
+            tMovPagos."Liq. por Id." := USERID;
+            tMovPagos.MODIFY;
+          END;
+        UNTIL (tMovPagos.NEXT = 0) OR (concilia = TRUE);
+
+        // $002 <
+        IF NOT concilia THEN BEGIN
+          tMovReemb.RESET;
+          tMovReemb.SETRANGE("N§ conciliaci¢n", 0);
+          tMovReemb.SETRANGE("Fecha reembolso"    , dataIni, dataFi);
+          IF tMovReemb.FINDSET(TRUE) THEN
+          REPEAT
+            tMovReemb.CALCFIELDS(Ticket);
+            lwDiferencia := ABS(tMovReemb.Importe - ABS(Importe)); //+$001
+            //-$001IF (tMovPagos."Importe Recibido" = Importe) AND
+            IF (lwDiferencia <= wMargenPermitido) AND //+$001
+               (tMovReemb."Fecha reembolso" = Fecha) AND
+               (STRPOS(tMovReemb.Ticket, Ticket) <> 0) THEN
+            BEGIN
+              concilia := TRUE;
+              tMovReemb."Autorizacion operacion" := diMovTarjeta.Operacion;
+              tMovReemb."Liq. por Id." := USERID;
+              tMovReemb.MODIFY;
+            END;
+          UNTIL (tMovReemb.NEXT = 0) OR (concilia = TRUE);
+        END;
+        // $002 >
+      END;
+    END;
+
+    PROCEDURE ConciliarMoviment_Step2@1100217000();
+    VAR
+      lwDiferencia@1100217001 : Decimal;
+    BEGIN
+      //Intentamos conciliar por dos
+      WITH diMovTarjeta DO
+      BEGIN
+        tMovPagos.RESET;
+        tMovPagos.SETRANGE("N§ conciliaci¢n", 0);
+        tMovPagos.SETRANGE("Fecha venta"    , dataIni, dataFi);
+        IF tMovPagos.FINDSET(TRUE) THEN
+        REPEAT
+          tMovPagos.CALCFIELDS(Ticket);
+          lwDiferencia := ABS(tMovPagos."Importe Recibido" - Importe); //+$001
+          //-$001IF (tMovPagos."Importe Recibido" = Importe) AND
+          IF (lwDiferencia <= wMargenPermitido) AND //+$001
+             (STRPOS(tMovPagos.Ticket, Ticket) <> 0) THEN
+          BEGIN
+            concilia := TRUE;
+            tMovPagos."Autorizacion operacion" := diMovTarjeta.Operacion;
+            tMovPagos."Liq. por Id." := USERID;
+            tMovPagos.MODIFY;
+          END;
+        UNTIL (tMovPagos.NEXT = 0) OR (concilia = TRUE);
+
+        // $002 <
+        IF NOT concilia THEN BEGIN
+          tMovReemb.RESET;
+          tMovReemb.SETRANGE("N§ conciliaci¢n", 0);
+          tMovReemb.SETRANGE("Fecha reembolso"    , dataIni, dataFi);
+          IF tMovReemb.FINDSET(TRUE) THEN
+          REPEAT
+            tMovReemb.CALCFIELDS(Ticket);
+            lwDiferencia := ABS(tMovReemb.Importe - ABS(Importe)); //+$001
+            //-$001IF (tMovPagos."Importe Recibido" = Importe) AND
+            IF (lwDiferencia <= wMargenPermitido) AND //+$001
+               (STRPOS(tMovReemb.Ticket, Ticket) <> 0) THEN
+            BEGIN
+              concilia := TRUE;
+              tMovReemb."Autorizacion operacion" := diMovTarjeta.Operacion;
+              tMovReemb."Liq. por Id." := USERID;
+              tMovReemb.MODIFY;
+            END;
+          UNTIL (tMovReemb.NEXT = 0) OR (concilia = TRUE);
+        END;
+        // $002 >
+
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 10072013 Se incluye una nueva opcion para indicar un margen de diferencia que se va a permitir
+                        a la hora de conciliar 2 importes, es la variable wMargenPermitido que se inicializa
+                        en el OnAfterGetRecord de Bank Account
+
+      $002 ARM 25072014 Se a¤ade los reembolsos CNT-OC-14047
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

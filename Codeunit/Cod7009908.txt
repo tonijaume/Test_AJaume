@@ -1,0 +1,1144 @@
+OBJECT Codeunit 7009908 Cotizacion generar reservas
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/04/14;
+    Time=20:32:43;
+    Modified=Yes;
+    Version List=AIC2009,CNT-OC-14035;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            lrCabCot@1103355000 : Record 7009871;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      wTipoDist@1103355000 : ',Hotel,Entrada,Salida';
+      wTipoPaquete@1103355002 : ',Hotel,Transfer,Htl+Trn';
+      cCotCom@1103355001 : Codeunit 7009913;
+      Text001@1103355003 : TextConst 'ENU=There are hotels with more than one type of room selected;ESP=Hay hoteles con m s de un tipo de habitaci¢n asignado.';
+      Text002@1103355004 : TextConst 'ENU=Stay terms between hotels overlap;ESP=Los periodos de estancia entre hoteles se solapan.';
+      Text003@1103355005 : TextConst 'ENU=Rate %1 cannot be transferred;ESP=No se puede traspasar una cotizaci¢n %1.';
+      cReservas@1103355006 : Codeunit 7009703;
+      Text004@1103355007 : TextConst 'ENU=Rate must be calculated in order to be transferred;ESP=La cotizaci¢n debe estar calculada para poder traspasarse.';
+      cProformas@1103355008 : Codeunit 7009902;
+      Text005@1103355009 : TextConst 'ENU=Would you like to create a proforma which include bookings of rating?;ESP=¨Desea crear una proforma que incluya las reservas de la cotizaci¢n?';
+      Text006@1103355010 : TextConst 'ENU=There is no exchange for touroperator %1 and board %2;ESP=No existe conversi¢n para el touroperador %1 y el regimen %2.';
+      Text007@1103355011 : TextConst 'ENU=There is no sale contract for TTOO %1 and currency %2;ESP=No existe contrato de venta para el TTOO %1 y divisa %2';
+      Text008@1100217000 : TextConst 'ENU=Quotation %1;ESP=Cotizacion %1';
+
+    PROCEDURE TraspasarCotizacion@1103355011(VAR prCab@1103355000 : Record 7009871);
+    VAR
+      lrHotsTMP@1103355007 : TEMPORARY Record 7009873;
+      lrPersosTMP@1103355006 : TEMPORARY Record 7009873;
+      lrTransEntTMP@1103355005 : TEMPORARY Record 7009881;
+      lrTransSalTMP@1103355004 : TEMPORARY Record 7009881;
+      lrDistribsTMP@1103355003 : ARRAY [2] OF TEMPORARY Record 7009875;
+      lrCjtosTMP@1103355002 : TEMPORARY Record 342;
+      lrPersxCjtosTMP@1103355001 : TEMPORARY Record 342;
+      lrVinculos@1103355008 : Record 7009884;
+      lrCabRes@1103355009 : Record 7009741;
+      lrContV@1103355010 : Record 7009727;
+      lrParAgencia@1103355011 : Record 7009700;
+    BEGIN
+      // TraspasarCotizacion
+
+      IF prCab.Estado IN [prCab.Estado::Cerrada, prCab.Estado::Anulada] THEN
+        ERROR(Text003, prCab.Estado);
+
+      IF NOT (prCab.Estado IN [prCab.Estado::Calculada]) THEN
+        ERROR(Text004);
+
+      // comprobamos que la cabecera tenga un n§ de bono asignado.
+      prCab.TESTFIELD(Bono);
+
+      // AJF 14/04/10
+      // Se comprueba que exista un contrato de venta para la divisa correspondiente a la cotizacion.
+      lrParAgencia.FINDFIRST;
+      IF NOT cProformas.BuscaContrato(lrContV, lrParAgencia.Delegacion, prCab."Touroperador Venta", prCab.Divisa) THEN
+        ERROR(Text007, prCab."Touroperador Venta", prCab.Divisa);
+
+      IF cCotCom.ComprobarSolapamientoHoteles(prCab, FALSE) <> 0 THEN BEGIN
+        ERROR(Text002);
+      END;
+
+      ComprobarConversionesRegimen(prCab);
+
+      PrepararTemps(prCab, lrHotsTMP, lrPersosTMP, lrTransEntTMP, lrTransSalTMP,
+                    lrDistribsTMP, lrCjtosTMP, lrPersxCjtosTMP);
+
+      GenerarCabeceras(prCab, lrHotsTMP, lrPersosTMP, lrTransEntTMP, lrTransSalTMP,
+                       lrDistribsTMP[1], lrCjtosTMP, lrPersxCjtosTMP);
+
+      GenerarResExcursiones(prCab, lrPersosTMP);
+
+      // Se generan las reservas de cabecera reserva.
+      lrVinculos.SETCURRENTKEY("Id Cotizacion", Delegacion, "N§ Interno", "N§ Periodo", Tipo);
+      lrVinculos.SETRANGE ("Id Cotizacion", prCab.Id);
+      lrVinculos.SETRANGE (Tipo           , lrVinculos.Tipo::Cabecera);
+
+      IF lrVinculos.FINDSET THEN BEGIN
+        REPEAT
+          lrCabRes.RESET;
+          lrCabRes.SETRANGE (Delegacion  , lrVinculos.Delegacion);
+          lrCabRes.SETRANGE ("N§ Interno", lrVinculos."N§ Interno");
+          lrCabRes.FINDFIRST;
+          cReservas.generar_cabecera(lrCabRes, TRUE);
+        UNTIL lrVinculos.NEXT = 0;
+      END;
+
+      IF CONFIRM(Text005) THEN
+        cProformas.CrearProformaCotizacion(prCab);
+
+      prCab.Estado := prCab.Estado::Cerrada;
+      prCab.SetDatosModificacion;
+      prCab.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE PrepararTemps@1103355001(VAR prCab@1103355000 : Record 7009871;VAR prHotsTMP@1103355001 : TEMPORARY Record 7009873;VAR prPersosTMP@1103355002 : TEMPORARY Record 7009873;VAR prTransEntTMP@1103355014 : TEMPORARY Record 7009881;VAR prTransSalTMP@1103355003 : TEMPORARY Record 7009881;VAR prDistribsTMP@1103355009 : ARRAY [2] OF TEMPORARY Record 7009875;VAR prCjtosTMP@1103355007 : TEMPORARY Record 342;VAR prPersxCjtosTMP@1103355008 : TEMPORARY Record 342);
+    VAR
+      lrHoteles@1103355006 : Record 7009873;
+      lrPersonas@1103355005 : Record 7009873;
+      lrHabitaciones@1103355020 : Record 7009873;
+      lrTransfers@1103355004 : Record 7009881;
+      lrDistribs@1103355011 : Record 7009875;
+      lwFiltroHots@1103355010 : Text[1024];
+      lwFiltroTransEnt@1103355012 : Text[1024];
+      lwFiltroTransSal@1103355013 : Text[1024];
+      lwNumCjt@1103355017 : Integer;
+    BEGIN
+      // PrepararTemps
+
+      // Borro los Temporaries.
+
+      prHotsTMP.RESET       ; prHotsTMP.DELETEALL;
+      prPersosTMP.RESET     ; prPersosTMP.DELETEALL;
+      prTransEntTMP.RESET   ; prTransEntTMP.DELETEALL;
+      prTransSalTMP.RESET   ; prTransSalTMP.DELETEALL;
+      prDistribsTMP[1].RESET; prDistribsTMP[1].DELETEALL;
+      prDistribsTMP[2].RESET; prDistribsTMP[2].DELETEALL;
+
+      // Preparo el TMP de personas
+
+      lrPersonas.SETCURRENTKEY("Id cotizacion", "Tipo uso", "Tipo linea");
+      lrPersonas.SETRANGE ("Id cotizacion", prCab.Id);
+      lrPersonas.SETRANGE ("Tipo uso"     , lrPersonas."Tipo uso"::Seleccion);
+      lrPersonas.SETRANGE ("Tipo linea"   , lrPersonas."Tipo linea"::Persona);
+      IF lrPersonas.FINDSET THEN BEGIN
+        REPEAT
+          prPersosTMP := lrPersonas;
+          prPersosTMP.INSERT;
+        UNTIL lrPersonas.NEXT = 0;
+      END;
+
+      // Separo los transfers que tienen tanto entrada como salida para optimizar
+      // la generaci¢n de cabeceras.
+      //: TODO: tratar los transfers manuales.
+      lrTransfers.SETCURRENTKEY("Id Cotizacion");
+      lrTransfers.SETRANGE ("Id Cotizacion", prCab.Id);
+      lrTransfers.SETRANGE ("Tipo Uso", lrTransfers."Tipo Uso"::Automatico);
+      IF lrTransfers.FINDSET THEN BEGIN
+        REPEAT
+
+          IF lrTransfers."Tipo transfer" IN [lrTransfers."Tipo transfer"::Ambos,
+                                             lrTransfers."Tipo transfer"::Entrada] THEN BEGIN
+
+            prTransEntTMP := lrTransfers;
+            prTransEntTMP.INSERT;
+
+          END;
+
+          IF lrTransfers."Tipo transfer" IN [lrTransfers."Tipo transfer"::Ambos,
+                                             lrTransfers."Tipo transfer"::Salida] THEN BEGIN
+            prTransSalTMP := lrTransfers;
+            prTransSalTMP.INSERT;
+
+          END;
+
+        UNTIL lrTransfers.NEXT = 0;
+      END;
+
+      // genero el TMP de hoteles
+      lrHoteles.SETCURRENTKEY("Id cotizacion", "Tipo uso", "Tipo linea");
+      lrHoteles.SETRANGE ("Id cotizacion", prCab.Id);
+      lrHoteles.SETRANGE ("Tipo uso"     , lrHoteles."Tipo uso"::Seleccion);
+      lrHoteles.SETRANGE ("Tipo linea"   , lrHoteles."Tipo linea"::Hotel);
+      IF lrHoteles.FINDSET THEN BEGIN
+        REPEAT
+
+          // Acumulo hoteles para filtrar todas las distribuciones a la vez.
+          lwFiltroHots := lwFiltroHots +  FORMAT(lrHoteles.Id) + '|';
+
+          prHotsTMP := lrHoteles;
+
+          // Inserto la informaci¢n de habitacion en la l¡nea de hotel.
+          lrHabitaciones.RESET;
+          lrHabitaciones.SETCURRENTKEY("Id cotizacion", "Id Hotel");
+          lrHabitaciones.SETRANGE ("Id cotizacion", prCab.Id);
+          lrHabitaciones.SETRANGE ("Id Hotel"     , lrHoteles.Id);
+          lrHabitaciones.SETRANGE ("Tipo linea"   , lrHabitaciones."Tipo linea"::Habitacion);
+
+          IF lrHabitaciones.COUNT <> 1 THEN
+            ERROR(Text001);
+
+          // Cada registro de hotel deberia tener solo una habitaci¢n asignada.
+          IF lrHabitaciones.FINDFIRST THEN BEGIN
+            prHotsTMP.Habitacion        := lrHabitaciones.Habitacion;
+            prHotsTMP."N§ Habitaciones" := lrHabitaciones."N§ Habitaciones";
+          END;
+
+          prHotsTMP.INSERT;
+
+        UNTIL lrHoteles.NEXT = 0;
+      END;
+
+      // genero el TMP de distribuciones.
+
+      lwFiltroHots := DELCHR(lwFiltroHots, '>', '|');
+
+      IF lwFiltroHots <> '' THEN BEGIN
+
+        lrDistribs.RESET;
+        lrDistribs.SETCURRENTKEY("Id Hotel", "Id habitacion", "Id persona");
+        lrDistribs.SETFILTER("Id Hotel"     , lwFiltroHots);
+        lrDistribs.SETRANGE ("Id habitacion", 0);
+        lrDistribs.SETRANGE (Seleccion      , TRUE);
+        IF lrDistribs.FINDSET THEN BEGIN
+          REPEAT
+
+            prDistribsTMP[1]                       := lrDistribs;
+            prDistribsTMP[1].INSERT;
+
+          UNTIL lrDistribs.NEXT = 0;
+        END;
+
+      END;
+
+      PrepararTempsTrnManuales(prCab,prTransEntTMP, prTransSalTMP, prDistribsTMP[1]);
+      GenerarConjuntos(prDistribsTMP[1], prDistribsTMP[2], prCjtosTMP, prPersxCjtosTMP);
+    END;
+
+    LOCAL PROCEDURE CompararConjuntos@1103355046(VAR prConjts@1103355000 : TEMPORARY Record 342;VAR prDistxConjts@1103355001 : TEMPORARY Record 342;VAR prDist@1103355002 : TEMPORARY Record 7009875) : Integer;
+    VAR
+      lwEnc@1103355004 : Boolean;
+      lwFin@1103355003 : Boolean;
+    BEGIN
+      // CompararConjuntos
+
+      prDist.RESET;
+
+      // Restrinjo los conjuntos a buscar a solo los que tengan el mismo
+      // numero de paxes.
+      prConjts.RESET;
+      prConjts.SETRANGE("Column No.", prDist.COUNT);
+
+      lwEnc := FALSE;
+      lwFin := FALSE;
+
+      IF prConjts.FINDSET THEN BEGIN
+        REPEAT
+
+          lwEnc := TRUE;
+
+          prDistxConjts.RESET;
+          prDistxConjts.SETRANGE ("Row No."   , prConjts."Row No.");
+          IF prDistxConjts.FINDSET THEN BEGIN
+            REPEAT
+              prDist.RESET;
+              prDist.SETCURRENTKEY("Id persona", "Id habitacion");
+              prDist.SETRANGE ("Id persona", prDistxConjts."Column No.");
+              lwEnc := NOT prDist.ISEMPTY;
+
+            UNTIL NOT lwEnc OR (prDistxConjts.NEXT = 0);
+          END;
+
+          IF NOT lwEnc THEN
+            lwFin := (prConjts.NEXT = 0);
+
+        UNTIL lwEnc OR lwFin;
+
+      END;
+
+      IF lwEnc THEN
+        EXIT(prConjts."Row No.")
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE A¤adirConjunto@1103355048(VAR prConjts@1103355003 : TEMPORARY Record 342;VAR prDistxConjts@1103355002 : TEMPORARY Record 342;VAR prDist@1103355001 : TEMPORARY Record 7009875) : Integer;
+    VAR
+      lwNumConjt@1103355004 : Integer;
+      lwCont@1103355005 : Integer;
+    BEGIN
+      // A¤adirConjunto
+
+      prConjts.RESET;
+      IF prConjts.FINDLAST THEN
+        lwNumConjt := prConjts."Row No." + 1
+      ELSE
+        lwNumConjt := 1;
+
+      prConjts.INIT;
+      prConjts."Row No." := lwNumConjt;
+
+      lwCont := 0;
+
+      prDist.RESET;
+
+      IF prDist.FINDSET THEN BEGIN
+        REPEAT
+
+          lwCont += 1;
+
+          prDistxConjts.INIT;
+          prDistxConjts."Row No."    := lwNumConjt;
+          prDistxConjts."Column No." := prDist."Id persona";
+          prDistxConjts.INSERT;
+
+        UNTIL prDist.NEXT = 0;
+      END;
+
+      prConjts."Column No." := lwCont;
+      prConjts.INSERT;
+
+      EXIT(lwNumConjt);
+    END;
+
+    LOCAL PROCEDURE GenerarCabeceras@1103355000(VAR prCab@1103355009 : Record 7009871;VAR prHotsTMP@1103355008 : TEMPORARY Record 7009873;VAR prPersosTMP@1103355007 : TEMPORARY Record 7009873;VAR prTransEntTMP@1103355006 : TEMPORARY Record 7009881;VAR prTransSalTMP@1103355005 : TEMPORARY Record 7009881;VAR prDistribsTMP@1103355000 : TEMPORARY Record 7009875;VAR prCjtos@1103355003 : TEMPORARY Record 342;VAR prPersxCjto@1103355004 : TEMPORARY Record 342);
+    VAR
+      lrCnjto@1103355001 : Record 342;
+      lrPersxCnjto@1103355002 : Record 342;
+      lrCabRes@1103355010 : Record 7009741;
+      lrAcoRes@1103355011 : Record 7009748;
+      lrPerRes@1103355015 : Record 7009742;
+      lwPaquetes@1103355014 : ARRAY [3] OF Code[10];
+      lrAuxDist@1103355016 : TEMPORARY Record 7009875;
+      lwHotAux@1103355012 : Integer;
+      lwTrnEntAux@1103355013 : Integer;
+      lwTrnSalAux@1103355017 : Integer;
+    BEGIN
+      // GenerarCabeceras
+
+      //: TODO: lrCabRes es TMP ahora hay que pasar a real.
+
+      prCjtos.RESET;
+      IF prCjtos.FINDSET THEN BEGIN
+
+        BuscarTiposPaquete(lwPaquetes);
+
+        REPEAT
+
+          lrAuxDist.RESET;
+          lrAuxDist.DELETEALL;
+
+          // paso las distribs que pertenecen al conjunto a auxiliar
+          prDistribsTMP.RESET;
+          prDistribsTMP.SETCURRENTKEY("Id habitacion", "N§ habitacion", Posicion);
+          prDistribsTMP.SETRANGE("Id habitacion", prCjtos."Row No.");
+
+          IF prDistribsTMP.FINDSET THEN BEGIN
+            REPEAT
+
+              lrAuxDist := prDistribsTMP;
+
+              lrAuxDist.INSERT;
+
+            UNTIL prDistribsTMP.NEXT = 0;
+          END;
+
+          GenerarCab(prCab, lrCabRes);
+
+
+          lrAuxDist.RESET;
+          lrAuxDist.SETCURRENTKEY("Id Hotel", "Id Transfer Entrada", "Id Transfer Salida");
+          IF lrAuxDist.FINDSET THEN BEGIN
+
+            lwHotAux    := 0;
+            lwTrnEntAux := 0;
+            lwTrnSalAux := 0;
+
+            // AJS 14.01.2010
+            // Nuevo parametro para enlazar con la distribucion, coger la distribucion del primer hotel
+
+            GenerarAcompa¤antes(prCjtos, prPersxCjto, prPersosTMP, lrCabRes, lrAcoRes, lrAuxDist."Id Hotel");
+
+            REPEAT
+
+              IF (lwHotAux    <> lrAuxDist."Id Hotel") OR
+                 (lwTrnEntAux <> lrAuxDist."Id Transfer Entrada") OR
+                 (lwTrnSalAux <> lrAuxDist."Id Transfer Salida") THEN BEGIN
+
+                lwHotAux    := lrAuxDist."Id Hotel";
+                lwTrnEntAux := lrAuxDist."Id Transfer Entrada";
+                lwTrnSalAux := lrAuxDist."Id Transfer Salida";
+
+                GenerarPeriodo(prCab, lrCabRes, lrAcoRes, lrPerRes,
+                               prHotsTMP, prTransEntTMP, prTransSalTMP,
+                               lwPaquetes, lwHotAux, lwTrnEntAux, lwTrnSalAux);
+              END;
+
+            UNTIL lrAuxDist.NEXT = 0;
+          END;
+
+          VincularACotizacion(prCab.Id, lrCabRes."N§ Interno", lrCabRes.Delegacion, 0, GetTipoCabecera, 0, 0, 0, 0);
+
+        UNTIL prCjtos.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerarCab@1103355006(VAR prCab@1103355000 : Record 7009871;VAR prCabRes@1103355003 : Record 7009741);
+    BEGIN
+      // GenerarCab
+
+      // AJS 14.01.2010
+      // Sustituyo el RESET por un INIT para que se inicialicen los campos de Adultos/Ni¤os/Infants
+
+      prCabRes.INIT;
+      prCabRes.INSERT(TRUE);
+
+      prCabRes.Bono                 := prCab.Bono;
+      prCabRes.TourOperador         := prCab."Touroperador compra";
+      prCabRes.VALIDATE("TourOperador Venta", prCab."Touroperador Venta"); //+$004
+      prCabRes."Fecha venta"        := DT2DATE(prCab."Fecha creacion");
+      prCabRes.Nombre               := STRSUBSTNO(Text008, prCab."N§ Cotizacion");
+      prCabRes.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GenerarAcompa¤antes@1103355007(VAR prCjtoTMP@1103355001 : TEMPORARY Record 342;VAR prPersxCjtoTMP@1103355002 : TEMPORARY Record 342;VAR prPersosTMP@1103355003 : TEMPORARY Record 7009873;VAR prCabRes@1103355004 : Record 7009741;VAR prAcoRes@1103355008 : Record 7009748;pwIDHotel@1103355006 : Integer);
+    VAR
+      lwNumAco@1103355009 : Integer;
+      lrParPer@1103355000 : Record 7009701;
+      lrDistrib@1103355005 : Record 7009875;
+    BEGIN
+      // GenerarAcompa¤antes
+
+      // AJS 14.01.2010
+      //: @pwIDHotel : Enlace con la distribucion de habitaciones dentro del hotel
+
+      lrParPer.FINDFIRST;
+
+      lwNumAco := 0;
+
+      prPersxCjtoTMP.RESET;
+      prPersxCjtoTMP.SETRANGE ("Row No.", prCjtoTMP."Row No.");
+      IF prPersxCjtoTMP.FINDSET THEN
+      BEGIN
+
+        REPEAT
+
+          lwNumAco += 1;
+
+          prPersosTMP.RESET;
+          prPersosTMP.GET(prPersxCjtoTMP."Column No.");
+
+          prAcoRes.INIT;
+
+          prAcoRes.Delegacion       := prCabRes.Delegacion;
+          prAcoRes."N§ Interno"     := prCabRes."N§ Interno";
+
+          prAcoRes."N§ Acompa¤ante" := lwNumAco;
+
+          IF lwNumAco <> 1 THEN
+          BEGIN
+            // AJS 14.01.2010
+            // La primera persona no se cuenta como acompa¤ante
+
+            // AJF 07/05/09
+            // Tengo que contar los paxes de la cabecera a mano, ya que el commit en el modify
+            // de acompa¤antes hace que las cabeceras se generen aunque haya un error.
+            CASE prAcoRes."Tipo Persona" OF
+              lrParPer."Codigo Adulto": prCabRes.Adultos += 1;
+              lrParPer."Codigo Ni¤o"  : prCabRes.Ni¤os   += 1;
+              lrParPer."Codigo Infant": prCabRes.Infants += 1;
+            END;
+            prCabRes.MODIFY;
+
+            prAcoRes.INSERT(TRUE)
+          END
+          ELSE
+          BEGIN
+            prCabRes.Nombre := prPersosTMP.Nombre;
+            prCabRes.Edad   := prPersosTMP.Edad;
+          END;
+
+          prAcoRes.Touroperador     := prCabRes.TourOperador;
+          prAcoRes.Bono             := prCabRes.Bono;
+          prAcoRes.VALIDATE(Nombre, prPersosTMP.Nombre);
+          prAcoRes.VALIDATE(Edad  , prPersosTMP.Edad);
+
+          prAcoRes."Tipo Persona"   := cCotCom.GetTipoPersona(prPersosTMP."N§ Persona");
+          prAcoRes."Fecha venta"    := prCabRes."Fecha venta";
+
+          // AJS 14.01.2010
+          // Buscamos la persona dentro de la distribucion de la habitacion
+
+          lrDistrib.RESET;
+          lrDistrib.SETCURRENTKEY("Id Hotel",
+                                  "Id habitacion",
+                                  "Id persona");
+          lrDistrib.SETRANGE ("N§ Persona"   , prPersosTMP."N§ Persona");
+          lrDistrib.SETRANGE ("Id Hotel"     , pwIDHotel);
+          lrDistrib.SETRANGE (Seleccion      , TRUE);
+          lrDistrib.SETFILTER("N§ habitacion", '<>%1', 0);
+          lrDistrib.FINDFIRST;
+
+          prAcoRes."N§ Habitacion" := FORMAT(lrDistrib."N§ habitacion");
+
+          //prAcoRes.MODIFY(TRUE);
+          prAcoRes.MODIFY;
+
+        UNTIL prPersxCjtoTMP.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerarPeriodo@1103355008(VAR prCabCot@1103355006 : Record 7009871;VAR prCabRes@1103355000 : Record 7009741;VAR prAcoRes@1103355008 : Record 7009748;VAR prPeriodo@1103355010 : Record 7009742;VAR prHotTMP@1103355001 : TEMPORARY Record 7009873;VAR prTrnEntTMP@1103355002 : TEMPORARY Record 7009881;VAR prTrnSalTMP@1103355003 : TEMPORARY Record 7009881;VAR pwPaquetes@1103355009 : ARRAY [3] OF Code[10];pwIdHotel@1103355012 : Integer;pwIdTrnEnt@1103355004 : Integer;pwIdTrnSal@1103355005 : Integer);
+    VAR
+      lwNumPeriodo@1103355011 : Integer;
+      lrConvReg@1103355007 : Record 7009719;
+      lrConvHot@1103355013 : Record 7009725;
+    BEGIN
+      // GenerarPeriodo
+
+      prHotTMP.RESET;
+      IF pwIdHotel <> 0 THEN
+        prHotTMP.GET(pwIdHotel);
+
+      prTrnEntTMP.RESET;
+      IF pwIdTrnEnt <> 0 THEN
+        prTrnEntTMP.GET(pwIdTrnEnt);
+
+      prTrnSalTMP.RESET;
+      IF pwIdTrnSal <> 0 THEN
+        prTrnSalTMP.GET(pwIdTrnSal);
+
+      prPeriodo.RESET;
+      prPeriodo.SETRANGE (Delegacion  , prCabRes.Delegacion);
+      prPeriodo.SETRANGE ("N§ Interno", prCabRes."N§ Interno");
+      IF prPeriodo.FINDLAST THEN
+        lwNumPeriodo := prPeriodo."N§ Periodo" + 10000
+      ELSE
+        lwNumPeriodo := 10000;
+
+      prPeriodo.RESET;
+      prPeriodo.INIT;
+
+      prPeriodo.Delegacion       := prCabRes.Delegacion;
+      prPeriodo."N§ Interno"     := prCabRes."N§ Interno";
+      prPeriodo."N§ Periodo"     := lwNumPeriodo;
+      prPeriodo."Fecha venta"    := prCabRes."Fecha venta";
+      prPeriodo."Fecha creacion" := CURRENTDATETIME; //+$002
+      prPeriodo.INSERT;
+
+      IF pwIdHotel <> 0 THEN
+      BEGIN
+        IF (pwIdTrnEnt <> 0) OR (pwIdTrnSal <> 0) THEN
+          prPeriodo.Paquete := pwPaquetes[wTipoPaquete::"Htl+Trn"]
+        ELSE
+          prPeriodo.Paquete := pwPaquetes[wTipoPaquete::Hotel];
+      END
+      ELSE
+        prPeriodo.Paquete   := pwPaquetes[wTipoPaquete::Transfer];
+
+      prPeriodo."TourOperador Venta" := prCabRes."TourOperador Venta";
+      prPeriodo.Bono         := prCabRes.Bono;
+
+      IF pwIdHotel <> 0 THEN
+      BEGIN
+        prPeriodo."Fecha entrada" := prHotTMP."Fecha inicio";
+        prPeriodo.VALIDATE("Fecha salida", prHotTMP."Fecha fin");
+      END
+      ELSE
+      BEGIN
+
+        // Solo Entrada.
+        IF (pwIdTrnEnt <> 0) AND (pwIdTrnSal = 0) THEN
+        BEGIN
+          prPeriodo."Fecha entrada" := prTrnEntTMP."Fecha inicio";
+          prPeriodo.VALIDATE("Fecha salida"   , prTrnEntTMP."Fecha inicio");
+          prPeriodo.VALIDATE("Hotel reservado", prTrnEntTMP."Hotel entrada");
+          prPeriodo."Compa¤ia entrada"     := prTrnEntTMP."Compa¤ia entrada";
+          prPeriodo."Vuelo entrada"        := prTrnEntTMP."Vuelo entrada";
+          prPeriodo."Terminal entrada"     := prTrnEntTMP."Terminal entrada";
+          prPeriodo."Hora entrada"         := prTrnEntTMP."Hora entrada";
+          prPeriodo."IATA origen entrada"  := prTrnEntTMP."IATA origen entrada";
+          prPeriodo."IATA destino entrada" := prTrnEntTMP."IATA destino entrada";
+        END;
+
+        // Solo Salida.
+        IF (pwIdTrnEnt = 0)  AND (pwIdTrnSal <> 0) THEN
+        BEGIN
+          prPeriodo."Fecha entrada" := prTrnSalTMP."Fecha fin";
+          prPeriodo.VALIDATE("Fecha salida", prTrnSalTMP."Fecha fin");
+          prPeriodo.VALIDATE("Hotel reservado", prTrnSalTMP."Hotel salida");
+          prPeriodo."Compa¤ia salida"     := prTrnSalTMP."Compa¤ia salida";
+          prPeriodo."Vuelo salida"        := prTrnSalTMP."Vuelo salida";
+          prPeriodo."Terminal salida"     := prTrnSalTMP."Terminal salida";
+          prPeriodo."Hora salida"         := prTrnSalTMP."Hora salida";
+          prPeriodo."IATA origen salida"  := prTrnSalTMP."IATA origen salida";
+          prPeriodo."IATA destino salida" := prTrnSalTMP."IATA destino salida";
+        END;
+
+        // Ambos.
+        IF (pwIdTrnEnt <> 0)  AND (pwIdTrnSal <> 0) THEN
+        BEGIN
+          prPeriodo."Fecha entrada" := prTrnEntTMP."Fecha inicio";
+          prPeriodo.VALIDATE("Fecha salida", prTrnSalTMP."Fecha fin");
+          prPeriodo.VALIDATE("Hotel reservado", prTrnSalTMP."Hotel entrada");
+          prPeriodo."Compa¤ia entrada"     := prTrnEntTMP."Compa¤ia entrada";
+          prPeriodo."Vuelo entrada"        := prTrnEntTMP."Vuelo entrada";
+          prPeriodo."Terminal entrada"     := prTrnEntTMP."Terminal entrada";
+          prPeriodo."Hora entrada"         := prTrnEntTMP."Hora entrada";
+          prPeriodo."IATA origen entrada"  := prTrnEntTMP."IATA origen entrada";
+          prPeriodo."IATA destino entrada" := prTrnEntTMP."IATA destino entrada";
+          prPeriodo."Compa¤ia salida"     := prTrnSalTMP."Compa¤ia salida";
+          prPeriodo."Vuelo salida"        := prTrnSalTMP."Vuelo salida";
+          prPeriodo."Terminal salida"     := prTrnSalTMP."Terminal salida";
+          prPeriodo."Hora salida"         := prTrnSalTMP."Hora salida";
+          prPeriodo."IATA origen salida"  := prTrnSalTMP."IATA origen salida";
+          prPeriodo."IATA destino salida" := prTrnSalTMP."IATA destino salida";
+
+        END;
+
+      END;
+
+      IF (pwIdHotel <> 0) THEN
+      BEGIN
+
+        lrConvHot.SETCURRENTKEY("Hotel estancia");
+        lrConvHot.SETRANGE (TourOperador    , prCabCot."Touroperador compra");
+        lrConvHot.SETRANGE ("Hotel estancia", prHotTMP.Hotel);
+        IF lrConvHot.FINDFIRST THEN
+          prPeriodo.VALIDATE("Hotel TO"     , lrConvHot."Hotel TO")
+        ELSE
+          prPeriodo.VALIDATE("Hotel reservado", prHotTMP.Hotel);
+
+        prPeriodo.VALIDATE(Habitacion       , prHotTMP.Habitacion);
+        prPeriodo.VALIDATE("N§ Habitaciones", prHotTMP."N§ Habitaciones");
+
+        lrConvReg.RESET;
+        lrConvReg.SETRANGE (TourOperador, prCabCot."Touroperador compra");
+        lrConvReg.SETRANGE (Regimen     , prHotTMP.Regimen);
+        IF lrConvReg.FINDFIRST THEN
+          prPeriodo.VALIDATE("Regimen TO", lrConvReg."Regimen TO");
+
+      END;
+      prPeriodo.CheckEnvioConfirmacion(FALSE); //+$003
+      prPeriodo.MODIFY;
+
+      VincularACotizacion(prCabCot.Id, prPeriodo."N§ Interno", prPeriodo.Delegacion,
+                          prPeriodo."N§ Periodo", GetTipoPeriodo, pwIdHotel, pwIdTrnEnt, pwIdTrnSal, 0);
+    END;
+
+    LOCAL PROCEDURE BuscarTiposPaquete@1103355002(VAR pwPaquetes@1103355000 : ARRAY [3] OF Code[10]);
+    VAR
+      lrPaquetes@1103355001 : Record 7009709;
+      lrPaqxProd@1103355002 : Record 7009752;
+      lwIndex@1103355003 : Integer;
+      lwFin@1103355004 : Boolean;
+      lwCompleto@1103355006 : Boolean;
+      lwActual@1103355005 : Integer;
+      lwOtroTipo@1103355007 : Boolean;
+    BEGIN
+      // BuscarTiposPaquete
+      // buscamos los paquetes con solo reserva hotel, solo reserva transfer o
+      // reserva hotel + reserva transfer.
+
+      IF lrPaquetes.FINDSET THEN BEGIN
+        REPEAT
+
+          lwActual   := 0;
+          lwOtroTipo := FALSE;
+
+          lrPaqxProd.RESET;
+          lrPaqxProd.SETRANGE(Paquete, lrPaquetes.Codigo);
+          IF lrPaqxProd.FINDSET THEN BEGIN
+            REPEAT
+
+              CASE lrPaqxProd."Tipo Producto" OF
+
+                lrPaqxProd."Tipo Producto"::Hotel:BEGIN
+
+                  IF lwActual = wTipoPaquete::Transfer THEN
+                    lwActual := wTipoPaquete::"Htl+Trn";
+
+                  IF lwActual = 0 THEN
+                    lwActual := wTipoPaquete::Hotel;
+                END;
+
+                lrPaqxProd."Tipo Producto"::Transfer:BEGIN
+
+                  IF lwActual = wTipoPaquete::Hotel THEN
+                    lwActual := wTipoPaquete::"Htl+Trn";
+
+                  IF lwActual = 0 THEN
+                    lwActual := wTipoPaquete::Transfer;
+
+                END;
+
+                ELSE BEGIN
+                  lwOtroTipo := TRUE;
+                END;
+
+              END;
+
+            UNTIL (lrPaqxProd.NEXT = 0) OR lwOtroTipo;
+          END;
+
+          IF NOT lwOtroTipo AND (lwActual <> 0) THEN
+            pwPaquetes[lwActual] := lrPaquetes.Codigo;
+
+          // si todas las posiciones del array est n llenas podemos acabar.
+
+          lwCompleto := TRUE;
+          FOR lwIndex := 1 TO ARRAYLEN(pwPaquetes) DO BEGIN
+            lwCompleto := lwCompleto AND (pwPaquetes[lwIndex] <> '');
+          END;
+
+        UNTIL (lrPaquetes.NEXT = 0) OR lwCompleto;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerarConjuntos@1103355022(VAR prDistribs@1103355000 : TEMPORARY Record 7009875;VAR prDistribsMod@1103355007 : TEMPORARY Record 7009875;VAR prCnjtos@1103355001 : TEMPORARY Record 342;VAR prPersxCnjto@1103355002 : TEMPORARY Record 342);
+    VAR
+      lwHotAnt@1103355003 : Integer;
+      lwTrnEntAnt@1103355004 : Integer;
+      lwTrnSalAnt@1103355005 : Integer;
+      prDistsAux@1103355006 : TEMPORARY Record 7009875;
+      lwIdCjto@1103355008 : Integer;
+    BEGIN
+      // GenerarConjuntos
+
+      prDistribs.RESET;
+      prDistribs.SETCURRENTKEY("Id Hotel", "Id Transfer Entrada", "Id Transfer Salida");
+
+      lwHotAnt    := 0;
+      lwTrnEntAnt := 0;
+      lwTrnSalAnt := 0;
+
+      IF prDistribs.FINDSET(TRUE) THEN BEGIN
+
+        lwHotAnt    := prDistribs."Id Hotel";
+        lwTrnEntAnt := prDistribs."Id Transfer Entrada";
+        lwTrnSalAnt := prDistribs."Id Transfer Salida";
+
+        REPEAT
+
+          IF  ((lwHotAnt    <> prDistribs."Id Hotel") OR
+              (lwTrnEntAnt <> prDistribs."Id Transfer Entrada") OR
+              (lwTrnSalAnt <> prDistribs."Id Transfer Salida"))  THEN BEGIN
+
+            lwIdCjto := CompararConjuntos(prCnjtos, prPersxCnjto, prDistsAux);
+            IF lwIdCjto = 0 THEN BEGIN
+              lwIdCjto := A¤adirConjunto(prCnjtos, prPersxCnjto, prDistsAux);
+            END;
+
+            // Marco las distribuciones como parte del conjunto.
+            prDistsAux.RESET;
+            IF prDistsAux.FINDSET THEN BEGIN
+              REPEAT
+                prDistribsMod.GET(prDistsAux.Id);
+                prDistribsMod."Id habitacion" := lwIdCjto;
+                prDistribsMod.MODIFY;
+              UNTIL prDistsAux.NEXT = 0;
+            END;
+
+            prDistsAux.RESET;
+            prDistsAux.DELETEALL;
+
+          END;
+
+          prDistsAux := prDistribs;
+          prDistsAux.INSERT;
+
+          lwHotAnt    := prDistribs."Id Hotel";
+          lwTrnEntAnt := prDistribs."Id Transfer Entrada";
+          lwTrnSalAnt := prDistribs."Id Transfer Salida";
+
+        UNTIL prDistribs.NEXT = 0;
+
+        // Modificamos el £ltimo cnjto
+
+        lwIdCjto := CompararConjuntos(prCnjtos, prPersxCnjto, prDistsAux);
+        IF lwIdCjto = 0 THEN BEGIN
+          lwIdCjto := A¤adirConjunto(prCnjtos, prPersxCnjto, prDistsAux);
+        END;
+
+        prDistsAux.RESET;
+        IF prDistsAux.FINDSET THEN BEGIN
+          REPEAT
+            prDistribsMod.GET(prDistsAux.Id);
+            prDistribsMod."Id habitacion" := lwIdCjto;
+            prDistribsMod.MODIFY;
+          UNTIL prDistsAux.NEXT = 0;
+        END;
+
+      END;
+    END;
+
+    PROCEDURE VincularACotizacion@1103355004(pwCotizacion@1103355000 : Integer;pwNumRes@1103355001 : Integer;pwDelegacion@1103355002 : Code[10];pwNumPer@1103355006 : Integer;pwTipo@1103355004 : Integer;pwIdHotel@1103355005 : Integer;pwIdTrnEnt@1103355007 : Integer;pwIdTrnSal@1103355008 : Integer;pwIdExcur@1103355009 : Integer);
+    VAR
+      lrVinculo@1103355003 : Record 7009884;
+    BEGIN
+      // VincularACotizacion
+      //: Vincula un registro en reservas (cabecera/Hotel/Transfer/Excursion) con la cotizaci¢n.
+      //: @pwCotizacion: La cotizaci¢n con la que vinculamos el registro.
+      //: @pwNumRes: parte de la clave primaria del registro (todos son delegacion + entero).
+      //: @pwDelegacion: parte de la clave primaria del registro (todos son delegacion + entero).
+      //: @pwNumPer: N§ periodo para los periodos de reserva.
+      //: @pwIdHotel: Id Num‚rico para Hotel.
+      //: @pwIdTrnEnt: Id Num‚rico para Transfer salida.
+      //: @pwIdTrnSal: Id Num‚rico para Transfer entrada.
+      //: @pwIdExcur: Id Num‚rico para Excursion.
+
+      lrVinculo.SETCURRENTKEY("Id Cotizacion", Delegacion, "N§ Interno", "N§ Periodo", Tipo);
+      lrVinculo.SETRANGE ("Id Cotizacion", pwCotizacion);
+      lrVinculo.SETRANGE (Delegacion     , pwDelegacion);
+      lrVinculo.SETRANGE ("N§ Interno"   , pwNumRes);
+      lrVinculo.SETRANGE ("N§ Periodo"   , pwNumPer);
+      lrVinculo.SETRANGE (Tipo           , pwTipo);
+
+      IF NOT lrVinculo.FINDFIRST THEN BEGIN
+
+        lrVinculo.INIT;
+        lrVinculo."N§ Interno" := pwNumRes;
+        lrVinculo."Id Cotizacion" := pwCotizacion;
+        lrVinculo.Delegacion   := pwDelegacion;
+        lrVinculo.Tipo         := pwTipo;
+
+        IF pwTipo = lrVinculo.Tipo::Periodo THEN
+          lrVinculo."N§ Periodo" := pwNumPer;
+
+        IF pwTipo <> lrVinculo.Tipo::Cabecera THEN BEGIN
+          lrVinculo."Id Hotel"            := pwIdHotel;
+          lrVinculo."Id Transfer entrada" := pwIdTrnEnt;
+          lrVinculo."Id Transfer salida"  := pwIdTrnSal;
+          lrVinculo."Id Excursion"        := pwIdExcur;
+        END;
+        lrVinculo.INSERT(TRUE);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE PrepararTempsTrnManuales@1103355003(VAR prCab@1103355000 : Record 7009871;VAR prTrnEntTMP@1103355001 : TEMPORARY Record 7009881;VAR prTrnSalTMP@1103355010 : TEMPORARY Record 7009881;VAR prDistribsTMP@1103355002 : TEMPORARY Record 7009875);
+    VAR
+      lrTransfers@1103355003 : Record 7009881;
+      lrDistribs@1103355004 : Record 7009875;
+      lwIdTrnEnt@1103355007 : Integer;
+      lwIdTrnSal@1103355008 : Integer;
+      lrAuxDists@1103355009 : TEMPORARY Record 7009875;
+    BEGIN
+      // PrepararTempsTrnManuales
+
+      prTrnEntTMP.RESET;
+      prTrnSalTMP.RESET;
+      prDistribsTMP.RESET;
+
+      lrTransfers.SETCURRENTKEY("Id Cotizacion");
+      lrTransfers.SETRANGE ("Id Cotizacion", prCab.Id);
+      lrTransfers.SETRANGE ("Tipo Uso", lrTransfers."Tipo Uso"::Manual);
+      IF lrTransfers.FINDSET THEN BEGIN
+        REPEAT
+
+          IF lrTransfers."Tipo transfer" IN [lrTransfers."Tipo transfer"::Ambos,
+                                             lrTransfers."Tipo transfer"::Entrada] THEN BEGIN
+
+            prTrnEntTMP := lrTransfers;
+            prTrnEntTMP.INSERT;
+
+          END;
+
+          IF lrTransfers."Tipo transfer" IN [lrTransfers."Tipo transfer"::Ambos,
+                                             lrTransfers."Tipo transfer"::Salida] THEN BEGIN
+
+            prTrnSalTMP := lrTransfers;
+            prTrnSalTMP.INSERT;
+
+          END;
+
+
+          lrDistribs.RESET;
+
+          CASE lrTransfers."Tipo transfer" OF
+            lrTransfers."Tipo transfer"::Ambos, lrTransfers."Tipo transfer"::Entrada:BEGIN
+              lrDistribs.SETCURRENTKEY("Id Transfer Entrada");
+              lrDistribs.SETRANGE ("Id Transfer Entrada", lrTransfers.Id);
+            END;
+
+            lrTransfers."Tipo transfer"::Salida: BEGIN
+              lrDistribs.SETCURRENTKEY("Id Transfer Salida");
+              lrDistribs.SETRANGE ("Id Transfer Salida", lrTransfers.Id);
+            END;
+          END;
+
+          lrDistribs.SETRANGE (Seleccion, TRUE);
+
+          IF lrDistribs.FINDSET THEN BEGIN
+            REPEAT
+              IF NOT prDistribsTMP.GET(lrDistribs.Id) THEN BEGIN
+                prDistribsTMP := lrDistribs;
+                prDistribsTMP.INSERT;
+              END;
+            UNTIL lrDistribs.NEXT = 0;
+          END;
+
+        UNTIL lrTransfers.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerarResExcursiones@1103355005(VAR prCab@1103355000 : Record 7009871;VAR prPersonasTMP@1103355001 : TEMPORARY Record 7009873);
+    VAR
+      lrExcsCot@1103355002 : Record 7009883;
+      lrResExc@1103355003 : Record 7010162;
+    BEGIN
+      // GenerarResExcursiones
+
+      prPersonasTMP.RESET;
+
+      lrExcsCot.SETCURRENTKEY("Id Cotizacion");
+      lrExcsCot.SETRANGE ("Id Cotizacion", prCab.Id);
+
+      IF lrExcsCot.FINDSET THEN BEGIN
+        REPEAT
+          prPersonasTMP.GET(lrExcsCot."Id persona");
+
+          lrResExc.INIT;
+          lrResExc.Delegacion        := prCab.Delegacion;
+          lrResExc."Booking Touroperador"         := prCab.Bono;
+
+          lrResExc.VALIDATE(Producto         , lrExcsCot.Producto);
+          lrResExc.VALIDATE(TourOperador     , prCab."Touroperador Venta");
+          lrResExc.VALIDATE("Fecha Excursion", lrExcsCot.Fecha);
+          lrResExc.VALIDATE("Hotel Cliente"  , lrExcsCot.Hotel);
+
+          lrResExc."N§ Ticket"       := lrExcsCot."N§ ticket";
+
+          lrResExc.VALIDATE(Adultos, lrExcsCot.Adultos);
+          lrResExc.VALIDATE(Ni¤os  , lrExcsCot.Ni¤os);
+          lrResExc.VALIDATE(Bebes  , lrExcsCot.Infants);
+
+          lrResExc."Nombre Cliente"  := prPersonasTMP.Nombre;
+
+          lrResExc.INSERT(TRUE);
+
+          VincularACotizacion(prCab.Id, lrResExc."N§ Reserva", lrResExc.Delegacion, 0,
+                              GetTipoReservaExcursion, 0, 0, 0, lrExcsCot.Id);
+
+        UNTIL lrExcsCot.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetTipoCabecera@1103355009() : Integer;
+    VAR
+      lrVinculo@1103355001 : Record 7009884;
+    BEGIN
+      // GetTipoCabecera
+
+      EXIT(lrVinculo.Tipo::Cabecera);
+    END;
+
+    PROCEDURE GetTipoPeriodo@1103355016() : Integer;
+    VAR
+      lrVinculo@1103355000 : Record 7009884;
+    BEGIN
+      // GetTipoPeriodo
+
+      EXIT(lrVinculo.Tipo::Periodo);
+    END;
+
+    PROCEDURE GetTipoReservaHotel@1103355010() : Integer;
+    VAR
+      lrVinculo@1103355000 : Record 7009884;
+    BEGIN
+      // GetTipoReservaHotel
+
+      EXIT(lrVinculo.Tipo::"Reserva hotel");
+    END;
+
+    PROCEDURE GetTipoReservaExcursion@1103355012() : Integer;
+    VAR
+      lrVinculo@1103355000 : Record 7009884;
+    BEGIN
+      // GetTipoReservaExcursion
+
+      EXIT(lrVinculo.Tipo::"Reserva excursion");
+    END;
+
+    PROCEDURE GetTipoReservaTransfer@1103355013() : Integer;
+    VAR
+      lrVinculo@1103355000 : Record 7009884;
+    BEGIN
+      // GetTipoReservaTransfer
+
+      EXIT(lrVinculo.Tipo::"Reserva transfer");
+    END;
+
+    PROCEDURE RecuperarIdProducto@1103355014(pwCotizacion@1103355003 : Integer;VAR prPeriodo@1103355001 : Record 7009742;VAR pwIdHotel@1103355000 : Integer;VAR pwIdTraEnt@1103355005 : Integer;VAR pwIdTraSal@1103355006 : Integer);
+    VAR
+      lrVinculo@1103355002 : Record 7009884;
+    BEGIN
+      // RecuperarIdProducto.
+      //: Recuperamos los ids de producto para el periodo indicado. Solo recupera Transfers y Hoteles,
+      //: ya que las excursiones se vinculan directamente a la reservas sin pasar por los periodos.
+      //: @pwCotizacion: Cotizacion donde al que est  vinculado el periodo.
+      //: @prPeriodo: Registro de periodo reserva del que se quiere recuperar el producto vinculado.
+      //: @pwIdHotel: Id de linea de hotel en la cotizacion. 0 si no tiene.
+      //: @pwIdTraEnt: Id de linea de transfer de entrada en la cotizacion. 0 si no tiene.
+      //: @pwIdTraSal: Id de linea de transfer de entrada en la cotizacion. 0 si no tiene.
+
+      pwIdHotel  := 0;
+      pwIdTraEnt := 0;
+      pwIdTraSal := 0;
+
+      lrVinculo.SETCURRENTKEY("Id Cotizacion", Delegacion, "N§ Interno", "N§ Periodo", Tipo);
+      lrVinculo.SETRANGE ("Id Cotizacion", pwCotizacion);
+      lrVinculo.SETRANGE (Delegacion     , prPeriodo.Delegacion);
+      lrVinculo.SETRANGE ("N§ Interno"   , prPeriodo."N§ Interno");
+      lrVinculo.SETRANGE ("N§ Periodo"   , prPeriodo."N§ Periodo");
+      lrVinculo.SETRANGE (Tipo           , GetTipoPeriodo);
+
+      IF lrVinculo.FINDFIRST THEN BEGIN
+        pwIdHotel  := lrVinculo."Id Hotel";
+        pwIdTraEnt := lrVinculo."Id Transfer entrada";
+        pwIdTraSal := lrVinculo."Id Transfer salida";
+      END;
+    END;
+
+    PROCEDURE ModificarPrecioManualResHotel@1103355015(pwCotizacion@1103355000 : Integer;VAR prResHot@1103355001 : Record 7009743);
+    VAR
+      lrVinculo@1103355002 : Record 7009884;
+      lrLinCalCot@1103355003 : Record 7009872;
+      lwAdultos@1103355004 : Integer;
+      lwNi¤os@1103355005 : Integer;
+      lrHotel@1103355006 : Record 7009873;
+    BEGIN
+      // ModificarPrecioManualResHotel
+      //: Modificamos el precio manual de una reserva hotel creada a partir de una cotizaci¢n para que no se vuelva a calcular.
+      //: @pwCotizacion: Id de cotizacion
+      //: @prResHot: registro de reserva hotel del que se quiere modificar el precio manual.
+
+      lrVinculo.SETCURRENTKEY("Id Cotizacion", Delegacion, "N§ Interno", "N§ Periodo", Tipo);
+      lrVinculo.SETRANGE ("Id Cotizacion", pwCotizacion);
+      lrVinculo.SETRANGE (Delegacion     , prResHot.Delegacion);
+      lrVinculo.SETRANGE ("N§ Interno"   , prResHot."N§ Reserva");
+      lrVinculo.SETRANGE (Tipo           , lrVinculo.Tipo::"Reserva hotel");
+
+      IF lrVinculo.FINDFIRST THEN BEGIN
+
+        lrLinCalCot.SETCURRENTKEY("Id Cotizacion", "Id Producto", Hotel);
+        lrLinCalCot.SETRANGE ("Id Cotizacion", pwCotizacion);
+        lrLinCalCot.SETRANGE ("Id Producto"  , lrVinculo."Id Hotel");
+        lrLinCalCot.SETRANGE (Tipo           , lrLinCalCot.Tipo::Hotel);
+
+        IF lrLinCalCot.FINDFIRST THEN BEGIN
+
+          cCotCom.ContarPerHotel(lrVinculo."Id Hotel", lwAdultos, lwNi¤os);
+
+          // AJF 29/06/09
+          // Hay que dividir el precio tambien por dia de estancia.
+          // AJF 09/06/09
+          // Usamos el total ingreso tambien para el precio manual de coste ya que el % se descuenta en el rappel.
+          // AJF 02/07/09
+          // Ya no se divide el ingreso ahora se hace con la nueva opci¢n "Por Estancia", y se pone el importe completo.
+
+          // AJF 04/08/09
+          // Solo se copia el Ingreso en ambos para los hoteles con "Importe TO".
+
+          lrHotel.SETCURRENTKEY("Id cotizacion", "Tipo uso", "Tipo linea");
+          lrHotel.SETRANGE ("Id cotizacion", pwCotizacion);
+          lrHotel.SETRANGE ("Tipo linea"   , lrHotel."Tipo linea"::Hotel);
+          lrHotel.SETRANGE ("Tipo uso"     , lrHotel."Tipo uso"::Seleccion);
+          lrHotel.SETRANGE (Id             , lrLinCalCot."Id Producto");
+          IF lrHotel.FINDFIRST THEN BEGIN
+
+            IF lrHotel."Importe Touroperador" <> 0 THEN BEGIN
+              IF lrLinCalCot."Total Ingreso" <> 0 THEN BEGIN
+                prResHot."Tipo Precio Manual Venta" := prResHot."Tipo Precio Manual Venta"::"Por Estancia";
+                prResHot."Precio Manual venta"      := lrLinCalCot."Total Ingreso";
+                prResHot."Tipo precio manual"       := prResHot."Tipo precio manual"::"Por Estancia";
+                prResHot."Precio Manual"            := lrLinCalCot."Total Ingreso";
+              END;
+            END
+            ELSE BEGIN
+              IF lrLinCalCot."Total Ingreso" <> 0 THEN BEGIN
+                prResHot."Tipo Precio Manual Venta" := prResHot."Tipo Precio Manual Venta"::"Por Estancia";
+                prResHot."Precio Manual venta"      := lrLinCalCot."Total Ingreso";
+                prResHot."Tipo precio manual"       := prResHot."Tipo precio manual"::"Por Estancia";
+                prResHot."Precio Manual"            := lrLinCalCot."Total Coste";
+              END;
+            END;
+
+          END;
+
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ComprobarConversionesRegimen@1103355017(VAR prCab@1103355000 : Record 7009871);
+    VAR
+      lrHotCot@1103355001 : Record 7009873;
+      lrConvReg@1103355002 : Record 7009719;
+    BEGIN
+      // ComprobarConversionesRegimen
+
+      lrHotCot.SETCURRENTKEY("Id cotizacion", "Tipo uso", "Tipo linea");
+      lrHotCot.SETRANGE ("Id cotizacion", prCab.Id);
+      lrHotCot.SETRANGE ("Tipo uso"     , lrHotCot."Tipo uso"::Seleccion);
+      lrHotCot.SETRANGE ("Tipo linea"   , lrHotCot."Tipo linea"::Hotel);
+
+      IF lrHotCot.FINDSET THEN BEGIN
+        REPEAT
+          lrConvReg.RESET;
+          lrConvReg.SETCURRENTKEY(Regimen);
+          lrConvReg.SETRANGE (TourOperador, prCab."Touroperador compra");
+          lrConvReg.SETRANGE (Regimen     , lrHotCot.Regimen);
+          IF lrConvReg.ISEMPTY THEN
+            ERROR(Text006, prCab."Touroperador compra", lrHotCot.Regimen);
+        UNTIL lrHotCot.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      ## AJF 09/06/09
+
+        .- Se usa siempre el total ingreso para traspasar el importe de la cotizacion al precio
+           manual de las reservas de hotel.
+
+      ## AJF 29/06/09
+
+        .- (0900333) Divido el importe por dia de estancia en ModificarPrecioManualResHotel.
+
+      ## AJF 02/07/09
+
+        .- (0900333) En lugar de dividir el importe se pone entero y se marca la nueva opci¢n "Por Estancia"
+           en ModificarPrecioManualResHotel.
+
+      ## AJF 04/08/09
+
+        .- (0900406) ModificarPrecioManualResHotel usa el coste y el ingreso para los hoteles que no se calculen
+           mediante el importe del Touroperador.
+
+      ## AJS 14.01.2010
+
+        .- (1000009) Pasar a distribucion de cotizaciones a los acompa¤antes
+
+      ## AJF 14/04/10
+        .- (INC-48217) Se A¤ade una comprobaci¢n de contrato de venta para evitar que se generen las reservas y
+           no se genere la proforma al traspasar la cotizaci¢n.
+
+      $001 AJS 21052013 Elimino referencia al campo Argumento Touroperador de la tabla Reserva excursion
+
+      $002 AJS 15022014 Rellenar la fecha de creacion del periodo
+
+      $003 AJS 17032014 CNT-OC-14035, Al modificar el periodo comprobamos si que reenviarla al touroperador
+
+      $004 AJS 18032014 Al crear una cabecera validamos el campo "Touroperador venta"
+    }
+    END.
+  }
+}

@@ -1,0 +1,1263 @@
+OBJECT Codeunit 7000000 CarteraManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/01/14;
+    Time=[ 9:32:50];
+    Modified=Yes;
+    Version List=NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 21=m,
+                TableData 25=m,
+                TableData 254=imd,
+                TableData 7000002=m,
+                TableData 7000003=m,
+                TableData 7000004=m,
+                TableData 7000005=m;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text1100000@1000 : TextConst 'ENU=The Bill Group does not exist.;ESP=La remesa no existe.';
+      Text1100001@1001 : TextConst 'ENU=This Bill Group has already been printed. Proceed anyway?;ESP=La remesa ya se ha impreso. ¨Confirma qu‚ desea continuar?';
+      Text1100002@1002 : TextConst 'ENU=The process has been interrupted to respect the warning.;ESP=Se ha interrumpido el proceso para respetar la advertencia.';
+      Text1100003@1003 : TextConst 'ENU=The Payment Order does not exist.;ESP=La orden de pago no existe.';
+      Text1100004@1004 : TextConst 'ENU=This Payment Order has already been printed. Proceed anyway?;ESP=La orden de pago ya se ha impreso. ¨Confirma qu‚ desea continuar?';
+      Text1100005@1005 : TextConst 'ENU=The update has been interrupted to respect the warning.;ESP=Se ha interrumpido la actualizaci¢n para respetar la advertencia.';
+      Text1100006@1006 : TextConst 'ENU=Document settlement %1/%2;ESP=Liq. documento %1/%2';
+      Text1100007@1007 : TextConst 'ENU=Bill %1/%2 settl. rev.;ESP=Reversi¢n efecto %1/%2';
+      Text1100008@1008 : TextConst 'ENU=Redrawing a settled bill is only possible for bills in posted or closed bill groups.;ESP=S¢lo se pueden recircular efectos liquidados que pertenecen a remesas registradas o cerradas.';
+      Text1100009@1009 : TextConst 'ENU=Redrawing a settled bill is only possible for bills in posted or closed payment orders.;ESP=S¢lo se pueden recircular efectos liquidados que pertenecen a ¢rdenes de pago registradas o cerradas.';
+      CarteraSetup@1100000 : Record 7000016;
+      VATPostingSetup@1100001 : Record 325;
+      VATEntryNo@1100002 : Integer;
+      VATUnrealAcc@1100003 : Code[20];
+      VATAcc@1100004 : Code[20];
+      TotalVATAmount@1100005 : Decimal;
+      Text1100010@1100100 : TextConst 'ENU=The document %1/%2 is marked to apply.;ESP=El documento %1/%2 est  marcado para liquidar.';
+      GenJnlPostLine@1100108 : Codeunit 12;
+      ElectPmtMgmt@1100007 : Codeunit 10701;
+
+    PROCEDURE CategorizeDocs@2(VAR Doc@1100000 : Record 7000002);
+    BEGIN
+      REPORT.RUNMODAL(REPORT::"Categorize Documents",TRUE,FALSE,Doc);
+    END;
+
+    PROCEDURE DecategorizeDocs@3(VAR Doc@1100000 : Record 7000002);
+    BEGIN
+      Doc.MODIFYALL("Category Code",'');
+    END;
+
+    PROCEDURE CategorizePostedDocs@7(VAR PostedDoc@1100000 : Record 7000003);
+    BEGIN
+      REPORT.RUNMODAL(REPORT::"Categorize Posted Documents",TRUE,FALSE,PostedDoc);
+    END;
+
+    PROCEDURE DecategorizePostedDocs@5(VAR PostedDoc@1100000 : Record 7000003);
+    BEGIN
+      PostedDoc.MODIFYALL("Category Code",'');
+    END;
+
+    PROCEDURE UpdateStatistics@4(VAR Doc2@1100000 : Record 7000002;VAR CurrTotalAmount@1100001 : Decimal;VAR ShowCurrent@1100002 : Boolean);
+    VAR
+      Doc@1100003 : Record 7000002;
+    BEGIN
+      WITH Doc DO BEGIN
+        COPY(Doc2);
+        SETCURRENTKEY(Type,"Bill Gr./Pmt. Order No.","Collection Agent","Due Date","Global Dimension 1 Code",
+        "Global Dimension 2 Code","Category Code","Posting Date","Document No.",Accepted,"Currency Code","Document Type");
+        ShowCurrent := CALCSUMS("Remaining Amt. (LCY)");
+        IF ShowCurrent THEN
+          CurrTotalAmount := "Remaining Amt. (LCY)"
+        ELSE
+          CurrTotalAmount := 0;
+      END;
+    END;
+
+    PROCEDURE NavigateDoc@6(VAR Doc@1100000 : Record 7000002);
+    VAR
+      Navigate@1100001 : Form 344;
+      VendLedgEntry@1100002 : Record 25;
+      CustLedgEntry@1100003 : Record 21;
+    BEGIN
+      WITH Doc DO BEGIN
+        CASE Type OF
+          Type::Receivable:
+            BEGIN
+              IF NOT CustLedgEntry.GET("Entry No.") THEN
+                EXIT;
+              Navigate.SetDoc(CustLedgEntry."Posting Date",CustLedgEntry."Document No.");
+            END;
+          Type::Payable:
+            BEGIN
+              IF NOT VendLedgEntry.GET("Entry No.") THEN
+                EXIT;
+              Navigate.SetDoc(VendLedgEntry."Posting Date",VendLedgEntry."Document No.");
+            END;
+        END;
+        Navigate.RUN;
+      END;
+    END;
+
+    PROCEDURE NavigatePostedDoc@9(VAR PostedDoc@1100000 : Record 7000003);
+    VAR
+      Navigate@1100001 : Form 344;
+      VendLedgEntry@1100002 : Record 25;
+      CustLedgEntry@1100003 : Record 21;
+    BEGIN
+      WITH PostedDoc DO BEGIN
+        CASE Type OF
+          Type::Receivable:
+            BEGIN
+              IF NOT CustLedgEntry.GET("Entry No.") THEN
+                EXIT; //+$001, Estaba despues del Navigate.SetDoc
+              Navigate.SetDoc(CustLedgEntry."Posting Date",CustLedgEntry."Document No.");
+            END;
+          Type::Payable:
+            BEGIN
+              IF NOT VendLedgEntry.GET("Entry No.") THEN
+                EXIT; //+$001, Estaba despues del Navigate.SetDoc
+              Navigate.SetDoc(VendLedgEntry."Posting Date",VendLedgEntry."Document No.");
+            END;
+          END;
+        Navigate.RUN;
+      END;
+    END;
+
+    PROCEDURE NavigateClosedDoc@8(VAR ClosedDoc@1100000 : Record 7000004);
+    VAR
+      Navigate@1100001 : Form 344;
+      VendLedgEntry@1100002 : Record 25;
+      CustLedgEntry@1100003 : Record 21;
+    BEGIN
+      WITH ClosedDoc DO BEGIN
+        CASE Type OF
+          Type::Receivable:
+            BEGIN
+              IF NOT CustLedgEntry.GET("Entry No.") THEN
+                EXIT; //+$001, Estaba despues del Navigate.SetDoc
+              Navigate.SetDoc(CustLedgEntry."Posting Date",CustLedgEntry."Document No.");
+            END;
+          Type::Payable:
+            BEGIN
+              IF NOT VendLedgEntry.GET("Entry No.") THEN
+                EXIT; //+$001, Estaba despues del Navigate.SetDoc
+              Navigate.SetDoc(VendLedgEntry."Posting Date",VendLedgEntry."Document No.");
+            END;
+        END;
+        Navigate.RUN;
+      END;
+    END;
+
+    PROCEDURE InsertReceivableDocs@14(VAR Doc2@1100000 : Record 7000002);
+    VAR
+      Doc@1100001 : Record 7000002;
+      OldDoc@1100002 : Record 7000002;
+      BankAcc@1100003 : Record 270;
+      BillGr@1100004 : Record 7000005;
+      CarteraSetup@1100005 : Record 7000016;
+      CustLedgEntry@1100006 : Record 21;
+      InsertDocsForm@1100007 : Form 7000003;
+      CheckDiscCreditLimit@1100008 : Form 7000037;
+      SelectedAmount@1100009 : Decimal;
+      GroupNo@1100010 : Code[20];
+      Cust@1170000000 : Record 18;
+    BEGIN
+      Doc2.FILTERGROUP(2);
+      Doc2.SETRANGE("Bill Gr./Pmt. Order No.");
+      Doc2.FILTERGROUP(0);
+      GroupNo := Doc2.GETRANGEMIN("Bill Gr./Pmt. Order No.");
+      IF NOT BillGr.GET(GroupNo) THEN
+        ERROR(Text1100000);
+
+      IF BillGr."No. Printed" <> 0 THEN
+        IF NOT CONFIRM(Text1100001,FALSE) THEN
+           EXIT;
+
+      WITH Doc DO BEGIN
+        RESET;
+        SETCURRENTKEY(Type,"Collection Agent","Bill Gr./Pmt. Order No.","Currency Code",Accepted);
+        Doc.FILTERGROUP(2);
+        SETRANGE(Type,Type::Receivable);
+        Doc.FILTERGROUP(0);
+        SETRANGE("Bill Gr./Pmt. Order No.",'');
+        SETRANGE("Currency Code",BillGr."Currency Code");
+        SETFILTER(Accepted,'<>%1',Accepted::No);
+        SETRANGE("Collection Agent","Collection Agent"::Bank);
+        IF BillGr.Factoring <> BillGr.Factoring::" " THEN
+          SETFILTER("Document Type",'<>%1',"Document Type"::Bill)
+        ELSE
+          SETRANGE("Document Type","Document Type"::Bill);
+        InsertDocsForm.SETTABLEVIEW(Doc);
+        InsertDocsForm.LOOKUPMODE(TRUE);
+        IF InsertDocsForm.RUNMODAL <> ACTION::LookupOK THEN
+          EXIT;
+        InsertDocsForm.GetSelected(Doc);
+        CLEAR(InsertDocsForm);
+        IF NOT FIND('-') THEN
+          EXIT;
+
+        IF (BillGr."Dealing Type" = BillGr."Dealing Type"::Discount) AND
+           BankAcc.GET(BillGr."Bank Account No.") AND
+           (BillGr.Factoring = BillGr.Factoring::" ") THEN BEGIN
+          CarteraSetup.GET;
+          IF CarteraSetup."Bills Discount Limit Warnings" THEN BEGIN
+            SelectedAmount := 0;
+            REPEAT
+              SelectedAmount := SelectedAmount + Doc."Remaining Amt. (LCY)";
+            UNTIL NEXT = 0;
+            BillGr.CALCFIELDS(Amount);
+            BankAcc.CALCFIELDS("Posted Receiv. Bills Rmg. Amt.");
+            IF BillGr.Amount + SelectedAmount + BankAcc."Posted Receiv. Bills Rmg. Amt." > BankAcc."Credit Limit for Discount"
+            THEN BEGIN
+              CheckDiscCreditLimit.SETRECORD(BankAcc);
+              CheckDiscCreditLimit.SetValues(BillGr.Amount,SelectedAmount);
+              IF CheckDiscCreditLimit.RUNMODAL <> ACTION::Yes THEN
+                ERROR(Text1100002);
+              CLEAR(CheckDiscCreditLimit);
+            END;
+          END;
+        END;
+
+        // check the selected bills and insert them
+        SETCURRENTKEY(Type,"Entry No.");
+        FIND('-');
+        REPEAT
+          IF CustLedgEntry.GET(Doc."Entry No.") THEN
+            IF CustLedgEntry."Applies-to ID" <> '' THEN
+              ERROR(Text1100010,Doc."Document No.",Doc."No.");
+          TESTFIELD(Type,Type::Receivable);
+          TESTFIELD("Bill Gr./Pmt. Order No.",'');
+          TESTFIELD("Currency Code",BillGr."Currency Code");
+          IF Cust."No." <> Doc."Account No." THEN
+            Cust.GET(Doc."Account No.");
+          Cust.CheckBlockedCustOnJnls(Cust, GetDocType("Document Type"), FALSE);
+          IF Accepted = Accepted::No THEN
+            FIELDERROR(Accepted);
+          TESTFIELD("Collection Agent","Collection Agent"::Bank);
+          "Bill Gr./Pmt. Order No." := GroupNo;
+          MODIFY;
+          IF CustLedgEntry.GET(Doc."Entry No.") THEN BEGIN
+            CustLedgEntry."Document Situation" := CustLedgEntry."Document Situation"::"BG/PO";
+            CustLedgEntry.MODIFY;
+          END;
+        UNTIL NEXT = 0;
+
+        BillGr."No. Printed" := 0;
+        BillGr.MODIFY;
+      END;
+    END;
+
+    PROCEDURE InsertPayableDocs@13(VAR Doc2@1100000 : Record 7000002);
+    VAR
+      Doc@1100001 : Record 7000002;
+      OldDoc@1100002 : Record 7000002;
+      BankAcc@1100003 : Record 270;
+      PmtOrd@1100004 : Record 7000020;
+      CarteraSetup@1100005 : Record 7000016;
+      VendLedgEntry@1100006 : Record 25;
+      InsertDocsForm@1100007 : Form 7000003;
+      CheckDiscCreditLimit@1100008 : Form 7000037;
+      SelectedAmount@1100009 : Decimal;
+      GroupNo@1100010 : Code[20];
+      Doc3@1100011 : Record 7000002;
+      Vend@1170000000 : Record 23;
+    BEGIN
+      Doc2.FILTERGROUP(2);
+      Doc2.SETRANGE("Bill Gr./Pmt. Order No.");
+      Doc2.FILTERGROUP(0);
+      GroupNo := Doc2.GETRANGEMIN("Bill Gr./Pmt. Order No.");
+      IF NOT PmtOrd.GET(GroupNo) THEN
+        ERROR(Text1100003);
+
+      IF PmtOrd."No. Printed" <> 0 THEN
+        IF NOT CONFIRM(Text1100004,FALSE) THEN
+           EXIT;
+      CarteraSetup.GET;
+      WITH Doc DO BEGIN
+        RESET;
+        SETCURRENTKEY(Type,"Collection Agent","Bill Gr./Pmt. Order No.","Currency Code",Accepted);
+        Doc.FILTERGROUP(2);
+        SETRANGE(Type,Type::Payable);
+        Doc.FILTERGROUP(0);
+        SETRANGE("Bill Gr./Pmt. Order No.",'');
+        SETRANGE("Currency Code",PmtOrd."Currency Code");
+        SETFILTER(Accepted,'<>%1',Accepted::No);
+        SETRANGE("Collection Agent","Collection Agent"::Bank);
+        SETRANGE("On Hold",FALSE);
+        InsertDocsForm.SETTABLEVIEW(Doc);
+        InsertDocsForm.LOOKUPMODE(TRUE);
+        IF InsertDocsForm.RUNMODAL <> ACTION::LookupOK THEN
+          EXIT;
+        InsertDocsForm.GetSelected(Doc);
+        CLEAR(InsertDocsForm);
+        IF NOT FIND('-') THEN
+          EXIT;
+
+        // check the selected bills and insert them
+        SETCURRENTKEY(Type,"Entry No.");
+        FIND('-');
+        REPEAT
+          IF VendLedgEntry.GET(Doc."Entry No.") THEN
+            IF VendLedgEntry."Applies-to ID" <> '' THEN
+              ERROR(Text1100010,Doc."Document No.",Doc."No.");
+          TESTFIELD(Type,Type::Payable);
+          TESTFIELD("Bill Gr./Pmt. Order No.",'');
+          TESTFIELD("Currency Code",PmtOrd."Currency Code");
+          IF Vend."No." <> Doc."Account No." THEN
+            Vend.GET(Doc."Account No.");
+
+          IF PmtOrd."Export Electronic Payment" THEN
+            ElectPmtMgmt.GetTransferType(Doc."Account No.",Doc."Remaining Amount",Doc."Transfer Type",FALSE);
+
+          Vend.CheckBlockedVendOnJnls(Vend, GetDocType("Document Type"), FALSE);
+          IF Accepted = Accepted::No THEN
+            FIELDERROR(Accepted);
+          TESTFIELD("Collection Agent","Collection Agent"::Bank);
+          "Bill Gr./Pmt. Order No." := GroupNo;
+          MODIFY(TRUE);
+          IF VendLedgEntry.GET(Doc."Entry No.") THEN BEGIN
+            VendLedgEntry."Document Situation" := VendLedgEntry."Document Situation"::"BG/PO";
+            VendLedgEntry.MODIFY;
+          END;
+
+        UNTIL NEXT = 0;
+
+        PmtOrd."No. Printed" := 0;
+        PmtOrd.MODIFY;
+      END;
+    END;
+
+    PROCEDURE RemoveReceivableDocs@10(VAR Doc2@1100000 : Record 7000002);
+    VAR
+      BillGr@1100001 : Record 7000005;
+      CustLedgEntry@1100002 : Record 21;
+    BEGIN
+      WITH Doc2 DO
+        IF FIND('-') THEN BEGIN
+          BillGr.GET("Bill Gr./Pmt. Order No.");
+          IF BillGr."No. Printed" <> 0 THEN
+            IF NOT CONFIRM(Text1100001,FALSE) THEN
+              EXIT;
+          BillGr."No. Printed" := 0;
+          REPEAT
+            "Bill Gr./Pmt. Order No." := '';
+            MODIFY;
+            IF CustLedgEntry.GET("Entry No.") THEN BEGIN
+              CustLedgEntry."Document Situation" := CustLedgEntry."Document Situation"::Cartera;
+              CustLedgEntry.MODIFY;
+            END;
+          UNTIL NEXT = 0;
+          BillGr.MODIFY;
+        END;
+    END;
+
+    PROCEDURE RemovePayableDocs@15(VAR Doc2@1100000 : Record 7000002);
+    VAR
+      PmtOrd@1100001 : Record 7000020;
+      VendLedgEntry@1100002 : Record 25;
+    BEGIN
+      WITH Doc2 DO
+        IF FIND('-') THEN BEGIN
+          PmtOrd.GET("Bill Gr./Pmt. Order No.");
+          IF PmtOrd."No. Printed" <> 0 THEN
+            IF NOT CONFIRM(Text1100004,FALSE) THEN
+              EXIT;
+          PmtOrd."No. Printed" := 0;
+          REPEAT
+            "Bill Gr./Pmt. Order No." := '';
+            MODIFY;
+            IF VendLedgEntry.GET("Entry No.") THEN BEGIN
+              VendLedgEntry."Document Situation" := VendLedgEntry."Document Situation"::Cartera;
+              VendLedgEntry.MODIFY;
+            END;
+          UNTIL NEXT = 0;
+          PmtOrd.MODIFY;
+        END;
+    END;
+
+    PROCEDURE CheckDiscCreditLimit@1(VAR BillGr@1100000 : Record 7000005);
+    VAR
+      CarteraSetup@1100001 : Record 7000016;
+      BankAcc@1100002 : Record 270;
+      CheckDiscCreditLimit@1100003 : Form 7000037;
+    BEGIN
+      WITH BillGr DO BEGIN
+        CarteraSetup.GET;
+        IF NOT CarteraSetup."Bills Discount Limit Warnings" THEN
+          EXIT;
+        IF ("Dealing Type" = "Dealing Type"::Discount) AND BankAcc.GET("Bank Account No.") THEN BEGIN
+          BankAcc.CALCFIELDS(BankAcc."Posted Receiv. Bills Rmg. Amt.");
+          CALCFIELDS(Amount);
+          IF Amount + BankAcc."Posted Receiv. Bills Rmg. Amt." > BankAcc."Credit Limit for Discount" THEN BEGIN
+            CheckDiscCreditLimit.SETRECORD(BankAcc);
+            CheckDiscCreditLimit.SetValues(Amount,0);
+            IF CheckDiscCreditLimit.RUNMODAL <> ACTION::Yes THEN
+              ERROR(Text1100005);
+            CLEAR(CheckDiscCreditLimit);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateReceivableDocPayment@11(VAR GenJnlLine2@1100000 : Record 81;VAR CustLedgEntry@1100001 : Record 21);
+    VAR
+      PostedDoc@1100002 : Record 7000003;
+    BEGIN
+      WITH GenJnlLine2 DO BEGIN
+        "Account Type" := "Account Type"::Customer;
+        "Account No." := CustLedgEntry."Customer No.";
+        "Document Type" := "Document Type"::" ";
+        "Document No." := CustLedgEntry."Document No.";
+        "Bill No." := CustLedgEntry."Bill No.";
+        Description := STRSUBSTNO(
+          Text1100006,
+          CustLedgEntry."Document No.",
+          CustLedgEntry."Bill No.");
+        VALIDATE("Currency Code",CustLedgEntry."Currency Code");
+        CustLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+        CASE CustLedgEntry."Document Situation" OF
+          CustLedgEntry."Document Situation"::"Posted BG/PO":
+            BEGIN
+              PostedDoc.GET(PostedDoc.Type::Receivable,CustLedgEntry."Entry No.");
+              VALIDATE(Amount,-PostedDoc."Remaining Amount");
+            END;
+          CustLedgEntry."Document Situation"::"Closed BG/PO",CustLedgEntry."Document Situation"::"Closed Documents":
+            VALIDATE(Amount,-CustLedgEntry."Remaining Amount");
+        END;
+        "Shortcut Dimension 1 Code" := CustLedgEntry."Global Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := CustLedgEntry."Global Dimension 2 Code";
+        "System-Created Entry" := TRUE;
+        "Applies-to Doc. Type" := "Document Type"::Bill;
+        "Applies-to Doc. No." := CustLedgEntry."Document No.";
+        "Applies-to Bill No." := CustLedgEntry."Bill No.";
+      END;
+    END;
+
+    PROCEDURE ReverseReceivableDocPayment@12(VAR GenJnlLine2@1100000 : Record 81;VAR CustLedgEntry@1100001 : Record 21);
+    VAR
+      PostedDoc@1100002 : Record 7000003;
+      ClosedDoc@1100003 : Record 7000004;
+      PostedBillGr@1100004 : Record 7000006;
+      ClosedBillGr@1100005 : Record 7000007;
+    BEGIN
+      WITH GenJnlLine2 DO BEGIN
+        "Account Type" := "Account Type"::"Bank Account";
+        "Document No." := CustLedgEntry."Document No.";
+        "Bill No." := CustLedgEntry."Bill No.";
+        Description := STRSUBSTNO(
+          Text1100007,
+          CustLedgEntry."Document No.",
+          CustLedgEntry."Bill No.");
+        VALIDATE("Currency Code",CustLedgEntry."Currency Code");
+        "Shortcut Dimension 1 Code" := CustLedgEntry."Global Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := CustLedgEntry."Global Dimension 2 Code";
+        "System-Created Entry" := TRUE;
+        IF PostedDoc.GET(PostedDoc.Type::Receivable,CustLedgEntry."Entry No.") THEN BEGIN
+          PostedBillGr.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          "Account No." := PostedBillGr."Bank Account No.";
+          VALIDATE(Amount,-PostedDoc."Amount for Collection");
+          PostedDoc.TESTFIELD(Redrawn,FALSE);
+          PostedDoc.Redrawn := TRUE;
+          PostedDoc.MODIFY;
+        END ELSE
+          IF ClosedDoc.GET(ClosedDoc.Type::Receivable,CustLedgEntry."Entry No.") THEN BEGIN
+            IF ClosedDoc."Bill Gr./Pmt. Order No." = '' THEN
+              ERROR(Text1100008);
+            ClosedBillGr.GET(ClosedDoc."Bill Gr./Pmt. Order No.");
+            "Account No." := ClosedBillGr."Bank Account No.";
+            VALIDATE(Amount,-ClosedDoc."Amount for Collection");
+            ClosedDoc.TESTFIELD(Redrawn,FALSE);
+            ClosedDoc.Redrawn := TRUE;
+            ClosedDoc.MODIFY;
+          END;
+      END;
+    END;
+
+    PROCEDURE CreatePayableDocPayment@17(VAR GenJnlLine2@1100000 : Record 81;VAR VendLedgEntry@1100001 : Record 25);
+    VAR
+      PostedDoc@1100002 : Record 7000003;
+    BEGIN
+      WITH GenJnlLine2 DO BEGIN
+        "Account Type" := "Account Type"::Vendor;
+        "Account No." := VendLedgEntry."Vendor No.";
+        "Document Type" := "Document Type"::" ";
+        "Document No." := VendLedgEntry."Document No.";
+        "Bill No." := VendLedgEntry."Bill No.";
+        Description := STRSUBSTNO(
+          Text1100006,
+          VendLedgEntry."Document No.",
+          VendLedgEntry."Bill No.");
+        VALIDATE("Currency Code",VendLedgEntry."Currency Code");
+        CASE VendLedgEntry."Document Situation" OF
+          VendLedgEntry."Document Situation"::"Posted BG/PO":
+           BEGIN
+             PostedDoc.GET(PostedDoc.Type::Payable,VendLedgEntry."Entry No.");
+             VALIDATE(Amount,-PostedDoc."Remaining Amount");
+           END;
+          VendLedgEntry."Document Situation"::"Closed BG/PO":
+            VALIDATE(Amount,-VendLedgEntry."Remaining Amount");
+        END;
+        "Shortcut Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := VendLedgEntry."Global Dimension 2 Code";
+        "System-Created Entry" := TRUE;
+        "Applies-to Doc. Type" := "Document Type"::Bill;
+        "Applies-to Doc. No." := VendLedgEntry."Document No.";
+        "Applies-to Bill No." := VendLedgEntry."Bill No.";
+      END;
+    END;
+
+    PROCEDURE ReversePayableDocPayment@16(VAR GenJnlLine2@1100000 : Record 81;VAR VendLedgEntry@1100001 : Record 25);
+    VAR
+      PostedDoc@1100002 : Record 7000003;
+      ClosedDoc@1100003 : Record 7000004;
+      PostedPmtOrd@1100004 : Record 7000021;
+      ClosedPmtOrd@1100005 : Record 7000022;
+    BEGIN
+      WITH GenJnlLine2 DO BEGIN
+        "Account Type" := "Account Type"::"Bank Account";
+        "Document No." := VendLedgEntry."Document No.";
+        "Bill No." := VendLedgEntry."Bill No.";
+        Description := STRSUBSTNO(
+          Text1100007,
+          VendLedgEntry."Document No.",
+          VendLedgEntry."Bill No.");
+        VALIDATE("Currency Code",VendLedgEntry."Currency Code");
+        "Shortcut Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := VendLedgEntry."Global Dimension 2 Code";
+        "System-Created Entry" := TRUE;
+        IF PostedDoc.GET(PostedDoc.Type::Payable,VendLedgEntry."Entry No.") THEN BEGIN
+          PostedPmtOrd.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          "Account No." := PostedPmtOrd."Bank Account No.";
+          VALIDATE(Amount,PostedDoc."Amount for Collection");
+          PostedDoc.TESTFIELD(Redrawn,FALSE);
+          PostedDoc.Redrawn := TRUE;
+          PostedDoc.MODIFY;
+        END ELSE
+          IF ClosedDoc.GET(ClosedDoc.Type::Payable,VendLedgEntry."Entry No.") THEN BEGIN
+            IF ClosedDoc."Bill Gr./Pmt. Order No." = '' THEN
+              ERROR(Text1100009);
+            ClosedPmtOrd.GET(ClosedDoc."Bill Gr./Pmt. Order No.");
+            "Account No." := ClosedPmtOrd."Bank Account No.";
+            VALIDATE(Amount,ClosedDoc."Amount for Collection");
+            ClosedDoc.TESTFIELD(Redrawn,FALSE);
+            ClosedDoc.Redrawn := TRUE;
+            ClosedDoc.MODIFY;
+          END;
+      END;
+    END;
+
+    PROCEDURE CheckOnHold@19(VAR Doc2@1100000 : Record 7000002);
+    VAR
+      VendLedgEntry@1100001 : Record 25;
+      Doc3@1100002 : Record 7000002;
+    BEGIN
+      WITH Doc2 DO BEGIN
+        Doc2.FIND('-');
+        REPEAT
+        CLEAR(VendLedgEntry);
+        VendLedgEntry.GET(Doc2."Entry No.");
+        IF VendLedgEntry."On Hold" =  '' THEN
+          Doc2.MARK(TRUE);
+        UNTIL Doc2.NEXT = 0;
+        Doc2.MARKEDONLY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CustUnrealizedVAT2@21(CustLedgEntry2@1100000 : Record 21;AmountLCY@1100001 : Decimal;GenJnlLine@1100002 : Record 81;VAR ExistVATEntry@1100003 : Boolean;VAR FirstVATEntry@1100004 : Integer;VAR LastVATEntry@1100005 : Integer;VAR NoRealVATBuffer@1100008 : Record 7000012;IsFromJournal@1100101 : Boolean);
+    VAR
+      CustLedgEntry3@1100006 : Record 21;
+      SettledAmt@1100007 : Decimal;
+    BEGIN
+      IF GenJnlPostLine.CustFindVATSetup(VATPostingSetup,CustLedgEntry2,IsFromJournal) THEN BEGIN
+        CustLedgEntry3.SETCURRENTKEY(CustLedgEntry3."Document No.",CustLedgEntry3."Document Type",CustLedgEntry3."Customer No.");
+        CustLedgEntry3.SETRANGE(CustLedgEntry3."Document Type",CustLedgEntry3."Document Type"::Invoice);
+        CustLedgEntry3.SETRANGE(CustLedgEntry3."Document No.",CustLedgEntry2."Document No.");
+
+        IF CustLedgEntry3.FIND('-') THEN BEGIN
+         CustLedgEntry3.Open := TRUE;
+          CustUnrealizedVAT(CustLedgEntry3,-AmountLCY,GenJnlLine,ExistVATEntry,FirstVATEntry,LastVATEntry,NoRealVATBuffer);
+        END;
+      END ELSE
+      EXIT;
+    END;
+
+    LOCAL PROCEDURE CustUnrealizedVAT@20(VAR CustLedgEntry2@1100000 : Record 21;SettledAmount@1100001 : Decimal;GenJnlLine@1100002 : Record 81;VAR ExistVATEntry@1100003 : Boolean;VAR FirstVATEntryNo@1100004 : Integer;VAR LastVATEntryNo@1100005 : Integer;VAR NoRealVATBuffer@1100021 : Record 7000012);
+    VAR
+      VATEntry@1100006 : Record 254;
+      VATEntry2@1100007 : Record 254;
+      VATEntry3@1100008 : Record 254;
+      VATPart@1100009 : Decimal;
+      VATAmount@1100010 : Decimal;
+      VATBase@1100011 : Decimal;
+      VATAmountAddCurr@1100012 : Decimal;
+      VATBaseAddCurr@1100013 : Decimal;
+      PaidAmount@1100014 : Decimal;
+      CurrencyFactor@1100015 : Decimal;
+      SalesVATAccount@1100016 : Code[20];
+      SalesVATUnrealAccount@1100017 : Code[20];
+      LastConnectionNo@1100018 : Integer;
+      Test1@1100019 : Boolean;
+      Test2@1100020 : Boolean;
+    BEGIN
+      CustLedgEntry2.CALCFIELDS(
+        Amount,
+        "Amount (LCY)",
+        "Remaining Amount",
+        "Remaining Amt. (LCY)",
+        "Original Amt. (LCY)");
+      CurrencyFactor := CustLedgEntry2.Amount / CustLedgEntry2."Amount (LCY)";
+      VATEntry2.RESET;
+      VATEntry2.SETCURRENTKEY("Transaction No.");
+      VATEntry2.SETRANGE("Transaction No.",CustLedgEntry2."Transaction No.");
+
+      IF VATEntry2.FIND('-') THEN BEGIN
+        LastConnectionNo := 0;
+        REPEAT
+          IF LastConnectionNo <> VATEntry2."Sales Tax Connection No." THEN BEGIN
+            LastConnectionNo := VATEntry2."Sales Tax Connection No.";
+          END;
+
+          VATEntry3.RESET;
+          IF VATEntry3.FIND('+') THEN
+            VATEntryNo := VATEntry3."Entry No." + 1;
+
+          IF (VATEntry2.Type <> 0) AND
+             (VATEntry2.Amount = 0) AND
+             (VATEntry2.Base = 0)
+          THEN BEGIN
+            CASE VATEntry2."VAT Calculation Type" OF
+              VATEntry2."VAT Calculation Type"::"Normal VAT",
+              VATEntry2."VAT Calculation Type"::"Reverse Charge VAT",
+              VATEntry2."VAT Calculation Type"::"Full VAT":
+                VATPostingSetup.GET(
+                  VATEntry2."VAT Bus. Posting Group",VATEntry2."VAT Prod. Posting Group");
+
+            END;
+            IF (VATPostingSetup."Unrealized VAT Type" > 0) AND
+               ((VATEntry2."Remaining Unrealized Amount" <> 0) OR
+                (VATEntry2."Remaining Unrealized Base" <> 0))
+            THEN BEGIN
+              IF NOT CustLedgEntry2.Open THEN
+                VATPart := 1
+              ELSE
+                IF CustLedgEntry2."Currency Code" = '' THEN
+                  VATPart := -SettledAmount / CustLedgEntry2."Original Amt. (LCY)"
+                ELSE
+                  VATPart :=
+                    -SettledAmount *
+                    (CustLedgEntry2."Original Amt. (LCY)" / CustLedgEntry2.Amount) / CustLedgEntry2."Original Amt. (LCY)";
+
+
+            END;
+              IF VATPart <> 0 THEN BEGIN
+                CASE VATEntry2."VAT Calculation Type" OF
+                  VATEntry2."VAT Calculation Type"::"Normal VAT",
+                  VATEntry2."VAT Calculation Type"::"Reverse Charge VAT",
+                  VATEntry2."VAT Calculation Type"::"Full VAT":
+                    BEGIN
+                      VATPostingSetup.TESTFIELD("Sales VAT Account");
+                      VATPostingSetup.TESTFIELD("Sales VAT Unreal. Account");
+                      SalesVATAccount := VATPostingSetup."Sales VAT Account";
+                      SalesVATUnrealAccount := VATPostingSetup."Sales VAT Unreal. Account";
+                    END;
+
+                END;
+
+                IF VATPart = 1 THEN BEGIN
+                  VATAmount := VATEntry2."Remaining Unrealized Amount";
+                  VATBase := VATEntry2."Remaining Unrealized Base";
+                  VATAmountAddCurr := VATEntry2."Add.-Curr. Rem. Unreal. Amount";
+                  VATBaseAddCurr := VATEntry2."Add.-Curr. Rem. Unreal. Base";
+                END ELSE BEGIN
+                  VATAmount := ROUND(VATEntry2."Unrealized Amount" * VATPart);
+                  VATBase := ROUND(VATEntry2."Unrealized Base" * VATPart);
+
+                END;
+
+                VATUnrealAcc := SalesVATUnrealAccount;
+                VATAcc := SalesVATAccount;
+                IF CustLedgEntry2."Currency Code" = '' THEN
+                  TotalVATAmount := VATAmount
+                ELSE
+                  TotalVATAmount := VATAmount * CurrencyFactor;
+
+                IF NoRealVATBuffer.GET(SalesVATUnrealAccount,SalesVATAccount,VATEntry2."Entry No.") THEN BEGIN
+                  NoRealVATBuffer.Amount := NoRealVATBuffer.Amount + TotalVATAmount;
+                END ELSE BEGIN
+                  NoRealVATBuffer.INIT;
+                  NoRealVATBuffer.Account := SalesVATUnrealAccount;
+                  NoRealVATBuffer."Balance Account" := SalesVATAccount;
+                  NoRealVATBuffer.Amount := TotalVATAmount;
+                  NoRealVATBuffer."Entry No." := VATEntry2."Entry No.";
+                  NoRealVATBuffer.INSERT;
+                END;
+
+                VATEntry := VATEntry2;
+                VATEntry."Entry No." := VATEntryNo;
+                VATEntry."Posting Date" := GenJnlLine."Posting Date";
+                VATEntry."Document No." := GenJnlLine."Document No.";
+                VATEntry."External Document No." := GenJnlLine."External Document No.";
+                VATEntry."Document Type" := GenJnlLine."Document Type";
+                VATEntry.Amount := VATAmount;
+                VATEntry.Base := VATBase;
+                VATEntry."Unrealized Amount" := 0;
+                VATEntry."Unrealized Base" := 0;
+                VATEntry."Remaining Unrealized Amount" := 0;
+                VATEntry."Remaining Unrealized Base" := 0;
+                VATEntry."Additional-Currency Amount" := VATAmountAddCurr;
+                VATEntry."Additional-Currency Base" := VATBaseAddCurr;
+                VATEntry."Add.-Currency Unrealized Amt." := 0;
+                VATEntry."Add.-Currency Unrealized Base" := 0;
+                VATEntry."Add.-Curr. Rem. Unreal. Amount" := 0;
+                VATEntry."Add.-Curr. Rem. Unreal. Base" := 0;
+                VATEntry."User ID" := USERID;
+                VATEntry."Source Code" := GenJnlLine."Source Code";
+                VATEntry."Reason Code" := GenJnlLine."Reason Code";
+                VATEntry."Closed by Entry No." := 0;
+                VATEntry.Closed := FALSE;
+                VATEntry."Transaction No." := CustLedgEntry2."Transaction No.";
+                VATEntry."Unrealized VAT Entry No." := VATEntry2."Entry No.";
+                Test1 := VATEntry.INSERT(TRUE);
+
+                VATEntry2."Remaining Unrealized Amount" :=
+                  VATEntry2."Remaining Unrealized Amount" - VATEntry.Amount;
+                VATEntry2."Remaining Unrealized Base" :=
+                  VATEntry2."Remaining Unrealized Base" - VATEntry.Base;
+                VATEntry2."Add.-Curr. Rem. Unreal. Amount" :=
+                  VATEntry2."Add.-Curr. Rem. Unreal. Amount" - VATEntry."Additional-Currency Amount";
+                VATEntry2."Add.-Curr. Rem. Unreal. Base" :=
+                  VATEntry2."Add.-Curr. Rem. Unreal. Base" - VATEntry."Additional-Currency Base";
+                Test2 := VATEntry2.MODIFY;
+                LastVATEntryNo := VATEntryNo;
+            END;
+          END;
+
+        IF NOT ExistVATEntry THEN
+          FirstVATEntryNo := LastVATEntryNo;
+        ExistVATEntry := Test1 AND Test2;
+
+
+
+        UNTIL VATEntry2.NEXT = 0;
+
+      END;
+    END;
+
+    PROCEDURE FindCustVATSetup@1100001(VAR VATSetup@1100000 : Record 325;CustLedgEntry4@1100011 : Record 21) : Boolean;
+    VAR
+      Customer@1100002 : Record 18;
+      PostingGroup@1100009 : Code[10];
+      SalesLine2@1100010 : Record 113;
+      ErrorMessage@1100001 : Boolean;
+      ExistsVATNoReal@1100004 : Boolean;
+      Text1100003@1100006 : TextConst 'ENU=Unrealized VAT Type must be "Percentage" in VAT Posting Setup.;ESP=Tipo IVA no realizado debe ser porcentaje en configuraci¢n grupo registro IVA.';
+    BEGIN
+      ErrorMessage := FALSE;
+      ExistsVATNoReal := FALSE;
+      Customer.GET(CustLedgEntry4."Customer No.");
+
+      VATSetup.SETCURRENTKEY("VAT Bus. Posting Group","VAT Prod. Posting Group");
+      VATSetup.SETRANGE(VATSetup."VAT Bus. Posting Group",Customer."VAT Bus. Posting Group");
+
+      SalesLine2.SETRANGE("Document No.",CustLedgEntry4."Document No.");
+      SalesLine2.FIND('-');
+
+      REPEAT
+        CASE SalesLine2.Type OF
+          SalesLine2.Type::Item:
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          SalesLine2.Type::Resource:
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          SalesLine2.Type::"G/L Account":
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+        END;
+      UNTIL SalesLine2.NEXT = 0;
+
+      IF ErrorMessage THEN
+        ERROR(Text1100003);
+      EXIT(ExistsVATNoReal);
+    END;
+
+    PROCEDURE VendUnrealizedVAT2@27(VendLedgEntry2@1100000 : Record 25;AmountLCY@1100001 : Decimal;GenJnlLine@1100002 : Record 81;VAR ExistVATEntry@1100003 : Boolean;VAR FirstVATEntry@1100004 : Integer;VAR LastVATEntry@1100005 : Integer;VAR NoRealVATBuffer@1100008 : Record 7000012;IsFromJournal@1100102 : Boolean);
+    VAR
+      VendLedgEntry3@1100006 : Record 25;
+      SettledAmt@1100007 : Decimal;
+    BEGIN
+      IF GenJnlPostLine.VendFindVATSetup(VATPostingSetup,VendLedgEntry2,IsFromJournal) THEN BEGIN
+        VendLedgEntry3.SETCURRENTKEY(VendLedgEntry3."Document No.",VendLedgEntry3."Document Type",VendLedgEntry3."Vendor No.");
+        VendLedgEntry3.SETRANGE(VendLedgEntry3."Document Type",VendLedgEntry3."Document Type"::Invoice);
+        VendLedgEntry3.SETRANGE(VendLedgEntry3."Document No.",VendLedgEntry2."Document No.");
+
+        IF VendLedgEntry3.FIND('-') THEN BEGIN
+          VendLedgEntry3.Open := TRUE;
+          VendUnrealizedVAT(VendLedgEntry3,-AmountLCY,GenJnlLine,ExistVATEntry,FirstVATEntry,LastVATEntry,NoRealVATBuffer);
+        END;
+      END ELSE
+        EXIT;
+    END;
+
+    LOCAL PROCEDURE VendUnrealizedVAT@26(VAR VendLedgEntry2@1100000 : Record 25;SettledAmount@1100001 : Decimal;GenJnlLine@1100002 : Record 81;VAR ExistVATEntry@1100003 : Boolean;VAR FirstVATEntryNo@1100004 : Integer;VAR LastVATEntryNo@1100005 : Integer;VAR NoRealVATBuffer@1100021 : Record 7000012);
+    VAR
+      VATEntry@1100006 : Record 254;
+      VATEntry2@1100007 : Record 254;
+      VATEntry3@1100008 : Record 254;
+      VATPart@1100009 : Decimal;
+      VATAmount@1100010 : Decimal;
+      VATBase@1100011 : Decimal;
+      VATAmountAddCurr@1100012 : Decimal;
+      VATBaseAddCurr@1100013 : Decimal;
+      PaidAmount@1100014 : Decimal;
+      CurrencyFactor@1100015 : Decimal;
+      PurchVATAccount@1100016 : Code[20];
+      PurchVATUnrealAccount@1100017 : Code[20];
+      LastConnectionNo@1100018 : Integer;
+      Test1@1100019 : Boolean;
+      Test2@1100020 : Boolean;
+    BEGIN
+      VendLedgEntry2.CALCFIELDS(
+        Amount,
+        "Amount (LCY)",
+        "Remaining Amount",
+        "Remaining Amt. (LCY)",
+        "Original Amt. (LCY)");
+      CurrencyFactor := VendLedgEntry2.Amount / VendLedgEntry2."Amount (LCY)";
+      VATEntry2.RESET;
+      VATEntry2.SETCURRENTKEY("Transaction No.");
+      VATEntry2.SETRANGE("Transaction No.",VendLedgEntry2."Transaction No.");
+
+      IF VATEntry2.FIND('-') THEN BEGIN
+        LastConnectionNo := 0;
+        REPEAT
+          IF LastConnectionNo <> VATEntry2."Sales Tax Connection No." THEN BEGIN
+            LastConnectionNo := VATEntry2."Sales Tax Connection No.";
+          END;
+
+          VATEntry3.RESET;
+          IF VATEntry3.FIND('+') THEN
+            VATEntryNo := VATEntry3."Entry No." + 1;
+
+          IF (VATEntry2.Type <> 0) AND
+             (VATEntry2.Amount = 0) AND
+             (VATEntry2.Base = 0)
+          THEN BEGIN
+            CASE VATEntry2."VAT Calculation Type" OF
+              VATEntry2."VAT Calculation Type"::"Normal VAT",
+              VATEntry2."VAT Calculation Type"::"Reverse Charge VAT",
+              VATEntry2."VAT Calculation Type"::"Full VAT":
+                VATPostingSetup.GET(
+                  VATEntry2."VAT Bus. Posting Group",VATEntry2."VAT Prod. Posting Group");
+
+            END;
+            IF (VATPostingSetup."Unrealized VAT Type" > 0) AND
+               ((VATEntry2."Remaining Unrealized Amount" <> 0) OR
+                (VATEntry2."Remaining Unrealized Base" <> 0))
+            THEN BEGIN
+              IF NOT VendLedgEntry2.Open THEN
+                VATPart := 1
+              ELSE
+                IF VendLedgEntry2."Currency Code" = '' THEN
+                  VATPart := -SettledAmount / VendLedgEntry2."Original Amt. (LCY)"
+                ELSE
+                  VATPart :=
+                    -SettledAmount *
+                    (VendLedgEntry2."Original Amt. (LCY)" / VendLedgEntry2.Amount) / VendLedgEntry2."Original Amt. (LCY)";
+
+
+            END;
+              IF VATPart <> 0 THEN BEGIN
+                CASE VATEntry2."VAT Calculation Type" OF
+                  VATEntry2."VAT Calculation Type"::"Normal VAT",
+                  VATEntry2."VAT Calculation Type"::"Reverse Charge VAT",
+                  VATEntry2."VAT Calculation Type"::"Full VAT":
+                    BEGIN
+                      VATPostingSetup.TESTFIELD("Purchase VAT Account");
+                      VATPostingSetup.TESTFIELD("Purch. VAT Unreal. Account");
+                      PurchVATAccount := VATPostingSetup."Purchase VAT Account";
+                      PurchVATUnrealAccount := VATPostingSetup."Purch. VAT Unreal. Account";
+                    END;
+
+                END;
+
+                IF VATPart = 1 THEN BEGIN
+                  VATAmount := VATEntry2."Remaining Unrealized Amount";
+                  VATBase := VATEntry2."Remaining Unrealized Base";
+                  VATAmountAddCurr := VATEntry2."Add.-Curr. Rem. Unreal. Amount";
+                  VATBaseAddCurr := VATEntry2."Add.-Curr. Rem. Unreal. Base";
+                END ELSE BEGIN
+                  VATAmount := ROUND(VATEntry2."Unrealized Amount" * VATPart);
+                  VATBase := ROUND(VATEntry2."Unrealized Base" * VATPart);
+
+                END;
+
+                VATUnrealAcc := PurchVATUnrealAccount;
+                VATAcc := PurchVATAccount;
+                IF VendLedgEntry2."Currency Code" = '' THEN
+                  TotalVATAmount := VATAmount
+                ELSE
+                  TotalVATAmount := VATAmount * CurrencyFactor;
+
+                IF NoRealVATBuffer.GET(PurchVATUnrealAccount,PurchVATAccount,VATEntry2."Entry No.") THEN BEGIN
+                  NoRealVATBuffer.Amount := NoRealVATBuffer.Amount + TotalVATAmount;
+                END ELSE BEGIN
+                  NoRealVATBuffer.INIT;
+                  NoRealVATBuffer.Account := PurchVATUnrealAccount;
+                  NoRealVATBuffer."Balance Account" := PurchVATAccount;
+                  NoRealVATBuffer.Amount := TotalVATAmount;
+                  NoRealVATBuffer."Entry No." := VATEntry2."Entry No.";
+                  NoRealVATBuffer.INSERT;
+                END;
+
+                VATEntry := VATEntry2;
+                VATEntry."Entry No." := VATEntryNo;
+                VATEntry."Posting Date" := GenJnlLine."Posting Date";
+                VATEntry."Document No." := GenJnlLine."Document No.";
+                VATEntry."External Document No." := GenJnlLine."External Document No.";
+                VATEntry."Document Type" := GenJnlLine."Document Type";
+                VATEntry.Amount := VATAmount;
+                VATEntry.Base := VATBase;
+                VATEntry."Unrealized Amount" := 0;
+                VATEntry."Unrealized Base" := 0;
+                VATEntry."Remaining Unrealized Amount" := 0;
+                VATEntry."Remaining Unrealized Base" := 0;
+                VATEntry."Additional-Currency Amount" := VATAmountAddCurr;
+                VATEntry."Additional-Currency Base" := VATBaseAddCurr;
+                VATEntry."Add.-Currency Unrealized Amt." := 0;
+                VATEntry."Add.-Currency Unrealized Base" := 0;
+                VATEntry."Add.-Curr. Rem. Unreal. Amount" := 0;
+                VATEntry."Add.-Curr. Rem. Unreal. Base" := 0;
+                VATEntry."User ID" := USERID;
+                VATEntry."Source Code" := GenJnlLine."Source Code";
+                VATEntry."Reason Code" := GenJnlLine."Reason Code";
+                VATEntry."Closed by Entry No." := 0;
+                VATEntry.Closed := FALSE;
+                VATEntry."Transaction No." := VendLedgEntry2."Transaction No.";
+                VATEntry."Unrealized VAT Entry No." := VATEntry2."Entry No.";
+                Test1 := VATEntry.INSERT(TRUE);
+
+                VATEntry2."Remaining Unrealized Amount" :=
+                  VATEntry2."Remaining Unrealized Amount" - VATEntry.Amount;
+                VATEntry2."Remaining Unrealized Base" :=
+                  VATEntry2."Remaining Unrealized Base" - VATEntry.Base;
+                VATEntry2."Add.-Curr. Rem. Unreal. Amount" :=
+                  VATEntry2."Add.-Curr. Rem. Unreal. Amount" - VATEntry."Additional-Currency Amount";
+                VATEntry2."Add.-Curr. Rem. Unreal. Base" :=
+                  VATEntry2."Add.-Curr. Rem. Unreal. Base" - VATEntry."Additional-Currency Base";
+                Test2 := VATEntry2.MODIFY;
+                LastVATEntryNo := VATEntryNo;
+            END;
+          END;
+
+        IF NOT ExistVATEntry THEN
+          FirstVATEntryNo := LastVATEntryNo;
+        ExistVATEntry := Test1 AND Test2;
+
+        UNTIL VATEntry2.NEXT = 0;
+
+      END;
+    END;
+
+    PROCEDURE FindVendVATSetup@1100000(VAR VATSetup@1100000 : Record 325;VendLedgEntry4@1100001 : Record 25) : Boolean;
+    VAR
+      Vendor@1100002 : Record 23;
+      PostingGroup@1100009 : Code[10];
+      PurchLine2@1100010 : Record 123;
+      Text1100003@1100004 : TextConst 'ENU=Unrealized VAT Type must be "Percentage" in VAT Posting Setup.;ESP=Tipo IVA no realizado debe ser porcentaje en configuraci¢n grupo registro IVA.';
+      ErrorMessage@1100008 : Boolean;
+      ExistsVATNoReal@1100006 : Boolean;
+    BEGIN
+      ErrorMessage := FALSE;
+      ExistsVATNoReal := TRUE;
+      Vendor.GET(VendLedgEntry4."Vendor No.");
+
+      VATSetup.SETCURRENTKEY("VAT Bus. Posting Group","VAT Prod. Posting Group");
+      VATSetup.SETRANGE(VATSetup."VAT Bus. Posting Group",Vendor."VAT Bus. Posting Group");
+
+      PurchLine2.SETRANGE("Document No.",VendLedgEntry4."Document No.");
+      PurchLine2.FIND('-');
+
+      REPEAT
+        CASE PurchLine2.Type OF
+          PurchLine2.Type::Item:
+            BEGIN
+              PostingGroup := PurchLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          PurchLine2.Type::"G/L Account":
+            BEGIN
+              PostingGroup := PurchLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+        END;
+      UNTIL PurchLine2.NEXT = 0;
+
+      IF ErrorMessage THEN
+        ERROR(Text1100003);
+      EXIT(ExistsVATNoReal);
+    END;
+
+    PROCEDURE GetLastDate@29(CurrCode@1100000 : Code[10];DocPostDate@1100001 : Date;Type@1100002 : 'Receivable,Payable') : Date;
+    VAR
+      ExchRateAdjReg@1100003 : Record 86;
+    BEGIN
+      ExchRateAdjReg.SETRANGE("Currency Code",CurrCode);
+      IF Type = Type::Receivable THEN
+        ExchRateAdjReg.SETRANGE("Account Type",ExchRateAdjReg."Account Type"::Customer)
+      ELSE
+          ExchRateAdjReg.SETRANGE("Account Type",ExchRateAdjReg."Account Type"::Vendor);
+      IF ExchRateAdjReg.FIND('+') THEN
+        IF ExchRateAdjReg."Creation Date" > DocPostDate THEN
+          EXIT(ExchRateAdjReg."Creation Date")
+        ELSE
+          EXIT(DocPostDate)
+      ELSE
+       EXIT(DocPostDate);
+    END;
+
+    PROCEDURE GetLastDate2@18(CurrCode@1100000 : Code[10];DocPostDate@1100001 : Date) : Date;
+    VAR
+      CurrencyExchRate@1100002 : Record 330;
+      ExchRateAdjReg@1100003 : Record 86;
+      ExistCurrencyExchRate@1100004 : Boolean;
+      ExistExchRateAdj@1100005 : Boolean;
+    BEGIN
+      CurrencyExchRate.SETRANGE("Currency Code",CurrCode);
+      ExchRateAdjReg.SETRANGE("Currency Code",CurrCode);
+      ExchRateAdjReg.SETRANGE("Account Type",ExchRateAdjReg."Account Type"::Customer);
+
+      //ExistCurrencyExchRate := CurrencyExchRate.FIND('+');
+      ExistExchRateAdj := ExchRateAdjReg.FIND('+');
+      ExistCurrencyExchRate := FALSE;
+      CASE TRUE OF
+        ((ExistCurrencyExchRate) AND (NOT ExistExchRateAdj)):
+          IF CurrencyExchRate."Starting Date" > DocPostDate THEN
+            EXIT(CurrencyExchRate."Starting Date")
+          ELSE
+            EXIT(DocPostDate);
+
+        (NOT (ExistCurrencyExchRate) AND (ExistExchRateAdj)):
+          IF ExchRateAdjReg."Creation Date" > DocPostDate THEN
+            EXIT(ExchRateAdjReg."Creation Date")
+          ELSE
+           EXIT(DocPostDate);
+
+        (ExistCurrencyExchRate AND ExistExchRateAdj):
+          IF CurrencyExchRate."Starting Date" > ExchRateAdjReg."Creation Date" THEN
+            IF CurrencyExchRate."Starting Date" > DocPostDate THEN
+              EXIT(CurrencyExchRate."Starting Date")
+            ELSE
+              EXIT(DocPostDate);
+          ELSE
+            IF ExchRateAdjReg."Creation Date" > DocPostDate THEN
+              EXIT(ExchRateAdjReg."Creation Date")
+            ELSE
+              EXIT(DocPostDate);
+
+      END;
+      EXIT(DocPostDate);
+    END;
+
+    PROCEDURE GetGainLoss@28(PostingDate@1100000 : Date;PostingDate2@1100001 : Date;Amount2@1100002 : Decimal;CurrencyCode@1100003 : Code[10]) : Decimal;
+    VAR
+      GenJnlLine@1100004 : TEMPORARY Record 81;
+      GenJnlLine2@1100005 : TEMPORARY Record 81;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        CLEAR(GenJnlLine);
+        INIT;
+        "Posting Date" := PostingDate;
+        VALIDATE("Account Type","Account Type"::"G/L Account");
+        VALIDATE("Currency Code",CurrencyCode);
+        VALIDATE(Amount,Amount2);
+        INSERT;
+      END;
+      WITH GenJnlLine2 DO BEGIN
+        CLEAR(GenJnlLine2);
+        INIT;
+        "Posting Date" := PostingDate2;
+        VALIDATE("Account Type","Account Type"::"G/L Account");
+        VALIDATE("Currency Code",CurrencyCode);
+        VALIDATE(Amount,Amount2);
+        INSERT;
+      END;
+      EXIT(GenJnlLine2."Amount (LCY)" - GenJnlLine."Amount (LCY)");
+    END;
+
+    PROCEDURE GetCustGainLoss@25(CustLedgEntry@1100000 : Record 21;PostingDate@1100001 : Date;Amount2@1100002 : Decimal) : Decimal;
+    VAR
+      PostedBillGr@1100003 : Record 7000006;
+      PostedDoc@1100004 : Record 7000003;
+      ClosedDoc@1100005 : Record 7000004;
+      PostingDate2@1100006 : Date;
+      Type@1100007 : 'Receivable,Payable';
+    BEGIN
+      WITH CustLedgEntry DO BEGIN
+        PostedDoc.SETRANGE(Type,PostedDoc.Type::Receivable);
+        PostedDoc.SETRANGE("Document No.",CustLedgEntry."Applies-to Doc. No.");
+        PostedDoc.SETRANGE("No.",CustLedgEntry."Applies-to Bill No.");
+        IF PostedDoc.FIND('-') THEN BEGIN
+          PostedBillGr.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          PostingDate2 := GetLastDate("Currency Code",PostedBillGr."Posting Date",Type::Receivable); //Receivable
+        END ELSE BEGIN
+          ClosedDoc.SETRANGE(Type,ClosedDoc.Type::Receivable);
+          ClosedDoc.SETRANGE("Document No.",CustLedgEntry."Applies-to Doc. No.");
+          ClosedDoc.SETRANGE("No.",CustLedgEntry."Applies-to Bill No.");
+          ClosedDoc.FIND('-');
+          PostingDate2 := GetLastDate("Currency Code",ClosedDoc."Honored/Rejtd. at Date",Type::Receivable); //Receivable
+        END;
+        EXIT(GetGainLoss(PostingDate2,PostingDate,Amount2,"Currency Code"));
+      END;
+    END;
+
+    PROCEDURE GetCustAmountLCYAtDate@30(CVLedgEntryBuf@1100000 : Record 382;Amount2@1100001 : Decimal) : Decimal;
+    VAR
+      PostedBillGr@1100002 : Record 7000006;
+      PostedDoc@1100003 : Record 7000003;
+      ClosedDoc@1100004 : Record 7000004;
+      CurrencyExchRate@1100005 : Record 330;
+      PostingDate2@1100006 : Date;
+      Type@1100007 : 'Receivable,Payable';
+    BEGIN
+      WITH CVLedgEntryBuf DO BEGIN
+        IF "Document Situation" = "Document Situation"::"Posted BG/PO" THEN BEGIN
+          PostedDoc.GET(PostedDoc.Type::Receivable,"Entry No.");
+          PostedBillGr.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          IF PostedDoc.Status IN [PostedDoc.Status::Rejected,PostedDoc.Status::Honored] THEN
+            PostingDate2 := GetLastDate("Currency Code",PostedDoc."Honored/Rejtd. at Date",Type::Receivable)
+          ELSE
+            PostingDate2 := GetLastDate("Currency Code",PostedBillGr."Posting Date",Type::Receivable);
+        END ELSE BEGIN
+          ClosedDoc.GET(ClosedDoc.Type::Receivable,"Entry No.");
+          PostingDate2 := GetLastDate("Currency Code",ClosedDoc."Honored/Rejtd. at Date",Type::Receivable);
+        END;
+        EXIT(ROUND(CurrencyExchRate.ExchangeAmtFCYToLCY(
+          PostingDate2,
+          "Currency Code",
+          Amount2,
+          CurrencyExchRate.ExchangeRate(PostingDate2,"Currency Code"))));
+      END;
+    END;
+
+    PROCEDURE GetVendGainLoss@32(VendLedgEntry@1100000 : Record 25;PostingDate@1100001 : Date;Amount2@1100002 : Decimal) : Decimal;
+    VAR
+      PostedPmtOrd@1100003 : Record 7000021;
+      PostedDoc@1100004 : Record 7000003;
+      ClosedDoc@1100005 : Record 7000004;
+      PostingDate2@1100006 : Date;
+      Type@1100007 : 'Receivable,Payable';
+    BEGIN
+      WITH VendLedgEntry DO BEGIN
+        PostedDoc.SETRANGE(Type,PostedDoc.Type::Payable);
+        PostedDoc.SETRANGE("Document No.",VendLedgEntry."Applies-to Doc. No.");
+        PostedDoc.SETRANGE("No.",VendLedgEntry."Applies-to Bill No.");
+        IF PostedDoc.FIND('-') THEN BEGIN
+          PostedPmtOrd.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          PostingDate2 := GetLastDate("Currency Code",PostedPmtOrd."Posting Date",Type::Payable);
+        END ELSE BEGIN
+          ClosedDoc.SETRANGE(Type,ClosedDoc.Type::Payable);
+          ClosedDoc.SETRANGE("Document No.",VendLedgEntry."Applies-to Doc. No.");
+          ClosedDoc.SETRANGE("No.",VendLedgEntry."Applies-to Bill No.");
+          ClosedDoc.FIND('-');
+          PostingDate2 := GetLastDate("Currency Code",ClosedDoc."Honored/Rejtd. at Date",Type::Payable);
+        END;
+        EXIT(GetGainLoss(PostingDate2,PostingDate,Amount2,"Currency Code"));
+      END;
+    END;
+
+    PROCEDURE GetVendAmountLCYAtDate@31(CVLedgEntryBuf@1000 : Record 382;Amount2@1100001 : Decimal) : Decimal;
+    VAR
+      PostedPmtOrd@1100002 : Record 7000021;
+      PostedDoc@1100003 : Record 7000003;
+      ClosedDoc@1100004 : Record 7000004;
+      CurrencyExchRate@1100005 : Record 330;
+      PostingDate2@1100006 : Date;
+      Type@1100007 : 'Receivable,Payable';
+    BEGIN
+      WITH CVLedgEntryBuf DO BEGIN
+        IF "Document Situation" = "Document Situation"::"Posted BG/PO" THEN BEGIN
+          PostedDoc.GET(PostedDoc.Type::Payable,"Entry No.");
+          PostedPmtOrd.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+          IF PostedDoc.Status IN [PostedDoc.Status::Rejected,PostedDoc.Status::Honored] THEN
+            PostingDate2 := GetLastDate("Currency Code",PostedDoc."Honored/Rejtd. at Date",Type::Payable)
+          ELSE
+            PostingDate2 := GetLastDate("Currency Code",PostedPmtOrd."Posting Date",Type::Payable);
+        END ELSE BEGIN
+          ClosedDoc.GET(ClosedDoc.Type::Payable,"Entry No.");
+          PostingDate2 := GetLastDate("Currency Code",ClosedDoc."Honored/Rejtd. at Date",Type::Payable);
+        END;
+        EXIT(ROUND(CurrencyExchRate.ExchangeAmtFCYToLCY(
+          PostingDate2,
+          "Currency Code",
+          Amount2,
+          CurrencyExchRate.ExchangeRate(PostingDate2,"Currency Code"))));
+      END;
+    END;
+
+    PROCEDURE CheckFromRedrawnDoc@33(DocNo@1100000 : Code[20]) : Boolean;
+    BEGIN
+      IF  STRPOS(DocNo,'-') = 0 THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE GetDocType@1100002(Type@1100000 : 'Invoice,,Bill') : Integer;
+    VAR
+      DocType@1100001 : ' ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund';
+    BEGIN
+      CASE Type OF
+        Type::Invoice, Type::Bill:
+          DocType := DocType::Payment;
+        ELSE
+          DocType := DocType::" ";
+      END;
+
+      EXIT(DocType);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 14012014 Corregir un error del estandar en las funciones NavigatePostedDoct y NavigateClosedDoc
+    }
+    END.
+  }
+}

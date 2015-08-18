@@ -1,0 +1,1001 @@
+OBJECT Codeunit 7009900 Funciones FTP Documental
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/09/13;
+    Time=15:16:47;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            // Esta funci¢n se lanza desde un Menu Suite
+
+            ImportarDetallePago(TRUE);
+            // Commit para que se mantengan los datos de la importaci¢n aunque
+            // se interrumpa la ejecuci¢n de la generaci¢n de estados de cuenta.
+            COMMIT;
+            GeneracionEstadosCta(TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rPar@1103355000 : Record 7009700;
+      Text0001@1103355001 : TextConst 'ENU=File\%1 does not exist;ESP=No existe el Archivo\%1';
+      wAutom@1103355002 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      Text0002@1103355003 : TextConst 'ENU=Directory %1 could not be created;ESP=No se ha podido crear el directorio:%1';
+      Text0003@1103355004 : TextConst 'ENU=Folder\%1 does not exist;ESP=No existe la carpeta\%1';
+      Text0004@1103355005 : TextConst 'ENU=Status account;ESP=Estado de Cuenta';
+      Text0005@1103355006 : TextConst 'ENU=Invoices x Hotel control %1.%2;ESP=Control Facturas x Hotel %1.%2';
+      Text0006@1103355007 : TextConst 'ENU=Payment Details;ESP=Detalle de pago';
+      Text0007@1103355008 : TextConst 'ENU=%1 Payment detail.%2;ESP=%1 Detalle de Pago.%2';
+      Text0008@1103355009 : TextConst 'ENU=Generate Ledger Entries balance for all suppliers?;ESP=¨Generar Estados de Cuenta para todos los proveedores?';
+      wVentana@1103355010 : Dialog;
+      Text0009@1103355011 : TextConst 'ENU=Generating Ledger Entries balance\@1@@@@@@@@@@@@@;ESP=Generando Estados de Cuenta\@1@@@@@@@@@@@@@';
+      wModoGlobal@1103355012 : 'PDF,HTM';
+      cFunVar@1103355013 : Codeunit 7009720;
+      Text0010@1103355014 : TextConst 'ENU=Errors importation of payment detail %1;ESP=Errores importaci¢n de detalle de pago %1';
+      Text0011@1103355015 : TextConst 'ENU=Next folders could not be processed:;ESP=Los siguientes ficheros no han podido ser procesados:';
+      Text0012@1103355016 : TextConst 'ENU=* Agency code coult not be converted for folder %1;ESP=* No se ha podido convertir el c¢digo de agencia para el fichero %1.';
+      Text0013@1103355017 : TextConst 'ENU=* Hotel code coult not be converted for folder %1;ESP=* No se ha podido convertir el c¢digo de hotel para el fichero %1.';
+      Text0014@1103355018 : TextConst 'ENU=* Supplier of hotel %1 was not found for file %2;ESP=* No se ha podido encontrar el proveedor del hotel %1 para el fichero %2.';
+      Text0015@1103355019 : TextConst 'ENU=Payment Details;ESP=Detalle de pago';
+      Text0016@1100253000 : TextConst 'ENU=Supplier_;ESP=Proveedor_';
+
+    PROCEDURE GestionFacturas@1103355000(VAR prProv@1103355000 : Record 23);
+    VAR
+      lrSelecImp@1103355001 : Record 78;
+      lrHotel@1103355003 : Record 7009724;
+      lrHotel2@1103355006 : Record 7009724;
+      lwIdReport@1103355004 : Integer;
+      lwLenguaID@1103355002 : Integer;
+      lpReport@1103355005 : Report 7009773;
+    BEGIN
+      // GestionFacturas
+
+      wModoGlobal := wModoGlobal::HTM;
+
+      IF NOT prProv."Gestion FTP Documental" THEN
+        EXIT;
+
+      lwIdReport := 50080;
+
+      IF ISCLEAR(wAutom) THEN // Iniciamos el automation si no lo est 
+        CREATE(wAutom);
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Carpeta FTP Hoteleros");
+      rPar.TESTFIELD("Impresora PDF");
+      rPar.TESTFIELD("Carpeta Puente PDF");
+
+      // Creamos (Temporalmente) un registro Printer selecci¢n para ese report
+      CreaSelecImp(lrSelecImp, lwIdReport);
+
+      // Selecci¢n de Hoteles x Proveedor
+      CLEAR(lrHotel);
+      lrHotel.SETCURRENTKEY(NoName,"Proveedor Intermediacion","Proveedor Cuenta Propia");
+      lrHotel.SETRANGE("Proveedor Intermediacion", prProv."No.");
+      IF lrHotel.FINDSET THEN BEGIN
+        REPEAT
+          BorraArchivo(lwIdReport);
+          CLEAR(lpReport);
+
+          // Imprime el documento a PDF
+          // Le insertamos el lenguaje del proveedor
+
+          lwLenguaID := GetLenguaje(prProv);
+          IF lwLenguaID <> 0 THEN
+            lpReport.LANGUAGE := lwLenguaID;
+
+          lpReport.USEREQUESTFORM := FALSE;
+          lrHotel2 := lrHotel;
+          lrHotel2.SETRECFILTER;
+          lpReport.SETTABLEVIEW(lrHotel2);
+
+          //CASE wModoGlobal OF
+          //  wModoGlobal::PDF : lpReport.RUNMODAL;
+          //  wModoGlobal::HTM : lpReport.SAVEASHTML(ArchOrigen(lwIdReport));
+          //END;
+
+          lpReport.SAVEASHTML(ArchOrigen(lwIdReport));
+
+          SLEEP(500); // Esperamos medio segundo
+
+          MueveArchivo(lwIdReport, prProv."No.", lrHotel.Nombre, 1, lpReport.GetCarpeta, lwLenguaID);
+      // Mueve el archivo a la carpeta FTP
+        UNTIL lrHotel.NEXT=0;
+      END;
+
+      // Se borra la seleccion de impresora
+      lrSelecImp.DELETE;
+
+      // Marcamos a false el campo "Refrescar Estado Cuenta"
+      IF prProv."Refrescar Estado Cuenta" THEN BEGIN
+        prProv."Refrescar Estado Cuenta":= FALSE;
+        prProv.MODIFY;
+      END;
+    END;
+
+    PROCEDURE NombreReport@1103355010(pwNo@1103355000 : Integer) : Text[30];
+    VAR
+      lrObj@1103355001 : Record 2000000001;
+    BEGIN
+      // NombreReport
+      // Devuelve el nombre del report a partir del parametro
+
+      lrObj.RESET;
+      lrObj.SETRANGE(Type , lrObj.Type::Report);
+      lrObj.SETRANGE(ID, pwNo);
+      IF lrObj.FINDFIRST THEN BEGIN
+        lrObj.CALCFIELDS(Caption);
+        EXIT(lrObj.Caption);
+      END;
+    END;
+
+    PROCEDURE LimpiaFileName@1100253000(pwNombre@1100253001 : Text[1024]) : Text[1024];
+    VAR
+      lwTexto@1100253000 : Text[1024];
+      lwChar@1100253002 : Char;
+      lwCont@1100253003 : Integer;
+    BEGIN
+      // LimpiaFileName
+      // Elimina del nombre del archivo los caracteres No validos
+
+      CLEAR(lwTexto);
+      FOR lwCont:=1 TO STRLEN(pwNombre)  DO BEGIN
+        lwChar:= pwNombre[lwCont];
+        IF NOT (lwChar IN ['/','(',')',',','-']) THEN
+          lwTexto += FORMAT(lwChar);
+      END;
+      EXIT(lwTexto);
+    END;
+
+    PROCEDURE MueveArchivo@1103355015(pwIdReport@1103355000 : Integer;pwProveedor@1103355001 : Code[20];pwCodigo@1103355002 : Text[30];pwTipo@1103355006 : ',Facturas,Pago';pwCarpeta@1103355007 : Text[1024];pwIdLenguage@1103355008 : Integer);
+    VAR
+      lwArch1@1103355003 : Text[1024];
+      lwArch2@1103355004 : Text[1024];
+      lwNom@1103355005 : Text[250];
+    BEGIN
+      // MueveArchivo
+
+      // Archivo Origen
+
+      lwArch1 := ArchOrigen(pwIdReport);
+      { JPT Si no existe el archivo origen, borramos el destino (si existe)
+        ya que la informaci¢n es ya obsoleta
+      IF NOT EXISTS(lwArch1) THEN
+        // ERROR(Text0001, lwArch1);
+        EXIT;
+      }
+
+      // Archivo Destino
+
+      CLEAR(lwArch2);
+      lwArch2 := rPar."Carpeta FTP Hoteleros";
+      IF lwArch2[STRLEN(lwArch2)] <> '\' THEN
+        lwArch2 += '\';
+
+      IF ISCLEAR(wAutom) THEN // Iniciamos el automation si no lo est 
+        CREATE(wAutom);
+
+      IF NOT wAutom.FolderExists(lwArch2) THEN
+        ERROR(Text0003, lwArch2);
+
+      lwArch2 += COMPANYNAME + '\';
+      AseguraDirectorio(lwArch2);
+      lwArch2 += pwProveedor + '\';
+      AseguraDirectorio(lwArch2);
+
+      IF pwCarpeta = '' THEN BEGIN
+        CASE pwTipo OF
+          pwTipo::Facturas : pwCarpeta := Text0004;
+          pwTipo::Pago     : pwCarpeta := Text0006;
+        END;
+      END;
+
+      pwCarpeta += '\';
+      lwArch2 += pwCarpeta;
+      AseguraDirectorio(lwArch2);
+
+      lwNom := GetNomReport(pwIdReport, pwIdLenguage);
+
+      // AJF 22/06/09
+      // substituyo las barras y contrabarras que pueda haber en el nombre de hotel por guiones.
+      lwNom := STRSUBSTNO('%1 %2.%3', lwNom, CONVERTSTR(pwCodigo, '/\', '--'), 'HTM');
+
+      lwArch2 += lwNom;
+
+      LimpiaFileName(lwArch2);
+
+      IF EXISTS(lwArch2) THEN
+        ERASE(lwArch2);
+
+      // Mueve el archivo
+      IF EXISTS(lwArch1) THEN
+        RENAME(lwArch1, lwArch2);
+    END;
+
+    PROCEDURE BorraArchivo@1103355009(pwIdReport@1103355000 : Integer);
+    VAR
+      lwArch1@1103355003 : Text[1024];
+    BEGIN
+      // BorraArchivo
+      // Borra el archivo en la carpeta de origen si existe, para asegurarnos que la impresora inserte con el nombre correcto
+
+      lwArch1 := ArchOrigen(pwIdReport);
+      IF EXISTS(lwArch1) THEN
+        ERASE(lwArch1);
+    END;
+
+    PROCEDURE AseguraDirectorio@1103355019(pwDirectorio@1103355000 : Text[1024]);
+    BEGIN
+      // AseguraDirectorio
+      // Si no existe el directorio pasado como parametro lo crea
+
+      IF NOT wAutom.FolderExists(pwDirectorio) THEN
+        wAutom.CreateFolder(pwDirectorio);
+
+      IF NOT wAutom.FolderExists(pwDirectorio) THEN
+        ERROR(Text0002, pwDirectorio);
+    END;
+
+    PROCEDURE GestionPago@1103355001(prProv@1103355000 : Record 23;prMovProv@1103355001 : Record 25);
+    VAR
+      lrSelecImp@1103355004 : Record 78;
+      lwIdReport@1103355002 : Integer;
+      lrRepPago@1103355003 : Report 7009754;
+      lwLenguaID@1103355005 : Integer;
+      lwLenguaUser@1103355006 : Integer;
+    BEGIN
+      // GestionPago
+
+      wModoGlobal := wModoGlobal::HTM;
+
+      IF NOT prProv."Gestion FTP Documental" THEN
+        EXIT;
+
+      IF NOT (prMovProv."Document Type" IN  [prMovProv."Document Type"::Payment, prMovProv."Document Type"::Refund]) THEN
+        EXIT;
+
+      lwIdReport := 50060;
+
+      IF ISCLEAR(wAutom) THEN // Iniciamos el automation si no lo est 
+        CREATE(wAutom);
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Carpeta FTP Hoteleros");
+      rPar.TESTFIELD("Impresora PDF");
+      rPar.TESTFIELD("Carpeta Puente PDF");
+
+      BorraPagosViejos(prProv."No.");
+
+      // Creamos (Temporalmente) un registro Printer selecci¢n para ese report
+
+      CreaSelecImp(lrSelecImp, lwIdReport);
+
+      BorraArchivo(lwIdReport);
+
+      CLEAR(lrRepPago);
+
+      lrRepPago.PasaParametros(prMovProv."Document No.", prProv."No.", prMovProv."Posting Date", FALSE);
+
+      // AJS 12.02.2008
+      // Guardar el idioma que tiene el usuario en este momento
+
+      lwLenguaUser := GLOBALLANGUAGE;
+
+      // Le insertamos el lenguaje del proveedor
+
+      lwLenguaID := GetLenguaje(prProv);
+      IF lwLenguaID <> 0 THEN
+        lrRepPago.LANGUAGE := lwLenguaID;
+      lrRepPago.USEREQUESTFORM := FALSE;
+
+      //CASE wModoGlobal OF
+      //  wModoGlobal::PDF : lrRepPago.RUNMODAL;
+      //  wModoGlobal::HTM : lrRepPago.SAVEASHTML(ArchOrigen(lwIdReport));
+      //END;
+
+      lrRepPago.SAVEASHTML(ArchOrigen(lwIdReport));
+
+      SLEEP(500); // Esperamos medio segundo
+
+      // Mueve el archivo a la carpeta FTP
+
+      MueveArchivo(lwIdReport, prProv."No.", FormtFecha(prMovProv."Posting Date") + '-' + prMovProv."Document No.",
+                   2, lrRepPago.GetCarpeta, lwLenguaID);
+
+      // Se borra la seleccion de impresora
+
+      lrSelecImp.DELETE;
+
+      // AJS 12.02.2008
+      // Restauramos el idioma del usuario
+
+      GLOBALLANGUAGE(lwLenguaUser);
+    END;
+
+    PROCEDURE CreaSelecImp@1103355002(VAR prSelecImp@1103355001 : Record 78;pwIdReport@1103355000 : Integer);
+    VAR
+      lwEnc@1103355002 : Boolean;
+    BEGIN
+      // CreaSelecImp
+      // Creamos (Temporalmente) un registro Printer selecci¢n para ese report
+
+      CLEAR(prSelecImp);
+      prSelecImp."User ID"     := USERID;
+      prSelecImp."Report ID"   := pwIdReport;
+      lwEnc := prSelecImp.FIND;
+      prSelecImp."Printer Name":= rPar."Impresora PDF";
+      IF lwEnc THEN
+        prSelecImp.MODIFY
+      ELSE
+        prSelecImp.INSERT;
+    END;
+
+    PROCEDURE FormtFecha@1103355011(pwFecha@1103355001 : Date) : Text[30];
+    VAR
+      lwTexto@1103355000 : Text[30];
+    BEGIN
+      // FormtFecha
+
+      CLEAR(lwTexto);
+      IF pwFecha=0D THEN
+        EXIT;
+
+      lwTexto := FORMAT(pwFecha,0, '<Year4><Month,2><Day,2>');
+
+      EXIT(lwTexto);
+    END;
+
+    PROCEDURE BorraPagosViejos@1103355003(pwCodProv@1103355002 : Code[20]);
+    VAR
+      lrArchs@1103355000 : Record 2000000022;
+      lwDirect@1103355001 : Text[1024];
+      lwNom@1103355003 : Text[1024];
+      lwFilename@1103355005 : Text[1024];
+      lwFecha@1103355004 : Date;
+    BEGIN
+      // BorraPagosViejos
+      // Se eliminan los archivos  que tengan una antiguedad superior al a¤o
+
+      CLEAR(lwDirect);
+      lwDirect := rPar."Carpeta FTP Hoteleros";
+      IF lwDirect[STRLEN(lwDirect)] <> '\' THEN
+        lwDirect += '\';
+
+      lwDirect := STRSUBSTNO('%1%2\%3\%4',lwDirect, COMPANYNAME ,pwCodProv , Text0006);
+      IF NOT wAutom.FolderExists(lwDirect) THEN
+        EXIT;
+
+      lwFecha := CALCDATE('<-1Y>',TODAY);
+      lwNom := STRSUBSTNO(Text0007 , FormtFecha(lwFecha), 'HTM');
+
+      CLEAR(lrArchs);
+      lrArchs.SETRANGE(Path        , lwDirect);
+      lrArchs.SETRANGE("Is a file" , TRUE);
+      IF lrArchs.FIND('-') THEN BEGIN
+        REPEAT
+          IF lrArchs.Name < lwNom THEN BEGIN
+            lwFilename := lwDirect + lrArchs.Name;
+            IF EXISTS(lwFilename) THEN
+              ERASE(lwFilename);
+          END;
+        UNTIL lrArchs.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE RefrescarEstadoCta@1103355004(pwCodProv@1103355000 : Code[20]);
+    VAR
+      lrProv@1103355001 : Record 23;
+    BEGIN
+      // RefrescarEstadoCta
+
+      IF pwCodProv='' THEN
+        EXIT;
+
+      CLEAR(lrProv);
+      lrProv.GET(pwCodProv);
+
+      IF lrProv."Gestion FTP Documental" AND (NOT lrProv."Refrescar Estado Cuenta") THEN BEGIN
+        lrProv."Refrescar Estado Cuenta" := TRUE;
+        lrProv.MODIFY;
+      END;
+    END;
+
+    PROCEDURE GeneracionEstadosCta@1103355005(pwVisual@1103355000 : Boolean);
+    VAR
+      lrProvs@1103355001 : Record 23;
+      lwTotal@1103355002 : Integer;
+      lwCont@1103355003 : Integer;
+    BEGIN
+      // GeneracionEstadosCta
+
+      // Se generara el proceso GestionFacturas para todos los proveedores con el campo "Refrescar Estado Cuenta"
+      // pwVisual indica si queremos que se muestren ventana de progreso y verificacion previa
+
+      IF pwVisual THEN BEGIN
+        IF NOT CONFIRM(Text0008) THEN
+          EXIT;
+      END;
+
+      CLEAR(lrProvs);
+      lrProvs.SETRANGE("Gestion FTP Documental", TRUE);
+      IF lrProvs.FIND('-') THEN BEGIN
+        IF pwVisual THEN BEGIN
+          lwTotal := lrProvs.COUNT;
+          lwCont  := 0;
+          wVentana.OPEN(Text0009);
+        END;
+        REPEAT
+          IF lrProvs."Refrescar Estado Cuenta" THEN
+            GestionFacturas(lrProvs);
+          IF pwVisual THEN BEGIN
+            lwCont +=1;
+            wVentana.UPDATE(1,ROUND(lwCont/lwTotal*10000,1));
+          END;
+        UNTIL lrProvs.NEXT=0;
+        IF pwVisual THEN
+          wVentana.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GetLenguaje@1103355006(prProv@1103355000 : Record 23) : Integer;
+    VAR
+      lwId@1103355001 : Integer;
+      lrLengua@1103355002 : Record 8;
+    BEGIN
+      // GetLenguaje
+      // Devuelve el id del lenguaje del proveedor
+
+      CLEAR(lwId);
+      CLEAR(lrLengua);
+      IF lrLengua.GET(prProv."Language Code") THEN
+        EXIT(lrLengua."Windows Language ID");
+    END;
+
+    PROCEDURE GetNomReport@1103355007(pwIDReport@1103355000 : Integer;pwIDLanguage@1103355001 : Integer) : Text[30];
+    VAR
+      lrObject@1103355002 : Record 2000000001;
+      lwCaption@1103355003 : Text[30];
+      lwIdOldLanguage@1103355004 : Integer;
+    BEGIN
+      // GetNomReport
+
+      CLEAR(lwCaption);
+      lwIdOldLanguage := GLOBALLANGUAGE;
+      IF pwIDLanguage <> 0 THEN
+        GLOBALLANGUAGE(pwIDLanguage);
+
+      CLEAR(lrObject);
+      lrObject.SETRANGE(Type, lrObject.Type::Report);
+      lrObject.SETRANGE(ID  , pwIDReport);
+      IF lrObject.FINDFIRST THEN BEGIN
+        lrObject.CALCFIELDS(Caption);
+        lwCaption := lrObject.Caption;
+      END;
+
+      // Volvemos a poner el lenguaje anterior
+      GLOBALLANGUAGE(lwIdOldLanguage);
+
+      EXIT(lwCaption);
+    END;
+
+    PROCEDURE ArchOrigen@1103355008(pwIdReport@1103355000 : Integer) : Text[1024];
+    VAR
+      lwArch@1103355001 : Text[1024];
+    BEGIN
+      // ArchOrigen
+      // Devuelve el nombre del archivo origen
+
+      CLEAR(lwArch);
+      rPar.FIND('-');
+      lwArch := rPar."Carpeta Puente PDF";
+      IF lwArch[STRLEN(lwArch)] <> '\' THEN
+        lwArch += '\';
+
+      lwArch += STRSUBSTNO('%1.%2', NombreReport(pwIdReport), 'HTM');
+      EXIT(lwArch)
+    END;
+
+    PROCEDURE ImportarDetallePago@1103355012(pwVisual@1103355004 : Boolean) rvOk : Boolean;
+    VAR
+      lrParInt@1103355002 : Record 7010081;
+      lrArchsTMp@1103355000 : TEMPORARY Record 7009840;
+      lrFileAux@1103355003 : File;
+    BEGIN
+      // ImportarDetallePago.
+      //: Importa los ficheros pdf de detalle de pago a la carpeta ficheros PDF.
+
+      IF NOT TestConfImpDetPago(pwVisual) THEN
+        EXIT(FALSE);
+
+      lrParInt.FINDFIRST;
+
+      // Conectamos al FTP y actualizamos los ficheros.
+      ImportarCarpTemp(lrParInt, lrArchsTMp);
+
+      // Movemos los ficheros a su sitio correspondiente.
+      MoveraCarpLocal(lrArchsTMp, lrParInt);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE TestConfImpDetPago@1103355013(pwErrores@1103355001 : Boolean) rvOk : Boolean;
+    VAR
+      lrParInt@1103355000 : Record 7010081;
+      lrParAg@1103355002 : Record 7009700;
+      lrEmpImp@1103355003 : Record 7009859;
+    BEGIN
+      // TestConfImpDetPago.
+      //: Comprueba que la configuraci¢n sea correcta para la importaci¢n de detalles de pago.
+      //: @pwErrores: Detiene la ejecuci¢n con mensajes de error si falla la comprobaci¢n.
+
+      // Comprueba los datos de conexi¢n al FTP.
+      lrParInt.RESET;
+      IF NOT lrParInt.FINDFIRST THEN
+        CLEAR(lrParInt);
+
+      IF pwErrores THEN BEGIN
+        lrParInt.TESTFIELD("Direccion FTP Pagos");
+        lrParInt.TESTFIELD("Usuario FTP Pagos");
+        lrParInt.TESTFIELD("Password FTP Pagos");
+        lrParInt.TESTFIELD("Ruta FTP Pagos");
+        lrParInt.TESTFIELD("Carpeta temporal FTP Pagos");
+      END
+      ELSE BEGIN
+        IF (lrParInt."Direccion FTP Pagos" = '') OR
+           (lrParInt."Usuario FTP Pagos"   = '') OR
+           (lrParInt."Password FTP Pagos"  = '') OR
+           (lrParInt."Ruta FTP Pagos"      = '') OR
+           (lrParInt."Carpeta temporal FTP Pagos" = '')
+        THEN
+          EXIT(FALSE);
+      END;
+
+      // Comprueba que este configurado el Touroperador compra para realizar las
+      // conversiones de hotel y la carpeta de destino para los archivos.
+      lrParAg.RESET;
+      IF NOT lrParAg.FINDFIRST THEN
+        CLEAR(lrParAg);
+
+      IF pwErrores THEN BEGIN
+        lrParAg.TESTFIELD("TourOperador Compra");
+        lrParAg.TESTFIELD("Ruta ficheros PDF");
+      END
+      ELSE BEGIN
+        IF (lrParAg."TourOperador Compra" = '') OR
+           (lrParAg."Ruta ficheros PDF"   = '')
+        THEN
+          EXIT(FALSE);
+      END;
+
+      // Solo las delegaciones que tenga la importaci¢n activada.
+      CLEAR(lrEmpImp);
+      lrEmpImp.SETRANGE (Tipo, lrEmpImp.Tipo::"Detalle Pago");
+      lrEmpImp.SETRANGE (Empresa, COMPANYNAME);
+      lrEmpImp.SETRANGE ("Imp. Detalle Pago", TRUE);
+      IF lrEmpImp.ISEMPTY THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ImportarCarpTemp@1103355014(VAR prParInt@1103355000 : Record 7010081;VAR prArchs@1103355001 : TEMPORARY Record 7009840);
+    VAR
+      lrFile@1103355002 : Record 2000000022;
+      lwId@1103355004 : Integer;
+      lrArchs@1103355005 : Record 7009840;
+    BEGIN
+      // ImportarCarpTemp.
+      //: Se copian los ficheros del ftp a la carpeta temporal y se borran solo los que se
+      //: hayan copiado a la carpeta
+      //: @prParInt: parametros interfase con los datos de conexi¢n a FTP.
+      //: @prArchs: Temporary con los archivos nuevos.
+      prArchs.RESET;
+      prArchs.DELETEALL;
+
+      cFunVar.ImportarTodosFTP(prParInt."Direccion FTP Pagos",
+                               prParInt."Usuario FTP Pagos",
+                               prParInt."Password FTP Pagos",
+                               prParInt."Ruta FTP Pagos",
+                               prParInt."Carpeta temporal FTP Pagos"
+                               );
+
+      // para que el record  File refresque bi‚n hay que buscar en un directorio
+      // distinto primero.
+      lrFile.RESET;
+      lrFile.SETRANGE(Path, '\'); // Ra¡z del sistema de ficheros.
+      lrFile.SETRANGE("Is a file", TRUE);
+      lrFile.FINDFIRST;
+
+      // Se borran del ftp solo los archivos que se han bajado.
+      lrFile.RESET;
+      lrFile.SETRANGE(Path, prParInt."Carpeta temporal FTP Pagos");
+      lrFile.SETRANGE("Is a file", TRUE);
+      cFunVar.BorraArchFTPOrigen(prParInt."Direccion FTP Pagos",
+                                 prParInt."Usuario FTP Pagos",
+                                 prParInt."Password FTP Pagos",
+                                 prParInt."Ruta FTP Pagos",
+                                 lrFile);
+
+      IF lrFile.FINDSET THEN BEGIN
+        lwId := 0;
+        REPEAT
+          lrArchs.RESET;
+          lrArchs.SETCURRENTKEY("Nombre fichero");
+          lrArchs.SETRANGE("Nombre fichero", lrFile.Name);
+          IF lrArchs.ISEMPTY THEN BEGIN
+            lwId += 1;
+            prArchs.Id := lwId;
+            prArchs."Nombre fichero" := lrFile.Name;
+            prArchs.INSERT;
+          END;
+        UNTIL lrFile.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE MoveraCarpLocal@1103355016(VAR prArchTMP@1103355000 : TEMPORARY Record 7009840;VAR prParInt@1103355002 : Record 7010081);
+    VAR
+      lrParAg@1103355001 : Record 7009700;
+      lcMail@1103355003 : Codeunit 397;
+      lwErrores@1103355004 : Boolean;
+      lwChar@1103355005 : Char;
+    BEGIN
+      // MoveraCarpLocal.
+      //: Se comprueban los ficheros, movemos a su carpeta los correctos y se envia correo para
+      //: los que ha tenido errores.
+      //: @prArchTMP: Archivos nuevos provenientes del FTP.
+      //: @prParInt: Par metros interfase con la carpeta temporal.
+
+      lwChar := 13;
+
+      prArchTMP.RESET;
+      IF prArchTMP.FINDSET(TRUE) THEN BEGIN
+
+        lwErrores := FALSE;
+        lrParAg.FINDFIRST;
+
+        REPEAT
+          IF ConvertirNombre(prArchTMP) THEN BEGIN
+            // Si se quiere procesar todos los pdfs de la BBDD simplemente
+            // cambiamos la condicidion por NOT "Fuera BBDD".
+            //IF prArchTMP.Agencia = lrParAg.Delegacion THEN
+              MoverPago(prArchTMP);
+          END
+          ELSE BEGIN
+            // se a¤ade una l¡nea al correo por fichero err¢neo encontrado
+
+            // Si se quiere procesar todos los pdfs de la BBDD simplemente
+            // cambiamos la condicidion por NOT "Fuera BBDD".
+            //IF prArchTMP.Agencia = lrParAg.Delegacion THEN BEGIN
+              IF lrParAg."Direccion Correo Supervisor" <> '' THEN BEGIN
+                IF NOT lwErrores THEN
+                  lcMail.AddBodyline(Text0011 + FORMAT(lwChar));
+                lwErrores := TRUE;
+                AddLineaCorreo(prArchTMP, lcMail);
+              END;
+            //END;
+          END;
+        UNTIL prArchTMP.NEXT = 0;
+
+        // Se env¡a el mail de errores si es necesario.
+        IF lwErrores THEN
+          lcMail.NewMessage(lrParAg."Direccion Correo Supervisor", '',
+                            STRSUBSTNO(Text0010, CURRENTDATETIME),
+                            '', '', FALSE);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ConvertirNombre@1103355017(VAR prArchTMP@1103355000 : TEMPORARY Record 7009840) rvOk : Boolean;
+    VAR
+      lrArch@1103355002 : Record 7009840;
+    BEGIN
+      // ConvertirNombre.
+      //: Busca la delegaci¢n/empresa y hotel que le toca al archivo a partir de su nombre.
+      //: Estructura del nombre del archivo:
+      //: [rtg.(hotel).POP(codigo agencia).avis.(AAMMDD(fecha de pago)).(HHMMSS(Hora de pago)).*.pdf]
+      //: @prArchTMP: Archivo del que se va a convertir el nombre.
+
+      IF NOT GetAgencia(prArchTMP) THEN
+        EXIT(FALSE);
+
+      { JPT 07/09/11 GOC-LP-11003 Elimina control de conversion hotel en importacion detalle pago
+      IF NOT GetHotel(prArchTMP) THEN
+        EXIT(FALSE);
+      }
+      GetHotel(prArchTMP);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetAgencia@1103355023(VAR prArchTMP@1103355000 : Record 7009840) rvOk : Boolean;
+    VAR
+      lwAuxNom@1103355001 : Text[100];
+      lrEmpImp@1103355003 : Record 7009859;
+      lwIndex@1103355004 : Integer;
+      lwPos@1103355005 : Integer;
+    BEGIN
+      // GetAgencia.
+      //: Busca la agencia dentro del nombre del fichero y la guarda en el temporary.
+      //: @prArchTMP: Archivo que se va a tratar.
+      //: @pwEmp: Devuelve la empresa en la que hay que.
+      //: @rvOk: Devuelve TRUE si se ha encontrado la agencia.
+
+      lwAuxNom := prArchTMP."Nombre fichero";
+      FOR lwIndex := 1 TO 2 DO BEGIN
+        // Avanzo al siguiente punto.
+        lwPos := STRPOS(lwAuxNom, '.');
+        // No se encuentra la estructura de nombre esperada.
+        IF lwPos = 0 THEN
+          EXIT(FALSE);
+
+        lwAuxNom := COPYSTR(lwAuxNom, lwPos + 1, STRLEN(lwAuxNom));
+
+        IF lwIndex = 2 THEN BEGIN
+          // localiza el siguiente punto despu‚s de la agencia.
+          lwPos := STRPOS(lwAuxNom, '.');
+          // Recorta el string de agencia
+          lwAuxNom := COPYSTR(lwAuxNom, 1, lwPos - 1);
+
+          // La longitud del string no es suficiente para albergar el c¢digo.
+          IF STRLEN(lwAuxNom) <= 3 THEN
+            EXIT(FALSE);
+
+          // se eliminan los tres primeros car cteres sobrantes.
+          lwAuxNom := COPYSTR(lwAuxNom, 4, STRLEN(lwAuxNom));
+
+          // se busca la conversi¢n de agencia.
+          lrEmpImp.SETRANGE (Tipo        , lrEmpImp.Tipo::"Detalle Pago");
+          lrEmpImp.SETRANGE (Destino  , lwAuxNom);
+          IF NOT lrEmpImp.FINDFIRST THEN
+            EXIT(FALSE);
+
+          prArchTMP.Empresa := lrEmpImp.Empresa;
+
+          prArchTMP.Agencia := lrEmpImp.Destino;
+          prArchTMP.MODIFY;
+
+          //-$001prArchTMP."Fuera BBDD" := lrEmpImp."Fuera BBDD";
+          EXIT(TRUE);
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetHotel@1103355024(VAR prArchTMP@1103355000 : Record 7009840) rvOk : Boolean;
+    VAR
+      lwAuxNom@1103355005 : Text[100];
+      lwIndex@1103355004 : Integer;
+      lwPos@1103355003 : Integer;
+      lrConvHotel@1103355001 : Record 7009725;
+      lrHotel@1103355006 : Record 7009724;
+      lrParAg@1103355007 : Record 7009700;
+      lrVendor@1103355002 : Record 23;
+    BEGIN
+      // GetHotel.
+      //: Busca conversi¢n de hotel dentro del nombre del fichero y la guarda en el temporary.
+      //: @prArchTMP: Archivo que se va a tratar.
+      //: @prParAg: Registro de parametros Agencia con el TO de compra.
+      //: @rvOk: Devuelve TRUE si se ha encontrado la agencia.
+
+      lwAuxNom := prArchTMP."Nombre fichero";
+
+      // Avanzo al primer punto.
+      lwPos := STRPOS(lwAuxNom, '.');
+
+      // No se encuentra la estructura de nombre esperada.
+      IF lwPos = 0 THEN
+        EXIT(FALSE);
+
+      lwAuxNom := COPYSTR(lwAuxNom, lwPos + 1, STRLEN(lwAuxNom));
+      // localiza el siguiente punto despu‚s del hotel.
+      lwPos := STRPOS(lwAuxNom, '.');
+      // Recorta el string de agencia
+      lwAuxNom := COPYSTR(lwAuxNom, 1, lwPos - 1);
+
+      // JPT 07/09/11 GOC-LP-11003
+      prArchTMP."Hotel TTOO" := lwAuxNom;
+      prArchTMP.MODIFY;
+
+      // Se busca conversi¢n para el hotel del TO.
+      lrParAg.RESET;
+      lrParAg.CHANGECOMPANY(prArchTMP.Empresa);
+      lrParAg.FINDFIRST;
+      CLEAR(lrConvHotel);
+      lrConvHotel.CHANGECOMPANY(prArchTMP.Empresa);
+      lrConvHotel.TourOperador := lrParAg."TourOperador Compra";
+      lrConvHotel."Hotel TO"   := lwAuxNom;
+      IF NOT lrConvHotel.FIND THEN
+        EXIT(FALSE);
+
+      prArchTMP.Hotel := lrConvHotel."Hotel estancia";
+      prArchTMP.MODIFY;
+
+      // comprueba que el hotel tenga un proveedor asignado.
+      lrHotel.CHANGECOMPANY(prArchTMP.Empresa);
+      lrHotel.GET(prArchTMP.Hotel);
+      IF lrHotel."Proveedor Intermediacion" = '' THEN
+        EXIT(FALSE);
+
+      // Solo para los proveedores que tenga activada la gesti¢n documental.
+      lrVendor.CHANGECOMPANY(prArchTMP.Empresa);
+      lrVendor.GET(lrHotel."Proveedor Intermediacion");
+      IF NOT lrVendor."Gestion FTP Documental" THEN
+        EXIT(FALSE);
+
+      prArchTMP.Proveedor := lrHotel."Proveedor Intermediacion";
+      prArchTMP.MODIFY;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE MoverPago@1103355021(VAR prArchTMP@1103355000 : TEMPORARY Record 7009840);
+    VAR
+      lrArch@1103355001 : Record 7009840;
+      lrParInt@1103355003 : Record 7010081;
+      lwDestino1@1103355004 : Text[250];
+      lwDestino2@1103355006 : Text[250];
+      lwOrigen@1103355005 : Text[250];
+    BEGIN
+      // MoverPago.
+      //: Se mueve el archivo a su carpeta correspondiente y se registra en la tabla de
+      //: ficheros de pagos de FTP.
+      //: @prArchTMP: Archivo a mover.
+
+      lrParInt.FINDFIRST;
+
+      // A la carpeta de gesti¢n documental.
+      lwDestino1 := GetDestinoGestDoc(prArchTMP);
+      // A la carpeta FTP hoteleros.
+      lwDestino2 := GetDestinoFTPHoteleros(prArchTMP);
+
+      // Comprobamos si existe el directorio. en caso contrario se crea.
+      cFunVar.ExisteDirectorio(lwDestino1, FALSE, FALSE, TRUE);
+      cFunVar.ExisteDirectorio(lwDestino2, FALSE, FALSE, TRUE);
+
+      lwOrigen   := lrParInt."Carpeta temporal FTP Pagos" + '\' + prArchTMP."Nombre fichero";
+
+      // A la carpeta de gesti¢n documental.
+      lwDestino1 += prArchTMP."Nombre fichero";
+
+      // A la carpeta FTP hoteleros.
+      lwDestino2 += prArchTMP."Nombre fichero";
+
+      // Movemos el fichero a la ubicaci¢n permanente.
+      cFunVar.CopiarFichero(lwOrigen, lwDestino1, FALSE);
+      cFunVar.CopiarFichero(lwOrigen, lwDestino2, FALSE);
+      IF cFunVar.EsFichero(lwDestino1) AND cFunVar.EsFichero(lwDestino2) THEN BEGIN
+        cFunVar.EliminarFichero(lwOrigen, FALSE);
+        IF cFunVar.EsFichero(lwOrigen) THEN BEGIN
+          cFunVar.EliminarFichero(lwDestino1, FALSE);
+          cFunVar.EliminarFichero(lwDestino2, FALSE);
+          EXIT;
+        END;
+      END;
+
+      // Si se ha movido correctamente lo registramos.
+      CLEAR(lrArch);
+      lrArch.CHANGECOMPANY(prArchTMP.Empresa);
+      lrArch.TRANSFERFIELDS(prArchTMP, FALSE);
+      lrArch.Id := 0;
+      lrArch.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE AddLineaCorreo@1103355018(VAR prArchTMP@1103355000 : TEMPORARY Record 7009840;VAR pcMail@1103355001 : Codeunit 397);
+    VAR
+      lwChar@1103355002 : Char;
+    BEGIN
+      // AddLineaCorreo.
+      //: A¤ade una l¡nea para el archivo que no se ha podido procesar.
+      //: @prArchTMP:
+
+      lwChar := 13;
+
+      CASE TRUE OF
+        (prArchTMP.Agencia   = '') :
+          pcMail.AddBodyline(STRSUBSTNO(Text0012, prArchTMP."Nombre fichero") + FORMAT(lwChar));
+        (prArchTMP.Hotel     = '') :
+          pcMail.AddBodyline(STRSUBSTNO(Text0013, prArchTMP."Nombre fichero") + FORMAT(lwChar));
+        (prArchTMP.Proveedor = '') :
+          pcMail.AddBodyline(STRSUBSTNO(Text0014, prArchTMP.Hotel, prArchTMP."Nombre fichero") + FORMAT(lwChar));
+      END;
+    END;
+
+    PROCEDURE GetDestinoFTPHoteleros@1103355020(VAR prArch@1103355001 : Record 7009840) rvPath : Text[250];
+    VAR
+      lrParAg@1103355000 : Record 7009700;
+      lrProv@1100253000 : Record 23;
+      lrRepPago@1100253001 : Report 7009754;
+      lwLenguaID@1100253002 : Integer;
+      lwCarp@1100253003 : Text[30];
+      lwCodProv@1100253004 : Code[20];
+    BEGIN
+      // GetDestinoFTPHoteleros.
+
+      lrParAg.RESET;
+      lrParAg.CHANGECOMPANY(prArch.Empresa);
+      lrParAg.FINDFIRST;
+
+      lrProv.CHANGECOMPANY(prArch.Empresa);
+      IF lrProv.GET(prArch.Proveedor) THEN BEGIN
+        CLEAR(lrRepPago);
+        lwLenguaID := GetLenguaje(lrProv);
+        IF lwLenguaID <> 0 THEN
+          lrRepPago.LANGUAGE := lwLenguaID;
+        lwCarp := lrRepPago.GetCarpeta;
+      END
+      ELSE
+        lwCarp := Text0015;
+
+      // JPT 07/09/11 GOC-LP-11003
+      // Si no se ha encontrado conversion hotel, no habra codigo de proveedor por lo
+      // que introducimos el codigo de hotel TTOO
+
+      CLEAR(lwCodProv);
+      lwCodProv := prArch.Proveedor;
+      IF lwCodProv = '' THEN
+        lwCodProv := Text0016 + prArch."Hotel TTOO";
+
+      EXIT(lrParAg."Carpeta FTP Hoteleros" + '\' + prArch.Empresa +
+                    '\' + lwCodProv + '\' + lwCarp + '\');
+    END;
+
+    PROCEDURE GetDestinoGestDoc@1103355022(VAR prArch@1103355001 : Record 7009840) rvPath : Text[250];
+    VAR
+      lrParAg@1103355000 : Record 7009700;
+      lrProv@1100253003 : Record 23;
+      lrRepPago@1100253002 : Report 7009754;
+      lwLenguaID@1100253001 : Integer;
+      lwCarp@1100253000 : Text[30];
+      lwCodProv@1100253004 : Code[20];
+    BEGIN
+      // GetDestinoGestDoc.
+
+      lrParAg.RESET;
+      lrParAg.CHANGECOMPANY(prArch.Empresa);
+      lrParAg.FINDFIRST;
+
+      lrProv.CHANGECOMPANY(prArch.Empresa);
+      IF lrProv.GET(prArch.Proveedor) THEN BEGIN
+        CLEAR(lrRepPago);
+        lwLenguaID := GetLenguaje(lrProv);
+        IF lwLenguaID <> 0 THEN
+          lrRepPago.LANGUAGE := lwLenguaID;
+        lwCarp := lrRepPago.GetCarpeta;
+      END
+      ELSE
+        lwCarp := Text0015;
+
+      // JPT 07/09/11 GOC-LP-11003
+      // Si no se ha encontrado conversion hotel, no habra codigo de proveedor por lo
+      // que introducimos el codigo de hotel TTOO
+      CLEAR(lwCodProv);
+      lwCodProv := prArch.Proveedor;
+      IF lwCodProv = '' THEN
+        lwCodProv := Text0016 + prArch."Hotel TTOO";
+
+      EXIT(lrParAg."Ruta ficheros PDF" + '\' + prArch.Empresa +
+                    '\' + lwCodProv + '\' + lwCarp + '\');
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 22/06/09
+
+        .- (INC-41604) Se substituyen las barras y contrabarras que pueda haber en el nombre del hotel
+           por guiones en el nombre del HTM de estado de cuentas.
+
+      JPT 07/09/11 GOC-LP-11003 Elimina control de conversion hotel en importacion detalle pago
+
+      $001 AJS 03092013 El campo Fuera BBDD se ha eliminado porque es obsoleto
+    }
+    END.
+  }
+}

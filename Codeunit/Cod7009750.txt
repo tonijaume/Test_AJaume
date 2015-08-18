@@ -1,0 +1,678 @@
+OBJECT Codeunit 7009750 Calcular soportes transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/09/14;
+    Time=18:26:02;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cCal@1100217000 : Codeunit 7009734;
+      Text001@1100217001 : TextConst 'ENU=The support with ID %1 doesn''t have vendor assigned.;ESP=El soporte con ID %1 no tiene proveedor asignado.';
+      Text002@1100217002 : TextConst 'ENU=The support with ID %1 doesn''t have vehicle type assigned.;ESP=El soporte con ID %1 no tiene tipo de vehiculo asignado.';
+      Text003@1100217003 : TextConst 'ENU=The vendor %1 doesn''t have contract for the point %2.;ESP=El proveedor %1 no tiene contrato para el punto %2.';
+      Text004@1100217004 : TextConst 'ENU=The support with ID %1 doesn''t have reservations assigned.;ESP=El soporte con ID %1 no tiene reservas asignadas.';
+      rParPer@1100217005 : Record 7009701;
+      rPar@1100217006 : Record 7009700;
+      Text005@1100217007 : TextConst 'ENU=The support with ID %1 doesn''t have capacity assigned.;ESP=El soporte con ID %1 no tiene capacidad asignada.';
+      rTOTMP@1100217017 : TEMPORARY Record 7010010;
+      criterio_coste@1100217008 : 'Zona mas alejada,Pax por zona';
+      Text006@1100217009 : TextConst 'ENU=Cost price for support service does not exist for %1 for %2 paxes, with vehicle %3 the day %4;ESP=No existe precio de servicio de soporte para %1 para %2  paxes, con vehiculo %3 el d¡a %4';
+      rMargen@1100217010 : Record 7009808;
+      rCoste@1100217011 : Record 7009805;
+      wCosteSoporte@1100217016 : Decimal;
+      wZonaPrecioOrigen@1100217018 : Code[10];
+
+    PROCEDURE CalcularSoportesTransfer@1100217000(prAgr@1100217000 : Record 7009796);
+    VAR
+      lrSop@1100217001 : Record 7010009;
+    BEGIN
+      // CalcularSoportesTransfer
+
+      rParPer.FINDFIRST;
+      rPar.FINDFIRST;
+
+      //. Comprobaciones y crear las zonas de compra
+      _CheckDatos(prAgr);
+
+      //. Si estamos calculando una salida y se ha indicado que el calculo es por Ida y Vuelta no se tiene que calcular nada
+      //IF (prAgr."Tipo precio coste" = prAgr."Tipo precio coste"::"Ida y Vuelta") AND
+      //   (prAgr."Tipo transfer" = prAgr."Tipo transfer"::Salida) THEN
+      //  EXIT;
+
+      //. Calcular el coste de cada soporte
+      lrSop.RESET;
+      lrSop.SETRANGE(Agrupacion, prAgr."N§ Agrupacion");
+      IF lrSop.FINDSET THEN
+      BEGIN
+        REPEAT
+          wCosteSoporte := 0;
+
+          _AcumulaTemporal(lrSop);
+
+          _CalcularSoporte(prAgr, lrSop);
+
+          lrSop.Coste := wCosteSoporte;
+          lrSop.MODIFY;
+
+          IF prAgr."Tipo Calculo" = prAgr."Tipo Calculo"::"Coste/Ingreso" THEN
+            _RepartirCosteTouroperador(lrSop);
+        UNTIL lrSop.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CheckDatos@1100217001(prAgr@1100217000 : Record 7009796);
+    VAR
+      lrSop@1100217001 : Record 7010009;
+      lrPerSop@1100217002 : Record 7010010;
+      lrCont@1100217003 : Record 7009787;
+    BEGIN
+      lrSop.RESET;
+      lrSop.SETRANGE(Agrupacion, prAgr."N§ Agrupacion");
+      IF lrSop.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lrSop.Transportista = '' THEN
+            cCal.inserta_error(STRSUBSTNO(Text001, lrSop."ID Soporte"), prAgr."N§ Agrupacion", TRUE, 0, '');
+
+          IF lrSop."Tipo Vehiculo" = '' THEN
+            cCal.inserta_error(STRSUBSTNO(Text002, lrSop."ID Soporte"), prAgr."N§ Agrupacion", TRUE, 0, '');
+
+          lrSop."Num. Contrato" := '';
+          lrSop."Cod. Divisa"   := '';
+          IF NOT lrSop.CheckProveedor(lrSop."Num. Contrato", FALSE) THEN
+            cCal.inserta_error(STRSUBSTNO(Text003, lrSop.Transportista), prAgr."N§ Agrupacion", TRUE, 0, '');
+
+          IF lrCont.GET(rPar.Delegacion, lrSop."Num. Contrato") THEN
+          BEGIN
+            lrSop."Cod. Divisa" := lrCont."C¢d. divisa";
+            IF lrCont."Buscar precios por" = lrCont."Buscar precios por"::"Capacidad solicitada" THEN
+              IF lrSop."Capacidad vehiculo" = 0 THEN
+                cCal.inserta_error(STRSUBSTNO(Text005, lrSop."ID Soporte"), prAgr."N§ Agrupacion", TRUE, 2, lrCont."N§ Contrato compra");
+          END;
+
+          //. Verificamos si el soporte tiene personas
+          lrPerSop.RESET;
+          lrPerSop.SETRANGE (Agrupacion  , lrSop.Agrupacion);
+          lrPerSop.SETRANGE ("Id Soporte", lrSop."ID Soporte");
+          lrPerSop.SETFILTER("N§ Reserva", '<>%1', 0);
+          IF NOT lrPerSop.ISEMPTY THEN
+          BEGIN
+            //. Refrescamos la informacion de los pasajeros
+            lrSop.AcumulaPersonas;
+
+            _TraduceZonaCompra(lrSop.Agrupacion, lrSop."ID Soporte", lrSop."Num. Contrato", prAgr."Tipo transfer",
+                               lrSop."Zona origen precios"); //+$005
+          END
+          ELSE
+            cCal.inserta_error(STRSUBSTNO(Text004, lrSop."ID Soporte"), prAgr."N§ Agrupacion", TRUE, 0, '');
+
+          lrSop.MODIFY;
+        UNTIL lrSop.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _TraduceZonaCompra@1100217002(pwAgrupacion@1100217000 : Integer;pwSoporte@1100217001 : Integer;pwContrato@1100217006 : Code[10];pwTipoTransfer@1100217007 : Integer;pwZonaOrigen@1100217008 : Code[10]);
+    VAR
+      lrPerSop@1100217005 : Record 7010010;
+      lrZonSop@1100217004 : Record 7010015;
+      lrZonCont@1100217003 : Record 7009791;
+      lrHotel@1100217002 : Record 7009724;
+    BEGIN
+      // _TraduceZonaCompra
+
+      wZonaPrecioOrigen := ''; //+$005
+
+      //. Recorremos las personas del soporte
+      lrPerSop.RESET;
+      lrPerSop.SETRANGE (Agrupacion  , pwAgrupacion);
+      lrPerSop.SETRANGE ("Id Soporte", pwSoporte);
+      lrPerSop.SETFILTER("N§ Reserva", '<>%1', 0);
+      IF lrPerSop.FINDSET THEN
+      BEGIN
+        //. Buscamos las zonas de compra de las reservas del soporte
+        lrZonSop.RESET;
+        lrZonSop.SETRANGE(Agrupacion  , lrPerSop.Agrupacion);
+        lrZonSop.SETRANGE("ID Soporte", lrPerSop."Id Soporte");
+        IF lrZonSop.FINDSET(TRUE) THEN
+          lrZonSop.DELETEALL;
+
+        REPEAT
+          //. Refrescamos la informacion de la reserva, por si ha habido un cambio
+          //. de tipo de persona o de hotel
+          lrPerSop.VALIDATE("N§ Reserva", lrPerSop."N§ Reserva");
+          lrPerSop.MODIFY;
+
+          //. Obtenemos el hotel para tener su zona fisica
+          lrHotel.GET(lrPerSop.Hotel);
+
+          //. Buscamos la zona fisica en el contrato
+          lrZonCont.SETRANGE(Contrato       , pwContrato);
+          lrZonCont.SETRANGE("Tipo contrato", lrZonCont."Tipo contrato"::Compra);
+          lrZonCont.SETRANGE("Zona fisica"  , lrHotel."Zona Fisica");
+          lrZonCont.FINDFIRST;
+
+          //. Creamos las zonas de compra por soporte
+          CLEAR(lrZonSop);
+          lrZonSop.Agrupacion    := lrPerSop.Agrupacion;
+          lrZonSop."ID Soporte"  := lrPerSop."Id Soporte";
+          lrZonSop."Zona Compra" := lrZonCont.Zona;
+          IF NOT lrZonSop.FIND THEN
+          BEGIN
+            IF pwTipoTransfer = 0 THEN
+              lrZonSop.Orden := lrZonCont."Orden entrada zona"
+            ELSE
+              lrZonSop.Orden := lrZonCont."Orden salida zona";
+            lrZonSop.INSERT;
+          END;
+
+          //. Acumulamos las personas por cada zona de compra del contrato
+          CASE lrPerSop."Tipo persona" OF
+            rParPer."Codigo Adulto": lrZonSop.Adultos += 1;
+            rParPer."Codigo Ni¤o": lrZonSop.Ni¤os += 1;
+          END;
+          lrZonSop.MODIFY;
+        UNTIL lrPerSop.NEXT = 0;
+      END;
+
+      //+$005 <
+      //. Buscamos la zona de precio del origen indicado en el soporte
+      lrZonCont.SETRANGE("Zona fisica", pwZonaOrigen);
+      lrZonCont.FINDFIRST;
+
+      wZonaPrecioOrigen := lrZonCont.Zona;
+      //+$005 >
+    END;
+
+    LOCAL PROCEDURE _CalcularSoporte@1100217009(prAgr@1100217003 : Record 7009796;prSop@1100217000 : Record 7010009);
+    VAR
+      lrCont@1100217001 : Record 7009787;
+      lrPreC@1100217002 : Record 7009789;
+      lrZonSop@1100217004 : Record 7010015;
+    BEGIN
+      //. CalcularSoporte
+
+      IF NOT lrCont.GET(rPar.Delegacion, prSop."Num. Contrato") THEN
+        EXIT;
+
+      IF lrCont."Buscar precios por" = lrCont."Buscar precios por"::"Capacidad solicitada" THEN
+        criterio_coste := criterio_coste::"Zona mas alejada"
+      ELSE
+      BEGIN
+        //. Comprobar si el criterio debe ser por zona mas alejada o precio por zona,
+        //. en funcion de que exista precio por pax o por vehiculo
+
+        lrPreC.RESET;
+        lrPreC.SETRANGE ("N§ Contrato"    , lrCont."N§ Contrato compra");
+        lrPreC.SETRANGE ("Codigo precio"  , lrPreC."Codigo precio"::Soporte);
+        lrPreC.SETFILTER("Fecha desde"    , '<=%1', prAgr.Fecha);
+        lrPreC.SETFILTER("Fecha hasta"    , '>=%1', prAgr.Fecha);
+        lrPreC.SETFILTER("Tipo vehiculo"  , '%1|%2', prSop."Tipo Vehiculo", '');
+        //lrPreC.SETRANGE (Origen           , wZonaPrecioOrigen); //+$005
+        lrPreC.SETRANGE ("Tipo aplicacion", lrPreC."Tipo aplicacion"::Pax);
+        lrPreC.SETFILTER("Rango desde"    , '<=%1', prSop.Adultos + prSop.Ni¤os);
+        lrPreC.SETFILTER("Rango hasta"    , '>=%1', prSop.Adultos + prSop.Ni¤os);
+        lrPreC.SETRANGE ("Tipo servicio"  , lrPreC."Tipo servicio"::"Una via"); //+$003
+        lrPreC.SETRANGE (Activo           , TRUE);
+        IF lrPreC.FINDFIRST THEN
+          criterio_coste := criterio_coste::"Pax por zona";
+        lrPreC.SETRANGE("Tipo aplicacion"  , lrPreC."Tipo aplicacion"::Vehiculo);
+        IF lrPreC.FINDFIRST THEN
+          criterio_coste := criterio_coste::"Zona mas alejada";
+      END;
+
+      CASE criterio_coste OF
+        criterio_coste::"Zona mas alejada":
+        BEGIN
+          lrZonSop.RESET;
+          lrZonSop.SETCURRENTKEY(Orden);
+          lrZonSop.SETRANGE(Agrupacion  , prSop.Agrupacion);
+          lrZonSop.SETRANGE("ID Soporte", prSop."ID Soporte");
+          IF lrZonSop.FINDLAST THEN
+            _CalcularZona(prAgr, prSop, prSop.Adultos, prSop.Ni¤os, lrZonSop."Zona Compra");
+
+        END;
+        criterio_coste::"Pax por zona":
+        BEGIN
+          lrZonSop.RESET;
+          lrZonSop.SETCURRENTKEY(Orden);
+          lrZonSop.SETRANGE(Agrupacion  , prSop.Agrupacion);
+          lrZonSop.SETRANGE("ID Soporte", prSop."ID Soporte");
+          IF lrZonSop.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              _CalcularZona(prAgr, prSop, lrZonSop.Adultos, lrZonSop.Ni¤os, lrZonSop."Zona Compra");
+            UNTIL lrZonSop.NEXT = 0;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CalcularZona@1100217003(prAgr@1100217000 : Record 7009796;prSop@1100217001 : Record 7010009;pwAdultos@1100217002 : Decimal;pwNi¤os@1100217003 : Decimal;pwZona@1100217004 : Code[10]);
+    VAR
+      lrCont@1100217006 : Record 7009787;
+      lrPreC@1100217005 : Record 7009789;
+      lwExistePrecio@1100217007 : Boolean;
+    BEGIN
+      // _CalcularZona
+
+      lrCont.GET(rPar.Delegacion, prSop."Num. Contrato");
+
+      lwExistePrecio := FALSE;
+
+      lrPreC.RESET;
+      lrPreC.SETRANGE("N§ Contrato"   , lrCont."N§ Contrato compra");
+      lrPreC.SETRANGE("Codigo precio" , lrPreC."Codigo precio"::Soporte);
+      lrPreC.SETRANGE(Origen          , wZonaPrecioOrigen);
+      lrPreC.SETRANGE(Destino         , pwZona);
+      lrPreC.SETRANGE("Tipo elemento" , '');
+      lrPreC.SETRANGE ("Tipo vehiculo", prSop."Tipo Vehiculo");
+      lrPreC.SETFILTER("Fecha desde"  , '<=%1', prAgr.Fecha);
+      lrPreC.SETFILTER("Fecha hasta"  , '>=%1', prAgr.Fecha);
+      IF lrCont."Buscar precios por" = lrCont."Buscar precios por"::"Capacidad solicitada" THEN
+      BEGIN
+        lrPreC.SETFILTER("Rango desde"  , '<=%1', prSop."Capacidad vehiculo");
+        lrPreC.SETFILTER("Rango hasta"  , '>=%1', prSop."Capacidad vehiculo");
+      END
+      ELSE
+      BEGIN
+        lrPreC.SETFILTER("Rango desde"  , '<=%1', prSop.Pasajeros);
+        lrPreC.SETFILTER("Rango hasta"  , '>=%1', prSop.Pasajeros);
+      END;
+      lrPreC.SETRANGE ("Tipo servicio", lrPreC."Tipo servicio"::"Una via"); //+$003
+      lrPreC.SETRANGE(Activo          , TRUE);
+      IF NOT lrPreC.FINDFIRST THEN
+      BEGIN
+        //+$006 Giramos Destino y Origen para cubrir ambas rutas
+        lrPreC.SETRANGE(Destino, wZonaPrecioOrigen);
+        lrPreC.SETRANGE(Origen , pwZona);
+        IF NOT lrPreC.FINDFIRST THEN
+        BEGIN
+          lrPreC.SETRANGE("Tipo vehiculo", ''); //. Buscamos precios sin vehiculo
+          IF NOT lrPreC.FINDFIRST THEN
+          BEGIN
+            lrPreC.SETRANGE(Origen , wZonaPrecioOrigen);
+            lrPreC.SETRANGE(Destino, pwZona);
+            IF NOT lrPreC.FINDFIRST THEN
+            BEGIN
+              IF lrCont."Buscar precios por" = lrCont."Buscar precios por"::"Capacidad solicitada" THEN
+                cCal.inserta_error(STRSUBSTNO(Text006, prSop.Transportista, prSop."Capacidad vehiculo", prSop."Tipo Vehiculo",
+                                   prAgr.Fecha), prAgr."N§ Agrupacion", TRUE, 2, lrCont."N§ Contrato compra")
+              ELSE
+                cCal.inserta_error(STRSUBSTNO(Text006, prSop.Transportista, prSop.Pasajeros, prSop."Tipo Vehiculo",
+                                   prAgr.Fecha), prAgr."N§ Agrupacion", TRUE, 2, lrCont."N§ Contrato compra");
+            END;
+          END
+          ELSE
+            lwExistePrecio := TRUE;
+        END;
+      END
+      ELSE
+        lwExistePrecio := TRUE;
+
+      IF lwExistePrecio THEN
+        IF lrPreC."Tipo aplicacion" = lrPreC."Tipo aplicacion"::Vehiculo THEN
+          _AplicarPrecioVehiculo(prAgr, prSop, lrPreC, pwAdultos, pwNi¤os)
+        ELSE
+          _AplicarPrecioPax(prAgr, prSop, lrPreC, pwAdultos, pwNi¤os);
+    END;
+
+    LOCAL PROCEDURE _AplicarPrecioVehiculo@1100217004(prAgr@1100217000 : Record 7009796;prSop@1100217001 : Record 7010009;prPre@1100217004 : Record 7009789;pwAdultos@1100217002 : Decimal;pwNi¤os@1100217003 : Decimal);
+    BEGIN
+      // _AplicarPrecioVehiculo
+
+      CASE prAgr."Tipo Calculo" OF
+        prAgr."Tipo Calculo"::Margenes:
+        BEGIN
+          CLEAR(rMargen);
+          rMargen."Tipo elemento"     := rMargen."Tipo elemento"::Soporte;
+          rMargen."Precio x Vehiculo" := -(prPre.Precio);
+          rMargen.Importe             := -(prPre.Precio);
+          rMargen.PaxAuxiliar         := prSop.Pasajeros;
+          rMargen."Cantidad Real"     := prSop.Pasajeros;
+        END;
+        prAgr."Tipo Calculo"::"Coste/Ingreso":
+        BEGIN
+          CLEAR(rCoste);
+          rCoste."Tipo linea"        := rCoste."Tipo linea"::Vehiculo;
+          rCoste."Precio x Vehiculo" := -(prPre.Precio);
+          rCoste.Importe             := -(prPre.Precio);
+          rCoste.PaxAuxiliar         := prSop.Pasajeros;
+          rCoste."Cantidad aplicada" := prSop.Pasajeros;
+        END;
+      END;
+
+      _ComunesCoste(prAgr, prSop, prPre);
+
+      // pondremos el coste repartido en cada reserva - mas tarde se emplear  en
+      // el m¢dulo de circuitos
+
+      //Coste_Reserva(rAgr, adultos_calculo, ni¤os_calculo, rPreC.Precio, 0, 0); // 0-> vehiculo  1-> pax
+    END;
+
+    LOCAL PROCEDURE _AplicarPrecioPax@1100217005(prAgr@1100217003 : Record 7009796;prSop@1100217002 : Record 7010009;VAR prPre@1100217004 : Record 7009789;pwAdultos@1100217001 : Decimal;pwNi¤os@1100217000 : Decimal);
+    BEGIN
+      // _AplicarPrecioPax
+
+      IF pwAdultos <> 0 THEN
+      BEGIN
+        CASE prAgr."Tipo Calculo" OF
+          prAgr."Tipo Calculo"::Margenes:
+          BEGIN
+            rMargen."Cantidad aplicada" := pwAdultos;
+            rMargen.PaxAuxiliar         := pwAdultos;
+            rMargen."Tipo elemento"     := rMargen."Tipo elemento"::Soporte;
+            rMargen."Tipo Pax"          := rParPer."Codigo Adulto";
+            rMargen."Precio x Pax"      := - (prPre."Precio Adulto");
+            rMargen.Importe             := - (prPre."Precio Adulto" * pwAdultos);
+          END;
+          prAgr."Tipo Calculo"::"Coste/Ingreso":
+          BEGIN
+            rCoste."Cantidad aplicada" := pwAdultos;
+            rCoste.PaxAuxiliar         := pwAdultos;
+            rCoste."Tipo linea"        := rCoste."Tipo linea"::Persona;
+            rCoste."Tipo Pax"          := rParPer."Codigo Adulto";
+            rCoste."Precio x Pax"      := - (prPre."Precio Adulto");
+            rCoste.Importe             := - (prPre."Precio Adulto" * pwAdultos);
+          END;
+        END;
+        //PrecioAdulto := rPreC.Precio;
+
+        _ComunesCoste(prAgr, prSop, prPre);
+      END;
+
+      IF pwNi¤os <> 0 THEN
+      BEGIN
+        CASE prAgr."Tipo Calculo" OF
+          prAgr."Tipo Calculo"::Margenes:
+          BEGIN
+            rMargen."Cantidad aplicada" := pwNi¤os;
+            rMargen.PaxAuxiliar         := pwNi¤os;
+            rMargen."Tipo elemento"     := rMargen."Tipo elemento"::Soporte;
+            rMargen."Tipo Pax"          := rParPer."Codigo Ni¤o";
+            rMargen."Precio x Pax"      := - (prPre."Precio Ni¤o");
+            rMargen.Importe             := - (prPre."Precio Ni¤o" * pwNi¤os);
+          END;
+          prAgr."Tipo Calculo"::"Coste/Ingreso":
+          BEGIN
+            rCoste."Cantidad aplicada" := pwNi¤os;
+            rCoste.PaxAuxiliar         := pwNi¤os;
+            rCoste."Tipo linea"        := rCoste."Tipo linea"::Persona;
+            rCoste."Tipo Pax"          := rParPer."Codigo Ni¤o";
+            rCoste."Precio x Pax"      := - (prPre."Precio Ni¤o");
+            rCoste.Importe             := - (prPre."Precio Ni¤o" * pwNi¤os);
+          END;
+        END;
+        //PrecioNin := rPreC.Precio;
+
+        _ComunesCoste(prAgr, prSop, prPre);
+      END;
+
+      // pondremos el coste repartido en cada reserva - mas tarde se emplear  en
+      // el m¢dulo de circuitos
+      //Coste_Reserva(rAgr, adultos_calculo, ni¤os_calculo, PrecioAdulto, PrecioNin, 1); // 0-> vehiculo  1-> pax
+    END;
+
+    LOCAL PROCEDURE _ComunesCoste@1100217006(prAgr@1100217000 : Record 7009796;prSop@1100217001 : Record 7010009;prPre@1100217002 : Record 7009789);
+    VAR
+      lrCont@1100217003 : Record 7009787;
+      lrPro@1100217004 : Record 23;
+      lrIVA@1100217005 : Record 325;
+      lrMargen2@1100217008 : Record 7009808;
+      lwPrecRedImp@1100217006 : Decimal;
+      lwPredRedPrec@1100217007 : Decimal;
+    BEGIN
+      // _ComunesCoste
+
+      lrCont.GET(rPar.Delegacion, prSop."Num. Contrato");
+
+      lwPrecRedImp  := cCal.Precision(lrCont."C¢d. divisa", 1);
+      lwPredRedPrec := cCal.Precision(lrCont."C¢d. divisa", 2);
+
+      CASE prAgr."Tipo Calculo" OF
+        prAgr."Tipo Calculo"::Margenes:
+        BEGIN
+          rMargen.Agrupacion      := prAgr."N§ Agrupacion";
+          rMargen."Tipo Vehiculo" := prSop."Tipo Vehiculo";
+          rMargen."N§ Vehiculos"  := 1;
+          rMargen.Usuario         := USERID;
+          rMargen.Fecha           := prAgr.Fecha;
+          rMargen.Zona            := prPre.Destino;
+          rMargen."C¢d. divisa"   := lrCont."C¢d. divisa";
+          rMargen."Tipo transfer" := prAgr."Tipo transfer";
+          rMargen.Concepto        := 'TRNC';
+          rMargen.Proveedor       := prSop.Transportista;
+          IF lrPro.GET(lrCont.Proveedor) THEN
+          BEGIN
+            IF lrIVA.GET(lrPro."VAT Bus. Posting Group", lrCont."Gr. registro IVA Producto") THEN
+            BEGIN
+              IF lrCont."Impuestos incluidos" THEN
+              BEGIN
+                rMargen."Importe con impuesto" := ROUND(rMargen.Importe, lwPrecRedImp);
+                rMargen."Importe sin impuesto" := ROUND(rMargen.Importe / ((lrIVA."VAT+EC %" / 100) + 1), lwPrecRedImp);
+              END
+              ELSE
+              BEGIN
+                rMargen."Importe sin impuesto" := ROUND(rMargen.Importe, lwPrecRedImp);
+                rMargen."Importe con impuesto" := ROUND(rMargen.Importe + ((rMargen.Importe * lrIVA."VAT+EC %") / 100), lwPrecRedImp);
+              END;
+
+              rMargen."Importe sin impuesto DL" := cCal.ValorDL(rMargen."C¢d. divisa", TODAY, rMargen."Importe sin impuesto");
+              rMargen."Importe con impuesto DL" := cCal.ValorDL(rMargen."C¢d. divisa", TODAY, rMargen."Importe con impuesto");
+
+            END;
+          END;
+          rMargen.INSERT(TRUE);
+
+          wCosteSoporte += rMargen."Importe con impuesto";
+        END;
+
+        prAgr."Tipo Calculo"::"Coste/Ingreso":
+        BEGIN
+          rCoste.Agrupacion                    := prAgr."N§ Agrupacion";
+          rCoste."ID Soporte"                  := prSop."ID Soporte";
+          rCoste."Tipo Vehiculo"               := prSop."Tipo Vehiculo";
+          rCoste."N§ Vehiculos"                := 1;
+          rCoste.Fecha                         := prAgr.Fecha;
+          rCoste.Origen                        := wZonaPrecioOrigen; //+$005
+          rCoste.Destino                       := prPre.Destino;
+          rCoste."Tipo transfer"               := prAgr."Tipo transfer";
+          rCoste.Concepto                      := 'TRNC';
+          rCoste."Cod. divisa"                 := lrCont."C¢d. divisa";
+          rCoste."Num. Contrato"               := lrCont."N§ Contrato compra";
+          rCoste.Transportista                 := prSop.Transportista;
+          rCoste."Transfer Privado"            := prAgr."Transfer Privado"; //+$004
+          rCoste."Traslado en destino"         := prAgr."Traslado en destino"; //+$004
+          rCoste."Tipo servicio transportista" := prAgr."Tipo servicio transportista"; //+$007
+          IF lrPro.GET(lrCont.Proveedor) THEN
+          BEGIN
+            IF lrIVA.GET(lrPro."VAT Bus. Posting Group", lrCont."Gr. registro IVA Producto") THEN
+            BEGIN
+              IF lrCont."Impuestos incluidos" THEN
+              BEGIN
+                rCoste."Importe con impuesto" := ROUND(rCoste.Importe, lwPrecRedImp);
+                rCoste."Importe sin impuesto" := ROUND(rCoste.Importe / ((lrIVA."VAT+EC %" / 100) + 1), lwPrecRedImp);
+              END
+              ELSE
+              BEGIN
+                rCoste."Importe sin impuesto" := ROUND(rCoste.Importe, lwPrecRedImp);
+                rCoste."Importe con impuesto" := ROUND(rCoste.Importe + ((rCoste.Importe * lrIVA."VAT+EC %") / 100), lwPrecRedImp);
+              END;
+            END;
+
+            rCoste."Importe sin impuestos (DL)" := cCal.ValorDL(rCoste."Cod. divisa", TODAY, rCoste."Importe sin impuesto");
+            rCoste."Importe con impuestos (DL)" := cCal.ValorDL(rCoste."Cod. divisa", TODAY, rCoste."Importe con impuesto");
+          END;
+          rCoste."Proveedor contable" := lrPro."No.";
+          rCoste.INSERT(TRUE);
+
+          wCosteSoporte += rCoste."Importe con impuesto";
+        END;
+      END;
+    END;
+
+    PROCEDURE _AcumulaTemporal@1100217010(prSop@1100217000 : Record 7010009);
+    VAR
+      lrPerSop@1100217001 : Record 7010010;
+      lwIDTmp@1100217002 : Integer;
+    BEGIN
+      // _AcumulaTemporal
+
+      //. Recorremos las personas del soporte
+      lrPerSop.RESET;
+      lrPerSop.SETRANGE (Agrupacion  , prSop.Agrupacion);
+      lrPerSop.SETRANGE ("Id Soporte", prSop."ID Soporte");
+      lrPerSop.SETFILTER("N§ Reserva", '<>%1', 0);
+      IF lrPerSop.FINDSET THEN
+      BEGIN
+        //. Trabajamos con un temporal para acumular por touroperador los paxes
+        rTOTMP.RESET;
+        rTOTMP.DELETEALL;
+
+        lwIDTmp := 0;
+        REPEAT
+          //. Creamos el temporal de personas por touroperador
+          rTOTMP.RESET;
+          rTOTMP.SETRANGE(Agrupacion  , lrPerSop.Agrupacion);
+          rTOTMP.SETRANGE("Id Soporte", lrPerSop."Id Soporte");
+          rTOTMP.SETRANGE(Touroperador, lrPerSop.Touroperador);
+          IF NOT rTOTMP.FINDFIRST THEN
+          BEGIN
+            lwIDTmp += 1;
+
+            rTOTMP.INIT;
+            rTOTMP.Agrupacion   := lrPerSop.Agrupacion;
+            rTOTMP."Id Soporte" := lrPerSop."Id Soporte";
+            rTOTMP.Touroperador := lrPerSop.Touroperador;
+            rTOTMP."Id Detalle" := lwIDTmp;
+            rTOTMP.INSERT;
+          END;
+          rTOTMP.Adultos += lrPerSop.Adultos;
+          rTOTMP.Ni¤os   += lrPerSop.Ni¤os;
+          rTOTMP.MODIFY;
+        UNTIL lrPerSop.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _RepartirCosteTouroperador@1100217007(prSop@1100217000 : Record 7010009);
+    VAR
+      lrCoste@1100217001 : Record 7009805;
+    BEGIN
+      // _RepartirCosteTouroperador
+
+      rTOTMP.RESET;
+
+      lrCoste.RESET;
+      lrCoste.SETRANGE (Agrupacion    , prSop.Agrupacion);
+      lrCoste.SETRANGE ("ID Soporte"  , prSop."ID Soporte");
+      lrCoste.SETRANGE (Concepto      , 'TRNC');
+      lrCoste.SETRANGE ("% Reparto TO", 0);
+      IF lrCoste.FINDSET THEN
+      BEGIN
+        REPEAT
+          _RepartirCosteLinea(lrCoste);
+        UNTIL lrCoste.NEXT = 0;
+        lrCoste.DELETEALL;
+      END;
+    END;
+
+    LOCAL PROCEDURE _RepartirCosteLinea@1100217008(prCoste@1100217000 : Record 7009805);
+    VAR
+      lrCoste2@1100217004 : Record 7009805;
+      lwAcumulado@1100217001 : Decimal;
+      lwPaxesTo@1100217002 : Decimal;
+      lwPorc@1100217003 : Decimal;
+      lwAjuste@1100217005 : Decimal;
+    BEGIN
+      // _RepartirCosteLinea
+
+      lwAcumulado := 0;
+
+      rTOTMP.FINDFIRST;
+      REPEAT
+        CASE prCoste."Tipo linea" OF
+          prCoste."Tipo linea"::Persona:
+          BEGIN
+            CASE prCoste."Tipo Pax" OF
+              rParPer."Codigo Adulto" :
+              BEGIN
+                lwPaxesTo := rTOTMP.Adultos;
+                lwPorc    := ROUND(((lwPaxesTo * 100) / prCoste."Cantidad aplicada"), 0.01);
+              END;
+              rParPer."Codigo Ni¤o" :
+              BEGIN
+                lwPaxesTo := rTOTMP.Ni¤os;
+                lwPorc    := ROUND(((lwPaxesTo * 100) / prCoste."Cantidad aplicada"), 0.01);
+              END;
+              //. Este contempla cuando el transportista tiene precio por pax pero no se ha entrado el desglose Adulto/Ni¤o
+              ELSE
+              BEGIN
+                lwPaxesTo := rTOTMP.Adultos + rTOTMP.Ni¤os;
+                lwPorc    := ROUND(((lwPaxesTo * 100) / prCoste."Cantidad aplicada"), 0.01);
+              END;
+            END;
+          END;
+
+          prCoste."Tipo linea"::Vehiculo:
+          BEGIN
+            lwPaxesTo := rTOTMP.Adultos + rTOTMP.Ni¤os;
+            lwPorc    := ROUND(((lwPaxesTo * 100) / prCoste."Cantidad aplicada"), 0.01);
+          END;
+        END;
+
+        IF lwPorc <> 0 THEN
+        BEGIN
+          lrCoste2 := prCoste;
+          lrCoste2."Cantidad Real"          := lwPaxesTo;
+          lrCoste2.TourOperador             := rTOTMP.Touroperador;
+          lrCoste2."% Reparto TO"           := lwPorc;
+          lrCoste2."Importe Original SIN"   := lrCoste2."Importe sin impuesto";
+          lrCoste2."Importe Original CON"   := lrCoste2."Importe con impuesto";
+          lrCoste2."Importe sin impuesto"   := ROUND(((lrCoste2."Importe Original SIN" * lwPorc) / 100), 0.01);
+          lrCoste2."Importe con impuesto"   := ROUND(((lrCoste2."Importe Original CON" * lwPorc) / 100), 0.01);
+
+          lwAcumulado += lrCoste2."Importe con impuesto";
+
+          lrCoste2."Importe sin impuesto" := ROUND(lrCoste2."Importe sin impuesto");
+          lrCoste2."Importe con impuesto" := ROUND(lrCoste2."Importe con impuesto");
+          lrCoste2.VALIDATE("Cod. divisa");
+          lrCoste2.INSERT(TRUE);
+        END;
+      UNTIL rTOTMP.NEXT = 0;
+
+      lwAjuste := prCoste."Importe con impuesto" - lwAcumulado;
+      IF lwAjuste <> 0 THEN
+      BEGIN
+        lrCoste2.VALIDATE("Importe con impuesto", lrCoste2."Importe con impuesto" + lwAjuste);
+        lrCoste2.MODIFY(TRUE);
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 05112013 CNT-OC-13018
+
+      $002 AJS 26112013 Nuevo valor Soporte del campo [Codigo precio]
+
+      $003 AJS 27112013 Los precios de los soporte seran siempre por Una via
+
+      $004 AJS 10042014 Guardar los campos Transfer privado y Traslado en destino
+
+      $005 AJS 11062014 CNT-OC-14046, Los precios se calculan en funcion de una ruta
+
+      $006 AJS 28092014 Buscamos los precios por Origen - Destino, pero tambien por Destino - Origen
+
+      $007 AJS 28092014 Rellenar el campo Tipo servicio transportista en los costes
+    }
+    END.
+  }
+}

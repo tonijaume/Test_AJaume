@@ -1,0 +1,205 @@
+OBJECT Codeunit 8700 Mobile Document Dispatcher
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 8705=i;
+    SingleInstance=Yes;
+    OnRun=BEGIN
+            Start('MOB PORT=8080');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MobDocMgt@1000 : Codeunit 8701;
+      Text001@1004 : TextConst 'ENU=Mobile Document Dispatcher is started.\Mobile Document Dispatcher is listening for connections at port %1.;ESP=Mobile Document Dispatcher se ha iniciado.\Mobile Document Dispatcher est  escuchando conexiones en el puerto %1.';
+      Text002@1005 : TextConst 'ENU=Unable to start Mobile Document Dispatcher.;ESP=No se puede iniciar Mobile Document Dispatcher.';
+      Text003@1006 : TextConst 'ENU=%1 is required.;ESP=%1 es necesario.';
+      Text004@1007 : TextConst 'ENU=%1 exceeds the maximum length.;ESP=%1 supera la longitud m xima.';
+      MobDocProcessor@1002 : Report 8700;
+      NAVConn@1001 : Automation "{265A6CF3-FC55-4ABD-A345-C60ECDE5205A} 1.1:{DA9C717A-DD37-46F3-9B10-569A1D6AD0F1}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      Port@1003 : Integer;
+      Running@1008 : Boolean;
+      Text005@1009 : TextConst 'ENU=Mobile Document Dispatcher is stopped;ESP=Mobile Document Dispatcher se ha detenido';
+
+    PROCEDURE Start@2(NASParameter@1000 : Text[1024]);
+    BEGIN
+      IF MobDocMgt.GetParamPart(NASParameter,'PORT') <> '' THEN
+        EVALUATE(Port,MobDocMgt.GetParamPart(NASParameter,'PORT'));
+
+      IF ISCLEAR(NAVConn) THEN
+        CREATE(NAVConn);
+
+      IF NAVConn.Start(Port) THEN BEGIN
+        Running := TRUE;
+        MESSAGE(Text001,Port);
+      END ELSE
+        ERROR(Text002);
+    END;
+
+    PROCEDURE Stop@5();
+    BEGIN
+      IF NOT Running THEN
+        EXIT;
+
+      IF ISCLEAR(NAVConn) THEN
+        EXIT;
+
+      NAVConn.Stop;
+      CLEAR(NAVConn);
+
+      MESSAGE(Text005);
+    END;
+
+    LOCAL PROCEDURE ProcessRequest@11(VAR XMLRequestDoc@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MobileUserID@1015 : Text[1024];DeviceID@1014 : Text[1024];MessageID@1006 : Text[1024]);
+    VAR
+      MobDocType@1008 : Record 8704;
+      MobDocQueue@1001 : Record 8705;
+      XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";
+    BEGIN
+      IF NOT ISSERVICETIER THEN
+        WITH MobDocQueue DO BEGIN
+
+          ValidateRequest(XMLRequestDoc,MobileUserID,DeviceID,MessageID);
+
+          INIT;
+          "Message ID" := MessageID;
+          "Device ID" := DeviceID;
+          "Mobile User ID" := MobileUserID;
+          "NAS User ID" := USERID;
+          "NAS Host Name" := COPYSTR(ENVIRON('COMPUTERNAME'),1,MAXSTRLEN("NAS Host Name"));
+          "NAS Port" := Port;
+
+          SaveXMLRequestDoc(XMLRequestDoc);
+
+          MobDocMgt.ValidateUser("Mobile User ID");
+
+          MobDocMgt.ValidateXMLLAX(XMLRequestDoc);
+
+          "Document Type" := MobDocMgt.GetDocumentType(XMLRequestDoc);
+
+          MobDocMgt.ValidateDocumentType("Document Type");
+
+          MobDocType.GET("Document Type");
+          "Process Type" := MobDocType."Process Type";
+
+          MobDocMgt.ValidateUserDocumentType("Mobile User ID","Document Type");
+
+          IF NOT MobDocMgt.ReceivedBefore(MobDocQueue,XMLResponseDoc) THEN BEGIN
+
+            CASE "Process Type" OF
+              "Process Type"::Queue:
+                BEGIN
+                  Status := Status::New;
+                  INSERT;
+                  COMMIT;
+                  MobDocProcessor.CreateXMLResponseDocReceived(XMLResponseDoc,MobDocQueue);
+                  SaveXMLAnswerDoc(XMLResponseDoc);
+                  MODIFY;
+                END;
+              "Process Type"::Direct:
+                BEGIN
+                  Status := Status::Processing;
+                  INSERT;
+                  COMMIT;
+                  NAVConn.EnableNavErrorEvent := TRUE;
+                  MobDocMgt.ProcessDocument(MobDocQueue);
+                  LoadXMLResultDoc(XMLResponseDoc);
+                  SaveXMLAnswerDoc(XMLResponseDoc);
+                  MODIFY;
+                END;
+            END;
+            COMMIT;
+          END;
+          NAVConn.SendResponse(XMLResponseDoc);
+        END;
+    END;
+
+    LOCAL PROCEDURE ProcessError@3(VAR XMLErrorDoc@1012 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MessageID@1000 : Text[1024]);
+    VAR
+      MobDocQueue@1002 : Record 8705;
+    BEGIN
+      IF NOT ISSERVICETIER THEN
+        WITH MobDocQueue DO BEGIN
+          IF STRLEN(MessageID) <= MAXSTRLEN("Message ID") THEN BEGIN
+            IF GET(MessageID) THEN BEGIN
+              SaveXMLResultDoc(XMLErrorDoc);
+              SaveXMLAnswerDoc(XMLErrorDoc);
+              Status := Status::Error;
+              MODIFY;
+            END;
+          END;
+        END;
+    END;
+
+    LOCAL PROCEDURE ValidateRequest@1(VAR XMLRequestDoc@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MobileUserID@1005 : Text[1024];DeviceID@1004 : Text[1024];MessageID@1013 : Text[1024]);
+    VAR
+      MobDocQueue@1000 : Record 8705;
+    BEGIN
+      IF NOT ISSERVICETIER THEN
+        WITH MobDocQueue DO BEGIN
+          IF MobileUserID = '' THEN
+            ERROR(Text003,FIELDCAPTION("Mobile User ID"));
+
+          IF STRLEN(MobileUserID) > MAXSTRLEN("Mobile User ID") THEN
+            ERROR(Text004,FIELDCAPTION("Mobile User ID"));
+
+          IF DeviceID = '' THEN
+            ERROR(Text003,FIELDCAPTION("Device ID"));
+
+          IF STRLEN(DeviceID) > MAXSTRLEN("Device ID") THEN
+            ERROR(Text004,FIELDCAPTION("Device ID"));
+
+          IF MessageID = '' THEN
+            ERROR(Text003,FIELDCAPTION("Message ID"));
+
+          IF STRLEN(MessageID) > MAXSTRLEN("Message ID") THEN
+            ERROR(Text004,FIELDCAPTION("Message ID"));
+
+          IF ISCLEAR(XMLRequestDoc) THEN
+            ERROR(Text003,FIELDCAPTION("Request XML"));
+        END;
+    END;
+
+    LOCAL PROCEDURE ValidateUser@4(MobileUserID@1005 : Text[1024]);
+    VAR
+      MobDocQueue@1000 : Record 8705;
+    BEGIN
+      IF NOT ISSERVICETIER THEN
+        WITH MobDocQueue DO BEGIN
+          IF MobileUserID = '' THEN
+            ERROR(Text003,FIELDCAPTION("Mobile User ID"));
+
+          IF STRLEN(MobileUserID) > MAXSTRLEN("Mobile User ID") THEN
+            ERROR(Text004,FIELDCAPTION("Mobile User ID"));
+
+          MobDocMgt.ValidateUser(MobileUserID);
+        END;
+    END;
+
+    EVENT NAVConn@1001::DocumentReceived@1(document@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{2933BF96-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v6.0'.IXMLDOMDocument3";username@1002 : Text[1024];deviceid@1001 : Text[1024];messageid@1000 : Text[1024]);
+    BEGIN
+      ProcessRequest(document,username,deviceid,messageid);
+    END;
+
+    EVENT NAVConn@1001::NavError@2(errorMessage@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{2933BF96-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v6.0'.IXMLDOMDocument3";messageid@1000 : Text[1024]);
+    BEGIN
+      ProcessError(errorMessage,messageid);
+    END;
+
+    EVENT NAVConn@1001::ValidateUser@3(username@1000 : Text[1024]);
+    BEGIN
+      ValidateUser(username);
+    END;
+
+    BEGIN
+    END.
+  }
+}

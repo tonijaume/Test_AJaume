@@ -1,0 +1,321 @@
+OBJECT Table 7010331 Historico Contrato conductor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:30:41;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               rC@1100244000 : Record 7010327;
+               rH@1100244001 : Record 7010331;
+             BEGIN
+               // ----  No podemos dar de alta contratos si no se ha rellenado el n§ de seguridad social  ----
+               // ----  y la fecha de alta                                                                ----
+
+               CLEAR(rC);
+               rC.GET(Conductor);
+               rC.TESTFIELD("Fecha alta SS");
+               rC.TESTFIELD("N§ Seguridad social");
+
+               // ----  Ponemos el garaje que tiene asociado el conductor  ----
+               Garaje := rC.Garaje;
+
+               rH.RESET;
+               rH.SETCURRENTKEY(Conductor,
+                                ID);
+               rH.SETRANGE(Conductor, Conductor);
+               IF rH.FINDLAST THEN
+                 ID := rH.ID + 1
+               ELSE
+                 ID := 1;
+             END;
+
+    OnModify=BEGIN
+               IF Confirmado THEN BEGIN
+                 ValidarCambios();
+               END;
+
+               ActConductor(FALSE);
+             END;
+
+    OnDelete=BEGIN
+               IF Confirmado THEN
+                 ActConductor(TRUE);
+             END;
+
+    OnRename=BEGIN
+               IF Confirmado THEN BEGIN
+                 ValidarCambios();
+                 ActConductor(FALSE);
+               END;
+             END;
+
+    CaptionML=ESP=Historico Contrato conductor;
+    LookupFormID=Form7010346;
+    DrillDownFormID=Form7010346;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Conductor           ;Code10        ;TableRelation=Conductor.Conductor;
+                                                   CaptionML=ESP=Conductor;
+                                                   NotBlank=Yes;
+                                                   Description=PK }
+    { 2   ;   ;Garaje              ;Code10        ;TableRelation=Garaje.Garaje;
+                                                   CaptionML=ESP=Garaje;
+                                                   NotBlank=Yes;
+                                                   Description=FK Garaje }
+    { 5   ;   ;Fecha Alta          ;Date          ;CaptionML=ESP=Fecha Alta;
+                                                   NotBlank=Yes;
+                                                   Description=Fecha de Alta en la Empresa }
+    { 6   ;   ;Fecha Baja          ;Date          ;CaptionML=ESP=Fecha Baja;
+                                                   Description=Fecha de Baja de la empresa }
+    { 7   ;   ;Tipo Contrato       ;Code10        ;TableRelation="Tipo Contrato"."Tipo Contrato";
+                                                   CaptionML=ESP=Tipo Contrato;
+                                                   NotBlank=Yes;
+                                                   Description=FK Tipo Contrato }
+    { 8   ;   ;Tipo Acuerdo        ;Code10        ;TableRelation="Tipo Acuerdo Conductor"."Tipo Acuerdo";
+                                                   CaptionML=ESP=Tipo Acuerdo;
+                                                   NotBlank=Yes;
+                                                   Description=FK Tipo Acuerdo }
+    { 9   ;   ;Nombre Abreviado    ;Code20        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Conductor."Nombre Abreviado" WHERE (Conductor=FIELD(Conductor)));
+                                                   CaptionML=ESP=Nombre Abreviado;
+                                                   Editable=No }
+    { 10  ;   ;Confirmado          ;Boolean       ;CaptionML=ESP=Confirmado;
+                                                   Editable=No }
+    { 11  ;   ;Fecha               ;Date          ;CaptionML=ESP=Fecha }
+    { 12  ;   ;Hora                ;Time          ;CaptionML=ESP=Hora }
+    { 13  ;   ;Usuario             ;Text20        ;CaptionML=ESP=Usuario }
+    { 14  ;   ;ID                  ;Integer       ;CaptionML=ESP=ID }
+    { 15  ;   ;Lunes               ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Lunes }
+    { 16  ;   ;Martes              ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Martes }
+    { 17  ;   ;Miercoles           ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Miercoles }
+    { 18  ;   ;Jueves              ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Jueves }
+    { 19  ;   ;Viernes             ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Viernes }
+    { 20  ;   ;Sabado              ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Sabado }
+    { 21  ;   ;Domingo             ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=ESP=Domingo }
+  }
+  KEYS
+  {
+    {    ;Conductor,Fecha Alta                    ;Clustered=Yes }
+    {    ;Garaje,Conductor,Fecha Alta,Fecha Baja,Confirmado }
+    {    ;Conductor,ID                             }
+    {    ;Fecha Alta,Fecha Baja,Conductor          }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244009 : TextConst 'ESP=Cambios Descartados';
+      Text001@1100244010 : TextConst 'ESP=<weekday text>';
+      rHist@1100244000 : Record 7010331;
+      Text002@1100244011 : TextConst 'ESP=No se puede dejar la fecha en blanco';
+      ERROR_SOLAPE@1100244001 : TextConst 'ESP=Se ha detectado un solape con otro contrato';
+      ERROR1@1100244002 : TextConst 'ESP=La fecha de alta, el convenio y el tipo de contrato deben tener valor';
+      ERROR6@1100244003 : TextConst 'ESP=S¢lo podemos borrar contratos que todav¡a no estan en vigor.';
+      ERROR2@1100244004 : TextConst 'ESP=La fecha de baja no puede ser menor que la fecha de alta';
+      MENSAJE1@1100244005 : TextConst 'ESP=Este contrato es hist¢rico o esta en vigor. ¨Quiere realmente realizar los cambios?';
+      ok@1100244006 : Boolean;
+      rmodulo@1100244007 : Codeunit 7010313;
+      Text0001@1100244008 : TextConst 'ESP=El Contrato del Conducto %1 no tiene validez para el %2';
+
+    PROCEDURE ValidarCambios@1();
+    BEGIN
+      //ValidarCambios()
+      IF ("Fecha Alta"=0D) OR ("Tipo Contrato"='') OR ("Tipo Acuerdo"='') THEN
+        ERROR(ERROR1);
+      IF ("Fecha Baja" <> 0D) AND ("Fecha Baja" < "Fecha Alta") THEN
+        ERROR(ERROR2);
+
+
+      ok := TRUE;
+      //Si se trata de un contrato hist¢rico o en vigor, dejaremos cambiar todos los datos, pero
+      //avisaremos.
+      IF TODAY >= xRec."Fecha Alta" THEN
+       ok := CONFIRM(MENSAJE1);
+
+       IF ok THEN BEGIN
+         //Validaremos que no haya solapamiento de fechas.
+         rHist.RESET;
+         rHist.SETCURRENTKEY(Conductor);
+         rHist.SETRANGE(Conductor,Conductor);
+         rHist.SETRANGE(Confirmado,TRUE);
+         IF rHist.FINDSET THEN
+           REPEAT
+             //No haremos la comprobaci¢n si se trata del mismo contrato que estamos modificando.
+             IF rHist.ID <> xRec.ID THEN
+               IF rmodulo.InterseccionFechas("Fecha Alta","Fecha Baja",
+                                             rHist."Fecha Alta",rHist."Fecha Baja") THEN
+                 ERROR(ERROR_SOLAPE);
+           UNTIL rHist.NEXT=0;
+       END
+       ELSE BEGIN
+         //Restauramos los valores anteriores.
+         "Fecha Alta":=xRec."Fecha Alta";
+         "Fecha Baja":=xRec."Fecha Baja";
+         "Tipo Contrato":=xRec."Tipo Contrato";
+         "Tipo Acuerdo":=xRec."Tipo Acuerdo";
+         ERROR(Text000);
+      END;
+
+      Usuario := USERID;
+      Fecha   := TODAY;
+      Hora    := TIME;
+    END;
+
+    PROCEDURE ActConductor@2(pBaja@1100244000 : Boolean);
+    VAR
+      rTC@1100244001 : Record 7010328;
+      rC@1100244002 : Record 7010327;
+      cCond@1100244003 : Codeunit 7010313;
+      vTipoContrato@1100244004 : Code[10];
+      vTipoAcuerdo@1100244005 : Code[10];
+      vFechaAlta@1100244006 : Date;
+      vFechaBaja@1100244007 : Date;
+      vNumOrden@1100244008 : Integer;
+      vCambio@1100244009 : Boolean;
+      vStatus@1100244010 : Integer;
+    BEGIN
+      //ActConductor.
+      //Se trata de actualizar los campos redundantes "Tipo Contrato" y "Tipo Acuerdo" de la tabla
+      //conductores.
+
+      cCond.CalcularDatosContrato(Conductor, vTipoContrato, vTipoAcuerdo,
+                                  vFechaAlta, vFechaBaja,vNumOrden,vStatus,ID);
+
+
+      IF (NOT pBaja) AND Confirmado THEN BEGIN
+        //Quiz s el contrato m s cercano sea el que estamos tratando.
+        vCambio := FALSE;
+
+        //Revisaremos si el registro que pasamos por parametro es m s actual que el que hemos obtenido.
+        IF vStatus <> 0 THEN BEGIN
+
+          IF vStatus = 4 THEN
+            vCambio := TRUE;
+
+          //Si el que tratamos es el vigente.
+          IF (TODAY >= "Fecha Alta") AND ( (TODAY <= "Fecha Baja") OR ("Fecha Baja" = 0D) ) THEN
+            vCambio := TRUE;
+
+          //Por si el obtenido est  caducado y el que tratamos tiene fecha superior.
+          IF (vStatus = 3) AND ("Fecha Alta" > vFechaAlta) THEN
+            vCambio := TRUE;
+
+          //Por si ambos son TODAVIA no vigentes y el que tratamos est  m s cercano.
+          IF (vStatus = 2) AND ("Fecha Alta" > TODAY) AND ("Fecha Alta" < vFechaAlta) THEN
+            vCambio := TRUE;
+        END
+        ELSE
+          vCambio := TRUE;
+
+        IF vCambio THEN BEGIN
+          vTipoAcuerdo := "Tipo Acuerdo";
+          vTipoContrato:= "Tipo Contrato";
+          IF rTC.GET(vTipoContrato) THEN
+            vNumOrden:= rTC.Orden;
+        END;
+
+      END;
+
+      //Al final, comparamos el resultado obtenido con los datos que hay.
+      IF rC.GET(Conductor) THEN BEGIN
+        IF (vTipoContrato <> rC."Tipo Contrato") OR (vTipoAcuerdo <> rC."Tipo Acuerdo") THEN BEGIN
+          rC."Tipo Acuerdo"   := vTipoAcuerdo;
+          rC."Tipo Contrato"  := vTipoContrato;
+          rC."Orden Contrato" := vNumOrden;
+          rC.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE TieneContParaDia@3(pwFecha@1100244000 : Date;pwError@1100244001 : Boolean) : Boolean;
+    VAR
+      lwD¡a@1100244002 : Integer;
+      lwTiene@1100244003 : Boolean;
+    BEGIN
+      // TieneContParaDia
+      // Devuelve true si el contrato es habil para el d¡a de la semana pasado como parametro
+      lwD¡a := DATE2DWY(pwFecha,1);
+      CASE lwD¡a OF
+        1: lwTiene := Lunes    ;
+        2: lwTiene := Martes   ;
+        3: lwTiene := Miercoles;
+        4: lwTiene := Jueves   ;
+        5: lwTiene := Viernes  ;
+        6: lwTiene := Sabado   ;
+        7: lwTiene := Domingo  ;
+      END;
+
+      IF pwError THEN BEGIN
+        IF NOT lwTiene THEN
+          ERROR(Text0001,Conductor,FORMAT(pwFecha,0,Text001));
+      END;
+
+      EXIT(lwTiene);
+    END;
+
+    PROCEDURE CreaContratoAut@1100244000(pwCodCond@1100244000 : Code[10];pwFecha@1100244003 : Date);
+    VAR
+      lrCond@1100244001 : Record 7010327;
+      lrContr@1100244002 : Record 7010331;
+    BEGIN
+      // CreaContratoAut
+      // Crea un contrato automatico
+
+      INIT;
+      lrCond.RESET;
+      lrCond.GET(pwCodCond);
+
+      // Buscamos contratos anteriores para el mismo conductor
+      lrContr.RESET;
+      lrContr.SETRANGE(Conductor , pwCodCond);
+      lrContr.SETRANGE(Confirmado, TRUE);
+      IF NOT lrContr.FINDLAST THEN BEGIN
+        IF lrCond."Fecha Antiguedad" = 0D THEN
+          lrCond.VALIDATE("Fecha Antiguedad", pwFecha);
+        IF lrCond."Fecha alta SS" = 0D THEN
+          lrCond.VALIDATE("Fecha alta SS"   , pwFecha);
+        lrCond.MODIFY(TRUE);
+        CLEAR(lrContr);
+      END
+      ELSE BEGIN
+        IF lrCond."Fecha Antiguedad"=0D THEN
+          lrCond.VALIDATE("Fecha Antiguedad", lrContr."Fecha Alta");
+        IF lrCond."Fecha alta SS" = 0D THEN
+          lrCond.VALIDATE("Fecha alta SS"   , lrContr."Fecha Alta");
+        lrCond.MODIFY(TRUE);
+      END;
+
+
+      VALIDATE(Conductor, pwCodCond);
+      IF pwFecha=0D THEN
+        ERROR(Text002);
+      VALIDATE("Fecha Alta" , pwFecha);
+      IF lrContr."Tipo Contrato" <> '' THEN
+        VALIDATE("Tipo Contrato",lrContr."Tipo Contrato");
+      IF lrContr."Tipo Acuerdo" <>'' THEN
+        VALIDATE("Tipo Acuerdo", lrContr."Tipo Acuerdo");
+      VALIDATE(Confirmado, TRUE);
+      Usuario := USERID;
+      Fecha   := TODAY;
+      Hora    := TIME;
+      INSERT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}

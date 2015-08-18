@@ -1,0 +1,755 @@
+OBJECT Report 7009776 Control EBB x Hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Control EBB x Hotel;
+               ESP=Control EBB x Hotel];
+    OnPreReport=BEGIN
+                  rPar.FINDFIRST;
+
+                  rDel.GET(rPar.Delegacion);
+
+                  BuscarHoteles;
+                END;
+
+    Orientation=Portrait;
+    PaperSize=A4 210 x 297 mm;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7009725;
+        DataItemTableView=SORTING(TourOperador,Touroperador venta,Hotel TO)
+                          WHERE(Seleccionado=CONST(Yes));
+        NewPagePerRecord=Yes;
+        DataItemVarName=Hoteles;
+        PrintOnlyIfDetail=Yes;
+        OnPreDataItem=BEGIN
+                        IF (wLlegadaDesde = 0D) OR (wLlegadaHasta = 0D) THEN
+                          ERROR(Text002);
+
+                        IF wLlegadaDesde > wLlegadaHasta THEN
+                          ERROR(Text003);
+
+                        IF wVentaDesde <> 0D THEN BEGIN
+                          IF wVentaHasta = 0D THEN
+                            wVentaHasta := wVentaDesde
+                          ELSE BEGIN
+                            IF wVentaDesde > wVentaHasta THEN
+                              ERROR(Text004);
+                          END;
+                        END
+                        ELSE
+                          IF wVentaHasta <> 0D THEN
+                            ERROR(Text004);
+
+                        // Borramos la tabla temporary, la vamos a utilizar para el resumen final
+
+                        rHotelesTMP.RESET;
+                        rHotelesTMP.DELETEALL;
+
+                        // Este informe solo muestra las reservas con EBB
+
+                        wMostrarSoloEBB := TRUE;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           // Almacenamos el hotel en una variable temporary para el resumen final
+
+                           rHotelesTMP := Hoteles;
+
+                           // Buscamos el contrato vigente el primer dia del periodo de llegadas
+
+                           rContrato.SETRANGE (Delegacion             , rPar.Delegacion);
+                           rContrato.SETFILTER("Fecha inicio contrato", '<=%1', wLlegadaDesde);
+                           rContrato.SETFILTER("Fecha final contrato" , '>=%1', wLlegadaDesde);
+                           rContrato.SETRANGE (Hotel                  , rHotelesTMP."Hotel estancia");
+                           rContrato.SETRANGE (Confirmado             , TRUE);
+                           rContrato.FINDFIRST;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=18150;
+            SectionHeight=1692;
+          }
+          CONTROLS
+          {
+            { 1103355001;Label  ;12750;0    ;5400 ;423  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Control advanced payments EBB x Hotel;
+                                                                    ESP=Control Prepagos EBB x Hotel] }
+            { 1103355003;TextBox;0    ;0    ;7500 ;423  ;FontSize=10;
+                                                         SourceExpr=COMPANYNAME }
+            { 1103355073;Label  ;0    ;423  ;7500 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=HOTEL PAYMENT DEPARMENT;
+                                                                    ESP=DEPARTAMENTO DE HOTEL PAYMENT] }
+            { 1103355074;TextBox;0    ;846  ;7500 ;423  ;FontSize=10;
+                                                         SourceExpr=rPar.Delegacion + ' - ' + rDel.Nombre }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            PrintOnEveryPage=Yes;
+            PlaceInBottom=Yes;
+            SectionWidth=18150;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1103355006;TextBox;10200;423  ;2250 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=USERID }
+            { 1103355002;TextBox;7050 ;423  ;3150 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=FORMAT(TODAY,0,4) }
+            { 1103355004;TextBox;17700;423  ;450  ;423  ;CaptionML=[ENU=page;
+                                                                    ESP=P gina];
+                                                         SourceExpr=CurrReport.PAGENO }
+            { 1103355005;Label  ;16650;423  ;1050 ;423  ;ParentControl=1103355004 }
+            { 1103355037;Shape  ;0    ;0    ;18150;423  ;ShapeStyle=HorzLine }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table7009743;
+        DataItemTableView=SORTING(Hotel booking,Hotel TO,TourOperador Venta,Fecha entrada)
+                          WHERE(Responsable=CONST(Yes));
+        NewPagePerGroup=Yes;
+        DataItemVarName=Reserva;
+        OnPreDataItem=BEGIN
+                        Reserva.SETRANGE("Fecha entrada", wLlegadaDesde, wLlegadaHasta);
+
+                        IF wVentaDesde <> 0D THEN
+                          Reserva.SETRANGE("Fecha venta", wVentaDesde, wVentaHasta);
+
+                        CurrReport.CREATETOTALS(wImporteCombinado, wImporteEBB, wImporteSPO, wImportePrepago, wImporteMenor);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           // Ponemos a cero los campos de importe
+
+                           wImporteCombinado := 0;
+                           wImporteEBB       := 0;
+                           wImporteSPO       := 0;
+                           wImportePrepago   := 0;
+                           wImporteMenor     := 0;
+
+                           // Calculamos la posicion de cada persona en las habitaciones
+
+                           cCalculo.calculo_3p(rRsvHot);
+
+                           // Buscamos si la reserva aplica oferta EBB
+
+                           CompruebaOfertaEBB;
+
+                           // Si la reserva no aplica en EBB no tiene que aparecer en este listado
+
+                           // AJS 28.09.2007
+                           // Micheline pide que se muestren todas las reservas a menos que se indique al lanzar el informe
+
+                           IF (NOT wAplicaEBB) AND (wMostrarSoloEBB) THEN
+                             CurrReport.SKIP;
+
+                           // Almacenar cual es el tipo actual de aplicacion de ofertas que tiene asociado la reserva
+
+                           wTipoOfertaReserva := rRsvHot."Aplica oferta tipo";
+
+                           // Comprobamos si han hecho que el EBB sea incompatible con las otras ofertas
+
+                           IF CompruebaOfertaCompatible AND wAplicaEBB THEN BEGIN
+
+                             // Calculamos la reserva combinando las ofertas
+
+                             IF wTipoOfertaReserva <> wTipoOfertaReserva::Todas THEN BEGIN
+                               rRsvHot.RESET;
+                               rRsvHot.SETCURRENTKEY(Delegacion,
+                                                     "N§ Responsable");
+                               rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                               rRsvHot.SETRANGE("N§ Responsable", "N§ Reserva");
+                               rRsvHot.FINDSET;
+
+                               rRsvHot.MODIFYALL("Aplica oferta tipo", rRsvHot."Aplica oferta tipo"::Todas);
+                             END;
+
+                             cCalculo.calculo_reserva(Reserva, FALSE);
+
+                             // Recogemos el resultado
+
+                             rCab.GET(USERID);
+                             rCab.CALCFIELDS("Total Coste");
+                             wImporteCombinado := ABS(rCab."Total Coste");
+
+                             wImporteMenor   := wImporteCombinado;
+                             wClaveResultado := 'C';
+
+                             // Buscamos los codigos de oferta aplicados
+
+                             RecogerCodigosOferta;
+
+                           END
+                           ELSE BEGIN
+                             // Calculamos la reserva solo con las ofertas de EBB
+
+                             IF wTipoOfertaReserva <> wTipoOfertaReserva::EBB THEN BEGIN
+                               rRsvHot.RESET;
+                               rRsvHot.SETCURRENTKEY(Delegacion,
+                                                     "N§ Responsable");
+                               rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                               rRsvHot.SETRANGE("N§ Responsable", "N§ Reserva");
+                               rRsvHot.FINDSET;
+
+                               rRsvHot.MODIFYALL("Aplica oferta tipo", rRsvHot."Aplica oferta tipo"::EBB);
+                             END;
+
+                             cCalculo.calculo_reserva(Reserva, FALSE);
+
+                             // Recogemos el resultado
+
+                             rCab.GET(USERID);
+                             rCab.CALCFIELDS("Total Coste");
+                             wImporteEBB := ABS(rCab."Total Coste");
+
+                             // Buscamos los codigos de oferta aplicados
+
+                             RecogerCodigosOferta;
+
+                             // Calculamos la reserva solo con las ofertas que no son EBB
+
+                             rRsvHot.RESET;
+                             rRsvHot.SETCURRENTKEY(Delegacion,
+                                                   "N§ Responsable");
+                             rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                             rRsvHot.SETRANGE("N§ Responsable", "N§ Reserva");
+                             rRsvHot.FINDSET;
+
+                             rRsvHot.MODIFYALL("Aplica oferta tipo", rRsvHot."Aplica oferta tipo"::SPO);
+
+                             cCalculo.calculo_reserva(Reserva, FALSE);
+
+                             // Recogemos el resultado
+
+                             rCab.GET(USERID);
+                             rCab.CALCFIELDS("Total Coste");
+                             wImporteSPO := ABS(rCab."Total Coste");
+
+
+                             // Dejamos la reserva para que calcule todas las ofertas
+
+                             rRsvHot.RESET;
+                             rRsvHot.SETCURRENTKEY(Delegacion,
+                                                   "N§ Responsable");
+                             rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                             rRsvHot.SETRANGE("N§ Responsable", "N§ Reserva");
+                             rRsvHot.FINDSET;
+
+                             rRsvHot.MODIFYALL("Aplica oferta tipo", rRsvHot."Aplica oferta tipo"::Todas);
+
+                             IF (wImporteEBB > wImporteSPO) AND (wImporteSPO <> 0) THEN BEGIN
+                               IF wMostrarSoloEBB THEN
+                                 CurrReport.SKIP
+                               ELSE BEGIN
+                                 wImporteMenor   := wImporteSPO;
+                                 wClaveResultado := 'S';
+
+                                 // Buscamos los codigos de oferta aplicados
+
+                                 RecogerCodigosOferta;
+                               END;
+                             END
+                             ELSE BEGIN
+                               wImporteMenor   := wImporteEBB;
+                               wClaveResultado := 'E';
+                             END;
+                           END;
+
+
+                           // Buscamos el porcentaje de EBB que se tiene que aplicar en funcion de la fecha de venta de la reserva
+
+                           CLEAR(rPorcenEBB);
+                           IF wClaveResultado IN ['C','E'] THEN BEGIN
+                             rPorcenEBB.SETRANGE (Delegacion     , rPrecio.Delegacion);
+                             rPorcenEBB.SETRANGE ("N§ Contrato"  , rPrecio."N§ Contrato");
+                             rPorcenEBB.SETRANGE ("Tipo Garantia", rPorcenEBB."Tipo Garantia"::Importe);
+                             rPorcenEBB.SETFILTER("Fecha venta desde"  , '<=%1', "Fecha venta");
+                             rPorcenEBB.SETFILTER("Fecha venta hasta"  , '>=%1', "Fecha venta");
+                             rPorcenEBB.SETRANGE (Activo         , TRUE);
+                             IF rPorcenEBB.FINDFIRST THEN BEGIN
+                               rPorcenEBB.TESTFIELD("% EBB");
+
+                               wImportePrepago := ROUND(wImporteMenor * rPorcenEBB."% EBB" / 100);
+                             END
+                             ELSE BEGIN
+                               IF wAplicaEBB THEN
+                                 ERROR(Text001, rPrecio."N§ Contrato", "Fecha venta");
+                             END
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         rHotelesTMP."Importe Prepago" := wImportePrepago;
+                         rHotelesTMP.INSERT;
+                       END;
+
+        ReqFilterFields=TourOperador Venta;
+        DataItemLink=Hotel TO=FIELD(Hotel TO);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=18150;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1103355055;TextBox;3300 ;0    ;2100 ;423  ;VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Hotel;
+                                                                    ESP=Hotel];
+                                                         SourceExpr=Hoteles."Hotel TO" }
+            { 1103355056;Label  ;0    ;0    ;3150 ;423  ;ParentControl=1103355055;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes }
+            { 1103355057;TextBox;5550 ;0    ;11400;423  ;VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Hotel;
+                                                                    ESP=Hotel];
+                                                         SourceExpr=Hoteles."Nombre hotel TO" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=18150;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(wVentaDesde <> 0D);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1103355051;TextBox;5700 ;0    ;1800 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Arrival term;
+                                                                    ESP=Periodo Llegadas];
+                                                         SourceExpr=wVentaHasta }
+            { 1103355052;Shape  ;5250 ;0    ;300  ;423  ;ShapeStyle=HorzLine }
+            { 1103355053;TextBox;3300 ;0    ;1950 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Sales term;
+                                                                    ESP=Periodo Ventas];
+                                                         SourceExpr=wVentaDesde }
+            { 1103355054;Label  ;0    ;0    ;3150 ;423  ;ParentControl=1103355053;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=18150;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1103355047;TextBox;3300 ;0    ;1950 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Arrival term;
+                                                                    ESP=Periodo Llegadas];
+                                                         SourceExpr=wLlegadaDesde }
+            { 1103355048;Label  ;0    ;0    ;3150 ;423  ;ParentControl=1103355047;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes }
+            { 1103355049;TextBox;5700 ;0    ;1800 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Arrival term;
+                                                                    ESP=Periodo Llegadas];
+                                                         SourceExpr=wLlegadaHasta }
+            { 1103355050;Shape  ;5250 ;0    ;300  ;423  ;ShapeStyle=HorzLine }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=18150;
+            SectionHeight=1269;
+          }
+          CONTROLS
+          {
+            { 1103355038;Label  ;450  ;0    ;1800 ;846  ;VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Voucher;
+                                                                    ESP=Bono] }
+            { 1103355039;Label  ;9450 ;0    ;1650 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Check-in Date;
+                                                                    ESP=Fecha entrada] }
+            { 1103355040;Label  ;11250;0    ;1650 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Sale date;
+                                                                    ESP=Fecha venta] }
+            { 1103355045;Label  ;13650;0    ;1350 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=% in advance;
+                                                                    ESP=% Prepago] }
+            { 1103355046;Label  ;15150;0    ;2100 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Advanded payment amount;
+                                                                    ESP=Monto Prepagar] }
+            { 1103355064;Shape  ;13050;0    ;450  ;1269 ;ShapeStyle=VertLine }
+            { 1103355066;Shape  ;450  ;846  ;16800;423  ;ShapeStyle=HorzLine }
+            { 1103355008;Label  ;2400 ;0    ;6900 ;846  ;ParentControl=1103355007;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Voucher;
+                                                                    ESP=Bono] }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18150;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1103355009;TextBox;450  ;0    ;1800 ;423  ;SourceExpr=Bono }
+            { 1103355012;TextBox;9450 ;0    ;1650 ;423  ;HorzAlign=Right;
+                                                         SourceExpr="Fecha entrada" }
+            { 1103355022;TextBox;15150;0    ;2100 ;423  ;HorzAlign=Right;
+                                                         BlankNumbers=BlankZero;
+                                                         SourceExpr=wImportePrepago }
+            { 1103355023;TextBox;13650;0    ;1350 ;423  ;HorzAlign=Right;
+                                                         BlankNumbers=BlankZero;
+                                                         SourceExpr=rPorcenEBB."% EBB" }
+            { 1103355030;TextBox;11250;0    ;1650 ;423  ;SourceExpr="Fecha venta" }
+            { 1103355067;Shape  ;13050;0    ;450  ;423  ;ShapeStyle=VertLine }
+            { 1103355007;TextBox;2400 ;0    ;6900 ;423  ;SourceExpr=Nombre }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=18150;
+            SectionHeight=1269;
+          }
+          CONTROLS
+          {
+            { 1103355000;Shape  ;450  ;0    ;16800;423  ;ShapeStyle=HorzLine }
+            { 1103355026;TextBox;15150;423  ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=No;
+                                                         SourceExpr=wImportePrepago }
+            { 1103355027;TextBox;4050 ;423  ;8850 ;423  ;VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Hotel;
+                                                                    ESP=Hotel];
+                                                         SourceExpr=Hoteles."Hotel TO" + ' ' + Hoteles."Nombre hotel TO" }
+            { 1103355028;Label  ;450  ;423  ;3450 ;423  ;ParentControl=1103355027;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes }
+            { 1103355069;TextBox;17250;423  ;900  ;423  ;HorzAlign=Center;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Hotel;
+                                                                    ESP=Hotel];
+                                                         SourceExpr=rContrato."C¢d. divisa" }
+            { 1103355071;Shape  ;13050;0    ;450  ;846  ;ShapeStyle=VertLine }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=9020;
+      Height=3410;
+      CaptionML=[ENU=Control EBB x Hotel;
+                 ESP=Control EBB x Hotel];
+    }
+    CONTROLS
+    {
+      { 1103355002;Label  ;220  ;220  ;3630 ;440  ;CaptionML=[ENU=check-in dates term;
+                                                              ESP=Periodo fechas de entrada] }
+      { 1103355003;TextBox;3960 ;220  ;1700 ;440  ;NextControl=1103355004;
+                                                   SourceExpr=wLlegadaDesde }
+      { 1103355004;TextBox;5830 ;220  ;1700 ;440  ;NextControl=1103355005;
+                                                   SourceExpr=wLlegadaHasta }
+      { 1103355005;TextBox;3960 ;770  ;1700 ;440  ;NextControl=1103355006;
+                                                   SourceExpr=wVentaDesde }
+      { 1103355006;TextBox;5830 ;770  ;1700 ;440  ;SourceExpr=wVentaHasta }
+      { 1103355007;Label  ;220  ;770  ;3630 ;440  ;CaptionML=[ENU=sale dates term;
+                                                              ESP=Periodo fechas de venta] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      rPar@1103355017 : Record 7009700;
+      rDel@1103355030 : Record 7009718;
+      rRsvHot@1103355000 : Record 7009743;
+      rPrecio@1103355002 : Record 7009738;
+      rCab@1103355005 : Record 7009735;
+      rPorcenEBB@1103355013 : Record 7009729;
+      rContrato@1103355016 : Record 7009723;
+      rHotelesTMP@1103355018 : TEMPORARY Record 7009725;
+      rHotelesTMPPrint@1103355027 : Record 7009725;
+      rLinCalculo@1103355028 : Record 7009736;
+      cCalculo@1103355004 : Codeunit 7009707;
+      fSelecHotel@1103355015 : Form 7010030;
+      wTipoOfertaReserva@1103355001 : 'Todas,EBB,SPO,Ninguna';
+      wAplicaEBB@1103355003 : Boolean;
+      wMostrarSoloEBB@1103355011 : Boolean;
+      wTermina@1103355026 : Boolean;
+      wImporteCombinado@1103355006 : Decimal;
+      wImporteEBB@1103355007 : Decimal;
+      wImporteSPO@1103355008 : Decimal;
+      wImportePrepago@1103355009 : Decimal;
+      wImporteMenor@1103355010 : Decimal;
+      Text001@1103355012 : TextConst 'ENU=In contract %1 for day %2 conditions EBB were not found;ESP=No se han encontrado condiciones de EBB en el contrato %1 para el dia %2';
+      wClaveResultado@1103355014 : Text[30];
+      wOfertaAplicada@1103355029 : Code[30];
+      wLlegadaDesde@1103355019 : Date;
+      wLlegadaHasta@1103355020 : Date;
+      wVentaDesde@1103355021 : Date;
+      wVentaHasta@1103355022 : Date;
+      Text002@1103355023 : TextConst 'ENU=Must specify a term of arrival dates of the clients;ESP=Debe especificar un periodo de fechas de llegada de los clientes';
+      Text003@1103355024 : TextConst 'ENU=Arrival dates term is not correct;ESP=El periodo de fechas de llegada no es correcto.';
+      Text004@1103355025 : TextConst 'ENU=Sale dates term is not correct;ESP=El periodo de fechas de venta no es correcto.';
+
+    PROCEDURE CompruebaOfertaEBB@1103355002();
+    VAR
+      lrRsvDia@1103355000 : Record 7009755;
+      lrContrato@1103355001 : Record 7009723;
+      lwTabContratos@1103355003 : ARRAY [10] OF Code[10];
+      lwIndice@1103355004 : Integer;
+    BEGIN
+      // CompruebaOfertaEBB
+
+      // Buscamos, dentro de todos los contratos que pueden aplicarse a la reserva, si aplica oferta EBB
+
+      wAplicaEBB := FALSE;
+
+      CLEAR(lwTabContratos);
+      CLEAR(lwIndice);
+
+      lrRsvDia.RESET;
+      lrRsvDia.SETRANGE(Delegacion  , Reserva.Delegacion);
+      lrRsvDia.SETRANGE("N§ Reserva", Reserva."N§ Reserva");
+      IF lrRsvDia.FINDSET THEN BEGIN
+        REPEAT
+          lrContrato.SETRANGE (Delegacion             , Reserva.Delegacion);
+          lrContrato.SETRANGE (Hotel                  , Reserva."Hotel origen precios");
+          lrContrato.SETRANGE (TourOperador           , Reserva.TourOperador);
+          lrContrato.SETFILTER("Fecha inicio contrato", '<=%1', lrRsvDia.Dia);
+          lrContrato.SETFILTER("Fecha final contrato" , '>=%1', lrRsvDia.Dia);
+          lrContrato.SETRANGE (Confirmado             , TRUE);
+          lrContrato.FINDFIRST;
+
+          BuscaContrato(lwTabContratos, lrContrato."N§ Contrato compra");
+        UNTIL lrRsvDia.NEXT = 0;
+      END;
+
+      lwIndice := 1;
+      WHILE (lwTabContratos[lwIndice] <> '') AND (NOT wAplicaEBB) DO BEGIN
+        CompruebaContrato(lwTabContratos[lwIndice]);
+        lwIndice += 1;
+      END;
+    END;
+
+    PROCEDURE CompruebaContrato@1103355000(pwNumContrato@1103355000 : Code[10]);
+    VAR
+      lcCalculoOferta@1103355003 : Codeunit 7009712;
+      lwOcupantes@1103355002 : Integer;
+    BEGIN
+      // CompruebaContrato
+
+      // Dentro de un contrato buscamos unicamente las ofertas de tipo EBB
+
+      rPrecio.RESET;
+      rPrecio.SETRANGE (Delegacion     , Reserva.Delegacion);
+      rPrecio.SETRANGE ("N§ Contrato"  , pwNumContrato);
+      rPrecio.SETRANGE ("Codigo Precio", rPrecio."Codigo Precio"::Ofertas);
+      rPrecio.SETFILTER("Tipo Fechas"  , '%1|%2|%3|%4', rPrecio."Tipo Fechas"::"Fecha venta",
+                                                        rPrecio."Tipo Fechas"::"Fecha venta+estancia",
+                                                        rPrecio."Tipo Fechas"::"Fecha venta+entrada",
+                                                        rPrecio."Tipo Fechas"::"Fecha venta+salida");
+      IF rPrecio.FINDSET THEN BEGIN
+        REPEAT
+          lwOcupantes := lcCalculoOferta.buscar_ocupantes_oferta(Reserva, rPrecio);
+
+          wAplicaEBB := lcCalculoOferta.comprobar_aplicacion_oferta(Reserva, rPrecio, FALSE, Reserva.Habitacion, lwOcupantes);
+        UNTIL (rPrecio.NEXT = 0) OR wAplicaEBB;
+      END;
+    END;
+
+    PROCEDURE CompruebaOfertaCompatible@1103355008() : Boolean;
+    VAR
+      lrOferIncom@1103355000 : Record 7009829;
+    BEGIN
+      // CompruebaOfertaCompatible
+
+      lrOferIncom.RESET;
+      lrOferIncom.SETRANGE(Delegacion     , rPrecio.Delegacion);
+      lrOferIncom.SETRANGE("N§ Contrato"  , rPrecio."N§ Contrato");
+      lrOferIncom.SETRANGE("Orden precio" , rPrecio."Orden Precio");
+      EXIT( NOT lrOferIncom.FINDFIRST );
+    END;
+
+    PROCEDURE BuscaContrato@1103355005(VAR pwTabContratos@1103355000 : ARRAY [10] OF Code[10];pwCodContrato@1103355002 : Code[10]);
+    VAR
+      lwIndice@1103355001 : Integer;
+    BEGIN
+      // BuscaContrato
+
+      lwIndice := 0;
+      REPEAT
+        lwIndice += 1;
+        IF pwTabContratos[lwIndice] = '' THEN
+          pwTabContratos[lwIndice] := pwCodContrato;
+      UNTIL pwTabContratos[lwIndice] = pwCodContrato;
+    END;
+
+    PROCEDURE BuscarHoteles@1103355003();
+    BEGIN
+      // BuscarHoteles
+
+      Hoteles.RESET;
+      Hoteles.MODIFYALL(Seleccionado, FALSE);
+
+      // Buscamos todos los contratos de la temporada
+
+      rContrato.RESET;
+      rContrato.SETFILTER("Fecha final contrato" , '>=%1', TODAY);
+      rContrato.SETRANGE (Confirmado             , TRUE);
+      IF rContrato.FINDSET THEN BEGIN
+        REPEAT
+          rPorcenEBB.RESET;
+          rPorcenEBB.SETRANGE (Delegacion     , rContrato.Delegacion);
+          rPorcenEBB.SETRANGE ("N§ Contrato"  , rContrato."N§ Contrato compra");
+          rPorcenEBB.SETRANGE ("Tipo Garantia", rPorcenEBB."Tipo Garantia"::Importe);
+          rPorcenEBB.SETRANGE (Activo         , TRUE);
+          IF rPorcenEBB.FINDFIRST THEN BEGIN
+            Hoteles.SETRANGE(TourOperador    , rContrato.TourOperador);
+            Hoteles.SETRANGE("Hotel estancia", rContrato.Hotel);
+            IF Hoteles.FINDSET(TRUE) THEN BEGIN
+              REPEAT
+                IF NOT rHotelesTMP.GET(Hoteles.TourOperador, Hoteles."Touroperador venta", Hoteles."Hotel TO") THEN BEGIN
+                  rHotelesTMP := Hoteles;
+                  rHotelesTMP.INSERT;
+                END;
+              UNTIL Hoteles.NEXT = 0;
+            END;
+          END;
+        UNTIL rContrato.NEXT = 0;
+      END;
+
+      COMMIT;
+
+      rHotelesTMP.RESET;
+
+      CLEAR(fSelecHotel);
+      fSelecHotel.SetTempHotel(rHotelesTMP);
+      fSelecHotel.RUNMODAL;
+    END;
+
+    PROCEDURE RecogerCodigosOferta@1103355001();
+    BEGIN
+      // RecogerCodigosOferta
+
+      wOfertaAplicada := '';
+
+      rLinCalculo.RESET;
+      rLinCalculo.SETRANGE(Usuario         , USERID);
+      rLinCalculo.SETRANGE("Coste/Ingreso" , rLinCalculo."Coste/Ingreso"::Coste);
+      rLinCalculo.SETRANGE("Concepto Coste", 'OFERTA');
+      IF rLinCalculo.FINDSET THEN BEGIN
+        REPEAT
+          IF wOfertaAplicada = '' THEN
+            wOfertaAplicada := rLinCalculo.Codigo
+          ELSE BEGIN
+            IF STRPOS(wOfertaAplicada, rLinCalculo.Codigo) = 0 THEN
+              wOfertaAplicada += ' + ' + rLinCalculo.Codigo;
+          END;
+        UNTIL rLinCalculo.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      Informe para entregar a los hoteles en el que se detallan las reservas que se van a prepagar
+      y los montos que se prepagan de cada una de ellas.
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

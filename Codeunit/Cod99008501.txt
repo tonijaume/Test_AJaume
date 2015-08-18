@@ -1,0 +1,694 @@
+OBJECT Codeunit 99008501 Purchase Quote-Accept
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    TableNo=99008502;
+    OnRun=VAR
+            InboundPurchaseDocumentHeader@1000 : Record 99008502;
+          BEGIN
+            InboundPurchaseDocumentHeader := Rec;
+            IF NOT Validation(InboundPurchaseDocumentHeader) THEN
+              EXIT;
+            IF FindReferenced AND ReferencedFound THEN BEGIN
+              IF UpdatePurchaseDocument(InboundPurchaseDocumentHeader) AND NOT HideDialogBox THEN
+                MESSAGE(Text000);
+            END ELSE BEGIN
+              CreatePurchaseDocument(InboundPurchaseDocumentHeader);
+              IF NOT HideDialogBox THEN
+                MESSAGE(Text001 +
+                  Text002,InboundPurchaseDocumentHeader."Corresp. Accepted Document No.");
+            END;
+            Rec := InboundPurchaseDocumentHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1005 : TextConst 'ENU=The referenced purchase quote has been updated with the BizTalk purchase quote.;ESP=Se ha actualizado la oferta de compra referida con la oferta de compra BizTalk.';
+      Text001@1006 : TextConst 'ENU="A purchase quote number %1 that is based on the ";ESP="Se ha creado una oferta de compra, con n£mero %1, "';
+      Text002@1007 : TextConst 'ENU=BizTalk purchase quote has been created.;ESP=basada en la oferta de compra BizTalk.';
+      Text003@1008 : TextConst 'ENU=A BizTalk partner with the number %1 does not exist.;ESP=No existe un socio BizTalk con el n£mero %1.';
+      Text004@1009 : TextConst 'ENU=The purchase quote is due. Do you want to continue?;ESP=La oferta de compra ha vencido. ¨Confirma que desea continuar?';
+      Text005@1010 : TextConst 'ENU=A purchase quote has already been updated or created from a similar BizTalk purchase quote.;ESP=Ya se ha creado o actualizado una oferta de compra a partir de una oferta BizTalk similar.';
+      Text006@1011 : TextConst 'ENU=The referenced purchase quote does not exist. Do you want to create a new quote?;ESP=La oferta de compra referida no existe. ¨Confirma que desea crear una nueva oferta?';
+      Text007@1012 : TextConst 'ENU=An inbound reference exists. Do you want to create a new quote?;ESP=Existe un documento de entrada referido. ¨Confirma que desea crear una nueva oferta?';
+      Text008@1013 : TextConst 'ENU=The currency code on the inbound purchase document header does not map to any currency specified for the Partner.;ESP=El c¢digo de divisa en la cabecera del documento de compra saliente no tiene equivalencia con ninguna divisa especificada para el socio.';
+      Text009@1014 : TextConst 'ENU=Commerce Gateway does not support the acceptance of a %1 whose %2 is %3;ESP=Commerce Gateway no permite aceptar un documento %1 en el que %2 es %3';
+      Text013@1018 : TextConst 'ENU=There is a discrepancy with the %1 in line number %2.;ESP=Existe una discrepancia con la %1 en la l¡nea n£mero %2.';
+      Text014@1019 : TextConst 'ENU=\Do you want to continue?;ESP=\¨Confirma que desea continuar?';
+      Text015@1020 : TextConst 'ENU=There is a discrepancy between the inbound quote and the referenced quote lines.;ESP=Existe una discrepancia entre las l¡neas de la oferta entrada y las l¡neas de la oferta referida.';
+      Text020@1025 : TextConst 'ENU=A vendor item number is not defined for item number %1.;ESP=No se ha definido un  n£mero de producto proveedor para el producto n£mero %1.';
+      Text021@1026 : TextConst 'ENU=The corresponding vendor item number %1 in quote line no. %2 \;ESP=No se puede encontrar el n£mero producto proveedor %1 correspondiente en la l¡nea de oferta n£m %2 \';
+      Text022@1027 : TextConst 'ENU=could not be found in the BizTalk purchase quote.;ESP=en la l¡nea de oferta %2, en la oferta de compra BizTalk.';
+      Text023@1028 : TextConst 'ENU=A common item number is not defined for item number %1.;ESP=No se definido un n£mero producto com£n  para el producto n£mero %1.';
+      Text024@1029 : TextConst 'ENU=The corresponding common item number %1 in quote line no. %2 \;ESP=No se puede encontrar el n£mero producto com£n %1 correspondiente en la l¡nea de oferta n£m %2 \';
+      BizTalkPartnerSetup@1000 : Record 99008513;
+      PurchQuoteHeader@1001 : Record 38;
+      Item@1030 : Record 27;
+      FindReferenced@1002 : Boolean;
+      ReferenceExists@1003 : Boolean;
+      ReferencedFound@1004 : Boolean;
+      Text025@1031 : TextConst 'ENU="You must specify %1 for %2 %3 = ''''%4'''' in order to accept a %5 with a %6";ESP="Debe especificar %1 para %2 %3 = ''''%4'''' para aceptar un(a) %5 con %6"';
+      HideDialogBox@1015 : Boolean;
+      AcceptDueDate@1016 : Boolean;
+      Text026@1017 : TextConst 'ENU=The document is due.;ESP=El documento a£n est  pendiente.';
+      Text027@1021 : TextConst 'ENU="The referenced purchase quote does not exist. ";ESP="Lo oferta de compra a la que se hace referencia no existe. "';
+      Text028@1023 : TextConst 'ENU=An inbound reference already exists.;ESP=Ya existe una referencia de entrada.';
+
+    PROCEDURE Validation@1(VAR InboundPurchaseDocumentHeader@1000 : Record 99008502) : Boolean;
+    VAR
+      BizTalkPartnerCurrencyMap@1001 : Record 99008532;
+    BEGIN
+      BizTalkPartnerSetup.SETCURRENTKEY("Partner Type","Partner No.");
+      BizTalkPartnerSetup.SETRANGE("Partner Type", BizTalkPartnerSetup."Partner Type"::Vendor);
+      BizTalkPartnerSetup.SETRANGE("Partner No.", InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+      IF NOT BizTalkPartnerSetup.FIND('-') THEN
+        ERROR(Text003,InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+
+      IF BizTalkPartnerSetup."Purchase Quote" = BizTalkPartnerSetup."Purchase Quote"::"Update Referenced" THEN
+        FindReferenced := TRUE
+      ELSE
+        FindReferenced := FALSE;
+
+      IF InboundPurchaseDocumentHeader."Currency Code" <> '' THEN BEGIN
+        IF BizTalkPartnerCurrencyMap.GET(
+          BizTalkPartnerSetup."BizTalk Partner No.",InboundPurchaseDocumentHeader."Currency Code") THEN
+          InboundPurchaseDocumentHeader."Currency Code" := BizTalkPartnerCurrencyMap."Currency Code"
+        ELSE
+          ERROR(Text008);
+      END;
+
+      IF (InboundPurchaseDocumentHeader."Due Date" <> 0D) AND
+        (InboundPurchaseDocumentHeader."Due Date" < TODAY) THEN BEGIN
+          IF NOT HideDialogBox THEN BEGIN
+            IF NOT CONFIRM(Text004) THEN
+              EXIT(FALSE);
+          END ELSE BEGIN
+            IF NOT AcceptDueDate THEN
+              ERROR(Text026);
+          END;
+      END;
+
+      PurchQuoteHeader.SETCURRENTKEY("Document Type","Buy-from Vendor No.");
+      PurchQuoteHeader.SETRANGE("Document Type",InboundPurchaseDocumentHeader."Document Type"::Quote);
+      PurchQuoteHeader.SETRANGE("Buy-from Vendor No.",InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+      PurchQuoteHeader.SETRANGE("Vendor Quote No.",InboundPurchaseDocumentHeader."Vendor Quote No.");
+      IF PurchQuoteHeader.FIND('-') THEN
+        ERROR(Text005);
+
+      PurchQuoteHeader.RESET;
+      IF InboundPurchaseDocumentHeader."Reference Quote No." <> '' THEN BEGIN
+        ReferenceExists := TRUE;
+        PurchQuoteHeader.SETCURRENTKEY("Document Type","Buy-from Vendor No.");
+        PurchQuoteHeader.SETRANGE("Document Type",PurchQuoteHeader."Document Type"::Quote);
+        PurchQuoteHeader.SETRANGE("Buy-from Vendor No.",InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+        PurchQuoteHeader.SETRANGE("No.",InboundPurchaseDocumentHeader."Reference Quote No.");
+        IF FindReferenced THEN
+          IF PurchQuoteHeader.FIND('-') THEN
+            ReferencedFound := TRUE
+          ELSE BEGIN
+            IF NOT HideDialogBox THEN BEGIN
+              IF NOT CONFIRM(Text006) THEN
+                EXIT(FALSE);
+              ReferencedFound := FALSE;
+            END ELSE
+              ERROR(Text027);
+          END;
+      END;
+
+      IF NOT FindReferenced AND ReferenceExists THEN BEGIN
+        IF NOT HideDialogBox THEN BEGIN
+          IF NOT CONFIRM(Text007) THEN
+            EXIT(FALSE);
+        END ELSE
+          ERROR(Text028);
+      END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreatePurchaseDocument@2(VAR InboundPurchaseDocumentHeader@1000 : Record 99008502);
+    VAR
+      PurchaseHeader@1001 : Record 38;
+      InboundPurchaseDocumentLine@1002 : Record 99008503;
+      PurchaseLine@1003 : Record 39;
+      BizTalkPartnerCurrencyMap@1004 : Record 99008532;
+      BizTalkReservEntry@1008 : Record 99008533;
+      BizTalkManagement@1005 : Codeunit 99008508;
+      CreateReservEntry@1009 : Codeunit 99000830;
+      ItemNo@1006 : Code[20];
+      NextLineNo@1007 : Integer;
+    BEGIN
+      PurchaseLine.LOCKTABLE;
+      PurchaseHeader.LOCKTABLE;
+      PurchaseHeader.INIT;
+      PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Quote;
+      PurchaseHeader.INSERT(TRUE);
+
+      IF (InboundPurchaseDocumentHeader."Payment Terms Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Payment Terms Code",InboundPurchaseDocumentHeader."Payment Terms Code");
+      IF (InboundPurchaseDocumentHeader."Payment Method Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Payment Method Code",InboundPurchaseDocumentHeader."Payment Method Code");
+      IF (InboundPurchaseDocumentHeader."Payment Discount %" <> 0) THEN
+        PurchaseHeader.VALIDATE("Payment Discount %",InboundPurchaseDocumentHeader."Payment Discount %");
+      IF (InboundPurchaseDocumentHeader."Pay-to Vendor No." <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Vendor No.", InboundPurchaseDocumentHeader."Pay-to Vendor No.");
+      IF (InboundPurchaseDocumentHeader."Ship-to Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Code", InboundPurchaseDocumentHeader."Ship-to Code");
+      IF (InboundPurchaseDocumentHeader."Sell-to Customer No." <> '') THEN
+        PurchaseHeader.VALIDATE("Sell-to Customer No.",InboundPurchaseDocumentHeader."Sell-to Customer No.");
+      IF (InboundPurchaseDocumentHeader."Buy-from Vendor No." <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.",InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+
+      IF (InboundPurchaseDocumentHeader."Buy-from Vendor Name" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Vendor Name",InboundPurchaseDocumentHeader."Buy-from Vendor Name");
+      IF  (InboundPurchaseDocumentHeader."Buy-from Vendor Name 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Vendor Name 2",InboundPurchaseDocumentHeader."Buy-from Vendor Name 2");
+      IF (InboundPurchaseDocumentHeader."Buy-from Address" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Address",InboundPurchaseDocumentHeader."Buy-from Address");
+      IF (InboundPurchaseDocumentHeader."Buy-from Address 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Address 2",InboundPurchaseDocumentHeader."Buy-from Address 2");
+      IF (InboundPurchaseDocumentHeader."Buy-from Contact" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Contact",InboundPurchaseDocumentHeader."Buy-from Contact");
+      IF (InboundPurchaseDocumentHeader."Buy-from County" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from County",InboundPurchaseDocumentHeader."Buy-from County");
+      IF (InboundPurchaseDocumentHeader."Buy-from Country/Region Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Country/Region Code",InboundPurchaseDocumentHeader."Buy-from Country/Region Code");
+
+      IF (InboundPurchaseDocumentHeader."Ship-to Name" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Name",InboundPurchaseDocumentHeader."Ship-to Name");
+      IF (InboundPurchaseDocumentHeader."Ship-to Name 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Name 2",InboundPurchaseDocumentHeader."Ship-to Name 2");
+      IF (InboundPurchaseDocumentHeader."Ship-to Address" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Address",InboundPurchaseDocumentHeader."Ship-to Address");
+      IF (InboundPurchaseDocumentHeader."Ship-to Address 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Address 2",InboundPurchaseDocumentHeader."Ship-to Address 2");
+      IF (InboundPurchaseDocumentHeader."Ship-to County" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to County",InboundPurchaseDocumentHeader."Ship-to County");
+      IF (InboundPurchaseDocumentHeader."Ship-to Country/Region Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Country/Region Code",InboundPurchaseDocumentHeader."Ship-to Country/Region Code");
+      IF (InboundPurchaseDocumentHeader."Ship-to Contact" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Contact",InboundPurchaseDocumentHeader."Ship-to Contact");
+
+      IF (InboundPurchaseDocumentHeader."Pay-to Name" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Name",InboundPurchaseDocumentHeader."Pay-to Name");
+      IF (InboundPurchaseDocumentHeader."Pay-to Name 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Name 2",InboundPurchaseDocumentHeader."Pay-to Name 2");
+      IF (InboundPurchaseDocumentHeader."Pay-to Address" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Address",InboundPurchaseDocumentHeader."Pay-to Address");
+      IF (InboundPurchaseDocumentHeader."Pay-to Address 2" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Address 2",InboundPurchaseDocumentHeader."Pay-to Address 2");
+      IF (InboundPurchaseDocumentHeader."Pay-to Contact" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Contact",InboundPurchaseDocumentHeader."Pay-to Contact");
+      IF (InboundPurchaseDocumentHeader."Pay-to County" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to County",InboundPurchaseDocumentHeader."Pay-to County");
+      IF (InboundPurchaseDocumentHeader."Pay-to Country/Region Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Country/Region Code",InboundPurchaseDocumentHeader."Pay-to Country/Region Code");
+      IF (InboundPurchaseDocumentHeader."Your Reference" <> '') THEN
+        PurchaseHeader.VALIDATE("Your Reference",InboundPurchaseDocumentHeader."Your Reference");
+
+      IF (InboundPurchaseDocumentHeader."Order Date" <> 0D) THEN
+        PurchaseHeader.VALIDATE("Order Date",InboundPurchaseDocumentHeader."Order Date");
+      IF (InboundPurchaseDocumentHeader."Shortcut Dimension 1 Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Shortcut Dimension 1 Code",InboundPurchaseDocumentHeader."Shortcut Dimension 1 Code");
+      IF (InboundPurchaseDocumentHeader."Shortcut Dimension 2 Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Shortcut Dimension 2 Code",InboundPurchaseDocumentHeader."Shortcut Dimension 2 Code");
+      IF (InboundPurchaseDocumentHeader."Transaction Type" <> '') THEN
+        PurchaseHeader.VALIDATE("Transaction Type",InboundPurchaseDocumentHeader."Transaction Type");
+      IF (InboundPurchaseDocumentHeader."Transport Method" <> '') THEN
+        PurchaseHeader.VALIDATE("Transport Method",InboundPurchaseDocumentHeader."Transport Method");
+      IF (InboundPurchaseDocumentHeader."Document Date" <> 0D) THEN
+        PurchaseHeader.VALIDATE("Document Date",InboundPurchaseDocumentHeader."Document Date");
+
+      IF (InboundPurchaseDocumentHeader."Due Date" <> 0D) THEN
+        PurchaseHeader.VALIDATE("Due Date",InboundPurchaseDocumentHeader."Due Date");
+      IF (InboundPurchaseDocumentHeader."Pmt. Discount Date" <> 0D) THEN
+        PurchaseHeader.VALIDATE("Pmt. Discount Date",InboundPurchaseDocumentHeader."Pmt. Discount Date");
+      IF (InboundPurchaseDocumentHeader."Shipment Method Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Shipment Method Code",InboundPurchaseDocumentHeader."Shipment Method Code");
+      IF (InboundPurchaseDocumentHeader."Purchaser Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Purchaser Code",InboundPurchaseDocumentHeader."Purchaser Code");
+      IF (InboundPurchaseDocumentHeader."Expected Receipt Date" <> 0D) THEN
+        PurchaseHeader.VALIDATE("Expected Receipt Date",InboundPurchaseDocumentHeader."Expected Receipt Date");
+      IF (InboundPurchaseDocumentHeader."VAT Registration No." <> '') THEN
+        PurchaseHeader.VALIDATE("VAT Registration No.",InboundPurchaseDocumentHeader."VAT Registration No.");
+      IF (InboundPurchaseDocumentHeader."Language Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Language Code",InboundPurchaseDocumentHeader."Language Code");
+      IF (InboundPurchaseDocumentHeader."Vendor Quote No." <> '') THEN
+        PurchaseHeader.VALIDATE("Vendor Quote No.",InboundPurchaseDocumentHeader."Vendor Quote No.");
+
+      PurchaseHeader.VALIDATE("Currency Code",InboundPurchaseDocumentHeader."Currency Code");
+
+      PurchaseHeader.VALIDATE("Date Received",InboundPurchaseDocumentHeader."Date Received");
+      PurchaseHeader.VALIDATE("Time Received",InboundPurchaseDocumentHeader."Time Received");
+      PurchaseHeader.VALIDATE("BizTalk Purchase Quote",TRUE);
+      IF (InboundPurchaseDocumentHeader."Buy-from Post Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from Post Code",InboundPurchaseDocumentHeader."Buy-from Post Code");
+      IF (InboundPurchaseDocumentHeader."Buy-from City" <> '') THEN
+        PurchaseHeader.VALIDATE("Buy-from City",InboundPurchaseDocumentHeader."Buy-from City");
+      IF (InboundPurchaseDocumentHeader."Ship-to Post Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to Post Code",InboundPurchaseDocumentHeader."Ship-to Post Code");
+      IF (InboundPurchaseDocumentHeader."Ship-to City" <> '') THEN
+        PurchaseHeader.VALIDATE("Ship-to City",InboundPurchaseDocumentHeader."Ship-to City");
+      IF (InboundPurchaseDocumentHeader."Pay-to Post Code" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to Post Code",InboundPurchaseDocumentHeader."Pay-to Post Code");
+      IF (InboundPurchaseDocumentHeader."Pay-to City" <> '') THEN
+        PurchaseHeader.VALIDATE("Pay-to City",InboundPurchaseDocumentHeader."Pay-to City");
+      PurchaseHeader.MODIFY;
+
+      NextLineNo := 10000;
+      InboundPurchaseDocumentLine.SETCURRENTKEY("Inbound Document No.");
+      InboundPurchaseDocumentLine.SETRANGE("Inbound Document No.", InboundPurchaseDocumentHeader."Inbound Document No.");
+      IF InboundPurchaseDocumentLine.FIND('-') THEN
+        REPEAT
+          PurchaseLine.INIT;
+          PurchaseLine."Document Type" := PurchaseHeader."Document Type";
+          PurchaseLine."Document No." := PurchaseHeader."No.";
+          PurchaseLine."Line No." := NextLineNo;
+          NextLineNo := NextLineNo + 10000;
+          PurchaseLine.VALIDATE(Type,InboundPurchaseDocumentLine.Type);
+          PurchaseLine.INSERT(TRUE);
+          CASE InboundPurchaseDocumentLine.Type OF
+            InboundPurchaseDocumentLine.Type::" ":
+              PurchaseLine.Description := InboundPurchaseDocumentLine.Description;
+            InboundPurchaseDocumentLine.Type::Item:
+              BEGIN
+                CASE BizTalkPartnerSetup."Purchase Item Number Type" OF
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Internal Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentLine.TESTFIELD("No.");
+                      ItemNo := InboundPurchaseDocumentLine."No.";
+                    END;
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Vendor Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentHeader.TESTFIELD("Buy-from Vendor No.");
+                      InboundPurchaseDocumentLine.TESTFIELD("Vendor Item No.");
+                      ItemNo := BizTalkManagement.ConvertVendorItemNo(
+                        InboundPurchaseDocumentLine."Vendor Item No.",
+                        InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+                    END;
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Common Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentLine.TESTFIELD("Common Item No.");
+                      ItemNo := BizTalkManagement.ConvertCommonItemNo(InboundPurchaseDocumentLine."Common Item No.");
+                    END;
+                END;
+                PurchaseLine.VALIDATE("No.",ItemNo);
+
+                IF (InboundPurchaseDocumentLine.Quantity <> 0) THEN
+                  PurchaseLine.VALIDATE(Quantity,InboundPurchaseDocumentLine.Quantity);
+                IF (InboundPurchaseDocumentLine."Gross Weight" <> 0) THEN
+                  PurchaseLine.VALIDATE("Gross Weight",InboundPurchaseDocumentLine."Gross Weight");
+                IF (InboundPurchaseDocumentLine."Net Weight" <> 0) THEN
+                  PurchaseLine.VALIDATE("Net Weight",InboundPurchaseDocumentLine."Net Weight");
+                IF (InboundPurchaseDocumentLine."Unit Volume" <> 0) THEN
+                  PurchaseLine.VALIDATE("Unit Volume",InboundPurchaseDocumentLine."Unit Volume");
+                IF (InboundPurchaseDocumentLine."Unit of Measure" <> '') THEN
+                  PurchaseLine.VALIDATE("Unit of Measure",InboundPurchaseDocumentLine."Unit of Measure");
+                IF (InboundPurchaseDocumentLine."Unit of Measure Code" <> '') THEN
+                  PurchaseLine.VALIDATE("Unit of Measure Code",InboundPurchaseDocumentLine."Unit of Measure Code");
+                IF (InboundPurchaseDocumentLine."Line Discount %" <> 0) THEN
+                  PurchaseLine.VALIDATE("Line Discount %",InboundPurchaseDocumentLine."Line Discount %");
+                IF (InboundPurchaseDocumentLine."Inv. Discount Amount" <> 0) THEN
+                  PurchaseLine.VALIDATE("Inv. Discount Amount",InboundPurchaseDocumentLine."Inv. Discount Amount");
+                IF (InboundPurchaseDocumentLine."Units per Parcel" <> 0) THEN
+                  PurchaseLine.VALIDATE("Units per Parcel",InboundPurchaseDocumentLine."Units per Parcel");
+
+                IF (InboundPurchaseDocumentLine.Description <> '') THEN
+                  PurchaseLine.VALIDATE(Description,InboundPurchaseDocumentLine.Description);
+                IF (InboundPurchaseDocumentLine."Description 2" <> '') THEN
+                  PurchaseLine.VALIDATE("Description 2",InboundPurchaseDocumentLine."Description 2");
+                IF (InboundPurchaseDocumentLine."Shortcut Dimension 1 Code" <> '') THEN
+                  PurchaseLine.VALIDATE("Shortcut Dimension 1 Code",InboundPurchaseDocumentLine."Shortcut Dimension 1 Code");
+                IF (InboundPurchaseDocumentLine."Shortcut Dimension 2 Code" <> '') THEN
+                  PurchaseLine.VALIDATE("Shortcut Dimension 2 Code",InboundPurchaseDocumentLine."Shortcut Dimension 2 Code");
+                IF (InboundPurchaseDocumentLine."Job No." <> '') THEN
+                  PurchaseLine.VALIDATE("Job No.",InboundPurchaseDocumentLine."Job No.");
+
+                IF (InboundPurchaseDocumentLine."Variant Code" <> '') THEN
+                  PurchaseLine.VALIDATE("Variant Code",InboundPurchaseDocumentLine."Variant Code");
+
+                IF (InboundPurchaseDocumentLine."Expected Receipt Date" <> 0D) THEN
+                  PurchaseLine.VALIDATE("Expected Receipt Date",InboundPurchaseDocumentLine."Expected Receipt Date");
+
+                IF (InboundPurchaseDocumentLine."Direct Unit Cost" <> 0) THEN
+                  PurchaseLine.VALIDATE("Direct Unit Cost",InboundPurchaseDocumentLine."Direct Unit Cost");
+
+                IF (InboundPurchaseDocumentLine."Vendor Item No." <> '') THEN
+                  PurchaseLine.VALIDATE("Vendor Item No.",InboundPurchaseDocumentLine."Vendor Item No.");
+                IF (InboundPurchaseDocumentLine."Bin Code" <> '') THEN
+                  PurchaseLine.VALIDATE("Bin Code",InboundPurchaseDocumentLine."Bin Code");
+                IF (InboundPurchaseDocumentLine."Qty. per Unit of Measure" <> 0) THEN
+                  PurchaseLine.VALIDATE("Qty. per Unit of Measure",InboundPurchaseDocumentLine."Qty. per Unit of Measure");
+                IF (InboundPurchaseDocumentLine."Unit Price (LCY)" <> 0) THEN
+                  PurchaseLine.VALIDATE("Unit Price (LCY)",InboundPurchaseDocumentLine."Unit Price (LCY)");
+              END;
+            ELSE
+              ERROR(Text009,PurchaseLine.TABLECAPTION,PurchaseLine.FIELDCAPTION(Type),FORMAT(PurchaseLine.Type));
+          END;
+          PurchaseLine.MODIFY;
+
+          BizTalkReservEntry.SETRANGE("BizTalk Document No.",
+            InboundPurchaseDocumentHeader."Inbound Document No.");
+          BizTalkReservEntry.SETRANGE("Biztalk Document Direction",
+            BizTalkReservEntry."Biztalk Document Direction"::Inbound);
+          BizTalkReservEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+          BizTalkReservEntry.SETRANGE("BizTalk Document Line No.",
+            InboundPurchaseDocumentLine."Line No.");
+          IF BizTalkReservEntry.FIND('-') THEN
+            REPEAT
+              Item.GET(ItemNo);
+              IF Item."Item Tracking Code" = '' THEN
+                ERROR(Text025,Item.FIELDCAPTION("Item Tracking Code"),Item.TABLECAPTION,Item.FIELDCAPTION("No."),
+                  Item."No.",FORMAT(PurchaseHeader."Document Type"),BizTalkReservEntry.TABLECAPTION);
+              CreateReservEntry.CreateReservEntryFor(
+                DATABASE::"Purchase Line",PurchaseLine."Document Type",
+                PurchaseLine."Document No.",'',0,PurchaseLine."Line No.",PurchaseLine."Qty. per Unit of Measure",
+                BizTalkReservEntry.Quantity,BizTalkReservEntry."Serial No.",BizTalkReservEntry."Lot No.");
+              CreateReservEntry.CreateEntry(ItemNo,
+                PurchaseLine."Variant Code",PurchaseLine."Location Code",
+                BizTalkReservEntry.Description,
+                BizTalkReservEntry."Expected Receipt Date",
+                BizTalkReservEntry."Shipment Date",0,BizTalkReservEntry."Reservation Status");
+            UNTIL BizTalkReservEntry.NEXT = 0;
+
+        UNTIL InboundPurchaseDocumentLine.NEXT = 0;
+      InboundPurchaseDocumentHeader.Status := InboundPurchaseDocumentHeader.Status::Accepted;
+      InboundPurchaseDocumentHeader."Date Processed" := TODAY;
+      InboundPurchaseDocumentHeader."Time Processed" := TIME;
+      InboundPurchaseDocumentHeader."Corresp. Accepted Document No." := PurchaseHeader."No.";
+      InboundPurchaseDocumentHeader.MODIFY;
+    END;
+
+    PROCEDURE UpdatePurchaseDocument@4(VAR InboundPurchaseDocumentHeader@1000 : Record 99008502) : Boolean;
+    VAR
+      InboundPurchaseDocumentLine@1001 : Record 99008503;
+      PurchQuoteLine@1002 : Record 39;
+      Currency@1003 : Record 4;
+      CurrencyExchRate@1015 : ARRAY [2] OF Record 330;
+      ReservEntry@1013 : Record 337;
+      BizTalkReservEntry@1012 : Record 99008533;
+      AuxCommentPurchLine@1016 : Record 39;
+      BizTalkManagement@1004 : Codeunit 99008508;
+      CreateReservEntry@1014 : Codeunit 99000830;
+      ItemNo@1005 : Code[20];
+      LineNo@1006 : Code[4];
+      PreviousItemNo@1011 : Code[20];
+      PreviousLineNo@1010 : Integer;
+      LastLineNo@1017 : Integer;
+      RoundedAmount@1008 : Decimal;
+      ValidateQuantity@1007 : Boolean;
+      IgnoreComments@1009 : Boolean;
+    BEGIN
+      PurchQuoteHeader."Document Type" := PurchQuoteHeader."Document Type"::Quote;
+      PurchQuoteHeader.VALIDATE("Date Received",InboundPurchaseDocumentHeader."Date Received");
+      PurchQuoteHeader.VALIDATE("Time Received",InboundPurchaseDocumentHeader."Time Received");
+      PurchQuoteHeader.VALIDATE("BizTalk Purchase Quote",TRUE);
+      PurchQuoteHeader.VALIDATE("Vendor Quote No.",InboundPurchaseDocumentHeader."Vendor Quote No.");
+      PurchQuoteHeader.VALIDATE("Currency Code",InboundPurchaseDocumentHeader."Currency Code");
+
+      CheckLines(InboundPurchaseDocumentHeader);
+
+      PurchQuoteLine.SETCURRENTKEY("Document Type","Document No.");
+      PurchQuoteLine.SETRANGE("Document Type", PurchQuoteHeader."Document Type");
+      PurchQuoteLine.SETRANGE("Document No.", PurchQuoteHeader."No.");
+
+      CASE BizTalkPartnerSetup."Purchase Item Number Type" OF
+        BizTalkPartnerSetup."Purchase Item Number Type"::"Internal Item No.":
+          InboundPurchaseDocumentLine.SETCURRENTKEY("Inbound Document No.","No.");
+        BizTalkPartnerSetup."Purchase Item Number Type"::"Vendor Item No.":
+          InboundPurchaseDocumentLine.SETCURRENTKEY("Inbound Document No.","Vendor Item No.");
+        BizTalkPartnerSetup."Purchase Item Number Type"::"Common Item No.":
+          InboundPurchaseDocumentLine.SETCURRENTKEY("Inbound Document No.","Common Item No.");
+      END;
+      InboundPurchaseDocumentLine.SETRANGE("Inbound Document No.",InboundPurchaseDocumentHeader."Inbound Document No.");
+
+      IgnoreComments := BizTalkPartnerSetup."Update Purchase Comments" =
+        BizTalkPartnerSetup."Update Purchase Comments"::"Ignore New and Modified";
+      IF NOT IgnoreComments THEN BEGIN
+        PurchQuoteLine.SETRANGE(Type,PurchQuoteLine.Type::" ");
+        PurchQuoteLine.DELETEALL;
+        PurchQuoteLine.SETRANGE(Type);
+        AuxCommentPurchLine.COPYFILTERS(PurchQuoteLine);
+        IF AuxCommentPurchLine.FIND('+') THEN
+          LastLineNo := AuxCommentPurchLine."Line No." + 10000;
+      END;
+
+      LineNo := '0';
+      IF InboundPurchaseDocumentLine.FIND('-') THEN
+        REPEAT
+          LineNo := INCSTR(LineNo);
+          CASE InboundPurchaseDocumentLine.Type OF
+            InboundPurchaseDocumentLine.Type::" ":
+              IF NOT IgnoreComments THEN BEGIN
+                AuxCommentPurchLine.INIT;
+                AuxCommentPurchLine."Document Type" := PurchQuoteHeader."Document Type";
+                AuxCommentPurchLine."Document No." := PurchQuoteHeader."No.";
+                AuxCommentPurchLine."Line No." := LastLineNo;
+                AuxCommentPurchLine.Description := InboundPurchaseDocumentLine.Description;
+                AuxCommentPurchLine.INSERT;
+                LastLineNo := LastLineNo + 10000;
+              END;
+            InboundPurchaseDocumentLine.Type::Item:
+              BEGIN
+                CASE BizTalkPartnerSetup."Purchase Item Number Type" OF
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Internal Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentLine.TESTFIELD("No.");
+                      ItemNo := InboundPurchaseDocumentLine."No.";
+                    END;
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Vendor Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentHeader.TESTFIELD("Buy-from Vendor No.");
+                      InboundPurchaseDocumentLine.TESTFIELD("Vendor Item No.");
+                      ItemNo := BizTalkManagement.ConvertVendorItemNo(
+                        InboundPurchaseDocumentLine."Vendor Item No.",
+                        InboundPurchaseDocumentHeader."Buy-from Vendor No.");
+                    END;
+                  BizTalkPartnerSetup."Purchase Item Number Type"::"Common Item No.":
+                    BEGIN
+                      InboundPurchaseDocumentLine.TESTFIELD("Common Item No.");
+                      ItemNo := BizTalkManagement.ConvertCommonItemNo(
+                        InboundPurchaseDocumentLine."Common Item No.");
+                    END;
+                END;
+                IF PreviousItemNo <> ItemNo THEN
+                  PreviousLineNo := 0;
+                PreviousItemNo := ItemNo;
+
+                PurchQuoteLine.SETRANGE("No.",ItemNo);
+                PurchQuoteLine.SETFILTER("Line No.",'>%1',PreviousLineNo);
+                IF PurchQuoteLine.FIND('-') THEN BEGIN
+                  IF InboundPurchaseDocumentLine."Expected Receipt Date" <> 0D THEN BEGIN
+                    CASE BizTalkPartnerSetup."Purch. Quote Expd. Rcpt. Date" OF
+                      BizTalkPartnerSetup."Purch. Quote Expd. Rcpt. Date"::Validate:
+                        BEGIN
+                          IF PurchQuoteLine."Expected Receipt Date" <> InboundPurchaseDocumentLine."Expected Receipt Date" THEN
+                            IF NOT HideDialogBox THEN BEGIN
+                              IF NOT CONFIRM(Text013 + Text014,FALSE,
+                                InboundPurchaseDocumentLine.FIELDCAPTION("Expected Receipt Date"),LineNo)
+                              THEN
+                                EXIT(FALSE);
+                            END ELSE
+                              ERROR(
+                                Text013,
+                                InboundPurchaseDocumentLine.FIELDCAPTION("Expected Receipt Date"),
+                                LineNo);
+                          PurchQuoteLine.VALIDATE("Expected Receipt Date",InboundPurchaseDocumentLine."Expected Receipt Date");
+                        END;
+                      BizTalkPartnerSetup."Purch. Quote Expd. Rcpt. Date"::Adjust:
+                        PurchQuoteLine.VALIDATE("Expected Receipt Date",InboundPurchaseDocumentLine."Expected Receipt Date");
+                    END;
+                  END;
+
+                  ValidateQuantity := FALSE;
+                  IF InboundPurchaseDocumentLine.Quantity <> 0 THEN BEGIN
+                    CASE BizTalkPartnerSetup."Purchase Quote (Qty)" OF
+                      BizTalkPartnerSetup."Purchase Quote (Qty)"::Validate:
+                        BEGIN
+                          IF PurchQuoteLine.Quantity <> InboundPurchaseDocumentLine.Quantity THEN
+                            IF NOT HideDialogBox THEN BEGIN
+                              IF NOT CONFIRM(Text013 + Text014,FALSE,
+                                InboundPurchaseDocumentLine.FIELDCAPTION(Quantity),LineNo)
+                              THEN
+                                EXIT(FALSE);
+                            END ELSE
+                              ERROR(Text013,InboundPurchaseDocumentLine.FIELDCAPTION(Quantity),LineNo);
+                          ValidateQuantity := TRUE;
+                        END;
+                      BizTalkPartnerSetup."Purchase Quote (Qty)"::Adjust:
+                        ValidateQuantity := TRUE;
+                    END;
+                  END;
+                  IF ValidateQuantity AND (PurchQuoteHeader."Currency Code" <> '') THEN BEGIN
+                    CurrencyExchRate[1].SETRANGE("Currency Code",PurchQuoteHeader."Currency Code");
+                    CurrencyExchRate[1].SETRANGE("Starting Date",0D,PurchQuoteHeader."Document Date");
+                    IF NOT CurrencyExchRate[1].FIND('+') THEN
+                      ERROR(Text022,CurrencyExchRate[1].TABLECAPTION,PurchQuoteHeader."Currency Code",
+                        PurchQuoteHeader.FIELDCAPTION("Document Date"),
+                        InboundPurchaseDocumentHeader.FIELDCAPTION("Reference Quote No."),
+                        InboundPurchaseDocumentHeader."Reference Quote No.");
+                  END;
+
+                  CASE BizTalkPartnerSetup."Quote Combined Amt/Cost/Disc." OF
+                    BizTalkPartnerSetup."Quote Combined Amt/Cost/Disc."::Validate:
+                      BEGIN
+                        IF PurchQuoteLine."Direct Unit Cost" <> InboundPurchaseDocumentLine."Direct Unit Cost" THEN
+                          IF NOT HideDialogBox THEN BEGIN
+                            IF NOT CONFIRM(Text013 + Text014,FALSE,
+                              InboundPurchaseDocumentLine.FIELDCAPTION("Direct Unit Cost"),LineNo)
+                            THEN
+                              EXIT(FALSE);
+                          END ELSE
+                            ERROR(Text013,InboundPurchaseDocumentLine.FIELDCAPTION("Direct Unit Cost"),LineNo);
+                        IF PurchQuoteHeader."Currency Code" = '' THEN
+                          Currency.InitRoundingPrecision
+                        ELSE
+                          Currency.GET(PurchQuoteHeader."Currency Code");
+                        Currency.TESTFIELD("Amount Rounding Precision");
+                        IF PurchQuoteLine."Line Discount %" <> InboundPurchaseDocumentLine."Line Discount %" THEN
+                          IF NOT HideDialogBox THEN BEGIN
+                            IF NOT CONFIRM(Text013 + Text014,FALSE,
+                              InboundPurchaseDocumentLine.FIELDCAPTION("Line Discount %"),LineNo)
+                            THEN
+                              EXIT(FALSE);
+                          END ELSE
+                            ERROR(Text013,InboundPurchaseDocumentLine.FIELDCAPTION("Line Discount %"),LineNo);
+                        IF ValidateQuantity THEN
+                          PurchQuoteLine.VALIDATE(Quantity,InboundPurchaseDocumentLine.Quantity);
+                        PurchQuoteLine.VALIDATE("Direct Unit Cost",InboundPurchaseDocumentLine."Direct Unit Cost");
+                        PurchQuoteLine.VALIDATE("Line Discount %",InboundPurchaseDocumentLine."Line Discount %");
+                      END;
+                    BizTalkPartnerSetup."Quote Combined Amt/Cost/Disc."::Adjust:
+                      BEGIN
+                        IF ValidateQuantity THEN
+                          PurchQuoteLine.VALIDATE(Quantity,InboundPurchaseDocumentLine.Quantity);
+                        PurchQuoteLine.VALIDATE("Direct Unit Cost",InboundPurchaseDocumentLine."Direct Unit Cost");
+                        PurchQuoteLine.VALIDATE("Line Discount %",InboundPurchaseDocumentLine."Line Discount %");
+                      END;
+                  END;
+                  PurchQuoteLine.MODIFY;
+                  PreviousLineNo := PurchQuoteLine."Line No.";
+
+                  BizTalkReservEntry.SETRANGE("BizTalk Document No.",
+                    InboundPurchaseDocumentHeader."Inbound Document No.");
+                  BizTalkReservEntry.SETRANGE("Biztalk Document Direction",
+                  BizTalkReservEntry."Biztalk Document Direction"::Inbound);
+                  BizTalkReservEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                  BizTalkReservEntry.SETRANGE("BizTalk Document Line No.",
+                    InboundPurchaseDocumentLine."Line No.");
+                  IF BizTalkReservEntry.FIND('-') THEN
+                    BEGIN
+                      ReservEntry.SETCURRENTKEY(
+                        "Source ID","Source Ref. No.","Source Type","Source Subtype",
+                        "Source Batch Name","Source Prod. Order Line","Reservation Status");
+                      ReservEntry.SETRANGE("Source ID",PurchQuoteHeader."No.");
+                      ReservEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                      ReservEntry.SETRANGE("Source Subtype",PurchQuoteLine."Document Type");
+                      ReservEntry.DELETEALL(TRUE);
+                      REPEAT
+                        Item.GET(ItemNo);
+                        IF Item."Item Tracking Code" = '' THEN
+                          ERROR(Text025,Item.FIELDCAPTION("Item Tracking Code"),Item.TABLECAPTION,Item.FIELDCAPTION("No."),
+                            Item."No.",FORMAT(PurchQuoteHeader."Document Type"),BizTalkReservEntry.TABLECAPTION);
+                        CreateReservEntry.CreateReservEntryFor(
+                          DATABASE::"Purchase Line",PurchQuoteLine."Document Type",
+                          PurchQuoteHeader."No.",'',0,PurchQuoteLine."Line No.",PurchQuoteLine."Qty. per Unit of Measure",
+                          BizTalkReservEntry.Quantity,BizTalkReservEntry."Serial No.",BizTalkReservEntry."Lot No.");
+                        CreateReservEntry.CreateEntry(ItemNo,
+                          PurchQuoteLine."Variant Code",PurchQuoteLine."Location Code",
+                          BizTalkReservEntry.Description,
+                          BizTalkReservEntry."Expected Receipt Date",
+                          BizTalkReservEntry."Shipment Date",0,BizTalkReservEntry."Reservation Status");
+                      UNTIL BizTalkReservEntry.NEXT = 0;
+                    END;
+
+                END ELSE
+                  ERROR(Text015);
+              END;
+            ELSE
+              ERROR(Text009,PurchQuoteLine.TABLECAPTION,PurchQuoteLine.FIELDCAPTION(Type),FORMAT(PurchQuoteLine.Type));
+          END;
+        UNTIL InboundPurchaseDocumentLine.NEXT = 0;
+
+      InboundPurchaseDocumentHeader.Status := InboundPurchaseDocumentHeader.Status::Accepted;
+      InboundPurchaseDocumentHeader."Date Processed" := TODAY;
+      InboundPurchaseDocumentHeader."Time Processed" := TIME;
+      InboundPurchaseDocumentHeader."Corresp. Accepted Document No." := PurchQuoteHeader."No.";
+      InboundPurchaseDocumentHeader.MODIFY;
+      PurchQuoteHeader.MODIFY;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckLines@3(InboundPurchaseDocumentHeader@1000 : Record 99008502);
+    VAR
+      InboundPurchaseDocumentLine@1001 : Record 99008503;
+      PurchQuoteLine@1002 : Record 39;
+      BizTalkManagement@1003 : Codeunit 99008508;
+      LineNo@1004 : Code[4];
+      ItemNo@1005 : Code[20];
+      VendorItemNo@1006 : Text[20];
+      CommonItemNo@1007 : Code[20];
+    BEGIN
+      LineNo := '0';
+      PurchQuoteLine.SETRANGE("Document Type",PurchQuoteHeader."Document Type");
+      PurchQuoteLine.SETRANGE("Document No.", PurchQuoteHeader."No.");
+      PurchQuoteLine.FIND('-');
+      REPEAT
+        LineNo := INCSTR(LineNo);
+        CASE PurchQuoteLine.Type OF
+          PurchQuoteLine.Type::" ":;
+          PurchQuoteLine.Type::Item:
+            BEGIN
+              InboundPurchaseDocumentLine.SETCURRENTKEY("Inbound Document No.");
+              InboundPurchaseDocumentLine.SETRANGE("Inbound Document No.", InboundPurchaseDocumentHeader."Inbound Document No.");
+              CASE BizTalkPartnerSetup."Purchase Item Number Type" OF
+                BizTalkPartnerSetup."Purchase Item Number Type"::"Internal Item No.":
+                  InboundPurchaseDocumentLine.SETRANGE("No.",PurchQuoteLine."No.");
+                BizTalkPartnerSetup."Purchase Item Number Type"::"Vendor Item No.":
+                  BEGIN
+                    VendorItemNo := BizTalkManagement.GetVendorItemNumber(
+                      PurchQuoteLine."No.",PurchQuoteHeader."Buy-from Vendor No.");
+                    IF VendorItemNo = '' THEN
+                      ERROR(Text020,PurchQuoteLine."No.");
+                    InboundPurchaseDocumentLine.SETRANGE("Vendor Item No.",VendorItemNo);
+                    IF NOT InboundPurchaseDocumentLine.FIND('-') THEN
+                      ERROR(Text021 + Text022,VendorItemNo,LineNo);
+                  END;
+                BizTalkPartnerSetup."Purchase Item Number Type"::"Common Item No.":
+                  BEGIN
+                    CommonItemNo := BizTalkManagement.GetCommonItemNumber(PurchQuoteLine."No.");
+                    IF CommonItemNo = '' THEN
+                      ERROR(Text023,PurchQuoteLine."No.");
+                    InboundPurchaseDocumentLine.SETRANGE("Common Item No.",CommonItemNo);
+                    IF NOT InboundPurchaseDocumentLine.FIND('-') THEN
+                      ERROR(Text024 + Text022,CommonItemNo,LineNo);
+                  END;
+              END;
+            END;
+          ELSE
+            ERROR(Text009,PurchQuoteLine.TABLECAPTION,PurchQuoteLine.FIELDCAPTION(Type),FORMAT(PurchQuoteLine.Type));
+        END;
+      UNTIL PurchQuoteLine.NEXT = 0;
+    END;
+
+    PROCEDURE SetHideDialogBox@5(NewHideDialogBox@1000 : Boolean);
+    BEGIN
+      HideDialogBox := NewHideDialogBox;
+    END;
+
+    PROCEDURE SetAcceptDueDate@6(NewAcceptDueDate@1000 : Boolean);
+    BEGIN
+      AcceptDueDate := NewAcceptDueDate;
+    END;
+
+    BEGIN
+    END.
+  }
+}

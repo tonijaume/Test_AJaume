@@ -1,0 +1,406 @@
+OBJECT Table 7010184 Recogidas excursion x hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/15;
+    Time=10:54:24;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Picking up excursions x hotel;
+               ESP=Recogidas excursion x hotel];
+    LookupFormID=Form7010225;
+    DrillDownFormID=Form7010225;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Hotel               ;Code20        ;TableRelation=Hotel.Hotel WHERE (NoName=CONST(No));
+                                                   OnValidate=BEGIN
+                                                                IF rHotel.GET(Hotel) THEN
+                                                                  "Nombre hotel" := rHotel.Nombre
+                                                                ELSE
+                                                                  "Nombre hotel" := '';
+                                                              END;
+
+                                                   CaptionML=[ENU=Hotel;
+                                                              ESP=Hotel];
+                                                   NotBlank=Yes;
+                                                   Description=PK, FK Hotel }
+    { 3   ;   ;Excursion           ;Code10        ;TableRelation="Producto agencia".Codigo WHERE (Tipo Producto=CONST(Excursion));
+                                                   CaptionML=[ENU=Excursion;
+                                                              ESP=Excursion];
+                                                   NotBlank=Yes;
+                                                   Description=PK, FK Producto }
+    { 5   ;   ;Turno               ;Integer       ;CaptionML=[ENU=Turn;
+                                                              ESP=Turno];
+                                                   Description=$005 }
+    { 7   ;   ;Hora recogida       ;Time          ;CaptionML=[ENU=Picking time;
+                                                              ESP=Hora recogida] }
+    { 9   ;   ;Nombre hotel        ;Text30        ;CaptionML=[ENU=Hotel Name;
+                                                              ESP=Nombre Hotel];
+                                                   Description=$001 }
+  }
+  KEYS
+  {
+    {    ;Hotel,Excursion,Turno                   ;Clustered=Yes }
+    {    ;Excursion,Hora recogida                 ;KeyGroups=RENUMERING }
+    {    ;Excursion,Nombre hotel                  ;KeyGroups=RENUMERING }
+    {    ;Excursion,Turno,Hora recogida            }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355000 : TextConst 'ENU=%1 excursions have been added;ESP=Se han a¤adido %1 excursiones.';
+      Text001@1103355001 : TextConst 'ENU=%1 hotels have been added;ESP=Se han a¤adido %1 hoteles.';
+      rHotel@1100253000 : Record 7009724;
+      rExcel@1100217000 : Record 7009785;
+      Text003@1100217002 : TextConst 'ENU=Pickup per hotel summary;ESP=Cuadrante Recogida Hoteles';
+      Text004@1100217001 : TextConst 'ENU=Creating temporary @1@@@@@@@@@@@@@;ESP=Creando Temporal @1@@@@@@@@@@@@@';
+      wVentana@1100217003 : Dialog;
+      Text005@1100217004 : TextConst 'ENU=Do you want only the hotels with current contract.;ESP=Desea a¤adir solo los hoteles con contrato en vigor.';
+
+    PROCEDURE horas_recogida_hotel@1(prHot@1103355000 : Record 7009724);
+    VAR
+      lrExc@1103355001 : Record 7009710;
+      lrHoraExc@1103355002 : Record 7010184;
+      lwContador@1103355003 : Integer;
+      lrCalendario@1000000001 : Record 7010254;
+      vTurnoAnt@1000000000 : Integer;
+    BEGIN
+      // horas_recogida_hotel
+
+      lwContador := 0;
+
+      lrExc.RESET;
+      lrExc.SETRANGE("Tipo Producto", lrExc."Tipo Producto"::Excursion);
+      IF lrExc.FINDSET THEN BEGIN
+        REPEAT
+          // +$006 < Tenemos que crear tantos registros como turnos tenga la excursi¢n
+          vTurnoAnt := 0;
+          lrCalendario.RESET;
+          lrCalendario.SETCURRENTKEY(lrCalendario.Excursion,lrCalendario.Turno);
+          lrCalendario.SETRANGE(lrCalendario.Excursion,lrExc.Codigo);
+          lrCalendario.SETFILTER("Fecha inicio", '<=%1', TODAY);
+          lrCalendario.SETFILTER("Fecha final" , '>=%1', TODAY);
+          IF lrCalendario.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              IF lrCalendario.Turno <> vTurnoAnt THEN
+              BEGIN
+                vTurnoAnt := lrCalendario.Turno;
+          // $006 >
+                IF NOT lrHoraExc.GET(prHot.Hotel, lrExc.Codigo, lrCalendario.Turno) THEN
+                BEGIN
+                  CLEAR(lrHoraExc);
+                  lrHoraExc.VALIDATE(Hotel, prHot.Hotel); //$001
+                  lrHoraExc.Excursion := lrExc.Codigo;
+                  lrHoraExc.Turno := lrCalendario.Turno;
+                  lrHoraExc.INSERT;
+
+                  lwContador += 1;
+                END;
+              END;
+            UNTIL lrCalendario.NEXT = 0;
+          END;
+        UNTIL lrExc.NEXT = 0;
+      END;
+
+      IF lwContador <> 0 THEN
+        MESSAGE(Text000, lwContador);
+    END;
+
+    PROCEDURE horas_recogida_excursion@2(prExc@1103355000 : Record 7009710);
+    VAR
+      lrHot@1103355001 : Record 7009724;
+      lrHoraExc@1103355002 : Record 7010184;
+      lrDatInst@1100217000 : Record 7009768;
+      lrCalendario@1000000001 : Record 7010254;
+      lwContador@1103355003 : Integer;
+      lwTieneContrato@1100253000 : Boolean;
+      lwTodos@1100217001 : Boolean;
+      vTurnoAnt@1000000000 : Integer;
+    BEGIN
+      // horas_recogida_excursion
+
+      //. Temporal 2012
+      lrDatInst.FINDFIRST;
+
+      lwContador := 0;
+
+      lwTodos := NOT CONFIRM(Text005); //+$004
+
+      lrHot.RESET;
+      lrHot.SETRANGE(NoName          , FALSE);
+      lrHot.SETRANGE("Hotel Ficticio", FALSE);
+      lrHot.SETRANGE(Catalogo        , TRUE); //+$005
+      IF lrHot.FINDSET THEN
+      BEGIN
+        REPEAT
+          lwTieneContrato := _ContratoCompraHotel(lrHot.Hotel) OR lwTodos; //$002 //+$004
+
+          // +$006 < Tenemos que crear tantos registros como turnos tenga la excursi¢n
+          vTurnoAnt := 0;
+          lrCalendario.RESET;
+          lrCalendario.SETCURRENTKEY(lrCalendario.Excursion,lrCalendario.Turno);
+          lrCalendario.SETRANGE(lrCalendario.Excursion,prExc.Codigo);
+          lrCalendario.SETFILTER("Fecha inicio", '<=%1', TODAY);
+          lrCalendario.SETFILTER("Fecha final" , '>=%1', TODAY);
+          IF lrCalendario.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              IF lrCalendario.Turno <> vTurnoAnt THEN
+              BEGIN
+                vTurnoAnt := lrCalendario.Turno;
+          // $006 >
+                IF NOT lrHoraExc.GET(lrHot.Hotel, prExc.Codigo, lrCalendario.Turno) THEN
+                BEGIN
+                  //+$002
+                  IF lwTieneContrato THEN
+                  BEGIN
+                    CLEAR(lrHoraExc); //+$007
+                    lrHoraExc.VALIDATE(Hotel, lrHot.Hotel); //$001
+                    lrHoraExc.Excursion := prExc.Codigo;
+                    lrHoraExc.Turno := lrCalendario.Turno;
+                    lrHoraExc.INSERT;
+
+                    lwContador += 1;
+                  END;
+                  //+$002
+                END
+                //+$002
+                ELSE
+                BEGIN
+                  IF NOT lwTieneContrato AND (lrDatInst."Empresa Real" = lrDatInst."Empresa Real"::GOC) THEN //. Temporal 2012
+                    lrHoraExc.DELETE;
+                END;
+              END;
+            UNTIL lrCalendario.NEXT = 0; // $006
+          END ELSE BEGIN
+            IF NOT lrHoraExc.GET(lrHot.Hotel, prExc.Codigo, 0) THEN
+            BEGIN
+              //+$002
+              IF lwTieneContrato THEN
+              BEGIN
+                CLEAR(lrHoraExc); //+$007
+                lrHoraExc.VALIDATE(Hotel, lrHot.Hotel); //$001
+                lrHoraExc.Excursion := prExc.Codigo;
+                lrHoraExc.Turno := 0;
+                lrHoraExc.INSERT;
+
+                lwContador += 1;
+              END;
+              //+$002
+            END
+            //+$002
+            ELSE
+            BEGIN
+              IF NOT lwTieneContrato AND (lrDatInst."Empresa Real" = lrDatInst."Empresa Real"::GOC) THEN //. Temporal 2012
+                lrHoraExc.DELETE;
+            END;
+          END;                           // $006
+          //+$002
+        UNTIL lrHot.NEXT = 0;
+      END;
+
+      IF lwContador <> 0 THEN
+        MESSAGE(Text001, lwContador);
+    END;
+
+    LOCAL PROCEDURE _ContratoCompraHotel@1100253000(pwHotel@1100253000 : Code[20]) : Boolean;
+    VAR
+      rContCompra@1100253001 : Record 7009723;
+    BEGIN
+      // _ContratoCompraHotel
+
+      rContCompra.RESET;
+      rContCompra.SETCURRENTKEY(Hotel, TourOperador, "Fecha inicio contrato");
+      rContCompra.SETRANGE (Hotel                 , pwHotel);
+      rContCompra.SETFILTER("Fecha final contrato", '>=%1', TODAY);
+      EXIT(NOT rContCompra.ISEMPTY);
+    END;
+
+    PROCEDURE PasarAExcel@1100217000(pwZona@1100217000 : Code[10]);
+    VAR
+      lrHotel@1100217010 : Record 7009724;
+      lrHora@1100217009 : Record 7010184;
+      lrTempExc@1100217008 : TEMPORARY Record 7009710;
+      lrProd@1100217007 : Record 7009710;
+      lwColum@1100217006 : Integer;
+      lwFila@1100217005 : Integer;
+      lwCod@1100217004 : Code[10];
+      lwTotal@1100217003 : Integer;
+      lwCont@1100217002 : Integer;
+      lwOk@1100217001 : Boolean;
+    BEGIN
+      // PasarAExcel
+
+      {
+      CLEAR(lwColum);
+      CLEAR(lwFila);
+      CLEAR(lrHotel);
+      CLEAR(lrHora);
+
+
+      CLEAR(rExcel);
+      rExcel.DELETEALL;
+
+      // Creamos un temporal de Excursiones
+      CLEAR(lrTempExc);
+      lrTempExc.DELETEALL;
+      CLEAR(lrProd);
+      lrProd.SETRANGE("Tipo Producto", lrProd."Tipo Producto"::Excursion);
+      IF lrProd.FINDSET THEN BEGIN
+        REPEAT
+          IF lrProd."Codigo abreviado" <> '' THEN BEGIN
+            CLEAR(lrHora);
+            lrHora.SETRANGE(Excursion, lrProd.Codigo);
+            IF lrHora.FINDFIRST THEN BEGIN
+              lrTempExc := lrProd;
+              lrTempExc.INSERT;
+            END;
+          END;
+        UNTIL lrProd.NEXT=0;
+      END;
+
+      lwFila +=1;
+      lwColum :=1;
+      rExcel.Bold := TRUE;
+      rExcel."Tama¤o Fuente" :=12;
+      rExcel.VALIDATE("Row No."   ,  lwFila);
+      rExcel.VALIDATE("Column No.", lwColum);
+      rExcel."Cell Value as Text" := Text003;
+      rExcel.INSERT;
+
+      rExcel."Tama¤o Fuente" :=9;
+      IF pwZona <> '' THEN BEGIN
+        lwFila += 3;
+        rExcel.VALIDATE("Row No."   ,  lwFila);
+        rExcel."Cell Value as Text" := lrHotel.FIELDCAPTION("Zona Fisica") + '=';
+        rExcel.INSERT;
+        lwColum +=1;
+        rExcel.VALIDATE("Column No.", lwColum);
+        rExcel."Cell Value as Text" := pwZona;
+        rExcel.Bold := FALSE;
+        rExcel.INSERT;
+        lwFila += 3;
+      END
+      ELSE
+        lwFila +=6;
+
+      // Insertamos la cabecera
+      CLEAR(lwColum);
+      lwColum +=1;
+      lwFila +=1;
+      rExcel.Bold := TRUE;
+      rExcel.VALIDATE(Bordes,2);
+      rExcel.VALIDATE("Row No."   ,  lwFila);
+      rExcel.VALIDATE("Column No.", lwColum);
+      rExcel."Cell Value as Text" := lrHotel.FIELDCAPTION(Nombre);
+      rExcel.INSERT;
+
+      lwColum +=1;
+      rExcel.VALIDATE("Column No.", lwColum);
+      rExcel."Cell Value as Text" := lrHotel.FIELDCAPTION("Zona Fisica");
+      rExcel.INSERT;
+
+      lwColum +=1;
+      rExcel.VALIDATE("Column No.", lwColum);
+      rExcel."Cell Value as Text" := lrHotel.FIELDCAPTION("Punto Recogida");
+      rExcel.INSERT;
+
+      CLEAR(lrTempExc);
+      IF lrTempExc.FINDSET THEN BEGIN
+        REPEAT
+          lwColum +=1;
+          rExcel.VALIDATE("Column No.", lwColum);
+          rExcel."Cell Value as Text" := lrTempExc."Codigo abreviado";
+          rExcel.INSERT;
+        UNTIL lrTempExc.NEXT=0;
+      END;
+
+      CLEAR(rExcel);
+      lrHotel.SETCURRENTKEY("Zona Fisica", "Orden Salida");
+      IF pwZona <> '' THEN
+        lrHotel.SETRANGE("Zona Fisica", pwZona);
+      IF lrHotel.FINDSET THEN BEGIN
+        wVentana.OPEN(Text004);
+        lwTotal := lrHotel.COUNT;
+        lwCont  := 0;
+        REPEAT
+          CLEAR(lrHora);
+          lrHora.SETRANGE(Hotel, lrHotel.Hotel);
+          IF lrHora.FINDSET THEN BEGIN
+            lwOk := FALSE;
+            lwColum := 3;
+            IF lrTempExc.FINDSET THEN BEGIN
+              REPEAT
+                CLEAR(lrHora);
+                lwColum +=1;
+                IF lrHora.GET(lrHotel.Hotel, lrTempExc.Codigo) THEN BEGIN
+                  IF NOT lwOk THEN BEGIN // En la primera columna saltamos de fila
+                    lwFila +=1;
+                    rExcel.VALIDATE("Row No.",  lwFila);
+                  END;
+                  rExcel.VALIDATE("Column No.", lwColum);
+                  rExcel."Cell Value as Text" := FORMAT(lrHora."Hora recogida",0,'<Hours24>:<Minutes>');
+                  rExcel.INSERT;
+                  lwOk:= TRUE;
+                END;
+              UNTIL lrTempExc.NEXT = 0;
+            END;
+
+            IF lwOk THEN BEGIN
+              CLEAR(lwColum);
+              lwColum := 1;
+              rExcel.VALIDATE("Column No.", lwColum);
+              rExcel."Cell Value as Text" := lrHotel.Nombre;
+              rExcel.INSERT;
+
+              lwColum += 1;
+              rExcel.VALIDATE("Column No.", lwColum);
+              rExcel."Cell Value as Text" := lrHotel."Zona Fisica";
+              rExcel.INSERT;
+
+              lwColum += 1;
+              rExcel.VALIDATE("Column No.", lwColum);
+              rExcel."Cell Value as Text" := lrHotel."Punto Recogida";
+              rExcel.INSERT;
+            END;
+          END;
+          lwCont += 1;
+          wVentana.UPDATE(1, ROUND(lwCont / lwTotal * 10000, 1));
+        UNTIL lrHotel.NEXT = 0;
+        wVentana.CLOSE;
+      END;
+
+      rExcel.CreateBook;
+      rExcel.CreateSheet(Text003, Text003, COMPANYNAME, USERID, TRUE, TRUE, '');
+      rExcel.GiveUserControl;
+      }
+    END;
+
+    BEGIN
+    {
+      $001 AJS 16112011 Agrego el campo "Nombre hotel" para poder ordenar alfabeticamente en la ventana
+
+      $002 AJS 16112011 Cuando se revisa la lista de hoteles hay que borrar los que no tengan contrato en la temporada
+                        e insertar solo los que si tienen contrato
+
+      $003 AJS 14042014 Inicialmente comentamos la funcion PasarAExcel para que no de error de compilacion
+
+      $004 AJS 13052014 A la hora de crear los hoteles hay que preguntar si se quieren solo los hoteles con contrato
+
+      $005 AJS 13052014 Tomar solo los hoteles con la marca Catalogo
+
+      $006 ARM 25082014 Se a¤ade el turno CNT-CAR-14073
+
+      $007 AJS 13072015 Limpiar la variable para que se creen sin hora
+    }
+    END.
+  }
+}

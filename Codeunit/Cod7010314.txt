@@ -1,0 +1,1038 @@
+OBJECT Codeunit 7010314 Generacion Actividad
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:35:31;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rPar@1100244004 : Record 7010311;
+      aConvenios@1100244000 : ARRAY [10] OF Code[10];
+      aHExtra@1100244001 : ARRAY [10] OF Decimal;
+      ContaConvenios@1100244002 : Integer;
+      window@1100244003 : Dialog;
+
+    PROCEDURE Generar@10(pGaraje@1100244000 : Code[10];pConductor@1100244001 : Code[10];pFechaIni@1100244002 : Date;pFechaFin@1100244003 : Date;pPedirConformidad@1100244004 : Boolean;pTipoAcuerdo@1100244005 : Code[10]);
+    VAR
+      error1@1100244006 : TextConst 'ESP=No se puede generar para un ambito mayor que %1 d¡as';
+      error2@1100244007 : TextConst 'ESP=No existe el usuario %1';
+      conformidad@1100244008 : TextConst 'ESP=¨Est  seguro que quiere generar?';
+      BAD_GARAJE@1100244009 : TextConst 'ESP=Garaje incorrecto';
+      rPar@1100244010 : Record 7010311;
+      rUsu@1100244011 : Record 7010420;
+      rGar@1100244012 : Record 7010310;
+      rConductor@1100244013 : Record 7010327;
+      vFecha@1100244014 : Date;
+      rHist@1100244015 : Record 7010331;
+      rIncid@1100244016 : Record 7010333;
+      rRA@1100244017 : Record 7010332;
+      vAumento@1100244018 : Decimal;
+      vProgreso@1100244019 : Decimal;
+      lwOk@1103350000 : Boolean;
+    BEGIN
+      //Generar.
+      IF pPedirConformidad THEN
+        IF NOT CONFIRM(conformidad) THEN
+          EXIT;
+
+      IF pGaraje<>'' THEN
+        IF NOT rGar.GET(pGaraje) THEN
+          ERROR(BAD_GARAJE);
+
+      //Revisaremos que en el filtro el rango de fechas no sea superior a x dias.
+      IF pFechaFin-pFechaIni > 30 THEN
+         ERROR(error1, 30);
+
+      //Bloquearemos la tabla registro de actividad.
+      rRA.LOCKTABLE(TRUE);
+
+      //Activaremos el filtro para acceder a la tabla de conductores.
+      //Consideraremos el entorno multi-garaje, as¡ como la selecci¢n del conductor que hayamos
+      //podido hacer.
+
+      rPar.FINDFIRST;
+
+      //Cargaremos las variables globales.
+      Inicios();
+      IF pGaraje<>'' THEN BEGIN
+         rConductor.RESET;
+         rConductor.SETCURRENTKEY(Garaje, Conductor);
+         rConductor.SETRANGE(Garaje, pGaraje);
+      END
+      ELSE BEGIN
+         rConductor.RESET;
+         rConductor.SETCURRENTKEY(Conductor);
+      END;
+
+      IF pConductor <> '' THEN
+        rConductor.SETRANGE(Conductor, pConductor);
+
+      rConductor.SETRANGE(Externo  , FALSE);
+      rConductor.SETRANGE(Bloqueado, FALSE);
+
+      vProgreso := 0;
+      IF rConductor.COUNT > 0 THEN
+        vAumento:= ROUND(100 / rConductor.COUNT);
+
+      //Procedemos a generar los registros
+
+      IF rConductor.FINDSET THEN BEGIN
+         window.OPEN('#2#################### @1@@@@@@@@@@@@@@');
+         REPEAT
+            Progreso(rConductor,vAumento,vProgreso);
+
+            ActContrato(rConductor);
+
+            //Buscaremos el contrato vigente.
+            rHist.RESET;
+            rHist.SETCURRENTKEY(Conductor);
+            rHist.SETRANGE(Conductor,rConductor.Conductor);
+            rHist.SETRANGE(Confirmado,TRUE);
+
+            //Necesitaremos tambien la tabla de incidencias para el conductor.
+            //rIncid.RESET;
+            //rIncid.SETCURRENTKEY(Conductor,"Fecha Desde");
+            //rIncid.SETRANGE(Conductor,rConductor.Conductor);
+
+            FOR vFecha := pFechaIni TO pFechaFin DO BEGIN
+
+               rHist.SETFILTER("Fecha Alta", '<=%1', vFecha);
+               rHist.SETFILTER("Fecha Baja", '%1|>=%2', 0D, vFecha);
+
+               // Le damos otra oportunidad. Pensaremos que todav¡a no se ha entrado el contrato.
+               { NO LE DAMOS MAS OPORTUNIDADES.
+               IF NOT rHist.FINDFIRST THEN
+                 rHist.SETFILTER("Fecha Baja",'=%1',0D);
+               }
+               IF rHist.FINDFIRST THEN BEGIN
+                 lwOk := (pTipoAcuerdo = '') OR (rHist."Tipo Acuerdo" = pTipoAcuerdo);
+                 lwOk := lwOk  AND rHist.TieneContParaDia(vFecha,FALSE);
+                 IF lwOk THEN BEGIN
+                   IF rPar."Tipo Calculo Conductores" = rPar."Tipo Calculo Conductores"::Ninguno THEN
+                     RegistroMinimo(rHist,rConductor,vFecha)
+                   ELSE
+                     RegistrarHoras(rHist,rConductor,vFecha);
+                 END;
+               END;
+            END;
+         UNTIL rConductor.NEXT = 0;
+         window.CLOSE;
+      END;
+    END;
+
+    PROCEDURE Inicios@2();
+    VAR
+      rConvenio@1100244000 : Record 7010334;
+    BEGIN
+      //Inicios.
+      rConvenio.RESET;
+      rConvenio.SETCURRENTKEY("Tipo Acuerdo");
+      ContaConvenios := 0;
+      IF rConvenio.FINDSET THEN REPEAT
+        ContaConvenios := ContaConvenios + 1;
+        aConvenios[ContaConvenios] := rConvenio."Tipo Acuerdo";
+        aHExtra[ContaConvenios]    := rConvenio."Hora Extra Desde";
+      UNTIL rConvenio.NEXT=0;
+    END;
+
+    PROCEDURE Progreso@3(rConductor@1100244000 : Record 7010327;vAumento@1100244001 : Decimal;VAR vProgreso@1100244002 : Decimal);
+    BEGIN
+      //PROGRESO(rConductor,vAumento,vProgreso);
+      vProgreso := vProgreso + vAumento;
+      window.UPDATE(2, rConductor."Nombre Abreviado");
+      IF vProgreso > 100 THEN
+        vProgreso := 100;
+      window.UPDATE(1, ROUND(vProgreso * 100, 1));
+    END;
+
+    PROCEDURE RegistrarHoras@5(rHist@1100244000 : Record 7010331;rConductor@1100244001 : Record 7010327;pFecha@1100244002 : Date);
+    VAR
+      cActCond@1100244003 : Codeunit 7010316;
+      vTipoAcuerdo@1100244004 : Code[10];
+      rHorasCond@1100244005 : Record 7010332;
+      rPar@1100244006 : Record 7010311;
+      vHorasServicio@1100244007 : Decimal;
+      vHorasExtras@1100244008 : Decimal;
+      vNumDietas@1100244009 : Decimal;
+      vMaletas@1100244010 : Decimal;
+      vViajes@1100244011 : Decimal;
+      vStatus@1100244012 : Integer;
+      vValidado@1100244013 : Boolean;
+      SOLAPE_ENCONTRADO@1100244014 : TextConst 'ESP=Se ha detectado un solape con otro periodo';
+      vPeriodoSolape@1100244015 : Text[40];
+      vErrorGrave@1100244016 : Boolean;
+      cFunCond@1100244017 : Codeunit 7010313;
+      ERROR_CONTIGUIDAD@1100244018 : TextConst 'ESP=Se ha detectado una incongruencia en la continuidad';
+    BEGIN
+      //RegistrarHoras.
+      //Revisaremos que no exista ya el registro, en cuyo caso no haremos nada.
+      rPar.FINDFIRST;
+
+      vTipoAcuerdo := rHist."Tipo Acuerdo";
+      rHorasCond.RESET;
+      rHorasCond.SETCURRENTKEY(Conductor,Fecha);
+      rHorasCond.SETRANGE(Fecha    , pFecha);
+      rHorasCond.SETRANGE(Conductor, rConductor.Conductor);
+
+      IF NOT rHorasCond.FINDFIRST THEN BEGIN
+        //Borramos los registros de error que pudiera haber.
+        cFunCond.BorraRegError(rConductor.Conductor,pFecha);
+        IF rPar."Tipo Calculo Conductores"<> rPar."Tipo Calculo Conductores"::Ninguno THEN BEGIN
+
+          IF rPar."Tipo Calculo Conductores" =
+             rPar."Tipo Calculo Conductores"::"Seg£n horario de los partes" THEN
+            vStatus := GrabarPeriodosConDatos(pFecha,rConductor.Conductor, vTipoAcuerdo)
+          ELSE
+            //El m‚todo de c lculo es: Considerando s¢lo la hora de inicio.
+            vStatus := GrabarPeriodosSHI(pFecha,rConductor.Conductor);
+
+          IF vStatus = 0 THEN BEGIN
+
+            vPeriodoSolape:= '';
+            vErrorGrave   := FALSE;
+            IF HaySolape(rConductor.Conductor,pFecha,vPeriodoSolape) THEN BEGIN
+              cFunCond.CreaRegistroError(SOLAPE_ENCONTRADO,rConductor.Conductor,
+                                         rConductor."Nombre Abreviado",'',0D,pFecha,vPeriodoSolape,TRUE);
+              vErrorGrave:= TRUE;
+            END;
+
+            IF HayErrorContiguidad(rConductor.Conductor,pFecha,vPeriodoSolape) THEN BEGIN
+              cFunCond.CreaRegistroError(ERROR_CONTIGUIDAD,rConductor.Conductor,
+                                         rConductor."Nombre Abreviado",'',0D,pFecha,vPeriodoSolape,TRUE);
+              vErrorGrave := TRUE;
+            END;
+
+            //Ahora ir  en funci¢n de la variable vErrorGrave.
+            IF NOT vErrorGrave THEN BEGIN
+              cActCond.CalculaHoras(vTipoAcuerdo,rConductor.Conductor,pFecha,
+                                vNumDietas,vHorasServicio,vHorasExtras);
+              cActCond.OtrosCalculos(rConductor.Garaje,vTipoAcuerdo,rConductor.Conductor,pFecha,
+                                     FALSE);
+            END;
+
+            //Revisamos que ningun parte haya podido quedar desasignado.
+            IF NOT vErrorGrave THEN
+              TestPartes(rConductor.Conductor,pFecha,rConductor."Nombre Abreviado");
+
+            vValidado := NOT ErroresDetectados(rConductor.Conductor,pFecha);
+
+            GrabarRegistro(pFecha,rConductor,vTipoAcuerdo,rHist."Tipo Contrato",
+                           vHorasServicio,vHorasExtras,vNumDietas,vMaletas,vValidado)
+
+          END
+          ELSE BEGIN
+            //Dado que no hemos podido obtener todas las horas->haremos lo mismo que si no hubieramos
+            //parametrizado el c lculo como Seg£n horario de los partes.
+            IF vStatus = 1 THEN BEGIN
+              IF GrabarPeriodos(pFecha,rConductor.Conductor,TRUE) THEN
+                //Si ha encontrado partes asociados, grabamos el registro.
+                GrabarRegistro(pFecha,rConductor,vTipoAcuerdo,rHist."Tipo Contrato",0,0,0,0,FALSE);
+            END
+            ELSE BEGIN
+              IF vStatus = 3 THEN
+                GrabarRegistro(pFecha,rConductor,vTipoAcuerdo,rHist."Tipo Contrato",0,0,0,0,FALSE)
+            END;
+          END;
+        END
+        ELSE BEGIN
+          IF GrabarPeriodos(pFecha,rConductor.Conductor,FALSE) THEN
+            //Si ha encontrado partes asociados, grabamos el registro.
+            GrabarRegistro(pFecha,rConductor,vTipoAcuerdo,rHist."Tipo Contrato",0,0,0,0,FALSE)
+        END
+      END;
+      COMMIT;
+    END;
+
+    PROCEDURE RegistroMinimo@13(rHist@1100244000 : Record 7010331;rConductor@1100244001 : Record 7010327;pFecha@1100244002 : Date);
+    VAR
+      rHorasCond@1100244003 : Record 7010332;
+      cFunCond@1100244004 : Codeunit 7010313;
+    BEGIN
+      //RegistroMinimo.
+
+      rHorasCond.RESET;
+      rHorasCond.SETCURRENTKEY(Conductor,Fecha);
+      rHorasCond.SETRANGE(Fecha,pFecha);
+      rHorasCond.SETRANGE(Conductor,rConductor.Conductor);
+
+      IF NOT rHorasCond.FINDFIRST THEN BEGIN
+        //Borramos los registros de error que pudiera haber.
+        cFunCond.BorraRegError(rConductor.Conductor,pFecha);
+        IF TestActividad(pFecha,rConductor.Conductor) THEN
+          //Si ha encontrado partes asociados, grabamos el registro.
+          GrabarRegistro(pFecha,rConductor,rHist."Tipo Acuerdo",rHist."Tipo Contrato",0,0,0,0,FALSE)
+      END;
+      COMMIT;
+    END;
+
+    PROCEDURE TestActividad@14(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10]) : Boolean;
+    BEGIN
+      //TestActividad.
+      //DEVOLVERMOS TRUE A PI¥ON FIJO.
+      //ESTA RUTINA DEBE SER LLAMADA SOLO DESDE EL MODO DE EJECUCION MINIMO.
+      //SUPONE UNA DESVINCULACION TOTAL DE LOS PARTES.
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GrabarPeriodos@7(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10];pGrabarPeriodos@1100244002 : Boolean) : Boolean;
+    VAR
+      rPar@1100244003 : Record 7010311;
+      rTParte@1100244004 : Record 7010343;
+      rParte@1100244005 : Record 7010360;
+      Result@1100244006 : Boolean;
+      rPeriodo@1100244007 : Record 7010338;
+      vHoras@1100244008 : Time;
+      vFactorResta@1100244009 : Integer;
+      FALTA_HORA_INICIO@1100244010 : TextConst 'ESP=No se ha podido determinar la hora de inicio';
+      vHoraComparacion@1100244011 : Time;
+      cFunCond@1100244012 : Codeunit 7010313;
+    BEGIN
+      //GrabarPeriodos()
+
+      //a la hora inicial le restaremos x minutos.
+      //x minutos * 60 segundos * 1000 milisegundos.
+      rPar.FINDFIRST;
+      vFactorResta:= rPar."Minutos a Descontar" * 60 * 1000;
+
+      cFunCond.ActTemporalCalculo(pConductor,pFecha,0);
+
+
+      Result := FALSE;
+      rTParte.RESET;
+      rTParte.SETCURRENTKEY(Usuario,"Cod Conductor",Fecha,"Hora Inicio");
+      rTParte.SETRANGE(Usuario,USERID);
+      rTParte.SETRANGE("Cod Conductor",pConductor);
+
+      // ----  AJS 4.2.2002  ----
+      // ----  Solo interesan los partes del dia, nunca los del dia siguiente  ----
+
+      //rTParte.SETRANGE(Fecha,pFecha,pFecha+1);
+
+      rTParte.SETRANGE(Fecha, pFecha);
+
+      // ----  FIN AJS 4.2.2002  ----
+
+      IF rTParte.FINDSET THEN BEGIN
+
+        IF rTParte.Fecha = pFecha THEN
+          Result := TRUE;
+
+        REPEAT
+
+          //Buscamos la hora de inicio de la actividad.
+          rParte.GET(rTParte."N§ Parte");
+          vHoras := ObtenerHoraReferencia(rParte,vHoraComparacion);
+          IF vHoras <> 0T THEN BEGIN
+
+            //No grabaremos el parte, si es un parte del d¡a siguiente y su hora de inicio es
+            //superior a la indicada en la ficha de parametros.
+
+            // ----  AJS 4.2.2002  ----
+            // ----  Solo interesan los partes del dia  ----
+            //IF (rTParte.Fecha = pFecha) OR
+            //   ( ( rPar."Partes d¡a siguiente" <> 0T ) AND
+            //     ( vHoraComparacion < rPar."Partes d¡a siguiente" ) ) THEN BEGIN
+
+            IF rTParte.Fecha = pFecha  THEN BEGIN
+
+            // ----  FIN AJS 4.2.2002  ----
+
+            // JPT-23/02/04 Si tiene descuento por garaje y zona fisica cambiamos el valor de vFactorResta
+            // Buscamos la primera linea de Servicios-Partes
+            vFactorResta:= GetFactRest(rTParte."N§ Parte",rTParte.Garaje);
+
+              Result := TRUE;
+              //Este valor quiz s se podr¡a parametrizar en PARAMETROS.
+              IF pGrabarPeriodos THEN BEGIN
+                rPeriodo.INIT;
+                rPeriodo.Fecha         := pFecha;
+                rPeriodo.VALIDATE(Conductor, pConductor);
+                rPeriodo."Num Vehiculo"  := rParte."N§ Vehiculo";
+                IF (vHoras - vFactorResta) <= vHoras THEN
+                  rPeriodo."Fecha Real"  := rTParte.Fecha
+                ELSE
+                  rPeriodo."Fecha Real"  := rTParte.Fecha - 1;
+
+                rPeriodo."Hora Inicio"  := vHoras-vFactorResta;
+                rPeriodo."Hora Fin"     := rTParte."Hora final";
+
+                rPeriodo.INSERT(TRUE);
+              END
+              ELSE
+                EXIT(Result);
+            END;
+          END
+          ELSE
+            cFunCond.CreaRegistroError(FALTA_HORA_INICIO,rTParte."Cod Conductor",rTParte.Conductor,
+                              rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE);
+        UNTIL rTParte.NEXT=0;
+
+      END;
+
+      EXIT(Result)
+    END;
+
+    PROCEDURE GrabarPeriodosConDatos@1(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10];pTipoAcuerdo@1103350000 : Code[10]) : Integer;
+    VAR
+      rPeriodo@1100244002 : Record 7010338;
+      rTParte@1100244003 : Record 7010343;
+      rPar@1100244004 : Record 7010311;
+      rTipoAcuerdo@1103350001 : Record 7010334;
+      lrVeh@1103350002 : Record 7010346;
+      vFactorResta@1100244005 : Decimal;
+      vDescanso@1100244006 : Decimal;
+      vAuxHoraFin@1100244007 : Time;
+      vRuptura@1100244008 : Boolean;
+      vPrimero@1100244009 : Boolean;
+      vResult@1100244010 : Integer;
+      BAD_HORA_INICIO@1100244011 : TextConst 'ESP=No se ha puesto la hora de inicio';
+      BAD_HORA_FINAL@1100244012 : TextConst 'ESP=No se ha puesto la hora final';
+      cFunCond@1100244013 : Codeunit 7010313;
+    BEGIN
+      //GrabarPeriodosConDatos
+      //Si para cada parte se aplica la hora fin, entonces tiene sentido ejecutar esta funci¢n.
+      //GrabarPeriodosConDatos()
+
+      //a la hora inicial le restaremos x minutos.
+      //x minutos * 60 segundos * 1000 milisegundos.
+
+      rPar.FINDFIRST;
+      vFactorResta := rPar."Minutos a Descontar" * 60 * 1000;
+      vPrimero  := TRUE;
+
+      vResult   := 2;
+
+      vResult   := cFunCond.ActTemporalCalculo(pConductor,pFecha,0);
+
+      //Nos aseguramos que todos los partes tengan hora de inicio. Y que haya alg£n parte.
+      CASE vResult OF
+        2: EXIT(2);
+      END;
+
+      //Habremos cargado s¢lo los partes que nos interesan.
+      rTParte.RESET;
+      rTParte.SETCURRENTKEY(Usuario,"Cod Conductor",Fecha,"Hora Inicio");
+      rTParte.SETRANGE(Usuario,USERID);
+      IF NOT rTParte.FINDSET THEN
+        EXIT;
+
+      IF rTParte.FINDSET THEN BEGIN
+
+        // ----  AJS 4.2.2002  ----
+        // ----  Solo nos interesan los partes del dia  ----
+        {*
+        //Si el primer parte encontrado es del d¡a siguiente y empieza m s tarde de lo
+        //indicada en la ficha de parametros, no empezamos ni el c lculo.
+        IF (rTParte.Fecha > pFecha) AND
+           ( (rTParte."Hora Inicio" = 0T) OR (rPar."Partes d¡a siguiente" = 0T) OR
+             (rTParte."Hora Inicio" >= rPar."Partes d¡a siguiente") ) THEN
+          EXIT(2);
+        *}
+        // ----  FIN AJS 4.2.2002  ----
+
+        //Como tiene partes asociados,....
+        vResult := 0;
+
+        REPEAT
+
+          //... Puede ser que los partes del d¡a siguiente todav¡a no est‚n preparados.
+          //... Si no tiene puesta la hora de inicio, LA CALCULAMOS. Sino la encontramos ES UN ERROR.
+          //... Si es del d¡a siguiente y no tiene ni la hora final que lo aceptemos o no
+          //... depender  si la hora de inicio se supone que cae en la actividad del d¡a
+          //... siguiente. (Parametro Partes dia siguiente). En ese caso lo dejaremos colar:
+          //... Por eso devolveremos CERO.
+          //... El PELIGRO de esto es que este parte DEBA en realidad JUNTARSE a la actividad
+          //... de este d¡a, pero tampoco se pueden hacer milagros ¨no?
+
+          // ----  AJS 4.2.2002  ----
+          // ----  Solo interesan los partes del dia  ----
+          {*
+          IF (rTParte.Fecha > pFecha) AND (rTParte."Hora Inicio" <> 0T) AND
+                ( (rTParte."Hora final" = 0T) AND
+                  ( ( rPar."Partes d¡a siguiente" = 0T) OR
+                    (rTParte."Hora Inicio">=rPar."Partes d¡a siguiente") )) THEN BEGIN
+
+            cFunCond.CreaRegistroError(BAD_HORA_FINAL,rTParte."Cod Conductor",rTParte.Conductor,
+                              rTParte."N§ Parte",rTParte.Fecha,pFecha,'',FALSE);
+            EXIT(0);
+          END;
+          *}
+
+          // JPT-23/02/04 Si tiene descuento por garaje y zona fisica cambiamos el valor de vFactorResta
+          // Buscamos la primera linea de Servicios-Partes
+          vFactorResta:= GetFactRest(rTParte."N§ Parte",rTParte.Garaje);
+
+
+          //Si un parte no tiene puestas las horas, nos saltamos el conductor.
+          IF (rTParte."Hora Inicio" = 0T) OR (rTParte."Hora final" = 0T) THEN BEGIN
+
+            //Borramos primero los periodos que hubieramos podido crear.
+            rPeriodo.RESET;
+            rPeriodo.SETCURRENTKEY(Conductor,Fecha);
+            rPeriodo.SETRANGE(Conductor,pConductor);
+            rPeriodo.SETRANGE(Fecha,pFecha);
+            rPeriodo.DELETEALL;
+
+            //Crearemos los periodos pero s¢lo el borrador, con el otro m‚todo.
+            IF rTParte."Hora Inicio" =0T THEN
+              cFunCond.CreaRegistroError(BAD_HORA_INICIO,rTParte."Cod Conductor",rTParte.Conductor,
+                                rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE)
+            ELSE
+              cFunCond.CreaRegistroError(BAD_HORA_FINAL,rTParte."Cod Conductor",rTParte.Conductor,
+                                rTParte."N§ Parte",rTParte.Fecha,pFecha,'',TRUE);
+
+            EXIT(1);
+          END;
+          vRuptura := TRUE;
+
+          IF NOT vPrimero THEN BEGIN
+            IF rTParte."Hora Inicio" >= vAuxHoraFin THEN
+              vDescanso := rTParte."Hora Inicio" - vAuxHoraFin
+            ELSE
+              vDescanso := (235959T - vAuxHoraFin) + (rTParte."Hora Inicio"-000000T);
+
+            vDescanso := ROUND(vDescanso / (60*60*1000),0.01,'=');
+
+            // JPT 08/07/05 Ahora los rangos de ruptura estan en el tipo de acuerdo
+            IF rTipoAcuerdo.GET(pTipoAcuerdo) THEN BEGIN
+              IF rPar."Empresa Real" = rPar."Empresa Real"::UEX THEN BEGIN
+                rTipoAcuerdo.TESTFIELD("Ruptura Actividad Desde (Mins)");
+                rTipoAcuerdo.TESTFIELD("Ruptura Actividad Hasta (Mins)");
+              END;
+              IF (vDescanso < (rTipoAcuerdo."Ruptura Actividad Desde (Mins)" DIV 60)) OR
+                 (vDescanso > (rTipoAcuerdo."Ruptura Actividad Hasta (Mins)" DIV 60)) THEN
+              vRuptura := FALSE;
+            END;
+
+          END;
+
+          // ----  AJS 4.2.2002  ----
+          // ----  Solo interesan los partes del dia  ----
+          {*
+          IF vRuptura AND (rTParte.Fecha > pFecha) AND
+             ( (rPar."Partes d¡a siguiente" = 0T) OR
+               (rTParte."Hora Inicio">=rPar."Partes d¡a siguiente") ) THEN
+            //Saldremos del c lculo porque el parte es del d¡a siguiente y NO hemos indicado en la
+            //parametrizaci¢n que queramos considerar los partes del d¡a siguiente o bien
+            //no nos interesa crear un nuevo periodo dado que la hora de inicio es superior a la
+            //hora permitida en el fichero de parametros.
+            EXIT(Result);
+          *}
+          IF vRuptura AND (rTParte.Fecha > pFecha) THEN
+            EXIT (vResult);
+
+          // ----  FIN AJS 4.2.2002  ----
+
+          IF vRuptura THEN BEGIN
+            //Insertaremos un nuevo registro de periodos.
+            rPeriodo.INIT;
+            rPeriodo.Fecha         := pFecha;
+            rPeriodo.VALIDATE(Conductor  , pConductor);
+            IF (rTParte."Hora Inicio" - vFactorResta) <= rTParte."Hora Inicio" THEN
+              rPeriodo."Fecha Real":= rTParte.Fecha
+            ELSE
+              rPeriodo."Fecha Real":= rTParte.Fecha - 1;
+            rPeriodo."Hora Inicio" := rTParte."Hora Inicio"-vFactorResta;
+            rPeriodo."Hora Fin"    := rTParte."Hora final";
+            // JPT - Busco el nunero de vehiculo
+            IF lrVeh.GET(rTParte.Matricula) THEN
+              rPeriodo."Num Vehiculo":= lrVeh.Numero;
+            rPeriodo.INSERT(TRUE);
+
+            //Para que s¢lo se haga para el primero.
+            //SE ASTERISCA.
+            //vFactorResta := 0;
+          END
+          ELSE BEGIN
+            //RRT. Modificamos la hora final.
+            rPeriodo."Hora Fin" := rTParte."Hora final";
+            rPeriodo.MODIFY;
+          END;
+
+          vAuxHoraFin := rTParte."Hora final";
+          vPrimero    := FALSE;
+
+        UNTIL rTParte.NEXT=0;
+
+
+      END;
+
+      EXIT(vResult);
+    END;
+
+    PROCEDURE GrabarPeriodosSHI@17(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10]) : Integer;
+    VAR
+      rTParte@1100244002 : Record 7010343;
+      rPeriodo@1100244003 : Record 7010338;
+      rPar@1100244004 : Record 7010311;
+      lrVeh@1103350000 : Record 7010346;
+      cFunCond@1100244005 : Codeunit 7010313;
+      vContaPeriodos@1100244006 : Integer;
+      vPDS@1100244007 : Time;
+      vSTNuevoPeriodo@1100244008 : Boolean;
+      vAbortar@1100244009 : Boolean;
+      vResult@1100244010 : Integer;
+    BEGIN
+      //GrabarPeriodosSHI.
+      //Devolvemos:
+      // 3 si hemos detectado un error.
+      // 2 si no tenemos nada que grabar porque no ha habido actividad.
+      // 0 si se ha encontrado alg£n parte.
+      //..............
+
+      rPar.RESET;
+      rPar.FINDFIRST;
+      vPDS:=  rPar."Partes d¡a siguiente";
+
+      vResult := cFunCond.ActTemporalCalculo(pConductor,pFecha,0);
+
+      //Nos aseguramos que todos los partes tengan hora de inicio. Y que haya alg£n parte.
+      CASE vResult OF
+        1: EXIT(3);
+        2: EXIT(2);
+      END;
+
+      //Habremos cargado s¢lo los partes que nos interesan.
+      rTParte.RESET;
+      rTParte.SETCURRENTKEY(Usuario,"Cod Conductor",Fecha,"Hora Inicio");
+      rTParte.SETRANGE(Usuario,USERID);
+      rTParte.FINDFIRST;
+
+      //Si el primer parte es del d¡a siguiente y se pasa de la hora indicada por parametros,
+      //ni empezamos.
+      IF (rTParte.Fecha=pFecha + 1) AND
+         ((vPDS = 0T) OR (rTParte."Hora Inicio" <= vPDS)) THEN
+        EXIT(2);
+
+      vContaPeriodos := 0;
+      REPEAT
+        vSTNuevoPeriodo := ExaminarSituacionSHI(rTParte,rPeriodo,pFecha,vContaPeriodos,vPDS,vAbortar);
+
+        IF NOT vAbortar THEN BEGIN
+          IF vSTNuevoPeriodo THEN BEGIN
+            //Insertaremos un nuevo registro de periodos.
+            rPeriodo.INIT;
+            rPeriodo.Fecha         := pFecha;
+            rPeriodo.VALIDATE(Conductor, pConductor);
+            rPeriodo."Fecha Real"  := rTParte.Fecha;
+
+            rPeriodo."Hora Inicio" := rTParte."Hora Inicio";
+            rPeriodo."Hora Fin"    := rTParte."Hora Inicio";
+            IF lrVeh.GET(rTParte.Matricula) THEN
+              rPeriodo."Num Vehiculo":= lrVeh.Numero;
+            rPeriodo.INSERT(TRUE);
+
+            vContaPeriodos += 1;
+          END
+          ELSE BEGIN
+            rPeriodo."Hora Fin" := rTParte."Hora Inicio";
+            rPeriodo.MODIFY;
+          END;
+        END;
+      UNTIL (rTParte.NEXT=0) OR vAbortar;
+
+      //Miraremos de evitar que un periodo tenga la misma hora inicio y hora final.
+      RevisarPeriodosSHI(pFecha,pConductor);
+
+      EXIT(0);
+    END;
+
+    PROCEDURE ExaminarSituacionSHI@18(rTParte@1100244000 : Record 7010343;rPeriodo@1100244001 : Record 7010338;pFechaReferencia@1100244002 : Date;pContaPeriodos@1100244003 : Integer;pPDS@1100244004 : Time;VAR vAbortar@1100244005 : Boolean) : Boolean;
+    BEGIN
+      //ExaminarSituacionSHI(rParte,rPeriodo,pFechaReferencia,pContaPeriodos,pPDS)
+      //.............................
+      //Devuelve TRUE   Si hay que crear un nuevo periodo.
+      //         FALSE  En caso contrario.
+      //.................
+
+      vAbortar := FALSE;
+
+      IF pContaPeriodos = 0 THEN
+        EXIT(TRUE);
+
+      IF rTParte.Fecha = pFechaReferencia THEN
+        EXIT(FALSE);
+
+      // El parte es del d¡a siguiente.
+      IF (pPDS=0T) OR (rTParte."Hora Inicio" >= pPDS) THEN BEGIN
+        vAbortar := TRUE;
+        EXIT(FALSE);
+      END;
+
+      //Examinamos si tenemos que crear un SEGUNDO periodo.
+      IF TestNuevoPeriodoSHI(rTParte,rPeriodo) THEN
+        EXIT(TRUE);
+
+      //En cualquier otro caso.
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE TestNuevoPeriodoSHI@19(rTParte@1100244000 : Record 7010343;rPeriodo@1100244001 : Record 7010338) : Boolean;
+    VAR
+      vOldDuracion@1100244002 : Integer;
+      vNewDuracion@1100244003 : Integer;
+    BEGIN
+      //TestNuevoPeriodoSHI(rParte,rPeriodo);
+      //Examinamos si tenemos que crear un SEGUNDO periodo.
+      //Para ello nos basamos en que si la duracion del futuro periodo es MENOR que la duracion
+      //actual del periodo, es que algo no cuadra.
+
+      IF rPeriodo."Hora Inicio" > rPeriodo."Hora Fin" THEN
+        vOldDuracion := (235959T-rPeriodo."Hora Inicio") + (rPeriodo."Hora Fin" - 000000T)
+      ELSE
+        vOldDuracion := rPeriodo."Hora Fin" - rPeriodo."Hora Inicio";
+
+      IF rPeriodo."Hora Inicio" > rTParte."Hora Inicio" THEN
+        vNewDuracion := (235959T-rPeriodo."Hora Inicio") + (rTParte."Hora Inicio" - 000000T)
+      ELSE
+        vNewDuracion := rPeriodo."Hora Fin" - rTParte."Hora Inicio";
+
+      IF vNewDuracion > vOldDuracion THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE RevisarPeriodosSHI@20(pFecha@1100244000 : Date;pConductor@1100244001 : Code[10]);
+    VAR
+      rP@1100244002 : Record 7010338;
+      vDuracion@1100244003 : Integer;
+    BEGIN
+      //RevisarPeriodosSHI(pFecha,pConductor);
+      //
+      //........
+      //Si la actividad consiste s¢lo en un parte, para que la hora de inicio y la hora final
+      //no tengan la misma hora (para que la pantalla gr fica no quede fea) pondremos un tiempo
+      //de 10 minutos.
+      //Si hubiera solape entre 2 periodos, se notificar¡a un error. En realidad significar¡a que
+      //los horarios de los partes no est n muy bien construidos.
+      //......  NOTA ............
+      //Esta duraci¢n extra de 10 minutos que vamos a dar, podr¡a realizarse en el momento de
+      //insertar el periodo, pero para que no haya interferencias en los c lculos lo hacemos
+      //ahora.
+      //...........
+      // 10 minutos = 10 minutos * 60 segundos * 1000 milisegundos).
+      vDuracion := 10 * 60 * 1000;
+
+      rP.RESET;
+      rP.SETCURRENTKEY(Conductor,Fecha);
+      rP.SETRANGE(Conductor,pConductor);
+      rP.SETRANGE(Fecha,pFecha);
+      IF rP.FINDSET(TRUE) THEN REPEAT
+        IF rP."Hora Inicio" = rP."Hora Fin" THEN BEGIN
+          rP."Hora Fin" := rP."Hora Fin" + vDuracion;
+          rP.MODIFY;
+        END;
+      UNTIL rP.NEXT=0;
+    END;
+
+    PROCEDURE GrabarRegistro@4(pFecha@1100244000 : Date;rConductor@1100244001 : Record 7010327;pTipoAcuerdo@1100244002 : Code[10];pTipoContrato@1100244003 : Code[10];pHorasServicio@1100244004 : Decimal;pHorasExtras@1100244005 : Decimal;pNumDietas@1100244006 : Decimal;pMaletas@1100244007 : Decimal;pStCalculo@1100244008 : Boolean);
+    VAR
+      rHorasCond@1100244009 : Record 7010332;
+      rP@1100244010 : Record 7010338;
+      rParte@1100244011 : Record 7010360;
+      rParte2@1100244012 : Record 7010360;
+      rTC@1100244015 : Record 7010328;
+    BEGIN
+      //GrabarRegistro(pFecha,rConductor,vTipoAcuerdo,vHorasServicio,vHorasExtras,vNumDietas,vMaletas)
+
+      rHorasCond.INIT;
+      rHorasCond.Fecha                    := pFecha;
+      rHorasCond.Conductor                := rConductor.Conductor;
+      rHorasCond.Garaje                   := rConductor.Garaje;
+      rHorasCond."Tipo Acuerdo"           := pTipoAcuerdo;
+      rHorasCond."Nombre Abreviado"       := rConductor."Nombre Abreviado";
+      rHorasCond."Horas Servicio"         := pHorasServicio;
+      rHorasCond."Fecha antiguedad"       := rConductor."Fecha Antiguedad";
+      rHorasCond."Grupo Vehiculo"         := rConductor."Grupo Vehiculo";
+      rHorasCond.Dietas                   := pNumDietas;
+      rHorasCond."Horas Extra"            := pHorasExtras;
+
+      IF rTC.GET(pTipoContrato) THEN
+        rHorasCond."Orden contrato" :=rTC.Orden
+      ELSE
+        rHorasCond."Orden contrato" := 1000;
+
+      // AJS 04.08.2005
+      // Ultramar pide que los registros de actividad de conductor queden marcados como "no validados"
+
+      rPar.FINDFIRST;
+      CASE rPar."Empresa Real" OF
+        rPar."Empresa Real"::UEX:
+          rHorasCond.Validado   := FALSE
+        ELSE
+          rHorasCond.Validado   := pStCalculo;
+      END;
+
+      rHorasCond."Fecha modificaci¢n" := TODAY;
+      rHorasCond."Hora modificaci¢n"  := TIME;
+      rHorasCond.Usuario              := USERID;
+
+      rHorasCond.INSERT;
+
+
+      IF pStCalculo THEN BEGIN
+        //Dejamos el campo como VALIDADO.
+        IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::UEX]) THEN BEGIN
+          rP.RESET;
+          rP.SETCURRENTKEY(Conductor,Fecha);
+          rP.SETRANGE(Conductor,rConductor.Conductor);
+          rP.SETRANGE(Fecha,pFecha);
+          IF rP.FINDSET(TRUE) THEN REPEAT
+            rP.Validado:= TRUE;
+            rP.MODIFY; //Sin el parametro TRUE. IMPORTANTE.
+          UNTIL rP.NEXT = 0;
+        END;
+      END
+      ELSE BEGIN
+        // Los partes que hubieramos podido marcar los desmarcamos.
+        rParte.SETCURRENTKEY("Cod Conductor",Fecha);
+        rParte.SETRANGE("Cod Conductor",rConductor.Conductor);
+
+        // ----  AJS 4.2.2002  ----
+        // ----  Solo interesan los partes del dia  ----
+        rPar.FINDFIRST;
+        IF rPar."Empresa Real" IN [rPar."Empresa Real"::IBZ, rPar."Empresa Real"::SJO] THEN
+          rParte.SETRANGE(Fecha, pFecha-1, pFecha+1)
+        ELSE
+          rParte.SETRANGE(Fecha, pFecha);
+
+        rParte.SETRANGE("Fecha conductor", pFecha);
+        IF rParte.FINDSET THEN REPEAT
+          rParte2:=rParte;
+          rParte2."Fecha conductor":=0D;
+          rParte2.MODIFY;
+        UNTIL rParte.NEXT=0;
+
+
+      END;
+    END;
+
+    PROCEDURE HaySolape@6(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date;VAR vPeriodo@1100244002 : Text[40]) : Boolean;
+    VAR
+      rP@1100244003 : Record 7010338;
+      cCond@1100244004 : Codeunit 7010313;
+    BEGIN
+      //HaySolape(rConductor.Conductor,pFecha)
+      //Miramos si hay solape con otros periodos.
+      vPeriodo:='';  //Periodo con el que hay solape.
+      rP.RESET;
+      rP.SETCURRENTKEY(Conductor,Fecha);
+      rP.SETRANGE(Conductor,pConductor);
+      rP.SETRANGE(Fecha,pFecha);
+      IF rP.FINDSET THEN REPEAT
+        IF cCond.TestSolapePeriodo(rP,vPeriodo) THEN
+          EXIT(TRUE);
+
+        IF cCond.TestSolapePeriodosHermanos(rP,vPeriodo) THEN
+          EXIT(TRUE);
+
+      UNTIL rP.NEXT = 0;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE HayErrorContiguidad@9(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date;VAR vPeriodoSolape@1100244002 : Text[40]) : Boolean;
+    VAR
+      rP@1100244003 : Record 7010338;
+      cCond@1100244004 : Codeunit 7010313;
+    BEGIN
+      //HayErrorContiguidad(rConductor.Conductor,pFecha,vPeriodoSolape)
+
+      //... Revisamos la coherencia en la contiguidad de los periodos.
+      //... Es decir, no es l¢gico que un periodo este asignado a la actividad del dia D y
+      //... que un periodo cronologicamente superior este asignado a la actividad el dia D-1.
+      //... Analogamente el caso contrario.
+
+      vPeriodoSolape:='';  //Periodo con el que hay solape.
+      rP.RESET;
+      rP.SETCURRENTKEY(Conductor,Fecha);
+      rP.SETRANGE(Conductor,pConductor);
+      rP.SETRANGE(Fecha,pFecha);
+      IF rP.FINDSET THEN REPEAT
+        IF NOT cCond.TestContiguidad(rP,vPeriodoSolape) THEN
+          EXIT(TRUE);
+      UNTIL rP.NEXT=0;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE TestPartes@12(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date;pNomAbr@1100244002 : Code[20]);
+    VAR
+      rParte@1100244003 : Record 7010360;
+      NO_ASIGNADO@1100244004 : TextConst 'ESP=El parte ha quedado sin asignar';
+      SIN_PARTES@1100244005 : TextConst 'ESP=No se ha enlazado con ningun parte';
+      cFunCond@1100244006 : Codeunit 7010313;
+    BEGIN
+      //TestPartes.
+      //Si el registro de actividad DEBE confirmarse no podemos permitir que un parte
+      //correspondiente a este conductor haya quedado sin asignar.
+      //No creo que se llegue a esta situaci¢n, pero bueno, por si las moscas.
+      rParte.SETCURRENTKEY("Cod Conductor",Fecha);
+      rParte.SETRANGE("Cod Conductor",pConductor);
+      rParte.SETRANGE(Fecha,pFecha);
+      rParte.SETRANGE("Fecha conductor",0D);
+      IF rParte.FINDFIRST THEN
+        cFunCond.CreaRegistroError(NO_ASIGNADO,rParte."Cod Conductor",rParte.Conductor,
+                                   rParte."N§ Parte",rParte.Fecha,pFecha,'',TRUE);
+
+      //Y si un conductor ha hecho medio parte y se pone enfermo¨?. y no lo tiene asignado.
+      //En fin se quitar  el asterisco ¨? ja es veur .
+      //Si no hay ningun parte asignado tambien daremos un ERROR.
+      //rParte.SETFILTER("Fecha conductor",'<> %1',0D);
+      //IF NOT rParte.FINDFIRST THEN
+      //  cFunCond.CreaRegistroError(SIN_PARTES,pConductor,pNomAbr,'',0D,pFecha,'',TRUE);
+    END;
+
+    PROCEDURE ErroresDetectados@11(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date) : Boolean;
+    VAR
+      rErr@1100244002 : Record 7010341;
+    BEGIN
+      //ErroresDetectados(pConductor)
+      //Miramos el registro de anomalias a ver si hay alg£n registro de TIPO error que impida
+      //validar.
+      rErr.RESET;
+      rErr.SETCURRENTKEY(Conductor,"Fecha Actividad");
+      rErr.SETRANGE(Conductor,pConductor);
+      rErr.SETRANGE("Fecha Actividad",pFecha);
+      rErr.SETRANGE(Error,TRUE);
+      IF rErr.FINDFIRST THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ObtenerHoraReferencia@15(rParte@1100244000 : Record 7010360;VAR vHoraComparacion@1100244001 : Time) : Time;
+    VAR
+      rParam@1100244002 : Record 7010311;
+      rSP@1100244003 : Record 7010359;
+      Result@1100244004 : Time;
+      vHMin@1100244005 : Time;
+      vHMax@1100244006 : Time;
+    BEGIN
+      //ObtenerHoraReferencia.
+      //Ser  la hora menor del parte.
+      //En primer lugar consideraremos la hora de inicio y sino, calcularemos la hora minima.
+      rParam.FINDFIRST;
+
+      Result           := rParte."Hora inicio";
+      vHoraComparacion := rParte."Hora inicio";
+
+      IF (Result = 0T) AND (rParam."Calcular Hora Referencia") THEN BEGIN
+        vHMin := 0T;
+        vHMax := 0T;
+        rSP.SETCURRENTKEY("N§ Parte");
+        rSP.SETRANGE("N§ Parte",rParte."N§ Parte");
+        IF rSP.FINDSET THEN REPEAT
+          BuscarMinyMax(rSP."Hora recogida",rSP."Hora Vuelo",vHMin,vHMax);
+        UNTIL rSP.NEXT=0;
+        IF vHMin <> 0T THEN BEGIN
+          IF (vHMax - vHMin) > (12 * 60 * 60 * 1000) THEN
+            //Si la diferencia entre vHMax y vHMax es superior a 12H interpretaremos que la Hora
+            //minima obtenida corresponde al d¡a siguiente, por tanto consideraremos la hora m xima.
+            Result := vHMax
+          ELSE
+            Result := vHMin;
+        END;
+
+        //Actualizamos la hora de comparacion
+        IF Result <> 0T THEN BEGIN
+          vHoraComparacion := Result - GetFactRest(rParte."N§ Parte",rParte.Garaje);
+          //Si es del d¡a anterior lo igualamos a las 0H, para simplificar la comparaci¢n.
+          IF vHoraComparacion > Result THEN
+            vHoraComparacion := 000000T;
+        END;
+      END;
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE BuscarMinyMax@16(pHR@1100244000 : Time;pHV@1100244001 : Time;VAR vHMin@1100244002 : Time;VAR vHMax@1100244003 : Time);
+    BEGIN
+      //BuscarMinyMax();
+      IF (pHR <> 0T) AND ( (vHMin = 0T) OR (pHR < vHMin) ) THEN
+        vHMin := pHR;
+
+      IF (pHV <> 0T) AND ( (vHMin = 0T) OR (pHV < vHMin) ) THEN
+        vHMin := pHV;
+
+      IF (pHR <> 0T) AND ( (vHMax = 0T) OR (pHR > vHMax) ) THEN
+        vHMax := pHR;
+
+      IF (pHV <> 0T) AND ( (vHMax = 0T) OR (pHV > vHMax) ) THEN
+        vHMax := pHV;
+    END;
+
+    PROCEDURE ActContrato@8(rConductor@1100244000 : Record 7010327);
+    VAR
+      cCond@1100244001 : Codeunit 7010313;
+      vTipoAcuerdo@1100244002 : Code[10];
+      vTipoContrato@1100244003 : Code[10];
+      vFechaAlta@1100244004 : Date;
+      vFechaBaja@1100244005 : Date;
+      vNumOrden@1100244006 : Integer;
+      vStatus@1100244007 : Integer;
+    BEGIN
+      //ActContrato.
+      //Revisamos si tenemos que actualizar el contrato vigente.
+      cCond.CalcularDatosContrato(rConductor.Conductor,vTipoContrato, vTipoAcuerdo,
+                                  vFechaAlta, vFechaBaja,vNumOrden,vStatus,0);
+
+      IF (vTipoContrato <> rConductor."Tipo Contrato") OR
+         (vTipoAcuerdo <> rConductor."Tipo Acuerdo")   OR
+         (vNumOrden <> rConductor."Orden Contrato") THEN BEGIN
+        rConductor."Tipo Acuerdo"   := vTipoAcuerdo;
+        rConductor."Tipo Contrato"  := vTipoContrato;
+        rConductor."Orden Contrato" := vNumOrden;
+        rConductor.MODIFY;
+      END;
+    END;
+
+    PROCEDURE GetFactRest@1100244000(pwParte@1100244002 : Code[10];pwGaraje@1100244003 : Code[10]) : Integer;
+    VAR
+      lrSerPar@1100244001 : Record 7010359;
+      lrDescGZF@1100244000 : Record 7010437;
+      lvFactorResta@1100244004 : Integer;
+    BEGIN
+      // GetFactRest
+
+      // JPT-23/02/04 Si tiene descuento por garaje y zona fisica cambiamos el valor de vFactorResta
+      // Buscamos la primera linea de Servicios-Partes
+
+      rPar.GET;
+      lvFactorResta:= rPar."Minutos a Descontar" * 60 * 1000;
+      lrSerPar.RESET;
+      lrSerPar.SETCURRENTKEY("N§ Parte","N§ Linea");
+      lrSerPar.SETRANGE("N§ Parte", pwParte);
+      IF lrSerPar.FINDFIRST THEN BEGIN
+        lrDescGZF.RESET;
+        IF lrDescGZF.GET(pwGaraje,lrSerPar."Zona fisica") THEN
+          lvFactorResta := lrDescGZF."Minutos a Descontar" * 60 * 1000;
+       END;
+
+      EXIT(lvFactorResta);
+    END;
+
+    BEGIN
+    {
+      //No generaremos actividad si el conductor:
+      //a) Es externo o est  bloqueado
+      //b) No tiene contrato en vigor ni nunca ha tenido.
+      //c) Tiene alguna incidencia para la fecha solicitada.
+
+      // Revisar el comentario rrt. cuidadin.
+
+      // En UEX no interesan los partes del dia siguiente ni los del dia anterior
+    }
+    END.
+  }
+}

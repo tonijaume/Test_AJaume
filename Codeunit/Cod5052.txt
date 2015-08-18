@@ -1,0 +1,234 @@
+OBJECT Codeunit 5052 AttachmentManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Send attachments...\\;ESP=Enviar anexos...\\';
+      Text001@1001 : TextConst 'ENU=Preparing;ESP=Preparando';
+      Text002@1002 : TextConst 'ENU=Deliver misc.;ESP=Entregar varios';
+      Text005@1005 : TextConst 'ENU=\Attachment.%1;ESP=\Anexo.%1';
+      Text008@1003 : TextConst 'ENU=You must select an interaction template with an attachment.;ESP=Debe seleccionar una plantilla de interacci¢n que incluya un archivo adjunto.';
+
+    PROCEDURE InsertAttachment@14(AttachmentNo@1000 : Integer) : Integer;
+    VAR
+      Attachment@1001 : Record 5062;
+      Attachment3@1003 : Record 5062;
+    BEGIN
+      IF AttachmentNo <> 0 THEN BEGIN
+        Attachment.GET(AttachmentNo);
+        IF Attachment."Storage Type" = Attachment."Storage Type"::Embedded THEN
+          Attachment.CALCFIELDS(Attachment);
+        Attachment3 := Attachment; // Remember "from" attachment
+      END;
+
+      Attachment.INSERT(TRUE);
+
+      IF AttachmentNo <> 0 THEN
+
+        // New attachment is based on old attachment
+        TransferAttachment(Attachment3,Attachment); // Transfer attachments of different types.
+
+      EXIT(Attachment."No.");
+    END;
+
+    PROCEDURE Send@1(VAR DeliverySorter@1000 : Record 5074);
+    VAR
+      Attachment@1001 : Record 5062;
+      TempDeliverySorterWord@1002 : TEMPORARY Record 5074;
+      TempDeliverySorterOther@1003 : TEMPORARY Record 5074;
+      InteractLogEntry@1004 : Record 5065;
+      Contact@1005 : Record 5050;
+      RBAutoMgt@1012 : Codeunit 419;
+      WordManagement@1006 : Codeunit 5054;
+      Mail@1007 : Codeunit 397;
+      FileName@1008 : Text[260];
+      Window@1009 : Dialog;
+      NoOfAttachments@1010 : Integer;
+      I@1011 : Integer;
+    BEGIN
+      Window.OPEN(
+        Text000 +
+        '#1############ @2@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\' +
+        '#3############ @4@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+
+      Window.UPDATE(1,Text001);
+      Window.UPDATE(3,Text002);
+
+      IF DeliverySorter.FIND('-') THEN BEGIN
+        NoOfAttachments := DeliverySorter.COUNT;
+        REPEAT
+          DeliverySorter.TESTFIELD("Correspondence Type");
+          IF NOT Attachment.GET(DeliverySorter."Attachment No.") THEN
+            ERROR(Text008);
+
+          IF UseComServer(Attachment."File Extension",
+            DeliverySorter."Correspondence Type" <> DeliverySorter."Correspondence Type"::"E-Mail")
+          THEN BEGIN
+            TempDeliverySorterWord := DeliverySorter;
+            TempDeliverySorterWord.INSERT;
+          END ELSE BEGIN
+            TempDeliverySorterOther := DeliverySorter;
+            TempDeliverySorterOther.INSERT;
+          END;
+          I := I + 1;
+          Window.UPDATE(2,ROUND(I / NoOfAttachments * 10000,1));
+        UNTIL DeliverySorter.NEXT = 0;
+      END;
+
+      // MS Word merge
+      IF TempDeliverySorterWord.FIND('-') THEN
+        WordManagement.Merge(TempDeliverySorterWord);
+
+      // Deliver other types
+      IF TempDeliverySorterOther.FIND('-') THEN BEGIN
+        I := 0;
+        NoOfAttachments := TempDeliverySorterOther.COUNT;
+        REPEAT
+          InteractLogEntry.LOCKTABLE;
+          InteractLogEntry.GET(TempDeliverySorterOther."No.");
+          IF TempDeliverySorterOther."Correspondence Type" = TempDeliverySorterOther."Correspondence Type"::"E-Mail" THEN BEGIN
+            Attachment.GET(TempDeliverySorterOther."Attachment No.");
+            Attachment.TESTFIELD("File Extension");
+            FileName := RBAutoMgt.EnvironFileName(Text005,Attachment."File Extension");
+            Attachment.ExportAttachment(FileName);
+            Contact.GET(InteractLogEntry."Contact No.");
+            Mail.NewMessage(InteractionEMail(InteractLogEntry),'',TempDeliverySorterOther.Subject,'',FileName,FALSE);
+            Attachment.DeleteFile(FileName);
+            InteractLogEntry."Delivery Status" := InteractLogEntry."Delivery Status"::" ";
+            InteractLogEntry.MODIFY;
+          END ELSE BEGIN
+            InteractLogEntry."Delivery Status" := InteractLogEntry."Delivery Status"::Error;
+            InteractLogEntry.MODIFY;
+          END;
+          COMMIT;
+          I := I + 1;
+          Window.UPDATE(4,ROUND(I / NoOfAttachments * 10000,1));
+        UNTIL TempDeliverySorterOther.NEXT = 0;
+      END;
+      Window.CLOSE;
+    END;
+
+    PROCEDURE FileExtension@4(FileName@1001 : Text[260]) Extension@1000 : Text[260];
+    VAR
+      I@1002 : Integer;
+    BEGIN
+      I := STRLEN(FileName);
+      WHILE COPYSTR(FileName,I,1) <> '.' DO
+        I := I - 1;
+      Extension := COPYSTR(FileName,I + 1,STRLEN(FileName) - I);
+    END;
+
+    LOCAL PROCEDURE TransferAttachment@5(FromAttachment@1000 : Record 5062;VAR ToAttachment@1001 : Record 5062);
+    VAR
+      RMSetup@1002 : Record 5079;
+      FileName@1003 : Text[1024];
+    BEGIN
+      // Transfer attachments of different types
+
+      IF (FromAttachment."Storage Type" = FromAttachment."Storage Type"::Embedded) AND
+         (ToAttachment."Storage Type" = ToAttachment."Storage Type"::"Disk File")
+      THEN BEGIN
+        FileName := ToAttachment.ConstDiskFileName;
+        FromAttachment.Attachment.EXPORT(FileName); // Export blob to UNC location
+        WITH ToAttachment DO BEGIN
+          CLEAR(Attachment);
+          RMSetup.GET;
+          RMSetup.TESTFIELD("Attachment Storage Location");
+          "Storage Pointer" := RMSetup."Attachment Storage Location";
+          MODIFY;
+        END;
+      END;
+
+      IF (FromAttachment."Storage Type" = FromAttachment."Storage Type"::"Disk File") AND
+         (ToAttachment."Storage Type" = ToAttachment."Storage Type"::"Disk File")
+      THEN BEGIN
+          // Copy external attachment (to new storage)
+          RMSetup.GET;
+          RMSetup.TESTFIELD("Attachment Storage Location");
+          ToAttachment."Storage Pointer" := RMSetup."Attachment Storage Location";
+          ToAttachment.MODIFY;
+          FILE.COPY(FromAttachment.ConstDiskFileName,ToAttachment.ConstDiskFileName);
+      END;
+
+      IF (FromAttachment."Storage Type" = FromAttachment."Storage Type"::"Disk File") AND
+         (ToAttachment."Storage Type" = ToAttachment."Storage Type"::Embedded)
+      THEN BEGIN
+
+        // Transfer External to Embedded attachment
+        WITH ToAttachment DO BEGIN
+          Attachment.IMPORT(FromAttachment.ConstDiskFileName); // Import file from UNC location
+          "File Extension" := FromAttachment."File Extension";
+          "Storage Pointer" := '';
+          MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE UseComServer@2(FileExtension@1001 : Text[250];RequireAutomation@1002 : Boolean) : Boolean;
+    VAR
+      VersionNo@1004 : Decimal;
+      DecimalSymbol@1007 : Text[1];
+    BEGIN
+      IF (UPPERCASE(FileExtension) <> 'DOC') AND
+         (UPPERCASE(FileExtension) <> 'DOCX')
+      THEN
+        EXIT(FALSE);
+
+      // 5.1 do not support Automation Server table. We assume that MS Word is installed and has a valid version.
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE InteractionEMail@6(VAR InteractLogEntry@1000 : Record 5065) : Text[80];
+    VAR
+      Cont@1001 : Record 5050;
+      ContAltAddr@1002 : Record 5051;
+    BEGIN
+      IF InteractLogEntry."Contact Alt. Address Code" = '' THEN BEGIN
+        Cont.GET(InteractLogEntry."Contact No.");
+        EXIT(Cont."E-Mail");
+      END ELSE BEGIN
+        ContAltAddr.GET(InteractLogEntry."Contact No.",InteractLogEntry."Contact Alt. Address Code");
+        IF ContAltAddr."E-Mail" <> '' THEN
+          EXIT(ContAltAddr."E-Mail")
+        ELSE BEGIN
+          Cont.GET(InteractLogEntry."Contact No.");
+          EXIT(Cont."E-Mail");
+        END;
+      END;
+    END;
+
+    PROCEDURE InteractionFax@7(VAR InteractLogEntry@1000 : Record 5065) : Text[30];
+    VAR
+      Cont@1001 : Record 5050;
+      ContAltAddr@1002 : Record 5051;
+    BEGIN
+      IF InteractLogEntry."Contact Alt. Address Code" = '' THEN BEGIN
+        Cont.GET(InteractLogEntry."Contact No.");
+        EXIT(Cont."Fax No.");
+      END ELSE BEGIN
+        ContAltAddr.GET(InteractLogEntry."Contact No.",InteractLogEntry."Contact Alt. Address Code");
+        IF ContAltAddr."Fax No." <> '' THEN
+          EXIT(ContAltAddr."Fax No.")
+        ELSE BEGIN
+          Cont.GET(InteractLogEntry."Contact No.");
+          EXIT(Cont."Fax No.");
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

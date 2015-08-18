@@ -1,0 +1,275 @@
+OBJECT Codeunit 7009905 Agrupar prefactura transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/12/13;
+    Time=19:06:37;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1103355000 : TextConst 'ENU=ABCDEFGHIJKLMNOPQRSTUVWXYZ;ESP=ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      Text002@1103355001 : TextConst 'ENU=Sure about to proforma this groupings?;ESP=¨Est  seguro que desea prefacturar estas agrupaciones?';
+      cFactTra@1103355002 : Codeunit 7009737;
+      Text003@1103355003 : TextConst 'ENU=Would you like to print generated proformas?;ESP=¨Desea imprimir las prefacturas generadas?';
+      Text004@1100217000 : TextConst 'ENU=ZEROINVOICE;ESP=FACTURACERO';
+
+    PROCEDURE AgruparIngresosPrefacturar@1103355000(VAR prCI@1103355000 : Record 7009805);
+    VAR
+      lrCI@1103355001 : Record 7009805;
+      lrAgrup@1103355002 : Record 7009841;
+      lrBufAgrup@1103355003 : Record 7009842;
+      lrAgrupAnt@1103355004 : Record 7009841;
+      lwUltFecha@1103355005 : Date;
+    BEGIN
+      // AgruparIngresosPrefacturar.
+
+      CLEAR(lrCI);
+      lrCI.COPY(prCI);
+
+      // Se marcan las l¡neas con el Usuario en el n§ de factura para que las l¡neas
+      // desaparezcan de la ventana para las dem s sesiones.
+      MarcarLineasaTratar(lrCI);
+      COMMIT;
+
+      // Se crea el temporal de agrupaci¢n.
+      lrCI.SETRANGE ("N§ Factura", USERID);
+      lrCI.SETRANGE ("N§ Prefactura");
+      ProcesarLineasIngreso(lrCI);
+      COMMIT;
+
+      // Se lanza la ventana para modificar las agrupaciones.
+      lrAgrup.RESET;
+      lrAgrup.FILTERGROUP(2);
+      lrAgrup.SETRANGE (Usuario, USERID);
+      lrAgrup.FILTERGROUP(0);
+      IF NOT(FORM.RUNMODAL(FORM::"Agrupacion factura transfer", lrAgrup) IN [ACTION::LookupOK,ACTION::OK])THEN BEGIN
+        lrCI.MODIFYALL("N§ Factura",'');
+      END
+      ELSE BEGIN
+        IF NOT CONFIRM(Text002) THEN BEGIN
+          lrCI.MODIFYALL("N§ Factura",'');
+        END
+        ELSE BEGIN
+          Prefacturar;
+
+          // imprimir prefacturas generadas.
+          IF CONFIRM(Text003) THEN BEGIN
+            lrAgrup.RESET;
+            lrAgrup.SETRANGE (Usuario, USERID);
+            lrAgrup.SETFILTER("N§ Prefactura", '<>%1', '');
+            IF lrAgrup.FINDSET THEN BEGIN
+              REPEAT
+                IF lrAgrup."N§ Prefactura" <> lrAgrupAnt."N§ Prefactura" THEN
+                  cFactTra.reimprimir_prefactura(lrAgrup."N§ Prefactura");
+                lrAgrupAnt := lrAgrup;
+              UNTIL lrAgrup.NEXT = 0;
+            END;
+          END;
+
+        END;
+      END;
+
+      // Se limpian los temporales.
+      CLEAR(lrAgrup);
+      lrAgrup.SETRANGE(Usuario, USERID);
+      lrAgrup.DELETEALL;
+      CLEAR(lrBufAgrup);
+      lrBufAgrup.SETRANGE(Usuario, USERID);
+      lrBufAgrup.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE MarcarLineasaTratar@1103355001(VAR prCI@1103355000 : Record 7009805);
+    BEGIN
+      // MarcarLineasaTratar.
+
+      prCI.SETRANGE ("N§ Prefactura", '');
+      prCI.MODIFYALL("N§ Factura", USERID);
+    END;
+
+    LOCAL PROCEDURE ProcesarLineasIngreso@1103355006(VAR prCI@1103355000 : Record 7009805);
+    VAR
+      lrAgrup@1103355001 : Record 7009841;
+      lwNumLin@1103355002 : Integer;
+      lwContCodAgrup@1103355003 : Integer;
+      lwUltCodAgrup@1103355004 : Integer;
+      lrBufAgrup@1103355005 : Record 7009842;
+    BEGIN
+      // ProcesarLineasIngreso.
+      //: Acumula las l¡neas en una tabla temporal por Aeropuerto/TTOO/Suplemento.
+      //: @prCI: L¡neas filtradas de coste/ingreso que se van a procesar.
+
+      // Se limpian las posibles agrupaciones anteriores para el usuario.
+      CLEAR(lrAgrup);
+      lrAgrup.SETRANGE(Usuario, USERID);
+      lrAgrup.DELETEALL;
+      CLEAR(lrBufAgrup);
+      lrBufAgrup.SETRANGE(Usuario, USERID);
+      lrBufAgrup.DELETEALL;
+
+      IF prCI.FINDSET THEN BEGIN
+        lwNumLin := 0;
+        REPEAT
+          lrAgrup.RESET;
+          lrAgrup.SETCURRENTKEY(TourOperador, "Origen/Destino transfer", "Tipo Pax");
+          lrAgrup.SETRANGE(Usuario, USERID);
+          lrAgrup.SETRANGE(TourOperador             , prCI.TourOperador);
+          lrAgrup.SETRANGE("Origen/Destino transfer", prCI."Origen/Destino transfer");
+
+          // AJF 12/04/10
+          // Si las lineas son de tipo elemento "No humano" (suplementos) se separan por c¢digo, en caso contrario
+          // se separan solo por tipo elemento.
+          CASE prCI."Tipo linea" OF
+            prCI."Tipo linea"::Persona, prCI."Tipo linea"::Vehiculo, prCI."Tipo linea"::Vehiculo: BEGIN
+              lrAgrup.SETRANGE ("Tipo Elemento", prCI."Tipo linea");
+            END;
+
+            prCI."Tipo linea"::Suplemento: BEGIN
+              lrAgrup.SETRANGE ("Tipo Pax"     , prCI."Tipo Pax");
+              lrAgrup.SETRANGE ("Tipo Elemento", prCI."Tipo linea");
+            END;
+          END;
+
+          IF NOT lrAgrup.FINDFIRST THEN BEGIN
+            lwNumLin += 1;
+            CLEAR(lrAgrup);
+            lrAgrup.Usuario                   := USERID;
+            lrAgrup.Linea                     := lwNumLin;
+            lrAgrup.TourOperador              := prCI.TourOperador;
+            lrAgrup."Tipo Elemento"           := prCI."Tipo linea";
+
+            IF prCI."Tipo linea" IN [prCI."Tipo linea"::Suplemento] THEN
+              lrAgrup."Tipo Pax"                := prCI."Tipo Pax";
+
+            lrAgrup."Origen/Destino transfer" := prCI."Origen/Destino transfer";
+            lrAgrup."Importe a facturar"      := 0;
+            lrAgrup."Agrupacion factura"      := GetCodigoAgrupacion(lwContCodAgrup, lwUltCodAgrup);
+            lrAgrup.INSERT;
+          END;
+
+          lrAgrup."Importe a facturar" += prCI."Importe con impuesto";
+          lrAgrup.MODIFY;
+
+          // Se vincula la l¡nea de ingreso con la agrupaci¢n.
+          CLEAR(lrBufAgrup);
+          lrBufAgrup.Usuario         := lrAgrup.Usuario;
+          lrBufAgrup.Linea           := lrAgrup.Linea;
+          lrBufAgrup."Agrupacion CI" := prCI.Agrupacion;
+          lrBufAgrup."N§ Linea CI"   := prCI."N§ Linea";
+          lrBufAgrup.INSERT;
+
+        UNTIL prCI.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCodigoAgrupacion@1103355002(VAR pwCont@1103355000 : Integer;VAR pwUltCod@1103355001 : Integer) rvNuevoCod : Code[10];
+    BEGIN
+      // GetCodigoAgrupacion
+
+      IF pwCont = 0 THEN BEGIN
+        pwCont   := 2;
+        pwUltCod := 0;
+      END;
+
+      IF pwUltCod = STRLEN(Text001) THEN BEGIN
+        pwCont += 1;
+        pwUltCod := 0;
+      END;
+
+      pwUltCod += 1;
+      rvNuevoCod := PADSTR('', pwCont, COPYSTR(Text001, pwUltCod, 1));
+    END;
+
+    LOCAL PROCEDURE Prefacturar@1103355004();
+    VAR
+      lrAgrup@1103355001 : Record 7009841;
+      lrUltAgrup@1103355002 : Record 7009841;
+      lrCI@1103355003 : Record 7009805;
+      lrBufAgrup@1103355000 : Record 7009842;
+    BEGIN
+      // Prefacturar.
+
+      // Se reparten los n£meros de prefactura entre las agrupaciones.
+      lrAgrup.RESET;
+      lrAgrup.SETCURRENTKEY("Agrupacion factura");
+      lrAgrup.SETRANGE (Usuario             , USERID);
+      IF lrAgrup.FINDSET THEN
+      BEGIN
+        REPEAT
+
+          // Si la agrupaci¢n es distinta hay que usar un nuevo n£mero de prefactura.
+          IF lrAgrup."Agrupacion factura" <> '' THEN
+          BEGIN
+            IF (lrUltAgrup."N§ Prefactura" = '') OR
+               (lrUltAgrup."Agrupacion factura" <> lrAgrup."Agrupacion factura")
+            THEN
+              lrAgrup."N§ Prefactura" := cFactTra.busca_ultima_prefactura
+            ELSE
+              lrAgrup."N§ Prefactura" := lrUltAgrup."N§ Prefactura";
+
+            lrAgrup.MODIFY;
+          END;
+          lrUltAgrup := lrAgrup;
+
+          // Marcamos los ingresos con la prefactura correspondiente.
+          lrBufAgrup.RESET;
+          lrBufAgrup.SETRANGE (Usuario, lrAgrup.Usuario);
+          lrBufAgrup.SETRANGE (Linea  , lrAgrup.Linea);
+          IF lrBufAgrup.FINDSET THEN
+          BEGIN
+            REPEAT
+              IF lrCI.GET(lrBufAgrup."Agrupacion CI", lrBufAgrup."N§ Linea CI") THEN
+              BEGIN
+                lrCI."N§ Prefactura" := lrAgrup."N§ Prefactura";
+                lrCI."N§ Factura"    := '';
+                lrCI.MODIFY;
+              END;
+            UNTIL lrBufAgrup.NEXT = 0;
+          END;
+
+          _ComprobarFacturaCero(lrAgrup."N§ Prefactura"); //+$001
+        UNTIL lrAgrup.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _ComprobarFacturaCero@1100217000(pwNumPrefactura@1100217000 : Code[10]);
+    VAR
+      lrCI@1100217001 : Record 7009805;
+    BEGIN
+      // _ComprobarFacturaCero
+
+      lrCI.RESET;
+      lrCI.SETCURRENTKEY(Concepto, "N§ Prefactura");
+      lrCI.SETRANGE(Concepto       , 'TRNI');
+      lrCI.SETRANGE("N§ Prefactura", pwNumPrefactura);
+      IF lrCI.FINDSET THEN
+      BEGIN
+        lrCI.CALCSUMS("Importe con impuesto");
+        IF lrCI."Importe con impuesto" = 0 THEN
+        BEGIN
+          lrCI.FINDFIRST;
+          lrCI.MODIFYALL("N§ Factura", Text004);
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 12/04/10
+        .- (INC-48262) Se modifica la agrupaci¢n para que genere una linea si el tipo elemento es distinto a
+           "No humano" (suplementos) y un desglose para los suplementos.
+
+      $001 AJS 28122013 Cuando se crea una prefactura con total cero marcamos las lineas como facturadas
+    }
+    END.
+  }
+}

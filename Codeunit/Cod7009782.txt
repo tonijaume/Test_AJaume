@@ -1,0 +1,650 @@
+OBJECT Codeunit 7009782 Gestion Traslados en destino
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/12/14;
+    Time=13:34:33;
+    Modified=Yes;
+    Version List=AIC2009,OC-14042;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100217000 : TextConst 'ENU=You must assign at least one person to the service prior to confirm it.;ESP=Debe asignar al menos una persona al servicio antes de confirmarlo.';
+      Text002@1100217001 : TextConst 'ENU=Do you want to confirm the service %1 of reservation %2;ESP=Desea confirmar el servicio %1 de la reserva %2';
+      Text003@1100217002 : TextConst 'ENU=Do you want to cancel the confirmation the service %1 of reservation %2;ESP=Desea cancelar la confirmaci¢n del servicio %1 de la reserva %2';
+      Text004@1100217003 : TextConst 'ENU=The service %1 is confirmed, the process cannot be completed.;ESP=La agrupacion %1 esta confirmada, no se puede terminar el proceso.';
+      Text005@1100217004 : TextConst 'ENU=Process completed.;ESP=Proceso terminado.';
+      Text006@1100217005 : TextConst 'ENU=You cannot put together private transfer reservations with regular transfer reservations.;ESP=No se pueden mezclar reservas de transfer privado con reservas de transfer regular.';
+      Text007@1100217006 : TextConst 'ENU=All reservations must have the same transfer type.;ESP=Todas las reservas deben ser del mismo medio.';
+      Text008@1100217007 : TextConst 'ENU=All reservations must be for the same day.;ESP=Todas las reservas deben ser del mismo dia.';
+      Text009@1100217008 : TextConst 'ENU=All the people in this service have service no. assigned.;ESP=Este servicio no tiene personas pendientes de asignar.';
+      Text010@1000000000 : TextConst 'ENU=The zone %1 is undefined in the contract %2.;ESP=La zona %1 no esta definida en el contrato %2.';
+      Text011@1000000001 : TextConst 'ENU=There is no sales price in contract %1 for booking conditions.;ESP=No existe ning£n precio venta en contrato %1 para las condiciones de la Reserva.';
+
+    PROCEDURE ConfirmService@1100217000(VAR prServTra@1100217000 : Record 7009916);
+    VAR
+      lrServTra@1100217001 : Record 7009916;
+    BEGIN
+      // ConfirmarServicio
+
+      IF prServTra.Confirmado THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text002, FALSE, prServTra."ID Servicio", prServTra."Num. Reserva") THEN
+          EXIT;
+
+      //. Revisamos que tenga la informaci¢n bien rellenada
+      _TestData(prServTra);
+
+      //. Crear las reservas de transfer
+      _CreateReservations(prServTra);
+
+      //. Marcamos el servicio como confirmado
+      prServTra.VALIDATE(Confirmado, TRUE);
+      prServTra.MODIFY;
+
+      //IF prServTra."Servicio privado" THEN // -$005
+      IF prServTra."Tipo Servicio" <> prServTra."Tipo Servicio"::Compartido THEN   // +$005
+      BEGIN
+        lrServTra.COPY(prServTra);
+        lrServTra.SETRECFILTER;
+        CreateService(lrServTra);
+      END;
+
+      //. Si es un servicio hotel-hotel hay que cambiar el hotel de salida de la reserva transfer
+      //+$003 <
+      IF (prServTra."Tipo origen" = prServTra."Tipo origen"::Hotel) AND
+         (prServTra."Tipo destino" = prServTra."Tipo destino"::Hotel) THEN
+        _UpdateDepartureHotel(prServTra, 0);
+      //+$003 >
+
+      //. Comprobar si hay que marcar la cabecera para volver a enviar la confirmacion al proveedor
+      prServTra.CheckEnvioConfirmacion;
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text005);
+    END;
+
+    LOCAL PROCEDURE _TestData@1100217001(VAR prServTra@1100217000 : Record 7009916);
+    VAR
+      lrRsv@1000000000 : Record 7009744;
+      lrCont@1000000001 : Record 7009788;
+    BEGIN
+      // _TestData
+
+      prServTra.TESTFIELD("Fecha servicio");
+
+      //. Informacion de origen
+      prServTra.TESTFIELD(Origen);
+      prServTra."Zona origen" := prServTra.GetZone(0);
+      prServTra.TESTFIELD("Zona origen");
+      prServTra."Zona servicio origen" := _GetServiceZone(prServTra."Zona origen");
+      prServTra.TESTFIELD("Zona servicio origen");
+      prServTra."Punto origen" := _GetServicePoint(prServTra, 0);
+
+      //. Informacion de destino
+      prServTra.TESTFIELD(Destino);
+      prServTra."Zona destino" := prServTra.GetZone(1);
+      prServTra.TESTFIELD("Zona destino");
+      prServTra."Zona servicio destino" := _GetServiceZone(prServTra."Zona destino");
+      prServTra.TESTFIELD("Zona servicio destino");
+      prServTra."Punto destino" := _GetServicePoint(prServTra, 1);
+
+      //. Check Personas asignadas
+      prServTra.CALCFIELDS(Personas);
+      IF prServTra.Personas = 0 THEN
+        ERROR(Text001);
+
+      //. Buscar si tiene contrato
+      lrRsv.CheckContratoVenta(lrCont, prServTra.Touroperador, prServTra."Fecha servicio", '', TRUE);
+
+      _CheckPrecioVenta(lrCont, prServTra);
+    END;
+
+    LOCAL PROCEDURE _GetServiceZone@1100217002(pwCodZona@1100217001 : Code[10]) : Code[10];
+    VAR
+      lrZonTra@1100217000 : Record 7009791;
+    BEGIN
+      // _GetServiceZone
+
+      lrZonTra.RESET;
+      lrZonTra.SETRANGE("Tipo contrato", lrZonTra."Tipo contrato"::Servicio);
+      lrZonTra.SETRANGE("Zona fisica"  , pwCodZona);
+      IF lrZonTra.FINDFIRST THEN
+        EXIT(lrZonTra.Zona);
+    END;
+
+    LOCAL PROCEDURE _GetServicePoint@1100217004(prServTra@1100217000 : Record 7009916;pwTipo@1100217001 : Integer) : Code[20];
+    VAR
+      lrAeropuerto@1100217002 : Record 7009704;
+      lrHotel@1100217003 : Record 7009724;
+      lrZona@1100217004 : Record 7009713;
+    BEGIN
+      // _GetServicePoint
+
+      //. Retornamos un codigo de hotel para las reservas de transfer
+
+      CASE pwTipo OF
+        0: //. Origen
+        BEGIN
+          CASE prServTra."Tipo origen" OF
+            prServTra."Tipo origen"::Aeropuerto:
+            BEGIN
+              lrAeropuerto.GET(prServTra.Origen);
+              lrAeropuerto.TESTFIELD("Zona fisica");
+
+              lrZona.GET(lrAeropuerto."Zona fisica");
+              lrZona.TESTFIELD("Pto. recogida x defecto");
+
+              lrHotel.GET(lrZona."Pto. recogida x defecto");
+              EXIT(lrHotel.Hotel);
+            END;
+            prServTra."Tipo origen"::Hotel: EXIT(prServTra.Origen);
+            prServTra."Tipo origen"::Zona:
+            BEGIN
+              lrZona.GET(prServTra.Origen);
+              lrZona.TESTFIELD("Pto. recogida x defecto");
+
+              lrHotel.GET(lrZona."Pto. recogida x defecto");
+              EXIT(lrHotel.Hotel);
+            END;
+          END;
+        END;
+        1: //. Destino
+        BEGIN
+          CASE prServTra."Tipo destino" OF
+            prServTra."Tipo destino"::Aeropuerto:
+            BEGIN
+              lrAeropuerto.GET(prServTra.Destino);
+              lrAeropuerto.TESTFIELD("Zona fisica");
+
+              lrZona.GET(lrAeropuerto."Zona fisica");
+              lrZona.TESTFIELD("Pto. recogida x defecto");
+
+              lrHotel.GET(lrZona."Pto. recogida x defecto");
+              EXIT(lrHotel.Hotel);
+            END;
+            prServTra."Tipo destino"::Hotel: EXIT(prServTra.Destino);
+            prServTra."Tipo destino"::Zona:
+            BEGIN
+              lrZona.GET(prServTra.Destino);
+              lrZona.TESTFIELD("Pto. recogida x defecto");
+
+              lrHotel.GET(lrZona."Pto. recogida x defecto");
+              EXIT(lrHotel.Hotel);
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CreateReservations@1100217003(prServTra@1100217000 : Record 7009916);
+    VAR
+      lrPerServ@1100217006 : Record 7009917;
+      lrAcoRsv@1100217001 : Record 7009748;
+      lwResponsable@1100217002 : Integer;
+    BEGIN
+      // _CreateReservations
+
+      lrPerServ.RESET;
+      lrPerServ.SETRANGE(Delegacion    , prServTra.Delegacion);
+      lrPerServ.SETRANGE("Num. Reserva", prServTra."Num. Reserva");
+      lrPerServ.SETRANGE("ID Servicio" , prServTra."ID Servicio");
+      IF lrPerServ.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrAcoRsv.GET(lrPerServ.Delegacion, lrPerServ."Num. Reserva", lrPerServ."ID Persona");
+
+          _CreateReservation(prServTra, lrAcoRsv, lwResponsable);
+        UNTIL lrPerServ.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CreateReservation@1100217005(prServTra@1100217000 : Record 7009916;prAcoRsv@1100217001 : Record 7009748;VAR pwResponsable@1100217007 : Integer) : Integer;
+    VAR
+      lrParPer@1100217006 : Record 7009701;
+      lrRsvTra@1100217004 : Record 7009744;
+      lrCab@1100217003 : Record 7009741;
+      cFunRes@1100217002 : Codeunit 7009703;
+    BEGIN
+      // _CreateReservation
+
+      //. Tablas de parametros
+
+      lrParPer.FINDFIRST;
+      lrParPer.TESTFIELD("Codigo Adulto");
+      lrParPer.TESTFIELD("Codigo Ni¤o");
+      lrParPer.TESTFIELD("Codigo Infant");
+
+      lrCab.GET(prServTra.Delegacion, prServTra."Num. Reserva");
+
+      CLEAR(lrRsvTra);
+      lrRsvTra.Delegacion                 := prServTra.Delegacion;
+      lrRsvTra."N§ Interno"               := prServTra."Num. Reserva";
+      lrRsvTra."N§ Periodo"               := prServTra."ID Servicio";
+      lrRsvTra."N§ Reserva"               := cFunRes.num_reserva_transfer;
+      lrRsvTra.Producto                   := _GetTransferProduct;
+      lrRsvTra.TourOperador               := prServTra.Touroperador;
+      lrRsvTra.Bono                       := lrCab.Bono;
+      lrRsvTra.Nombre                     := prAcoRsv.Nombre;
+      lrRsvTra.Edad                       := prAcoRsv.Edad;
+      lrRsvTra."N§ Acompa¤ante"           := prAcoRsv."N§ Acompa¤ante";
+      lrRsvTra."Tipo Persona"             := prAcoRsv."Tipo Persona";
+      lrRsvTra."Fecha entrada"            := prServTra."Fecha servicio";
+      lrRsvTra."TourOperador facturacion" := lrCab."TourOperador Venta";
+      lrRsvTra."Servicio transfer entrada":= prServTra."Tipo Servicio"; // +$005
+      lrRsvTra."Transfer Privado Llegada" := prServTra."Servicio privado"; //+$002
+      lrRsvTra."Tipo transfer entrada"    := prServTra."Medio del traslado";
+      IF pwResponsable = 0 THEN
+        pwResponsable := lrRsvTra."N§ Reserva";
+      lrRsvTra."N§ Responsable"           := pwResponsable;
+      lrRsvTra.VALIDATE("Hotel entrada", prServTra."Punto destino");
+      lrRsvTra."Traslado en destino" := TRUE;
+      lrRsvTra."Fecha creacion"      := CURRENTDATETIME;
+      lrRsvTra.ManagePersonType;
+      lrRsvTra.INSERT;
+    END;
+
+    PROCEDURE CancelConfirmation@1100217006(VAR prServTra@1100217000 : Record 7009916);
+    BEGIN
+      // CancelConfirmation
+
+      IF NOT prServTra.Confirmado THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text003, FALSE, prServTra."ID Servicio", prServTra."Num. Reserva") THEN
+          EXIT;
+
+      //. Borramos las reservas de transfer
+      _DeleteReservations(prServTra);
+
+      //. Marcamos el servicio como confirmado
+      prServTra.VALIDATE(Confirmado, FALSE);
+      prServTra.MODIFY;
+
+      //. Si es un servicio hotel-hotel hay que cambiar el hotel de salida de la reserva transfer
+      //+$003 <
+      IF (prServTra."Tipo origen" = prServTra."Tipo origen"::Hotel) AND
+         (prServTra."Tipo destino" = prServTra."Tipo destino"::Hotel) THEN
+        _UpdateDepartureHotel(prServTra, 1);
+      //+$003 >
+
+      //. Comprobar si hay que marcar la cabecera para volver a enviar la confirmacion al proveedor
+      prServTra.CheckEnvioConfirmacion;
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text005);
+    END;
+
+    LOCAL PROCEDURE _DeleteReservations@1100217007(prServTra@1100217000 : Record 7009916);
+    VAR
+      lrRsvTra@1100217001 : Record 7009744;
+      lrRsvTra2@1100217003 : Record 7009744;
+      lrAgrup@1100217002 : Record 7009796;
+      lcFunCua@1100217004 : Codeunit 7009733;
+    BEGIN
+      // _DeleteReservations
+
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Delegacion, "N§ Interno");
+      lrRsvTra.SETRANGE (Delegacion           , prServTra.Delegacion);
+      lrRsvTra.SETRANGE ("N§ Interno"         , prServTra."Num. Reserva");
+      lrRsvTra.SETRANGE ("N§ Periodo"         , prServTra."ID Servicio");
+      lrRsvTra.SETRANGE ("Traslado en destino", TRUE);
+      lrRsvTra.SETFILTER("Agrupacion entrada" , '<>%1', 0);
+      IF lrRsvTra.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrAgrup.GET(lrRsvTra."Agrupacion entrada");
+          IF lrAgrup.Estado = lrAgrup.Estado::Confirmado THEN
+            ERROR(Text004, lrRsvTra."Agrupacion entrada");
+
+          lrRsvTra2 := lrRsvTra;
+          lrRsvTra2.VALIDATE("Agrupacion entrada", 0);
+          lrRsvTra2.MODIFY;
+        UNTIL lrRsvTra.NEXT = 0;
+
+        //. Si es un servicio privado borro tambien la agrupaci¢n
+
+        //IF prServTra."Servicio privado" THEN   // -$005
+        IF prServTra."Tipo Servicio" <> prServTra."Tipo Servicio"::Compartido THEN // +$005
+          lcFunCua.Desagrupar(lrAgrup);
+      END;
+
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Delegacion, "N§ Interno");
+      lrRsvTra.SETRANGE (Delegacion           , prServTra.Delegacion);
+      lrRsvTra.SETRANGE ("N§ Interno"         , prServTra."Num. Reserva");
+      lrRsvTra.SETRANGE ("N§ Periodo"         , prServTra."ID Servicio");
+      lrRsvTra.SETRANGE ("Traslado en destino", TRUE);
+      IF lrRsvTra.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsvTra2 := lrRsvTra;
+          lrRsvTra2.DELETE(TRUE)
+        UNTIL lrRsvTra.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CreateService@1100217008(VAR prServ@1100217000 : Record 7009916);
+    VAR
+      lwTransferPrivado@1100217001 : Boolean;
+      lwMedioTraslado@1100217003 : Integer;
+      lwNumAgrupacion@1100217004 : Integer;
+      lwFechaServicio@1100217007 : Date;
+      lwZonaAgrupacion@1100217010 : Code[10];
+      lrServ@1100217002 : Record 7009916;
+      lrRsv@1100217008 : Record 7009744;
+      lrRsv2@1100217009 : Record 7009744;
+      lrAgr@1100217006 : Record 7009796;
+      lrVeh@1100217011 : Record 7009809;
+      lcCuadrante@1100217005 : Codeunit 7009733;
+      lfAgrupacion@1100217012 : Form 7009938;
+    BEGIN
+      // CreateService
+
+      lrServ.COPY(prServ);
+      IF lrServ.FINDSET THEN
+      BEGIN
+        lwTransferPrivado := lrServ."Tipo Servicio" <> lrServ."Tipo Servicio"::Compartido;   // $005
+        lwMedioTraslado   := prServ."Medio del traslado";
+        lwFechaServicio   := lrServ."Fecha servicio";
+
+        //. Creamos el registro de agrupacion
+        lwNumAgrupacion := lcCuadrante.GetNumAgrupacion + 1;
+
+        lrAgr.INIT;
+        lrAgr."N§ Agrupacion"           := lwNumAgrupacion;
+        lrAgr."Medio del transfer"      := lwMedioTraslado;
+        lrAgr.Fecha                     := lwFechaServicio;
+        lrAgr."Tipo transfer"           := lrAgr."Tipo transfer"::Entrada;
+        lrAgr."Hora presentacion"       := lrServ."Hora recogida";
+        lrAgr."Lugar presentacion"      := lrServ."Descripcion origen";
+        lrAgr."Traslado en destino"    := TRUE;
+        lrAgr.Estado                    := lrAgr.Estado::Pendiente;
+        lrAgr."Ver cuadrante"           := TRUE;
+        lrAgr."Transfer Privado"        := lwTransferPrivado;
+        lrAgr."Tipo Servicio venta"           := lrServ."Tipo Servicio";
+        lrAgr."Descripcion destino"     := lrServ."Descripcion destino"; //+$001
+        lrAgr."Origen/Destino transfer" := prServ."Zona origen";
+        lrAgr."Tipo servicio transportista"           := lrAgr."Tipo servicio transportista"::"Una via"; //+$004
+        lrAgr.INSERT(TRUE);
+
+        REPEAT
+          //. Hay que comprobar que no se mezclen clientes de transfer privado con otros clientes
+          IF lwTransferPrivado <> (lrServ."Tipo Servicio" <> lrServ."Tipo Servicio"::Compartido) THEN
+            ERROR(Text006);
+          //. Hay que comprobar que todos los servicios sean del mismo medio (Terrestre, Aereo, Maritimo)
+          IF lwMedioTraslado <> prServ."Medio del traslado" THEN
+            ERROR(Text007);
+          //. Hay que comprobar que todas las reservas sean del mismo dia
+          IF lwFechaServicio <> lrServ."Fecha servicio" THEN
+            ERROR(Text008);
+
+          lrRsv.RESET;
+          lrRsv.SETCURRENTKEY(Delegacion, lrRsv."N§ Interno");
+          lrRsv.SETRANGE(Delegacion          , lrServ.Delegacion);
+          lrRsv.SETRANGE("N§ Interno"        , lrServ."Num. Reserva");
+          lrRsv.SETRANGE("N§ Periodo"        , lrServ."ID Servicio");
+          lrRsv.SETRANGE("Agrupacion entrada", 0);
+          IF lrRsv.FINDSET THEN
+          BEGIN
+            REPEAT
+              lrRsv2 := lrRsv;
+              lrRsv2.VALIDATE("Agrupacion entrada", lrAgr."N§ Agrupacion");
+              lrRsv2.MODIFY;
+
+              lwZonaAgrupacion := lrRsv2."Zona servicio entrada";
+            UNTIL lrRsv.NEXT = 0;
+          END;
+        UNTIL lrServ.NEXT = 0;
+
+        //. Grabar datos adicionales agrupaci¢n
+        IF lrAgr.GET(lrAgr."N§ Agrupacion") THEN
+        BEGIN
+          lrAgr.Zona := lwZonaAgrupacion;
+
+          //. Poner Transportista y vehiculo seg£n zona y pax
+          lrAgr.CALCFIELDS("Personas entrada");
+
+          lrVeh.RESET;
+          lrVeh.SETRANGE ("Zona servicio", lrAgr.Zona);
+          lrVeh.SETFILTER("Pax desde"    , '<=%1', lrAgr."Personas entrada");
+          lrVeh.SETFILTER("Pax hasta"    , '>=%1', lrAgr."Personas entrada");
+          IF lrVeh.FINDFIRST THEN
+          BEGIN
+            lrAgr.VALIDATE(Transportista, lrVeh.Transportista);
+            lrAgr."Tipo vehiculo"      := lrVeh."Tipo veh¡culo";
+            lrAgr."Capacidad Vehiculo" := lrVeh."Capacidad x defecto"; //+$005
+            lrAgr."N§ vehiculos"       := 1;
+          END;
+          lrAgr.LOCKTABLE;
+          lrAgr.MODIFY;
+
+          COMMIT;
+          lrAgr.SETRECFILTER;
+
+          CLEAR(lfAgrupacion);
+          lfAgrupacion.SETTABLEVIEW(lrAgr);
+          lfAgrupacion.RUNMODAL;
+        END;
+      END;
+    END;
+
+    PROCEDURE CallServices@1100217009(prAcuZon@1100217000 : Record 7009793);
+    VAR
+      lrServTra@1100217001 : Record 7009916;
+      lfServicios@1100217002 : Form 7009950;
+    BEGIN
+      // CallServices
+
+      IF prAcuZon."Tipo Transfer" = prAcuZon."Tipo Transfer"::Salida THEN
+        EXIT;
+
+      lrServTra.RESET;
+      lrServTra.SETRANGE("Fecha servicio"       , prAcuZon.Fecha);
+      //-$007lrServTra.SETRANGE("Zona servicio destino", prAcuZon.Zona);
+      //-$007lrServTra.SETRANGE(Touroperador           , prAcuZon.TourOperador);
+
+      CLEAR(lfServicios);
+      lfServicios.SETTABLEVIEW(lrServTra);
+      lfServicios.RUN;
+    END;
+
+    PROCEDURE AddToService@1100217010(VAR prSerTra@1100217000 : Record 7009916);
+    VAR
+      lrAgr@1100217001 : Record 7009796;
+      lrSerTra@1100217002 : Record 7009916;
+      lrRsv@1100217003 : Record 7009744;
+      lrRsv2@1100217004 : Record 7009744;
+    BEGIN
+      // AddToService
+
+      //. Comprobaremos si esta linea tiene gente pendiente de asignar
+      lrSerTra.COPY(prSerTra);
+      lrSerTra.CALCFIELDS("Personas sin servicio");
+      IF lrSerTra."Personas sin servicio" = 0 THEN
+        ERROR(Text009);
+
+      //. Pediremos al usuario que seleccione la agrupacion a la que agregar las personas
+
+      lrAgr.RESET;
+      lrAgr.FILTERGROUP(2);
+      lrAgr.SETRANGE(Fecha                 , prSerTra."Fecha servicio");
+      lrAgr.SETRANGE("Tipo transfer"       , lrAgr."Tipo transfer"::Entrada);
+      lrAgr.SETRANGE("Traslado en destino", TRUE);
+      lrAgr.FILTERGROUP(0);
+      IF FORM.RUNMODAL(0, lrAgr) <> ACTION::LookupOK THEN
+        EXIT;
+
+      IF lrSerTra.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsv.RESET;
+          lrRsv.SETCURRENTKEY(Delegacion, lrRsv."N§ Interno");
+          lrRsv.SETRANGE(Delegacion          , lrSerTra.Delegacion);
+          lrRsv.SETRANGE("N§ Interno"        , lrSerTra."Num. Reserva");
+          lrRsv.SETRANGE("N§ Periodo"        , lrSerTra."ID Servicio");
+          lrRsv.SETRANGE("Agrupacion entrada", 0);
+          IF lrRsv.FINDSET THEN
+          BEGIN
+            REPEAT
+              lrRsv2 := lrRsv;
+              lrRsv2.VALIDATE("Agrupacion entrada", lrAgr."N§ Agrupacion");
+              lrRsv2.MODIFY;
+            UNTIL lrRsv.NEXT = 0;
+          END;
+        UNTIL lrSerTra.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _UpdateDepartureHotel@1000000000(prServTra@1000000000 : Record 7009916;pwAction@1000000001 : 'Confirmar,Cancelar');
+    VAR
+      lrRsv@1000000002 : Record 7009744;
+      lrPax@1000000003 : Record 7009917;
+    BEGIN
+      // _UpdateDepartureHotel
+
+      lrPax.RESET;
+      lrPax.SETRANGE(Delegacion    , prServTra.Delegacion);
+      lrPax.SETRANGE("Num. Reserva", prServTra."Num. Reserva");
+      lrPax.SETRANGE("ID Servicio" , prServTra."ID Servicio");
+      IF lrPax.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsv.RESET;
+          lrRsv.SETCURRENTKEY(Delegacion, lrRsv."N§ Interno");
+          lrRsv.SETRANGE (Delegacion      , prServTra.Delegacion);
+          lrRsv.SETRANGE ("N§ Interno"    , prServTra."Num. Reserva");
+          lrRsv.SETRANGE ("N§ Acompa¤ante", lrPax."ID Persona");
+          lrRsv.SETFILTER("Fecha entrada" , '<=%1', prServTra."Fecha servicio");
+          lrRsv.SETFILTER("Fecha salida"  , '>=%1', prServTra."Fecha servicio");
+          IF lrRsv.FINDFIRST THEN
+          BEGIN
+            lrRsv."Modificacion importacion" := TRUE;
+            IF pwAction = pwAction::Confirmar THEN
+              lrRsv.VALIDATE("Hotel salida", prServTra.Destino)
+            ELSE
+              lrRsv.VALIDATE("Hotel salida", lrRsv."Hotel entrada");
+            lrRsv."Modificacion importacion" := FALSE;
+            lrRsv.MODIFY;
+          END;
+        UNTIL lrPax.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CheckPrecioVenta@1000000002(prContrato@1000000000 : Record 7009788;prServTra@1000000004 : Record 7009916);
+    VAR
+      lrPrecios@1000000007 : Record 7009790;
+      lrCab@1000000001 : Record 7009741;
+      lrZonas@1000000005 : Record 7009791;
+      lwOrigen@1000000003 : Code[10];
+      lwDestino@1000000002 : Code[10];
+    BEGIN
+      // CheckPrecioVenta
+
+      lrZonas.RESET;
+      lrZonas.SETRANGE(Contrato       , prContrato."N§ Contrato Venta");
+      lrZonas.SETRANGE("Tipo contrato", lrZonas."Tipo contrato"::Venta);
+      lrZonas.SETRANGE("Zona fisica"  , prServTra."Zona origen");
+      IF lrZonas.FINDFIRST THEN
+        lwOrigen := lrZonas.Zona
+      ELSE
+        ERROR(Text010, prServTra."Zona origen", prContrato."N§ Contrato Venta");
+
+      //. Con la zona del hotel vamos a obtener el destino de la ruta
+
+      lrZonas.RESET;
+      lrZonas.SETRANGE(Contrato       , prContrato."N§ Contrato Venta");
+      lrZonas.SETRANGE("Tipo contrato", lrZonas."Tipo contrato"::Venta);
+      lrZonas.SETRANGE("Zona fisica"  , prServTra."Zona destino");
+      IF lrZonas.FINDFIRST THEN
+        lwDestino := lrZonas.Zona
+      ELSE
+        ERROR(Text010, prServTra."Zona destino", prContrato."N§ Contrato Venta");
+
+      prServTra.CALCFIELDS(Personas);
+
+      lrPrecios.RESET;
+      lrPrecios.SETRANGE ("N§ Contrato"  , prContrato."N§ Contrato Venta");
+      lrPrecios.SETRANGE ("Codigo precio", lrPrecios."Codigo precio"::"Precio Base");
+      lrPrecios.SETRANGE (Origen         , lwOrigen);
+      lrPrecios.SETRANGE (Destino        , lwDestino);
+      lrPrecios.SETFILTER("Fecha desde"  , '<=%1', prServTra."Fecha servicio");
+      lrPrecios.SETFILTER("Fecha hasta"  , '>=%1', prServTra."Fecha servicio");
+      lrPrecios.SETFILTER("Rango desde"  , '<=%1', prServTra.Personas);
+      lrPrecios.SETFILTER("Rango hasta"  , '>=%1', prServTra.Personas);
+      lrPrecios.SETRANGE(lrPrecios."Tipo Traslado",prServTra."Tipo Servicio");  // +$005
+
+      // -$005
+      //IF prServTra."Servicio privado" THEN
+      //  lrPrecios.SETRANGE("Tipo Traslado", lrPrecios."Tipo Traslado"::Privado)
+      //ELSE
+      //  lrPrecios.SETRANGE("Tipo Traslado", lrPrecios."Tipo Traslado"::Regular);
+
+      lrCab.GET(prServTra.Delegacion, prServTra."Num. Reserva");
+      CASE lrCab."Tipo Operacion" OF
+        0:
+        BEGIN
+          lrPrecios.SETFILTER("Tipo operacion", '%1|%2', lrPrecios."Tipo operacion"::Ambos,
+                                                         lrPrecios."Tipo operacion"::Charter);
+        END;
+        1:
+        BEGIN
+          lrPrecios.SETFILTER("Tipo operacion", '%1|%2', lrPrecios."Tipo operacion"::Ambos,
+                                                         lrPrecios."Tipo operacion"::Regular);
+        END;
+      END;
+
+      IF NOT lrPrecios.FINDFIRST THEN
+      BEGIN
+        lrPrecios.SETRANGE (Destino, lwOrigen);
+        lrPrecios.SETRANGE (Origen , lwDestino);
+
+        IF NOT lrPrecios.FINDFIRST THEN
+          ERROR(Text011, prContrato."N§ Contrato Venta");
+      END;
+    END;
+
+    LOCAL PROCEDURE _GetTransferProduct@1000000001() : Code[10];
+    VAR
+      lrPro@1000000000 : Record 7009710;
+    BEGIN
+      // _GetTransferProduct
+
+      lrPro.RESET;
+      lrPro.SETRANGE("Tipo Producto", lrPro."Tipo Producto"::Transfer);
+      lrPro.FINDFIRST;
+
+      EXIT(lrPro.Codigo);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 03052014 Agregamos la descripcion del destino en las agrupaciones para los reportes de operaciones
+
+      $002 AJS 29052014 Ahora tenemos dos campos para transfer privado de llegada y salida
+
+      $003 AJS 27092014 Cuando confirmamos o cancelamos un servicio hotel-hotel hay que actualizar el hotel salida
+                        de la reserva transfer
+
+      $004 AJS 28092014 Modifico la funcion create_service para que el servicio se cree como de Una via, se lo mas habitual
+
+      $005 ARM 30092014 CNT-CAR-14063 Nuevo campo Tipo servicio
+
+      $006 AJS 01122014 Elimino el parametro de Producto Traslado en destino porque no es necesario
+
+      $007 AJS 09122014 Modifico la funcion CallServices para que solo se filtre por fecha
+    }
+    END.
+  }
+}

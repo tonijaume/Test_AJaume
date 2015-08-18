@@ -1,0 +1,1535 @@
+OBJECT Codeunit 7010408 Calculo Ingresos Parte
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:35:35;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100253009 : TextConst 'ESP=VEHICULO';
+      Text002@1100253008 : TextConst 'ESP=SUPLFIJO';
+      Text003@1100253000 : TextConst 'ESP=Calculando ingresos';
+      cFunCalc@1100253001 : Codeunit 7010407;
+      rtmConV@1100253002 : TEMPORARY Record 7010403;
+      Text004@1100253004 : TextConst 'ESP=El %1 %2 tiene un C¢digo de Divisa diferente al precio generico de maletas';
+      rErr@1100253005 : Record 7010413;
+      Text005@1100253007 : TextConst 'ESP=No se ha encontrado contrato para el cliente %1 Touroperador %2 para el dia %3.';
+      Text006@1100253006 : TextConst 'ESP=No se ha encontrato precio generico para las maletas ni precio de suplemento en el contrato.';
+      Text007@1100253003 : TextConst 'ESP=No hay ningun touroperador asociado a este parte';
+      rPar@1100253010 : Record 7010311;
+      wTipoLinea@1100253011 : 'Base,Suplemento,Manual,Extra';
+      Text008@1100253012 : TextConst 'ESP=No se han considerado las maletas  para el touroperador %1 en la zona %2  por especificaci¢n contrato de venta';
+      Text009@1100253013 : TextConst 'ESP=Las maletas del touroperador %1 en la zona %2 se han calculado para los paxes facturados.';
+      Text010@1100253014 : TextConst 'ESP=Las maletas del touroperador %1 en la zona %2 se han calculado para los paxes transportados.';
+      wConcepto@1100253015 : 'Ingreso,Coste';
+      Text011@1100253016 : TextConst 'ESP=Hay que indicar un codigo en los extras.';
+      Text012@1100253017 : TextConst 'ESP=MANUAL';
+      Text013@1100253018 : TextConst 'ESP=No se puede Confirmar  Parte %1 ya que el TTOO %2  esta parametrizado para  facturar en empresa %3';
+
+    PROCEDURE LanzaCalculoIngresos@1100253002(VAR prParte@1100253000 : Record 7010360;VAR prtmTOPar@1100253001 : TEMPORARY Record 7010365;VAR prtmSerPar@1100253002 : TEMPORARY Record 7010359;VAR prtmZonPre@1100253004 : TEMPORARY Record 7010364;VAR prtmExtra@1100253017 : TEMPORARY Record 7010362;VAR ptmElePto@1100253008 : TEMPORARY Record 7010363;VAR pwVentana@1100253003 : Dialog);
+    VAR
+      lrZonPre2@1100253005 : TEMPORARY Record 7010364;
+      lrPre@1100253012 : TEMPORARY Record 7010405;
+      lrCliTo@1100253006 : Record 7010313;
+      lwPasajeIngreso@1100253007 : ARRAY [3] OF Integer;
+      lwAplicadoMinimoPlazas@1100253009 : Boolean;
+      lwAplicadoMinimoCombinado@1100253018 : Boolean;
+      lwOrigenDestino@1100253010 : Code[10];
+      lwZonaMasLejana@1100253011 : Boolean;
+      lwCantidadParte@1100253015 : Decimal;
+      lwCantidadZona@1100253014 : Decimal;
+      lwCantidadTO@1100253013 : Decimal;
+      lwTouroperador@1100253016 : Code[10];
+    BEGIN
+      // LanzaCalculoIngresos
+      //
+      // lwPasajeIngreso tiene tres dimesiones: 1-Todos, 2=Adultos, 3= Ni¤os
+
+      rPar.FINDFIRST;
+      pwVentana.UPDATE(2, Text002);
+
+      prtmTOPar.RESET;
+
+
+      // Hacer una primera pasada por los touroperadores para traducir las zonas de precios
+      // Los touroperadores se tomaran por orden, este campo orden es modificable por el usuario, de esta manera se puede
+      // seleccionar el touroperador al que se aplican los minimos
+
+      CLEAR(lrZonPre2);
+      prtmTOPar.SETCURRENTKEY("N§ Parte", "Orden calculo");
+
+      CLEAR(lrCliTo);
+      IF prtmTOPar.FINDSET(TRUE) THEN BEGIN // En una primera vuelta crea las lineas de zona parte
+        REPEAT
+          // JPT /10/03/06 No se pueden Confirmar Partes de Touroperadores que se facturen en otras empresas
+          IF prParte."Tipo Calculo" = prParte."Tipo Calculo"::Confirmacion THEN BEGIN
+            IF lrCliTo.GET(prParte.Cliente,prtmTOPar.Touroperador) THEN
+              IF lrCliTo."Facturar a traves de empresa" <> '' THEN
+                ERROR(Text013,prParte."N§ Parte", prtmTOPar.Touroperador,lrCliTo."Facturar a traves de empresa");
+          END;
+
+          // lrZonPre2 indicar  la zona m s alejada
+          IF cFunCalc.BuscaContratoVenta(rtmConV,prParte.Cliente,prtmTOPar.Touroperador,prParte."Fecha facturacion",prParte.Garaje) THEN
+            cFunCalc.TraduceZonaVenta(prParte ,prtmTOPar ,rtmConV ,lwPasajeIngreso ,lrZonPre2);
+
+          prtmTOPar."N§ Contrato venta" := rtmConV."N§ Contrato";
+          prtmTOPar."Cod. Divisa venta" := rtmConV."Cod. Divisa";
+
+          // Rellenamos el nuevo campo en "TTOO x Parte"
+          prtmTOPar."Fecha Servicio Parte" := prParte.Fecha;
+          prtmTOPar.MODIFY;
+        UNTIL prtmTOPar.NEXT = 0;
+      END;
+
+      IF prtmTOPar.FINDSET THEN BEGIN
+        BuscaTotalPasajeIngreso(prtmTOPar,lwPasajeIngreso);
+        lwAplicadoMinimoPlazas    := FALSE;
+        lwAplicadoMinimoCombinado := FALSE;
+
+        //  Si todos los precios del 1 TTOO son iguales "Precio por":= Zona mas alejada
+        cFunCalc.ChequeaPrecios(prParte, prtmTOPar, lwPasajeIngreso[1]);
+        REPEAT
+          cFunCalc.BuscaContratoVenta(rtmConV, prParte.Cliente, prtmTOPar.Touroperador, prParte."Fecha facturacion",
+                                      prParte.Garaje);
+          lwOrigenDestino := cFunCalc.TraduceOrigenVenta(prParte, rtmConV);
+
+          // Calculo de los ingresos para cada una de las zonas de precios obtenidas.
+
+          CLEAR(prtmZonPre);
+          prtmZonPre.SETCURRENTKEY("N§ Parte", "Tipo contrato", "N§ Contrato", Orden);
+          prtmZonPre.SETRANGE("N§ Parte"     , prParte."N§ Parte");
+          prtmZonPre.SETRANGE("Tipo contrato", prtmZonPre."Tipo contrato"::Venta);
+          prtmZonPre.SETRANGE("N§ Contrato"  , rtmConV."N§ Contrato");
+
+          // Ahora buscamos la linea de precio de cada zona. Guardamos el no de orden (de creacion) y el minimo zona
+
+          IF (prtmZonPre.FINDLAST) AND (prtmTOPar."Precio manual venta" = 0) THEN BEGIN
+            lwZonaMasLejana := TRUE;
+            REPEAT
+              // AJF 07/07/08 - Si el pasaje est  modificado manualmente cogemos los paxes facturados tb para el TO.
+              IF prtmZonPre."Pasaje modificado manual" THEN BEGIN
+                lwCantidadParte := lwPasajeIngreso[1];
+                lwCantidadZona  := prtmZonPre."Adultos facturados zona" + prtmZonPre."Ni¤os facturados zona";
+                lwCantidadTO    := prtmTOPar."Adultos facturados" + prtmTOPar."Ni¤os facturados";
+              END
+              ELSE BEGIN
+                lwCantidadParte := prParte."Adultos trans. soporte" + prParte."Ni¤os trans. soporte";
+                lwCantidadZona  := prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona";
+                lwCantidadTO    := prtmTOPar."Adultos transportados" + prtmTOPar."Ni¤os transportados";
+              END;
+              //lwCantidadTO  := prtmTOPar."Adultos transportados" + prtmTOPar."Ni¤os transportados";
+
+              IF cFunCalc.BuscaPrecioVenta(prParte, rtmConV, lrPre, prtmZonPre."Zona Precio" , '', lwCantidadParte,
+                                           lwOrigenDestino, lwCantidadZona, lwCantidadTO, prtmZonPre."Grupo Precio") THEN BEGIN
+                prtmZonPre."Orden linea precio" := lrPre.Orden;
+                prtmZonPre."Minimo Zona"        := lrPre."Minimos Zona";
+                prtmZonPre.MODIFY;
+
+                // Ahora establecemos los minimos de pax-zona
+
+                IF lrPre."Tipo aplicacion" = lrPre."Tipo aplicacion"::Pax THEN
+                  DeterminaMinPax2(prParte,lrPre,prtmZonPre,prtmTOPar, lwPasajeIngreso[2],lwPasajeIngreso[3],
+                                  rtmConV,lwAplicadoMinimoPlazas, lwAplicadoMinimoCombinado, lwZonaMasLejana);
+              END;
+              lwZonaMasLejana := FALSE;
+            UNTIL prtmZonPre.NEXT(-1) = 0;
+          END;
+        UNTIL prtmTOPar.NEXT = 0;
+      END;
+
+      // Volvemos a calcular w_pasaje_ingreso
+
+      CLEAR(lwPasajeIngreso);
+      CLEAR(prtmZonPre);
+      prtmZonPre.SETRANGE("N§ Parte"     , prParte."N§ Parte");
+      prtmZonPre.SETRANGE("Tipo contrato", prtmZonPre."Tipo contrato"::Venta);
+      IF prtmZonPre.FINDSET THEN BEGIN
+        REPEAT
+          lwPasajeIngreso[1] += prtmZonPre."Adultos facturados zona" + prtmZonPre."Ni¤os facturados zona";
+          lwPasajeIngreso[2] += prtmZonPre."Adultos facturados zona";
+          lwPasajeIngreso[3] += prtmZonPre."Ni¤os facturados zona";
+        UNTIL prtmZonPre.NEXT = 0;
+      END;
+
+      // Determina los minimos por vehiculo/tipo Serv fijo
+      IF prtmTOPar.FINDSET THEN BEGIN
+        REPEAT
+          cFunCalc.DeterminaMinVeh (prParte, prtmTOPar."N§ Contrato venta", lwPasajeIngreso[1]);
+        UNTIL prtmTOPar.NEXT = 0;
+      END;
+
+      prtmTOPar.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF prtmTOPar.FINDSET THEN BEGIN
+        BuscaTotalPasajeIngreso(prtmTOPar,lwPasajeIngreso);
+        lwAplicadoMinimoPlazas := FALSE;
+
+        // Si todos los precios del 1 TTOO son iguales "Precio por":= Zona mas alejada
+        cFunCalc.ChequeaPrecios(prParte, prtmTOPar, lwPasajeIngreso[1]);
+        REPEAT
+          CalculoIngreso(prParte, prtmTOPar, prtmSerPar, prtmZonPre, prtmExtra, ptmElePto,
+                         lwAplicadoMinimoPlazas, lwPasajeIngreso[1], lwPasajeIngreso[2], lwPasajeIngreso[3]);
+
+          // Comprobar si los adultos transportados que figuran en las lineas de coste/ingreso o margen coinciden
+          // con los transportados realmente por el parte y sino cuadran sumar la diferencia sobre la ultima linea
+
+          cFunCalc.ChequeoTransportadosFacturados(prParte, prtmTOPar);
+
+        UNTIL prtmTOPar.NEXT = 0;
+      END
+      // A¤adir mensaje de error si un parte no tiene touroperadores  ----
+      ELSE
+        cFunCalc.InsertaError(prParte, Text007, rErr.Tipo::Error);
+
+      // A¤adir mensaje de error sin un parte no tiene touroperadores
+
+      // Una vez finalizados los calculos en funcion del tipo de calculo indicado en el parte
+      // se dejara el calculo de cada touroperador por separado o se buscar cual tiene mayor
+      // importe y se repartira entre los demas, solo de aquellos que tengan ingreso.
+
+      IF prParte."Tipo aplicacion ingreso" = prParte."Tipo aplicacion ingreso"::"Mayor importe" THEN BEGIN
+        lwTouroperador := BuscaImporteMayor(prParte, prtmTOPar);
+        cFunCalc.BorrarOtrosTo(prParte, lwTouroperador);
+        cFunCalc.RepartirIngresoTo(prParte);
+      END;
+    END;
+
+    PROCEDURE CalculoIngreso@1100253007(prParte@1100244000 : Record 7010360;VAR prtmTOPar@1100253004 : TEMPORARY Record 7010365;VAR prtmSerPar@1100253003 : TEMPORARY Record 7010359;VAR prtmZonPre@1100253002 : TEMPORARY Record 7010364;VAR prtmExtra@1100253005 : TEMPORARY Record 7010362;VAR ptmElePto@1100253007 : TEMPORARY Record 7010363;VAR pwAplicadoMinimoPlazas@1100253006 : Boolean;pwPasajeIngreso@1100244002 : Integer;pwAdultoIngreso@1100244003 : Integer;pwNi¤oIngreso@1100244004 : Integer);
+    VAR
+      rtmConV@1100244005 : TEMPORARY Record 7010403;
+      lrCon2@1103350003 : TEMPORARY Record 7010403;
+      lrPre@1100244006 : TEMPORARY Record 7010405;
+      lrVeh@1100244009 : Record 7010346;
+      lwOrigenDestino@1100244010 : Code[10];
+      lwCondicion@1100244015 : Boolean;
+      lwPrecioPorZona@1103350000 : Boolean;
+      lwZonaMasLejana@1100253017 : Boolean;
+      lwCantidad@1103350004 : Decimal;
+      lwManual@1100253000 : Boolean;
+      lwNumVuel@1100253001 : Integer;
+      lwVuelt@1100253021 : Integer;
+      lwDivisa@1100253008 : Code[10];
+      lwImporte@1100253009 : Decimal;
+      lwPrecio@1100253010 : Decimal;
+      lwTipoPrecio@1100253011 : 'Pax,Vehiculo';
+      lwContrato@1100253012 : Code[10];
+      lwTipElem@1100253013 : Code[10];
+      lwPaxFact@1100253014 : Integer;
+      lwPaxTransp@1100253015 : Integer;
+      lwOk@1100253016 : Boolean;
+      lwAdFac@1100253023 : Integer;
+      lwNiFac@1100253022 : Integer;
+      lwAdTrn@1100253020 : Integer;
+      lwNiTrn@1100253019 : Integer;
+      lwRangoVeh@1100253024 : Boolean;
+      lwConcept@1100253018 : Text[30];
+      lwInserta@1100253025 : Boolean;
+    BEGIN
+      // CalculoIngreso
+      //
+      // Se encarga de calcular el ingreso para un touroperador determinado. Para cada
+      // Touroperador se comprobara que no se haya marcado un precio manual.
+      // Buscamos el contrato de venta a aplicar al parte de trabajo para este touroperador
+
+      IF NOT cFunCalc.BuscaContratoVenta(rtmConV,prParte.Cliente,prtmTOPar.Touroperador,prParte."Fecha facturacion",prParte.Garaje) THEN
+      BEGIN
+        cFunCalc.InsertaError(prParte, STRSUBSTNO(Text005, prParte.Cliente, prtmTOPar.Touroperador,
+                              prParte."Fecha facturacion"), rErr.Tipo::Error);
+      END
+      ELSE BEGIN
+        prtmTOPar."N§ Contrato venta" := rtmConV."N§ Contrato";
+        prtmTOPar."Cod. Divisa venta" := rtmConV."Cod. Divisa";
+        prtmTOPar.MODIFY;
+      END;
+
+      lrCon2:= rtmConV;
+      cFunCalc.BuscaContratoReal(lrCon2); // Buscamos el contrato que tiene los precios
+
+      // Buscar la zona de precios dentro del contrato para cada uno de los puntos de recogida y
+      // la traduccion en el contrato del punto de Origen/Destino del servicio.
+
+      lwOrigenDestino := cFunCalc.TraduceOrigenVenta(prParte, rtmConV);
+
+      CLEAR(prtmZonPre);
+      prtmZonPre.SETCURRENTKEY("N§ Parte", "Tipo contrato", "N§ Contrato", Orden);
+      prtmZonPre.ASCENDING(FALSE);
+      prtmZonPre.SETRANGE("N§ Parte"     , prParte."N§ Parte");
+      prtmZonPre.SETRANGE("Tipo contrato", prtmZonPre."Tipo contrato"::Venta);
+      prtmZonPre.SETRANGE("N§ Contrato"  , rtmConV."N§ Contrato");
+
+      // Buscar si hay que aplicar precios manuales
+
+      lwManual := prtmTOPar."Precio manual venta" <> 0;
+
+      // Comprobar si existen suplementos de zona que obliguen a aplicar minimos para
+      // alguna de las zonas de precios del parte
+      // Los suplementos de zona no se tienen que aplicar si zona mas alejada
+
+      IF (prtmTOPar."Ingreso Precios Por" <> prtmTOPar."Ingreso Precios Por"::"Zona mas alejada") AND (NOT lwManual) THEN
+        BuscaSuplementoZonaVenta(prParte, rtmConV,prtmZonPre);
+
+      CLEAR(lrPre);
+
+      IF prtmZonPre.FINDFIRST THEN BEGIN
+        lwZonaMasLejana := TRUE;
+        REPEAT
+          CLEAR(lwConcept);
+          CLEAR(lwPaxFact);
+          // Calculo del precio basico para la zona de precios.
+          lwNumVuel := 1; // El precio por Pax presupone 2 vueltas
+          IF lwManual THEN BEGIN
+
+            prtmZonPre."Pax facturados zona" := prtmTOPar."Adultos facturados" + prtmTOPar."Ni¤os facturados";
+              prtmZonPre.MODIFY;
+
+            lwDivisa     := prtmTOPar."Cod. Divisa venta";
+            lwImporte    := prtmTOPar."Precio manual venta";
+            lwPrecio     := prtmTOPar."Precio manual venta";
+            lwTipoPrecio := lwTipoPrecio::Vehiculo;
+            lwContrato   := rtmConV."N§ Contrato";
+            lwTipElem    := Text012;
+            lwPaxFact    := prtmTOPar."Adultos facturados" + prtmTOPar."Ni¤os facturados";
+            lwPaxTransp  := prtmTOPar."Adultos transportados" + prtmTOPar."Ni¤os transportados";
+            lwConcept    := prtmTOPar."Concepto facturacion";
+            // Cambiamos el tipo de aplicaci¢n del precio para que no entre en las subrutinas que cambiarian estos datos
+            lrPre."Tipo aplicacion" := -1;
+
+            lwInserta := TRUE;
+            lwOk := TRUE;
+          END
+          ELSE BEGIN
+            lrPre.Garaje         := lrCon2.Garaje;
+            lrPre."N§ Contrato"  := lrCon2."N§ Contrato";
+            lrPre."Tipo precio"  := lrPre."Tipo precio"::"Precio Base";
+            lrPre.Orden          := prtmZonPre."Orden linea precio";
+            lwOk := cFunCalc.GetPrecioVta(lrPre);
+            lwConcept            := lrPre."Concepto facturacion";
+
+            IF lrPre."Tipo aplicacion" = lrPre."Tipo aplicacion"::Pax  THEN
+              lwNumVuel := 2;
+          END;
+          IF lwOk THEN BEGIN
+            FOR lwVuelt :=1 TO lwNumVuel DO BEGIN // Establecemos dos vueltas para cuando el precio es por Pax
+              CASE lrPre."Tipo aplicacion" OF
+                lrPre."Tipo aplicacion"::Pax: BEGIN
+                  CASE prtmTOPar."Ingreso Precios Por" OF
+                    prtmTOPar."Ingreso Precios Por"::"Cada zona", prtmTOPar."Ingreso Precios Por"::"Zonas combinadas" : BEGIN
+                      lwAdTrn := prtmZonPre."Adultos Transportados zona";
+                      lwNiTrn := prtmZonPre."Ni¤os Transportados zona";
+                    END;
+                    prtmTOPar."Ingreso Precios Por"::"Zona mas alejada": BEGIN
+                      lwAdTrn   := prtmTOPar."Adultos transportados";
+                      lwNiTrn   := prtmTOPar."Ni¤os transportados";
+                    END;
+                  END;
+                  CASE lwVuelt OF
+                    1: BEGIN // Adultos
+                         lwPaxFact  := prtmZonPre."Adultos facturados zona";
+                         lwPaxTransp:= lwAdTrn;
+                         lwPrecio   := lrPre."Precio Adulto";
+                         lwTipElem  := rPar."Codigo Adulto";
+                       END;
+                    2: BEGIN // Ni¤os
+                         lwPaxFact  := prtmZonPre."Ni¤os facturados zona";
+                         lwPaxTransp:= lwNiTrn;
+                         lwPrecio   := lrPre."Precio Ni¤o";
+                         lwTipElem  := rPar."Codigo Ni¤o";
+                       END;
+                  END;
+
+                  lwContrato   := rtmConV."N§ Contrato";
+                  lwDivisa     := rtmConV."Cod. Divisa";
+                  IF (lrPre."Minimos Zona" <> 0) AND
+                    (lrPre."Minimos Zona" > prParte."Adultos transportados" + prParte."Ni¤os transportados") THEN
+                    PrecioPromedio(prParte, lwPrecio, lrPre."Minimos Zona" , pwPasajeIngreso);
+                  lwImporte    := lwPaxFact * lwPrecio;
+                  lwTipoPrecio := lwTipoPrecio::Pax;
+                  lwInserta    := (lwPaxFact <> 0) OR (lwImporte <> 0);
+                END;
+
+                lrPre."Tipo aplicacion"::Vehiculo: BEGIN
+                  // Si el precio es por vehiculo, automaticamente se aplica el precio por zona mas alejada (si no es TransUnion)
+                  lwPrecioPorZona := FALSE;
+
+                  // Si estamos en IBZ con un precio por zona y marcada la opcion de pasaje por zona hay que
+                  // poner la variable local "lwPrecioPorZona" a VERDADERO para que los transportados salgan bien
+
+                 IF rPar."Empresa Real" IN [rPar."Empresa Real"::IBZ, rPar."Empresa Real"::SJO] THEN BEGIN
+                   IF prParte."Busca precio pasaje x zona ing" THEN
+                     lwPrecioPorZona := TRUE;
+                 END;
+
+                 // IBZ Forzamos a que el precio por vehiculo sea siempre a la zona m s alejada
+                 //  Si se ha marcado "Busca precio pasaje x zona" no hay que calcular a zona mas alejada
+                 IF rPar."Empresa Real" IN [rPar."Empresa Real"::IBZ, rPar."Empresa Real"::SJO]  THEN BEGIN
+                   IF (prtmTOPar."Ingreso Precios Por" <> prtmTOPar."Ingreso Precios Por"::"Zona mas alejada") AND
+                     (NOT prParte."Busca precio pasaje x zona ing") THEN BEGIN
+                     prParte."Ingreso Precios por" := prParte."Ingreso Precios por"::"Zona mas alejada";
+                     prParte."Busca precio pasaje x zona ing" := FALSE;
+                     prParte.MODIFY;
+
+                     prtmTOPar.MODIFYALL("Ingreso Precios Por" , prtmTOPar."Ingreso Precios Por"::"Zona mas alejada");
+                     // Modificamos sobre la variable prToPar para que este cambiado el valor dentro de la rutina actual
+                     prtmTOPar."Ingreso Precios Por" := prtmTOPar."Ingreso Precios Por"::"Zona mas alejada";
+                     prtmTOPar.MODIFY;
+                   END;
+                 END;
+
+                  // Si en una zona todos son invitados no se tiene que calcular nada, pero si insertar
+                  // la linea para el calculo de paxes transportados
+
+                  // Si la zona mas alejada existe hay que aplicarla aunque no haya paxes a facturar
+                  // Ultramar no quiere que se aplique la zona mas alejada si no hay paxes que facturar
+
+                  CASE rPar."Empresa Real" OF
+                    rPar."Empresa Real"::TRN : lwCondicion := lwZonaMasLejana;
+                    // IBZ quiere que se calcule el precio por vehiculo en la zona mas alejada o
+                    // si se ha marcado el campo Busca precio pasaje x zona
+                    rPar."Empresa Real"::IBZ : lwCondicion := lwZonaMasLejana OR (prParte."Busca precio pasaje x zona ing")
+                    ELSE lwCondicion:= (prtmZonPre."Adultos facturados zona" + prtmZonPre."Ni¤os facturados zona"<>0) AND
+      lwZonaMasLejana;
+                  END;
+
+                  // Los paxes facturados solo se modifican en caso de que no se hayan especificado manualmente
+                  IF lwCondicion THEN BEGIN
+                    IF NOT prtmZonPre."Pasaje modificado manual" THEN BEGIN
+                      lwRangoVeh := lrVeh.GET(prParte.Vehiculo);
+                      IF lwRangoVeh THEN
+                        prtmZonPre."Ni¤os facturados zona"   := 0;
+                      lwRangoVeh := lwRangoVeh AND (lrVeh.Plazas < lrPre."Rango hasta" );
+                      IF lwRangoVeh THEN BEGIN
+                        prtmZonPre."Pax facturados zona"     := lrVeh.Plazas;
+                        prtmZonPre."Adultos facturados zona" := lrVeh.Plazas;
+                      END
+                      ELSE BEGIN
+                        prtmZonPre."Pax facturados zona"      := lrPre."Rango hasta";
+                        prtmZonPre."Adultos facturados zona"  := lrPre."Rango hasta";
+                      END;
+                      prtmZonPre.MODIFY;
+                    END;
+                  END
+                  ELSE
+                    lrPre."Precio Vehiculo" := 0;
+
+                  IF lwPrecioPorZona THEN
+                   lwPaxTransp := prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona"
+                  ELSE
+                   lwPaxTransp := prtmTOPar."Adultos transportados" + prtmTOPar."Ni¤os transportados";
+
+                  lwContrato   := rtmConV."N§ Contrato";
+                  lwDivisa     := rtmConV."Cod. Divisa";
+                  IF lwZonaMasLejana OR lwPrecioPorZona THEN // Esto condicionara si se inserta la linea o no
+                    lwPaxFact    := prtmZonPre."Pax facturados zona";
+                  lwPrecio     := lrPre."Precio Vehiculo";
+                  lwTipElem    := Text001;
+                  lwTipoPrecio := lwTipoPrecio::Vehiculo;
+
+                  // Calculo Promedio Paxes
+                  PrecioPromedio(prParte, lwPrecio, prtmTOPar."Adultos facturados" + prtmTOPar."Ni¤os facturados" , pwPasajeIngreso);
+                  lwImporte    := lwPrecio;
+
+      // Si el usuario ha modificado los campos "Adultos/Ni¤os mostrar factura" hay que pasar estos valores a la linea de C/I
+
+                  IF prtmZonPre."Adultos mostrar factura" + prtmZonPre."Ni¤os mostrar factura" <> 0 THEN BEGIN
+                    lwPaxFact := prtmZonPre."Adultos mostrar factura" + prtmZonPre."Ni¤os mostrar factura";
+                  END;
+
+                  lwInserta := lwZonaMasLejana OR lwPrecioPorZona;
+                END;
+              END;
+
+              IF lwInserta THEN BEGIN
+                cFunCalc.InsertaLinea(prtmZonPre."Zona Precio", wTipoLinea::Base, lwDivisa, lwImporte , prtmTOPar.Touroperador,
+                                      lwManual, wConcepto::Ingreso, lwPrecio, lwTipoPrecio, lwContrato, lwTipElem, prParte,
+                                      lwPaxFact, lwPaxTransp, lwConcept, '');
+              END;
+            END;
+          END;
+
+          // Solo se calculan las maletas en aquellos servicios que se haya especificad y que han generado ingreso base.
+
+          IF (prParte."Calcular maletas") AND (lwManual OR ((lrPre."Calcular Maletas") AND
+             (cFunCalc.SumarIngresoBase(prtmTOPar, prParte, TRUE, rtmConV."Impuestos incluidos") <>0))) THEN BEGIN
+
+            // Calculo de las maletas aplicables a este touroperador en esta zona
+            IngresoMaletas(prParte, prtmTOPar, prtmZonPre, rtmConV, pwPasajeIngreso, lwOrigenDestino);
+          END
+          ELSE BEGIN
+            // Si en parte considerar maleta=true y la linea de precio es false explica el porque no se considerado las maletas
+            IF (prParte."Calcular maletas") AND (lrPre."Calcular Maletas"= FALSE) THEN
+              cFunCalc.InsertaError(prParte, STRSUBSTNO(Text008, prtmTOPar.Touroperador, prtmZonPre."Zona Precio"), rErr.Tipo::Mensaje);
+          END;
+
+          lwZonaMasLejana := FALSE;
+        UNTIL (prtmZonPre.NEXT = 0) OR (prtmTOPar."Ingreso Precios Por" = prtmTOPar."Ingreso Precios Por"::"Zona mas alejada");
+      END;
+
+      prtmZonPre.ASCENDING(TRUE);
+      // Segundo bucle sobre las zonas de precios para el calculo de suplementos
+      // que en un principio (a falta de confirmacion por el usuario) se van a calcular por zona.
+      // Recordar que estos suplementos son los de Bicicletas, Tablas de Surf, etc...
+      //
+      IF prtmZonPre.FINDSET THEN BEGIN
+        REPEAT
+          // Calculo de los suplementos aplicables a este touroperador en esta zona.
+          IngresoSuplemento(prParte, prtmTOPar, prtmZonPre, rtmConV, prtmSerPar, ptmElePto, lwOrigenDestino);
+        UNTIL prtmZonPre.NEXT = 0;
+      END;
+
+      // Calcular los suplementos de aplicacion automatica indicados en el contrato. Estos son los suplementos varios
+      IF NOT lwManual THEN
+        IngresoSuplementoAutomatico(prParte, prtmTOPar, prtmZonPre, rtmConV, pwPasajeIngreso);
+
+      //   Calcular todos los extras de este touroperador
+      IF prtmZonPre.FINDSET THEN
+        IngresoExtra(prParte, prtmTOPar, prtmExtra, rtmConV, prtmZonPre);
+    END;
+
+    PROCEDURE DeterminaMinPax@1103350003(prParte@1100244000 : Record 7010360;VAR prPre@1100244001 : TEMPORARY Record 7010405;VAR prZonPre@1100244002 : TEMPORARY Record 7010364;VAR prToPar@1100244003 : TEMPORARY Record 7010365;pwAdultos@1100244004 : Integer;pwNi¤os@1100244005 : Integer;prCon@1100244016 : TEMPORARY Record 7010403;VAR pwAplicadoMinimoPlazas@1100253000 : Boolean;VAR pwAplicadoMinimoCombinado@1100253001 : Boolean;VAR pwZonaMasLejana@1100253002 : Boolean);
+    VAR
+      lrTipoSer@1100244018 : Record 7010319;
+      lwAdultosCalculo@1100244007 : Decimal;
+      lwAdultosZona@1100244008 : Decimal;
+      lwAdultosTranspt@1100244009 : Decimal;
+      lwNi¤osCalculo@1100244010 : Decimal;
+      lwNi¤osZona@1100244011 : Decimal;
+      lwNi¤osTransportados@1100244012 : Decimal;
+      lwPasajeOtrasZonas@1100244013 : Decimal;
+      lwPasajeServicio@1100244015 : Decimal;
+      lwConsideraMedios@1100244014 : Boolean;
+      lwCantidadComparaMinimos@1100244017 : Decimal;
+    BEGIN
+      // DeterminaMinPax
+      // Se determinan los minimos que hay que aplicar
+      //
+      //  Se ha indica que el precio se aplica por pax, con lo que hay que calcular el importe
+      //  por adulto y por ni¤o. Si se han indicado minimos para la zona indicada hay que
+      //  comprobar si los paxes superan esta cantidad y en caso contrario aplicar este minimo
+
+      //  Hay que tratar aquellos clientes que consideran a los ni¤os como medios a la hora de buscar minimos y aplicar
+      //  zonas combinadas
+
+      lwConsideraMedios := prPre."Precio Adulto" > prPre."Precio Ni¤o";
+      lwPasajeServicio := prToPar."Adultos facturados" + prToPar."Ni¤os facturados";
+
+      // Comprobar si precio por zona o por zona mas alejada,
+
+      // El concepto de Zonas combinadas indica que se juntan 2 o mas zonas de precios pero solo hay que aplicar minimos
+      // en una de ellas y repartir el pasaje de las otras zonas hasta alcanzar el pasaje total del servicio
+
+      CASE prToPar."Ingreso Precios Por" OF
+        prToPar."Ingreso Precios Por"::"Zonas combinadas": BEGIN
+          // Si se ha aplicado minimo en la zona mas alejada en el resto de zonas solo hay que facturar hasta alcanzar el
+          // total del pasaje transportado
+
+          IF pwAplicadoMinimoCombinado THEN BEGIN
+            lwAdultosZona          := prZonPre."Adultos facturados zona";
+            lwNi¤osZona            := prZonPre."Ni¤os facturados zona";
+            // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+            IF lwConsideraMedios THEN
+              lwNi¤osZona            := ROUND(lwNi¤osZona / 2, 0.1);
+
+            lwPasajeOtrasZonas := PasajeOtrasZonasVenta(prParte, prZonPre, lwConsideraMedios);
+
+            IF (( prZonPre."Adultos facturados zona" + prZonPre."Ni¤os facturados zona" ) >=
+                 ( lwPasajeServicio - lwPasajeOtrasZonas ) ) AND ( lwPasajeServicio > lwPasajeOtrasZonas ) THEN BEGIN
+
+              //  Si hay ni¤os a mitad de precio tiene que contar por la mitad a la hora de calcularlos como adultos
+
+              IF lwConsideraMedios THEN
+                lwAdultosCalculo  := pwAdultos + ROUND(pwNi¤os / 2, 0.1) - lwPasajeOtrasZonas
+              ELSE
+                lwAdultosCalculo  := pwAdultos + pwNi¤os - lwPasajeOtrasZonas;
+
+              lwNi¤osCalculo    := 0;
+              lwAdultosTranspt := prZonPre."Adultos Transportados zona" + prZonPre."Ni¤os Transportados zona";
+              lwNi¤osTransportados   := 0;
+            END
+            ELSE BEGIN
+              lwAdultosCalculo      := prZonPre."Adultos facturados zona";
+              lwNi¤osCalculo        := prZonPre."Ni¤os facturados zona";
+              lwAdultosTranspt      := prZonPre."Adultos Transportados zona";
+              lwNi¤osTransportados  := prZonPre."Ni¤os Transportados zona";
+
+              // Hay que ajustar al pasaje del servicio de manera que si el pasaje de una zona va a hacer que se supere
+              // el pasaje a facturar del servicio se hara un ajuste por la diferencia o directemente esa zona no se facturar 
+
+              IF lwAdultosZona + lwNi¤osZona + lwPasajeOtrasZonas >= lwPasajeServicio THEN BEGIN
+
+                // Si los paxes a facturar salen negativos no hay que facturar la zona
+                IF lwPasajeServicio - lwPasajeOtrasZonas < 0 THEN BEGIN
+                  lwAdultosCalculo     := 0;
+                  lwNi¤osCalculo       := 0;
+                  lwAdultosTranspt     := 0;
+                  lwNi¤osTransportados := 0;
+                END
+                ELSE BEGIN
+                  lwAdultosCalculo     := lwPasajeServicio - lwPasajeOtrasZonas;
+                  lwNi¤osCalculo       := 0;
+                  lwAdultosTranspt     := lwAdultosTranspt + lwNi¤osTransportados;
+                  lwNi¤osTransportados := 0;
+                END;
+              END;
+            END;
+          END
+          ELSE BEGIN
+            lwAdultosCalculo       := prZonPre."Adultos facturados zona";
+            lwNi¤osCalculo         := prZonPre."Ni¤os facturados zona";
+
+            lwAdultosZona          := prZonPre."Adultos facturados zona";
+            lwAdultosTranspt       := prZonPre."Adultos Transportados zona";
+            lwNi¤osTransportados   := prZonPre."Ni¤os Transportados zona";
+            lwNi¤osZona            := prZonPre."Ni¤os facturados zona";
+
+            // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+            IF lwConsideraMedios THEN
+              lwNi¤osZona          := ROUND(lwNi¤osZona / 2, 0.1);
+          END;
+        END;
+
+        prToPar."Ingreso Precios Por"::"Cada zona": BEGIN
+          lwAdultosCalculo       := prZonPre."Adultos facturados zona";
+          lwAdultosZona          := prZonPre."Adultos facturados zona";
+          lwAdultosTranspt       := prZonPre."Adultos Transportados zona";
+
+          lwNi¤osCalculo         := prZonPre."Ni¤os facturados zona";
+          lwNi¤osZona            := prZonPre."Ni¤os facturados zona";
+
+          // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+          IF lwConsideraMedios THEN
+            lwNi¤osZona           := ROUND(lwNi¤osZona / 2, 0.1);
+
+          lwNi¤osTransportados   := prZonPre."Ni¤os Transportados zona";
+        END;
+
+        prToPar."Ingreso Precios Por"::"Zona mas alejada": BEGIN
+          IF pwZonaMasLejana THEN BEGIN
+            lwAdultosCalculo      := prToPar."Adultos transportados" - prToPar."Adultos invitados ingreso";
+            lwAdultosZona         := pwAdultos;
+            lwAdultosTranspt      := prToPar."Adultos transportados";
+
+            lwNi¤osCalculo        := prToPar."Ni¤os transportados" - prToPar."Ni¤os invitados ingreso";
+            // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+
+            IF lwConsideraMedios THEN
+              lwNi¤osZona            := ROUND((prToPar."Ni¤os transportados" - prToPar."Ni¤os invitados ingreso") / 2, 0.1)
+            ELSE
+              lwNi¤osZona            := pwNi¤os;
+
+            lwNi¤osTransportados   := prToPar."Ni¤os transportados";
+          END;
+        END;
+      END;
+
+      // Si el tipo de calculo es Mayor Precio o Promedio Plazas no se aplican minimos
+      IF (prParte."Tipo Calculo Ingresos"=prParte."Tipo Calculo Ingresos"::"Mayor Importe") OR
+         (prParte."Tipo Calculo Ingresos"=prParte."Tipo Calculo Ingresos"::"Promedio Plazas") THEN
+        pwAplicadoMinimoPlazas:= TRUE;
+
+      // Comprobar minimos
+      // Si se han aplicado "minimos de zona" no hay que aplicar los minimos del precio
+      // Las zonas modificadas manualmente no hay que aplicar minimos
+      // En los partes con mas de un touroperador, si el precio es por plaza solo hay que aplicar un minimo
+
+      IF (NOT prZonPre."Aplicado minimos zona") AND
+         (NOT prZonPre."Pasaje modificado manual") AND
+         (NOT prToPar."No aplica minimos") AND
+         (NOT pwAplicadoMinimoPlazas) THEN BEGIN
+
+        // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+        // al minimo y no los ni¤os
+
+        IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+          lrTipoSer.GET(prParte."Tipo Servicio");
+
+          // Los ni¤os cuentan para llegar al minimo, siempre que no tengan que promocionarse
+          IF (lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Traslado) AND (prCon."Promociona ni¤os hasta minimo") THEN
+            lwCantidadComparaMinimos := lwAdultosZona
+          ELSE
+            lwCantidadComparaMinimos := lwAdultosZona + lwNi¤osZona;
+        END
+        ELSE
+          lwCantidadComparaMinimos := lwAdultosZona + lwNi¤osZona;
+
+        IF ( lwCantidadComparaMinimos < prPre."Minimos Zona" ) AND (lwAdultosCalculo + lwNi¤osCalculo <> 0) THEN BEGIN
+
+          pwAplicadoMinimoPlazas := TRUE;
+
+          // Solo se aplican los minimos del precio si es [precio por zona, precio por zona mas alejada] o [zonas combinadas
+          // y estamos calculando la zona mas alejada] para hacerlo mas claro hago un CASE
+
+          // Hay una serie de clientes que a la hora de calcular los minimos promocionan ni¤os a adultos hasta alcanzar
+          // la cantidad minima y despues el resto de los ni¤os lo cobran normalmente, esta indicacion esta en el contrato
+
+          CASE prToPar."Ingreso Precios Por" OF
+            prToPar."Ingreso Precios Por"::"Zonas combinadas": BEGIN
+              IF pwZonaMasLejana THEN BEGIN
+                IF prCon."Promociona ni¤os hasta minimo" THEN BEGIN
+                  lwAdultosCalculo          := prPre."Minimos Zona";
+
+                  // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+                  // al minimo y no los ni¤os
+
+                  IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+                    lrTipoSer.GET(prParte."Tipo Servicio");
+                    IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Traslado THEN
+                      lwNi¤osCalculo := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona)
+                    ELSE
+                      lwNi¤osCalculo := lwNi¤osZona - (prPre."Minimos Zona" - lwAdultosZona)
+                  END
+                  ELSE
+                    lwNi¤osCalculo   := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona);
+
+                  IF lwNi¤osCalculo < 0 THEN
+                    lwNi¤osCalculo := 0;
+                END
+                ELSE BEGIN
+                  lwAdultosCalculo          := prPre."Minimos Zona";
+                  lwNi¤osCalculo            := 0;
+                  lwAdultosTranspt    := lwAdultosTranspt + lwNi¤osTransportados;
+                END;
+
+                pwAplicadoMinimoCombinado := TRUE;
+              END;
+            END;
+
+            prToPar."Ingreso Precios Por"::"Cada zona": BEGIN
+              IF prCon."Promociona ni¤os hasta minimo" THEN BEGIN
+                lwAdultosCalculo := prPre."Minimos Zona";
+
+                // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+                // al minimo y no los ni¤os
+
+                IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+                  lrTipoSer.GET(prParte."Tipo Servicio");
+                  IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Traslado THEN
+                    lwNi¤osCalculo := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona)
+                  ELSE
+                    lwNi¤osCalculo := lwNi¤osZona - (prPre."Minimos Zona" - lwAdultosZona)
+                END
+                ELSE
+                  lwNi¤osCalculo   := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona);
+
+                IF lwNi¤osCalculo < 0 THEN
+                  lwNi¤osCalculo := 0;
+              END
+              ELSE BEGIN
+                lwAdultosCalculo      := prPre."Minimos Zona";
+                lwNi¤osCalculo         := 0;
+                lwAdultosTranspt := lwAdultosTranspt + lwNi¤osTransportados;
+              END;
+            END;
+
+            prToPar."Ingreso Precios Por"::"Zona mas alejada": BEGIN
+              IF pwZonaMasLejana THEN BEGIN
+                IF prCon."Promociona ni¤os hasta minimo" THEN BEGIN
+                  lwAdultosCalculo := prPre."Minimos Zona";
+
+                  // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+                  // al minimo y no los ni¤os
+
+                  IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+                    lrTipoSer.GET(prParte."Tipo Servicio");
+                    IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Traslado THEN
+                      lwNi¤osCalculo := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona)
+                    ELSE
+                      lwNi¤osCalculo := lwNi¤osZona - (prPre."Minimos Zona" - lwAdultosZona);
+                  END
+                  ELSE
+                    lwNi¤osCalculo   := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona);
+
+                  IF lwNi¤osCalculo < 0 THEN
+                    lwNi¤osCalculo := 0;
+                END
+                ELSE BEGIN
+                  lwAdultosCalculo      := prPre."Minimos Zona";
+                  lwNi¤osCalculo        := 0;
+                  lwAdultosTranspt := lwAdultosTranspt + lwNi¤osTransportados;
+                END;
+              END;
+            END;
+          END;
+        END;
+      END;
+
+      // Actualizar el campo "Facturados zona" del registro de zonas
+      IF NOT prZonPre."Pasaje modificado manual" THEN BEGIN
+        prZonPre."Pax facturados zona"     := ROUND(lwAdultosCalculo + lwNi¤osCalculo, 1);
+        prZonPre."Adultos facturados zona" := ROUND(lwAdultosCalculo, 1);
+        prZonPre."Ni¤os facturados zona"   := ROUND(lwNi¤osCalculo, 1);
+      END;
+
+      // Si es zonas combinadas guardamos los transportados
+      IF prToPar."Ingreso Precios Por" = prToPar."Ingreso Precios Por"::"Zonas combinadas" THEN BEGIN
+        prZonPre."Adultos Transportados zona" := lwAdultosTranspt;
+        prZonPre."Ni¤os Transportados zona"   := lwNi¤osTransportados;
+      END;
+
+      prZonPre.MODIFY;
+    END;
+
+    PROCEDURE DeterminaMinPax2@1100253003(prParte@1100244000 : Record 7010360;VAR prPre@1100244001 : TEMPORARY Record 7010405;VAR prZonPre@1100244002 : TEMPORARY Record 7010364;VAR prToPar@1100244003 : TEMPORARY Record 7010365;pwAdultos@1100244004 : Integer;pwNi¤os@1100244005 : Integer;prCon@1100244016 : TEMPORARY Record 7010403;VAR pwAplicadoMinimoPlazas@1100253000 : Boolean;VAR pwAplicadoMinimoCombinado@1100253001 : Boolean;VAR pwZonaMasLejana@1100253002 : Boolean);
+    VAR
+      lrTipoSer@1100244018 : Record 7010319;
+      lwAdultosCalculo@1100244007 : Decimal;
+      lwAdultosZona@1100244008 : Decimal;
+      lwAdultosTranspt@1100244009 : Decimal;
+      lwNi¤osCalculo@1100244010 : Decimal;
+      lwNi¤osZona@1100244011 : Decimal;
+      lwNi¤osTransportados@1100244012 : Decimal;
+      lwPasajeOtrasZonas@1100244013 : Decimal;
+      lwPasajeServicio@1100244015 : Decimal;
+      lwConsideraMedios@1100244014 : Boolean;
+      lwCantidadComparaMinimos@1100244017 : Decimal;
+      lwOkPromociona@1100253003 : Boolean;
+    BEGIN
+      // DeterminaMinPax2
+      // Se determinan los minimos que hay que aplicar
+      //
+      //  Se ha indica que el precio se aplica por pax, con lo que hay que calcular el importe
+      //  por adulto y por ni¤o. Si se han indicado minimos para la zona indicada hay que
+      //  comprobar si los paxes superan esta cantidad y en caso contrario aplicar este minimo
+
+      //  Hay que tratar aquellos clientes que consideran a los ni¤os como medios a la hora de buscar minimos y aplicar
+      //  zonas combinadas
+
+      lwConsideraMedios := prPre."Precio Adulto" > prPre."Precio Ni¤o";
+      lwPasajeServicio := prToPar."Adultos facturados" + prToPar."Ni¤os facturados";
+
+      // Comprobar si precio por zona o por zona mas alejada,
+
+      // El concepto de Zonas combinadas indica que se juntan 2 o mas zonas de precios pero solo hay que aplicar minimos
+      // en una de ellas y repartir el pasaje de las otras zonas hasta alcanzar el pasaje total del servicio
+
+      lwAdultosCalculo       := prZonPre."Adultos facturados zona";
+      lwNi¤osCalculo         := prZonPre."Ni¤os facturados zona";
+
+      lwAdultosZona          := prZonPre."Adultos facturados zona";
+      lwAdultosTranspt       := prZonPre."Adultos Transportados zona";
+      lwNi¤osTransportados   := prZonPre."Ni¤os Transportados zona";
+      lwNi¤osZona            := prZonPre."Ni¤os facturados zona";
+
+      // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+      IF lwConsideraMedios THEN
+        lwNi¤osZona          := ROUND(lwNi¤osZona / 2, 0.1);
+
+
+      CASE prToPar."Ingreso Precios Por" OF
+        prToPar."Ingreso Precios Por"::"Zonas combinadas": BEGIN
+          // Si se ha aplicado minimo en la zona mas alejada en el resto de zonas solo hay que facturar hasta alcanzar el
+          // total del pasaje transportado
+
+          IF pwAplicadoMinimoCombinado THEN BEGIN
+            lwPasajeOtrasZonas := PasajeOtrasZonasVenta(prParte, prZonPre, lwConsideraMedios);
+
+            IF (( prZonPre."Adultos facturados zona" + prZonPre."Ni¤os facturados zona" ) >=
+                 ( lwPasajeServicio - lwPasajeOtrasZonas ) ) AND ( lwPasajeServicio > lwPasajeOtrasZonas ) THEN BEGIN
+
+              //  Si hay ni¤os a mitad de precio tiene que contar por la mitad a la hora de calcularlos como adultos
+
+              IF lwConsideraMedios THEN
+                lwAdultosCalculo  := pwAdultos + ROUND(pwNi¤os / 2, 0.1) - lwPasajeOtrasZonas
+              ELSE
+                lwAdultosCalculo  := pwAdultos + pwNi¤os - lwPasajeOtrasZonas;
+
+              lwNi¤osCalculo    := 0;
+              // JPT 19/07/07 Si hay medio adulto lo cobramos como NI¥O
+              IF (lwAdultosCalculo MOD 1) = 0.5 THEN BEGIN
+                lwAdultosCalculo -= 0.5;
+                lwNi¤osCalculo   :=1;
+              END;
+
+              lwAdultosTranspt := prZonPre."Adultos Transportados zona" + prZonPre."Ni¤os Transportados zona";
+              lwNi¤osTransportados   := 0;
+            END
+            ELSE BEGIN
+              // Hay que ajustar al pasaje del servicio de manera que si el pasaje de una zona va a hacer que se supere
+              // el pasaje a facturar del servicio se hara un ajuste por la diferencia o directemente esa zona no se facturar 
+
+              IF lwAdultosZona + lwNi¤osZona + lwPasajeOtrasZonas >= lwPasajeServicio THEN BEGIN
+                // Si los paxes a facturar salen negativos no hay que facturar la zona
+                IF lwPasajeServicio - lwPasajeOtrasZonas < 0 THEN BEGIN
+                  lwAdultosCalculo     := 0;
+                  lwNi¤osCalculo       := 0;
+                  lwAdultosTranspt     := 0;
+                  lwNi¤osTransportados := 0;
+                END
+                ELSE BEGIN
+                  lwAdultosCalculo     := lwPasajeServicio - lwPasajeOtrasZonas;
+                  lwNi¤osCalculo       := 0;
+                  lwAdultosTranspt     := lwAdultosTranspt + lwNi¤osTransportados;
+                  lwNi¤osTransportados := 0;
+                END;
+              END;
+            END;
+          END;
+        END;
+
+        prToPar."Ingreso Precios Por"::"Cada zona": BEGIN
+        END;
+
+        prToPar."Ingreso Precios Por"::"Zona mas alejada": BEGIN
+          IF pwZonaMasLejana THEN BEGIN
+            lwAdultosCalculo      := prToPar."Adultos transportados" - prToPar."Adultos invitados ingreso";
+            lwAdultosZona         := pwAdultos;
+            lwAdultosTranspt      := prToPar."Adultos transportados";
+
+            lwNi¤osCalculo        := prToPar."Ni¤os transportados" - prToPar."Ni¤os invitados ingreso";
+            // Hay que comprobar si este Touroperador trabajo con medios en cuyo caso hay que indicarlo
+
+            IF lwConsideraMedios THEN
+              lwNi¤osZona            := ROUND((prToPar."Ni¤os transportados" - prToPar."Ni¤os invitados ingreso") / 2, 0.1)
+            ELSE
+              lwNi¤osZona            := pwNi¤os;
+
+            lwNi¤osTransportados   := prToPar."Ni¤os transportados";
+          END
+          ELSE BEGIN
+            CLEAR(lwAdultosCalculo);
+            CLEAR(lwAdultosZona);
+            CLEAR(lwAdultosTranspt);
+            CLEAR(lwNi¤osCalculo);
+            CLEAR(lwNi¤osZona);
+            CLEAR(lwNi¤osTransportados);
+          END;
+        END;
+      END;
+
+      // Si el tipo de calculo es Mayor Precio o Promedio Plazas no se aplican minimos
+      IF (prParte."Tipo Calculo Ingresos"=prParte."Tipo Calculo Ingresos"::"Mayor Importe") OR
+         (prParte."Tipo Calculo Ingresos"=prParte."Tipo Calculo Ingresos"::"Promedio Plazas") THEN
+        pwAplicadoMinimoPlazas:= TRUE;
+
+      // Comprobar minimos
+      // Si se han aplicado "minimos de zona" no hay que aplicar los minimos del precio
+      // Las zonas modificadas manualmente no hay que aplicar minimos
+      // En los partes con mas de un touroperador, si el precio es por plaza solo hay que aplicar un minimo
+
+      IF (NOT prZonPre."Aplicado minimos zona") AND
+         (NOT prZonPre."Pasaje modificado manual") AND
+         (NOT prToPar."No aplica minimos") AND
+         (NOT pwAplicadoMinimoPlazas) THEN BEGIN
+
+        // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+        // al minimo y no los ni¤os
+
+        IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+          lrTipoSer.GET(prParte."Tipo Servicio");
+
+          // Los ni¤os cuentan para llegar al minimo, siempre que no tengan que promocionarse
+          IF (lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Traslado) AND (prCon."Promociona ni¤os hasta minimo") THEN
+            lwCantidadComparaMinimos := lwAdultosZona
+          ELSE
+            lwCantidadComparaMinimos := lwAdultosZona + lwNi¤osZona;
+        END
+        ELSE
+          lwCantidadComparaMinimos := lwAdultosZona + lwNi¤osZona;
+
+        IF ( lwCantidadComparaMinimos < prPre."Minimos Zona" ) AND (lwAdultosCalculo + lwNi¤osCalculo <> 0) THEN BEGIN
+
+          pwAplicadoMinimoPlazas := TRUE;
+
+          // Solo se aplican los minimos del precio si es [precio por zona, precio por zona mas alejada] o [zonas combinadas
+          // y estamos calculando la zona mas alejada] para hacerlo mas claro hago un CASE
+
+          // Hay una serie de clientes que a la hora de calcular los minimos promocionan ni¤os a adultos hasta alcanzar
+          // la cantidad minima y despues el resto de los ni¤os lo cobran normalmente, esta indicacion esta en el contrato
+
+          CASE prToPar."Ingreso Precios Por" OF
+            prToPar."Ingreso Precios Por"::"Zonas combinadas": lwOkPromociona := pwZonaMasLejana;
+            prToPar."Ingreso Precios Por"::"Cada zona"       : lwOkPromociona := TRUE;
+            prToPar."Ingreso Precios Por"::"Zona mas alejada": lwOkPromociona := pwZonaMasLejana;
+          END;
+
+          IF lwOkPromociona THEN BEGIN
+            lwAdultosCalculo          := prPre."Minimos Zona";
+            IF prCon."Promociona ni¤os hasta minimo" THEN BEGIN
+              // Si la empresa es Transunion en los traslados solo se consideran los adultos a la hora de comprobar si llegan
+              // al minimo y no los ni¤os
+
+              lwNi¤osCalculo   := lwNi¤osCalculo - (prPre."Minimos Zona" - lwAdultosZona);
+              IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN BEGIN
+                lrTipoSer.GET(prParte."Tipo Servicio");
+                IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Excursion THEN
+                  lwNi¤osCalculo := lwNi¤osZona - (prPre."Minimos Zona" - lwAdultosZona)
+              END;
+              IF lwNi¤osCalculo < 0 THEN
+                lwNi¤osCalculo := 0;
+            END
+            ELSE BEGIN
+              lwNi¤osCalculo      := 0;
+              lwAdultosTranspt    := lwAdultosTranspt + lwNi¤osTransportados;
+              lwNi¤osTransportados := 0; // JPT 18/07/07 A¤ado esto ya que no calculaba bien el tranportado
+            END;
+            pwAplicadoMinimoCombinado := TRUE;
+          END;
+        END;
+      END;
+
+      // Actualizar el campo "Facturados zona" del registro de zonas
+      IF NOT prZonPre."Pasaje modificado manual" THEN BEGIN
+        prZonPre."Pax facturados zona"     := ROUND(lwAdultosCalculo + lwNi¤osCalculo, 1);
+        prZonPre."Adultos facturados zona" := ROUND(lwAdultosCalculo, 1);
+        prZonPre."Ni¤os facturados zona"   := ROUND(lwNi¤osCalculo, 1);
+      END;
+
+      // Si es zonas combinadas guardamos los transportados
+      IF prToPar."Ingreso Precios Por" = prToPar."Ingreso Precios Por"::"Zonas combinadas" THEN BEGIN
+        prZonPre."Adultos Transportados zona" := lwAdultosTranspt;
+        prZonPre."Ni¤os Transportados zona"   := lwNi¤osTransportados;
+      END;
+
+      prZonPre.MODIFY;
+    END;
+
+    PROCEDURE IngresoMaletas@25(prParte@1100244000 : Record 7010360;prToPar@1100244001 : TEMPORARY Record 7010365;prZonPre@1100244002 : TEMPORARY Record 7010364;prCon@1100244003 : TEMPORARY Record 7010403;pwPasaje@1100244004 : Integer;pwOrigenDestino@1100244005 : Code[10]);
+    VAR
+      lrPre@1100244008 : TEMPORARY Record 7010405;
+      lrPreMal@1100244009 : Record 7010322;
+      lwMaletas@1100244010 : Decimal;
+      lwDivisa@1100244011 : Code[10];
+      lwPrecio@1100244012 : Decimal;
+      lwEnc@1100253002 : Boolean;
+      lwPrecioGenerico@1100253000 : Boolean;
+      lwDescMaletas@1103355000 : Boolean;
+    BEGIN
+      // IngresoMaletas
+      //
+      //  Hay que calcular una maleta por persona en los traslados, bien sobre el precio
+      //  de contrato o bien sobre un precio generico. Tambien hay que tener en cuenta
+      //  si las maletas se deben calcular sin tene en cuenta los invitados o contandolos.
+
+      // En los precios manuales si las maletas van incluidas o no van por TTOO x Parte
+      IF prToPar."Precio manual venta" = 0 THEN
+        lwDescMaletas := prCon."Maletas incluidas"
+      ELSE
+        lwDescMaletas := prToPar."P Manual Maletas Inc";
+
+
+      CLEAR(lwPrecioGenerico);
+      IF prCon."Maletas sobre" = prCon."Maletas sobre"::Facturados THEN
+        cFunCalc.InsertaError(prParte, STRSUBSTNO(Text009, prToPar.Touroperador, prZonPre."Zona Precio"),rErr.Tipo::Mensaje)
+      ELSE
+        cFunCalc.InsertaError(prParte, STRSUBSTNO(Text010, prToPar.Touroperador, prZonPre."Zona Precio"),rErr.Tipo::Mensaje);
+
+      CASE prToPar."Ingreso Precios Por" OF
+        prToPar."Ingreso Precios Por"::"Cada zona", prToPar."Ingreso Precios Por"::"Zonas combinadas": BEGIN
+          IF prCon."Maletas sobre" = prCon."Maletas sobre"::Facturados THEN // Facturados
+            lwMaletas := prZonPre."Pax facturados zona"
+          ELSE // Transportados
+            // Los invitados no deben computar en el calculo de las maletas
+            lwMaletas := prZonPre."Adultos Transportados zona" + prZonPre."Ni¤os Transportados zona" -
+                         prZonPre."Adultos Invitados Zona" - prZonPre."Ni¤os Invitados Zona";
+        END
+        // Precios por "zona mas alejada"
+        ELSE BEGIN
+          IF prCon."Maletas sobre" = prCon."Maletas sobre"::Facturados THEN
+            lwMaletas := prZonPre."Pax facturados zona"
+          ELSE
+          // Los invitados no deben computar en el calculo de las maletas
+            lwMaletas := prToPar."Adultos transportados" + prToPar."Ni¤os transportados" -
+                         prToPar."Adultos invitados ingreso" - prToPar."Ni¤os invitados ingreso";
+        END;
+      END;
+
+
+      lwDivisa   := prCon."Cod. Divisa";
+      lwEnc:= cFunCalc.BuscaPrecioVenta(prParte, prCon, lrPre, prZonPre."Zona Precio", rPar."Codigo Maletas",
+                                        pwPasaje, pwOrigenDestino, lwMaletas, lwMaletas, '');
+      // JPT 02/03/06 Si se ha encontrado precio se considerar  aunque este a 0 (for INVISA)
+      // lwEnc := lwEnc AND (lrPre."Precio Vehiculo" <> 0);
+      IF lwEnc THEN BEGIN
+        lwPrecio := lrPre."Precio Vehiculo";
+        lwDivisa  := prCon."Cod. Divisa";
+      END
+      ELSE BEGIN
+        lwEnc := cFunCalc.BuscaPrecioMaletas(lrPreMal, prParte);
+        IF lwEnc THEN BEGIN
+          lwPrecio := lrPreMal.Precio;
+          lwDivisa  := lrPreMal."Cod. Divisa";
+          lwPrecioGenerico := TRUE;
+          IF lwDescMaletas THEN
+            IF lrPreMal."Cod. Divisa" <> prCon."Cod. Divisa" THEN
+              cFunCalc.InsertaError(prParte, STRSUBSTNO(Text004,prCon.TABLECAPTION, prCon."N§ Contrato"), rErr.Tipo::Error);
+        END ELSE
+          cFunCalc.InsertaError(prParte, Text006, rErr.Tipo::Error);
+      END;
+
+      IF lwEnc THEN
+        cFunCalc.InsertaLinea (prZonPre."Zona Precio", wTipoLinea::Suplemento, lwDivisa,
+                              (lwPrecio * lwMaletas), prToPar.Touroperador, lwPrecioGenerico, wConcepto::Ingreso,
+                              lwPrecio, 0, prCon."N§ Contrato", rPar."Codigo Maletas", prParte, lwMaletas,
+                              lwMaletas, lrPre."Concepto facturacion", '');
+
+      // Si en el contrato se especifica que las maletas van incluidas en el precio
+      // hay que descontar el ingreso de las maletas de la base.
+
+
+      IF lwDescMaletas THEN
+        cFunCalc.DescontarMaletas(wConcepto::Ingreso, prParte, prToPar, prZonPre."Zona Precio", rtmConV."N§ Contrato");
+    END;
+
+    PROCEDURE IngresoExtra@23(prParte@1100244000 : Record 7010360;VAR prtmTOPar@1100253001 : TEMPORARY Record 7010365;VAR prtmExtra@1100253000 : TEMPORARY Record 7010362;prCon@1100244004 : Record 7010403;prZonPre@1100244005 : TEMPORARY Record 7010364);
+    VAR
+      lwBaseExtra@1100244008 : Decimal;
+      lwImporteExtra@1100244009 : Decimal;
+    BEGIN
+      // IngresoExtra
+      //
+      // Buscar entre los extras que tienen que generar ingreso, los que se apliquen al touroperador que estamos calculando.
+
+      prtmExtra.SETRANGE ("N§ Parte"  , prParte."N§ Parte");
+      prtmExtra.SETFILTER("Tipo Extra", '<>%1', prtmExtra."Tipo Extra"::Coste);
+      prtmExtra.SETRANGE (Touroperador, prtmTOPar.Touroperador);
+      IF prtmExtra.FINDSET THEN BEGIN
+        REPEAT
+          IF prtmExtra.Extra = '' THEN BEGIN
+            cFunCalc.InsertaError(prParte, Text011, rErr.Tipo::Error);
+          END
+          ELSE BEGIN
+            IF NOT prtmExtra.Porcentaje THEN BEGIN
+              lwImporteExtra := prtmExtra.Importe;
+            END
+            ELSE BEGIN
+              lwBaseExtra := cFunCalc.SumarIngresoBase(prtmTOPar, prParte, NOT prCon."Maletas incluidas", prCon."Impuestos incluidos");
+              lwImporteExtra := ROUND((lwBaseExtra * prtmExtra.Importe) / 100, cFunCalc.GetPrecision(0));
+            END;
+
+            cFunCalc.InsertaLinea(prZonPre."Zona Precio", wTipoLinea::Extra, prtmExtra."Cod. Divisa", lwImporteExtra,
+                                  prtmTOPar.Touroperador, TRUE, wConcepto::Ingreso, lwImporteExtra,1, prCon."N§ Contrato",
+                                  prtmExtra.Extra, prParte, 1, prtmTOPar."Adultos transportados" + prtmTOPar."Ni¤os transportados",
+                                  '', '');
+          END;
+        UNTIL prtmExtra.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE IngresoSuplemento@17(prParte@1100244000 : Record 7010360;VAR prTOPar@1100253001 : TEMPORARY Record 7010365;VAR prZonPre@1100244002 : TEMPORARY Record 7010364;VAR prCon@1100244003 : TEMPORARY Record 7010403;VAR prSerPar@1100253003 : TEMPORARY Record 7010359;VAR prElePto@1100253000 : TEMPORARY Record 7010363;pwOrigenDestino@1100244004 : Code[10]);
+    VAR
+      lrtmPre@1100244007 : TEMPORARY Record 7010405;
+      lrTemp2@1100253002 : TEMPORARY Record 7010363;
+      lwImporte@1100253004 : Decimal;
+      lwPrecio@1100253005 : Decimal;
+      lwDivisa@1100253006 : Code[10];
+      lwTipoApl@1100253007 : 'Pax,Vehiculo';
+    BEGIN
+      // IngresoSuplemento
+      //
+      // Se monta un segundo temporal local de elementos x punto
+      // Para tener la cantidad de suplementos x TTOO
+
+      CLEAR(lrTemp2);
+
+      CLEAR(prSerPar);
+      prSerPar.SETCURRENTKEY("N§ Parte");
+      prSerPar.SETRANGE("N§ Parte"  , prParte."N§ Parte");
+      prSerPar.SETRANGE("Zona Venta", prZonPre."Zona Precio");
+      prSerPar.SETRANGE(Touroperador, prTOPar.Touroperador);
+      IF prSerPar.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(prElePto);
+          prElePto.SETRANGE("N§ Servicio", prSerPar."N§ Servicio");
+          prElePto.SETRANGE("N§ Linea"   , prSerPar."N§ Linea");
+
+          // Para buscar los elementos filtrar por aquellos que se han indicado que son de ingreso  ----
+          // o "ambos" para evitar calcular aquellos elementos que sean solo de coste                              ---
+          prElePto.SETFILTER("Tipo calculo", '%1|%2', prElePto."Tipo calculo"::Ingreso, prElePto."Tipo calculo"::Ambos);
+
+          IF prElePto.FINDSET THEN BEGIN
+            REPEAT
+              IF (prTOPar."Precio manual venta"=0) OR prElePto."Aplica con precio manual" THEN BEGIN
+                lrTemp2.RESET;
+                lrTemp2.SETRANGE("Cod. Suplemento", prElePto."Cod. Suplemento");
+                lrTemp2.SETFILTER(Precio,'=%1', prElePto.Precio);
+                IF NOT lrTemp2.FINDFIRST THEN BEGIN
+                  lrTemp2.Cantidad         :=0;
+                  lrTemp2."Cod. Suplemento":= prElePto."Cod. Suplemento";
+                  lrTemp2.Precio           := prElePto.Precio;
+                  lrTemp2.Divisa           := prElePto.Divisa;
+                  lrTemp2.INSERT;
+                END;
+                  lrTemp2.Cantidad += prElePto.Cantidad;
+                  lrTemp2.MODIFY;
+              END;
+            UNTIL prElePto.NEXT = 0;
+          END;
+        UNTIL prSerPar.NEXT = 0;
+      END;
+
+      // Ahora que tenemos el temporal ya buscamos los importes
+      lrTemp2.RESET;
+      IF lrTemp2.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lwPrecio);
+          CLEAR(lwImporte);
+          CLEAR(lwDivisa);
+          // Los suplementos pueden tener un precio indicado manualmente
+          // La variable lwPrecio tiene dos dimensiones 1: Precio pax 2: Precio Vehiculo
+          IF lrTemp2.Precio <> 0 THEN BEGIN
+            lwImporte := lrTemp2.Precio * lrTemp2.Cantidad;
+            lwPrecio  := lrTemp2.Precio;
+            lwDivisa  := lrTemp2.Divisa;
+            lwTipoApl := lwTipoApl::Pax;
+          END
+          ELSE BEGIN
+            IF cFunCalc.BuscaPrecioVenta(prParte, prCon, lrtmPre, prZonPre."Zona Precio", lrTemp2."Cod. Suplemento",
+                                        lrTemp2.Cantidad, pwOrigenDestino, lrTemp2.Cantidad, lrTemp2.Cantidad,'') THEN BEGIN
+              lwImporte := lrTemp2.Precio * lrTemp2.Cantidad;
+              lwDivisa     := lrTemp2.Divisa;
+              lwPrecio     := lrtmPre."Precio Vehiculo";
+              CASE lrtmPre."Tipo aplicacion" OF
+                lrtmPre."Tipo aplicacion"::Pax     : BEGIN
+                  lwImporte    := lrtmPre."Precio Vehiculo" * lrTemp2.Cantidad;
+                  lwTipoApl    := lwTipoApl::Pax;
+                END;
+                lrtmPre."Tipo aplicacion"::Vehiculo: BEGIN
+                  lwImporte    := lrtmPre."Precio Vehiculo";
+                  lwTipoApl    := lwTipoApl::Vehiculo;
+                END;
+              END;
+              lwDivisa  := lrtmPre."Cod. Divisa";
+            END;
+          END;
+
+          IF lwImporte <> 0 THEN
+            cFunCalc.InsertaLinea(prZonPre."Zona Precio", wTipoLinea::Suplemento, lwDivisa, lwImporte,
+                                  prTOPar.Touroperador, FALSE, wConcepto::Ingreso, lwPrecio, lwTipoApl,
+                                  prZonPre."N§ Contrato", lrTemp2."Cod. Suplemento", prParte, lrTemp2.Cantidad,
+                                  lrTemp2.Cantidad, lrtmPre."Concepto facturacion", '');
+        UNTIL lrTemp2.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE BuscaSuplementoZonaVenta@34(prParte@1100244000 : Record 7010360;prCon@1100244001 : TEMPORARY Record 7010403;VAR prtmZonPre@1100253000 : TEMPORARY Record 7010364);
+    VAR
+      lrPre@1100244003 : TEMPORARY Record 7010405;
+      lrPre2@1100244004 : TEMPORARY Record 7010405;
+      lwDesde@1100244005 : Code[10];
+      lwHasta@1100244006 : Code[10];
+      lwAuxZona@1100244007 : Code[10];
+      ltZonas@1100244008 : ARRAY [8] OF Code[10];
+      ind@1100244009 : Integer;
+      wPaxDesde1@1100244010 : Integer;
+      wPaxDesde2@1100244011 : Integer;
+      wPaxHasta1@1100244012 : Integer;
+      wPaxHasta2@1100244013 : Integer;
+      lwOk1@1100244014 : Boolean;
+      lwOk2@1100244015 : Boolean;
+      lwPaxZonPre@1100253001 : Decimal;
+      lrZonPre2@1100253002 : TEMPORARY Record 7010364;
+    BEGIN
+      // BuscaSuplementoZonaVenta
+      //
+      //  Busca si se para las zonas del servicio se ha indicado algun tipo de suplemento
+      //  en forma de minimos a aplicar. Esto suele ocurrir cuando se juntan dos zonas de
+      //  precios. En nuestro caso buscaremos la primera zona y la ultima.
+
+      lrZonPre2.COPY(prtmZonPre); // Copiamos el puntero para dejarlo como estaba
+
+      CLEAR(prtmZonPre);
+      prtmZonPre.SETCURRENTKEY("N§ Parte","Tipo contrato","N§ Contrato",Orden);
+      prtmZonPre.SETRANGE("N§ Parte"     , prParte."N§ Parte");
+      prtmZonPre.SETRANGE("Tipo contrato", prtmZonPre."Tipo contrato"::Venta);
+      prtmZonPre.SETRANGE("N§ Contrato"  , prCon."N§ Contrato");
+
+      // Si el parte de trabajo agrupa tres zonas de precios hay que buscar el suplemento
+      // que hay desde la 2¦ a la 3¦. Si se juntan m s de tres zonas hay que dar un error
+
+      IF prtmZonPre.FINDSET THEN BEGIN
+        ind := 0;
+        REPEAT
+          ind := ind + 1;
+          ltZonas[ind] := prtmZonPre."Zona Precio";
+        UNTIL prtmZonPre.NEXT = 0;
+      END;
+
+      // Si en el parte de trabajo hay una sola zona de precios no habra suplementos
+
+      CASE ind OF
+        1: BEGIN
+             prtmZonPre.COPY(lrZonPre2); // Dejamos el puntero como estaba
+             EXIT;
+           END;
+        2: BEGIN
+             lwDesde := ltZonas[1];
+             lwHasta := ltZonas[2];
+           END;
+        3: BEGIN
+             lwDesde := ltZonas[2];
+             lwHasta := ltZonas[3];
+           END;
+      END;
+
+      // Hay que buscar si existe el suplemento de la zona1 a la zona2 y si existe el suplemento de la zona2 a la zona1
+      lwOk1 := cFunCalc.BuscaPrecioSuplementoVenta(prCon, prParte, lwDesde, lwHasta, lrPre);
+      lwOk2 := cFunCalc.BuscaPrecioSuplementoVenta(prCon, prParte, lwHasta, lwDesde, lrPre2);
+
+      IF (NOT lwOk1) AND (NOT lwOk2) THEN BEGIN
+        prtmZonPre.COPY(lrZonPre2); // Dejamos el puntero como estaba
+        EXIT;
+      END;
+
+      // Hay que comprobar cual es el mas favorable para el cliente
+
+      IF lwOk1 AND lwOk2 THEN BEGIN
+        prtmZonPre.SETRANGE("Zona Precio", lwDesde);
+        IF prtmZonPre.FINDFIRST THEN BEGIN
+          lwPaxZonPre := prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona" -
+                         prtmZonPre."Adultos Invitados Zona" - prtmZonPre."Ni¤os Invitados Zona";
+
+          IF lrPre."Minimos Zona desde" > lwPaxZonPre THEN
+            wPaxDesde1 := lrPre."Minimos Zona desde"
+          ELSE
+            wPaxDesde1 := lwPaxZonPre;
+
+
+          IF lrPre2."Minimos Zona hasta" > lwPaxZonPre THEN
+            wPaxHasta2 := lrPre2."Minimos Zona hasta"
+          ELSE
+            wPaxHasta2 := lwPaxZonPre;
+        END;
+
+        prtmZonPre.SETRANGE("Zona Precio", lwHasta);
+        IF prtmZonPre.FINDFIRST THEN BEGIN
+          lwPaxZonPre := prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona" -
+                         prtmZonPre."Adultos Invitados Zona" - prtmZonPre."Ni¤os Invitados Zona";
+
+          IF lrPre."Minimos Zona hasta" > lwPaxZonPre THEN
+            wPaxHasta1 := lrPre."Minimos Zona hasta"
+          ELSE
+            wPaxHasta1 := lwPaxZonPre;
+
+          IF lrPre2."Minimos Zona desde" > lwPaxZonPre THEN
+            wPaxDesde2 := lrPre2."Minimos Zona desde"
+          ELSE
+            wPaxDesde2 := lwPaxZonPre;
+        END;
+
+        IF (wPaxDesde1 + wPaxHasta1) < (wPaxDesde2 + wPaxHasta2) THEN
+          lwOk2 := FALSE
+        ELSE
+          lwOk1 := FALSE;
+      END;
+
+      // Una vez encontrado cual es el suplemento que es el mas favorable lo aplicamos
+
+      IF lwOk2 THEN BEGIN
+        lrPre := lrPre2;
+        lwAuxZona  := lwHasta;
+        lwHasta    := lwDesde;
+        lwDesde    := lwAuxZona;
+      END;
+
+      prtmZonPre.SETRANGE("Zona Precio", lwDesde);
+      IF prtmZonPre.FINDFIRST THEN BEGIN
+        IF lrPre."Minimos Zona desde" >= (prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona" -
+                                         prtmZonPre."Adultos Invitados Zona" - prtmZonPre."Ni¤os Invitados Zona") THEN BEGIN
+
+          // Comprobar si esta zona se ha modificado manualmente
+          IF NOT prtmZonPre."Pasaje modificado manual" THEN BEGIN
+            prtmZonPre."Adultos facturados zona" := lrPre."Minimos Zona desde";
+            prtmZonPre."Ni¤os facturados zona"   := 0;
+            prtmZonPre."Adultos Invitados Zona"  := 0;
+            prtmZonPre."Ni¤os Invitados Zona"    := 0;
+          END;
+        END
+
+        // Para el caso de IBZ estos minimos mandan sobre los posibles minimos de zona
+        ELSE BEGIN
+          prtmZonPre."Adultos facturados zona" := prtmZonPre."Adultos Transportados zona" - prtmZonPre."Adultos Invitados Zona";
+          prtmZonPre."Ni¤os facturados zona"   := prtmZonPre."Ni¤os Transportados zona" - prtmZonPre."Ni¤os Invitados Zona";
+        END;
+        prtmZonPre.MODIFY;
+      END;
+
+      prtmZonPre.SETRANGE("Zona Precio", lwHasta);
+      IF prtmZonPre.FINDFIRST THEN BEGIN
+        IF lrPre."Minimos Zona hasta" >= (prtmZonPre."Adultos Transportados zona" + prtmZonPre."Ni¤os Transportados zona" -
+                                         prtmZonPre."Adultos Invitados Zona" - prtmZonPre."Ni¤os Invitados Zona") THEN BEGIN
+
+          // Comprobar si esta zona se ha modificado manualmente
+
+          IF NOT prtmZonPre."Pasaje modificado manual" THEN BEGIN
+            prtmZonPre."Adultos facturados zona" := lrPre."Minimos Zona hasta";
+            prtmZonPre."Ni¤os facturados zona"   := 0;
+            prtmZonPre."Adultos Invitados Zona"  := 0;
+            prtmZonPre."Ni¤os Invitados Zona"    := 0;
+          END;
+        END
+        // Para el caso de IBZ estos minimos mandan sobre los posibles minimos de zona
+        ELSE BEGIN
+          prtmZonPre."Adultos facturados zona" := prtmZonPre."Adultos Transportados zona" - prtmZonPre."Adultos Invitados Zona";
+          prtmZonPre."Ni¤os facturados zona"   := prtmZonPre."Ni¤os Transportados zona" - prtmZonPre."Ni¤os Invitados Zona";
+        END;
+        prtmZonPre.MODIFY;
+      END;
+
+      // Indicamos que se han aplicado minimos por juntar zonas en todos los registros de
+      // zonas de precios, para luego no aplicar los minimos especificados para cada zona individual.
+
+      prtmZonPre.SETRANGE("Zona Precio");
+      IF prtmZonPre.FINDSET(TRUE) THEN
+        prtmZonPre.MODIFYALL("Aplicado minimos zona", TRUE);
+
+      prtmZonPre.COPY(lrZonPre2); // Dejamos el puntero como estaba
+    END;
+
+    PROCEDURE PrecioPromedio@1100253001(prParte@1103350001 : Record 7010360;VAR pwPre@1100253001 : Decimal;pwPax@1103350003 : Decimal;pwPaxFtParte@1103350002 : Decimal);
+    BEGIN
+      // PrecioPromedio
+      // Nueva funcionalidad que hace un promedio de precios
+
+      IF (prParte."Tipo Calculo Ingresos" <> prParte."Tipo Calculo Ingresos"::"Promedio Plazas") AND
+         (prParte."Tipo Calculo Ingresos" <> prParte."Tipo Calculo Ingresos"::"Mayor Importe") THEN
+        EXIT;
+
+      pwPre := ROUND (pwPre * pwPax / pwPaxFtParte, 0.001);
+    END;
+
+    PROCEDURE IngresoSuplementoAutomatico@46(prParte@1100244000 : Record 7010360;VAR prToPar@1100244001 : TEMPORARY Record 7010365;VAR prZonPre@1100253000 : TEMPORARY Record 7010364;VAR prCon@1100244002 : TEMPORARY Record 7010403;pwPasajeIngreso@1100244003 : Integer);
+    VAR
+      lrPre@1100244004 : TEMPORARY Record 7010405;
+      lwTzonas@1100244006 : ARRAY [8] OF Code[10];
+      ind@1100244007 : Integer;
+      lwBasePorcentaje@1100244010 : Decimal;
+      lwImporte@1100244011 : Decimal;
+      lwZonaLinea@1100244012 : Code[10];
+    BEGIN
+      // IngresoSuplementoAutomatico
+      //
+      //  Buscaremos para el contrato del touroperador si se han indicado que existen
+      //  suplementos automaticos para los casos en que se junten 2 zonas.
+      //  Se van a utilizar los filtros para establecer la prioridad de aplicacion, primero
+      //  los mas restrictivos, y despues bajando eliminando campos.
+      //
+      //  Hay que buscar las zonas de precios implicadas en este parte
+
+      CLEAR(prZonPre);
+      prZonPre.SETCURRENTKEY("N§ Parte", "Tipo contrato", "N§ Contrato", Orden);
+      prZonPre.SETRANGE("N§ Parte"     , prParte."N§ Parte");
+      prZonPre.SETRANGE("Tipo contrato", prZonPre."Tipo contrato"::Venta);
+      prZonPre.SETRANGE("N§ Contrato"  , prCon."N§ Contrato");
+      IF prZonPre.FINDSET THEN BEGIN
+        ind := 1;
+        REPEAT
+          lwTzonas[ind] := prZonPre."Zona Precio";
+          ind := ind + 1;
+        UNTIL prZonPre.NEXT = 0;
+      END;
+
+      //  Si hemos encontrado precio calcular el importe del mismo
+      //  lrPre es el valor de retorno
+      IF cFunCalc.PrecioSuplementoAutomaticoIng(prParte, prCon, pwPasajeIngreso, lwTzonas, lrPre) THEN BEGIN
+        IF lwTzonas[2] = '' THEN
+          lwZonaLinea := lwTzonas[1]
+        ELSE
+          lwZonaLinea := lwTzonas[2];
+
+        IF lrPre.Porcentaje THEN BEGIN
+          lwBasePorcentaje := cFunCalc.SumarIngresoBase(prToPar, prParte, NOT prCon."Maletas incluidas", prCon."Impuestos incluidos");
+          lwImporte        := ROUND((lwBasePorcentaje * lrPre."Precio Vehiculo") / 100, cFunCalc.GetPrecision(0));
+        END ELSE
+          lwImporte        := lrPre."Precio Vehiculo";
+
+        cFunCalc.InsertaLinea(lwZonaLinea, wTipoLinea::Suplemento, lrPre."Cod. Divisa", lwImporte, prToPar.Touroperador,
+                              FALSE, wConcepto::Ingreso, lrPre."Precio Vehiculo", 0, prZonPre."N§ Contrato", Text002, prParte,
+                              1, 1, lrPre."Concepto facturacion", '');
+      END;
+    END;
+
+    PROCEDURE BuscaImporteMayor@21(prParte@1100244000 : Record 7010360;VAR prTOPar@1100253000 : TEMPORARY Record 7010365) : Code[10];
+    VAR
+      lrToPar2@1100244006 : TEMPORARY Record 7010365;
+      lwMayorImp@1100244007 : Decimal;
+      lwMayorTTOO@1100244008 : Code[10];
+      lwImp@1100253001 : Decimal;
+    BEGIN
+      // BuscaImporteMayor
+
+      lrToPar2.COPY(prTOPar); // Copiamos el puntero para dejarlo como antes
+
+      CLEAR(prTOPar);
+      prTOPar.SETRANGE ("N§ Parte"     , prParte."N§ Parte");
+      prTOPar.SETFILTER("Rango Usuario", USERID);
+      IF prTOPar.FINDFIRST THEN BEGIN
+        CLEAR(lwMayorImp);
+        CLEAR(lwMayorTTOO);
+        REPEAT
+          lwImp :=  cFunCalc.SumarIngresoBase(prTOPar, prParte, FALSE, FALSE);
+          IF lwImp > lwMayorImp THEN BEGIN
+            lwMayorImp  := lwImp;
+            lwMayorTTOO := prTOPar.Touroperador;
+          END;
+        UNTIL prTOPar.NEXT = 0;
+      END;
+      prTOPar.COPY(lrToPar2); // Dejamos el puntero como antes
+
+      EXIT(lwMayorTTOO);
+    END;
+
+    PROCEDURE PasajeOtrasZonasVenta@1100244000(prParte@1100244000 : Record 7010360;VAR prZonPre@1100244001 : TEMPORARY Record 7010364;pwConsideraMedios@1100244004 : Boolean) : Decimal;
+    VAR
+      lrZonPre2@1100244002 : TEMPORARY Record 7010364;
+      lwPasaje@1100244003 : Decimal;
+      lwNi¤os@1103355000 : Decimal;
+    BEGIN
+      // PasajeOtrasZonasVenta
+
+      lrZonPre2.COPY(prZonPre);
+
+      prZonPre.RESET;
+      prZonPre.SETRANGE ("N§ Parte"     , prParte."N§ Parte");
+      prZonPre.SETRANGE ("Tipo contrato", prZonPre."Tipo contrato"::Venta);
+      prZonPre.SETRANGE ("N§ Contrato"  , lrZonPre2."N§ Contrato");
+      prZonPre.SETFILTER("Zona Precio"  , '<>%1', lrZonPre2."Zona Precio");
+
+      lwPasaje := 0;
+      IF prZonPre.FINDSET THEN BEGIN
+        REPEAT
+          lwNi¤os := prZonPre."Ni¤os facturados zona";
+          IF pwConsideraMedios THEN
+            lwNi¤os := ROUND(lwNi¤os / 2, 0.1);
+          lwPasaje += prZonPre."Adultos facturados zona" + lwNi¤os;
+        UNTIL prZonPre.NEXT = 0;
+      END;
+
+      prZonPre.COPY(lrZonPre2); // Dejamos el puntero como estaba
+      EXIT(lwPasaje);
+    END;
+
+    PROCEDURE BuscaTotalPasajeIngreso@50(VAR prToPar@1100253001 : TEMPORARY Record 7010365;VAR pwPasajeIngreso@1100253000 : ARRAY [3] OF Integer);
+    VAR
+      lrToPar2@1100244004 : TEMPORARY Record 7010365;
+    BEGIN
+      // BuscaTotalPasajeIngreso
+      // pwPasajeIngreso tiene tres dimesiones: 1-Todos, 2=Adultos, 3= Ni¤os
+
+      pwPasajeIngreso[2] := 0;
+      pwPasajeIngreso[3] := 0;
+
+      lrToPar2.COPY(prToPar);
+
+      prToPar.RESET;
+      prToPar.SETRANGE("N§ Parte", lrToPar2."N§ Parte");
+      IF prToPar.FINDSET THEN BEGIN
+        REPEAT
+          pwPasajeIngreso[2]  += prToPar."Adultos transportados" - prToPar."Adultos invitados ingreso";
+          pwPasajeIngreso[3]  += prToPar."Ni¤os transportados"   - prToPar."Ni¤os invitados ingreso";
+        UNTIL prToPar.NEXT = 0;
+      END;
+
+      prToPar.COPY(lrToPar2); // Dejamos el puntero como estaba
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,536 @@
+OBJECT Report 7010380 Viajes x Zona y Conductor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:34:37;
+    Version List=TRANSFER,INV;
+  }
+  PROPERTIES
+  {
+    CaptionML=ESP=Viajes x Zona y Conductor;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7010327;
+        DataItemVarName=rConductor;
+        PrintOnlyIfDetail=Yes;
+        OnPreDataItem=BEGIN
+                        wEsPrimero :=TRUE;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           rTemporal.DELETEALL;
+                           IF wEsPrimero THEN
+                             wEsPrimero := FALSE
+                           ELSE
+                             CurrReport.NEWPAGE;
+
+                           wNombreConductor := Apellidos + ' , ' + Nombre;
+                         END;
+
+        ReqFilterFields=Conductor,Filtro Fechas;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table7010360;
+        DataItemTableView=SORTING(Cod Conductor,Fecha,Tipo Vehiculo);
+        PrintOnlyIfDetail=Yes;
+        OnPreDataItem=BEGIN
+
+
+                        rParametros.RESET;
+                        rParametros.FINDFIRST;
+                        rConductor.COPYFILTER("Filtro Fechas", Parte.Fecha);
+
+                        wVarios := Text50000;
+                        wFiltroFecha := GETFILTER(Fecha);
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lrSerPar@1100253000 : Record 7010359;
+                           lwServicio@1100253001 : Code[10];
+                           lwPuntoAnt@1100253002 : Code[10];
+                           lrPuntodeR@1100253003 : Record 7010315;
+                           lwZona@1100253004 : Code[10];
+                         BEGIN
+                           // Va rellenando la informaci¢n en el temporal Conductor x Zona
+                           // lwServicio sera Entrada, Salida, EXcursion o varios segun corresponda
+                           // lwPuntoAnt = Punto de Recogida Anterior
+
+                           lwPuntoAnt := '';
+                           lrSerPar.RESET;
+                           lrSerPar.SETCURRENTKEY("N§ Parte","Punto recogida","Hora recogida");
+                           lrSerPar.SETRANGE("N§ Parte" , "N§ Parte");
+
+                           IF "Tipo Servicio" = rParametros."Codigo Tipo Excursiones" THEN BEGIN
+                             lwServicio := rParametros."Codigo Tipo Excursiones";
+                             wOrden     := 3;
+                           END
+                           ELSE BEGIN
+                             IF "Codigo Servicio" = rParametros."Codigo Salidas" THEN BEGIN
+                              wOrden    := 2;
+                              lwServicio := "Codigo Servicio";
+                             END
+                             ELSE
+                               IF "Codigo Servicio" = rParametros."Codigo Entradas" THEN BEGIN
+                                 wOrden     := 1;
+                                 lwServicio := "Codigo Servicio"
+                               END
+                             ELSE BEGIN
+                               wOrden     := 4;
+                               lwServicio := wVarios;
+                             END;
+                           END;
+
+                           IF lrSerPar.FINDSET THEN
+                             REPEAT
+                               IF "Tipo Servicio" = rParametros."Codigo Tipo Excursiones" THEN
+                                 lwZona := Parte."Codigo Servicio"
+                               ELSE
+                                 IF lwServicio = wVarios THEN
+                                   lwZona :=  wVarios
+                                 ELSE BEGIN    // Si es un traslado
+                                   IF NOT lrPuntodeR.GET(lrSerPar."Punto recogida") THEN
+                                     lrPuntodeR.INIT;
+                                   lwZona := lrPuntodeR."Zona fisica";
+                                 END;
+
+                               IF NOT rTemporal.GET("Cod Conductor", lwServicio , lwZona) THEN BEGIN
+                                 rTemporal.INIT;
+                                 rTemporal.Conductor := "Cod Conductor";
+                                 rTemporal.Servicio  := lwServicio;
+                                 rTemporal.zona      := lwZona;
+                                 rTemporal.Orden     := wOrden;
+                                 rTemporal.INSERT;
+                               END;
+                               IF  lrSerPar."Punto recogida" <> lwPuntoAnt THEN
+                                 rTemporal."N§Hoteles" += 1;
+                               lwPuntoAnt := lrSerPar."Punto recogida";
+                               IF rTemporal."N§Parte" <> lrSerPar."N§ Parte" THEN BEGIN
+                                 rTemporal."N§Visitas" += 1;
+                                 rTemporal."N§Parte"   := lrSerPar."N§ Parte";
+                               END;
+                               rTemporal.MODIFY;
+
+                             UNTIL lrSerPar.NEXT = 0;
+
+                           rTemporal."N§Viajes"  += Parte."N§ viajes";
+                           rTemporal.MODIFY;
+                         END;
+
+        DataItemLink=Cod Conductor=FIELD(Conductor);
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table7010391;
+        DataItemTableView=SORTING(Orden);
+        DataItemVarName=Temporal;
+        OnPreDataItem=BEGIN
+                        wOrden := 0;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lrZonaFis@1100253000 : Record 7010314;
+                           lrCodSer@1100253001 : Record 7010320;
+                         BEGIN
+                           IF wOrden <> Orden THEN BEGIN
+                             wMhz  := 0;
+                             wMzv  := 0;
+                             wMhv  := 0;
+                             wMDhz := 0;
+
+                             rTemporal.RESET;
+                             rTemporal.SETRANGE(Servicio,Servicio);
+                             rTemporal.SETRANGE(Conductor,Conductor);
+
+                             rTemporal.CALCSUMS("N§Hoteles", "N§Visitas", "N§Viajes");
+                             "wN§Viajes" := rTemporal."N§Viajes";
+                             IF rTemporal."N§Visitas" > 0 THEN
+                               wMhz := ROUND(rTemporal."N§Hoteles" / rTemporal."N§Visitas",1);
+                             IF "wN§Viajes" > 0 THEN BEGIN
+                               wMzv := ROUND(rTemporal."N§Visitas" / "wN§Viajes",1);
+                               wMhv := ROUND(rTemporal."N§Hoteles" / "wN§Viajes",1);
+
+                             END;
+                           wOrden := Orden
+                           END;
+
+
+
+                           IF "N§Visitas" > 0 THEN
+                             wMDhz := ROUND("N§Hoteles" / "N§Visitas",1)
+                           ELSE
+                             wMDhz := 0;
+
+                           CASE Orden OF
+                             1,2: BEGIN
+                                    // Busca la descripcion de la zona fisica
+                                    lrZonaFis.RESET;
+                                    IF lrZonaFis.GET(zona) THEN
+                                      wRotuloZona := lrZonaFis.Descripcion
+                                    ELSE
+                                      wRotuloZona := zona;
+                                  END;
+                               3: BEGIN
+                                    // Busca la descripcion del codigo de servicio
+                                    lrCodSer.RESET;
+                                    IF lrCodSer.GET(zona) THEN
+                                      wRotuloZona := lrCodSer.Descripcion
+                                    ELSE
+                                      wRotuloZona := zona;
+                                  END;
+                               4: wRotuloZona := zona;
+                           END;
+                         END;
+
+        TotalFields=N§Visitas,N§Viajes;
+        GroupTotalFields=Orden;
+        DataItemLink=Conductor=FIELD(Conductor);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=18500;
+            SectionHeight=2538;
+            KeepWithNext=No;
+          }
+          CONTROLS
+          {
+            { 18  ;TextBox      ;3450 ;1269 ;6300 ;423  ;FontSize=8;
+                                                         SourceExpr=wFiltroFecha }
+            { 1   ;Shape        ;0    ;1692 ;18450;423  ;ShapeStyle=HorzLine }
+            { 26  ;Label        ;0    ;1269 ;3300 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Periodo de Fechas }
+            { 19  ;Label        ;0    ;846  ;3300 ;423  ;ParentControl=16;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Conductor }
+            { 16  ;TextBox      ;3450 ;846  ;6300 ;423  ;FontSize=8;
+                                                         SourceExpr=wNombreConductor }
+            { 9   ;Shape        ;0    ;423  ;18450;423  ;ShapeStyle=HorzLine }
+            { 7   ;Label        ;12600;0    ;5850 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Vajes por zona y conductor }
+            { 8   ;TextBox      ;0    ;0    ;7500 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr=COMPANYNAME }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=TransHeader;
+            SectionWidth=18500;
+            SectionHeight=2538;
+          }
+          CONTROLS
+          {
+            { 35  ;TextBox      ;3450 ;1269 ;6300 ;423  ;FontSize=8;
+                                                         SourceExpr=wFiltroFecha }
+            { 48  ;Shape        ;0    ;1692 ;18450;423  ;ShapeStyle=HorzLine }
+            { 49  ;Label        ;0    ;1269 ;3300 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Periodo de Fechas }
+            { 50  ;Label        ;0    ;846  ;3300 ;423  ;ParentControl=51;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Conductor }
+            { 51  ;TextBox      ;3450 ;846  ;6300 ;423  ;FontSize=8;
+                                                         SourceExpr=wNombreConductor }
+            { 52  ;Shape        ;0    ;423  ;18450;423  ;ShapeStyle=HorzLine }
+            { 53  ;Label        ;12600;0    ;5850 ;423  ;HorzAlign=Right;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Vajes por zona y conductor }
+            { 54  ;TextBox      ;0    ;0    ;7500 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr=COMPANYNAME }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupHeader;
+            SectionWidth=18500;
+            SectionHeight=2961;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden < 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 23  ;Label        ;8400 ;2115 ;2700 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Media detallada hoteles por zona }
+            { 24  ;Label        ;6300 ;2115 ;1800 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=N§ Hoteles }
+            { 37  ;TextBox      ;4650 ;423  ;900  ;423  ;SourceExpr="wN§Viajes" }
+            { 38  ;TextBox      ;4650 ;846  ;900  ;423  ;SourceExpr=wMhz }
+            { 39  ;TextBox      ;4650 ;1269 ;900  ;423  ;SourceExpr=wMzv }
+            { 40  ;TextBox      ;4650 ;1692 ;900  ;423  ;SourceExpr=wMhv }
+            { 41  ;Label        ;3600 ;2115 ;2400 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=N§ Visitas }
+            { 42  ;Label        ;0    ;423  ;4500 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=N§ Viajes }
+            { 43  ;Label        ;0    ;846  ;4500 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Media hoteles por zona }
+            { 44  ;Label        ;0    ;1269 ;4500 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Media zonas por viaje }
+            { 45  ;Label        ;0    ;1692 ;4500 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Media hoteles por viaje }
+            { 46  ;TextBox      ;0    ;0    ;4050 ;423  ;VertAlign=Bottom;
+                                                         ForeColor=8388608;
+                                                         BackColor=8388608;
+                                                         BorderColor=8388608;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr=Servicio }
+            { 47  ;Label        ;0    ;2115 ;3300 ;846  ;VertAlign=Bottom;
+                                                         ForeColor=0;
+                                                         BackColor=0;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Zonas Fisicas }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupHeader;
+            SectionWidth=18500;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden = 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 25  ;Label        ;3600 ;0    ;2400 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         ForeColor=0;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=N§ Excursiones }
+            { 28  ;TextBox      ;0    ;0    ;3300 ;846  ;VertAlign=Bottom;
+                                                         ForeColor=8388608;
+                                                         BackColor=8388608;
+                                                         BorderColor=8388608;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr=Servicio }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18500;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden < 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 13  ;TextBox      ;0    ;0    ;3300 ;423  ;SourceExpr=wRotuloZona }
+            { 15  ;TextBox      ;3600 ;0    ;2400 ;423  ;SourceExpr="N§Visitas" }
+            { 17  ;TextBox      ;6300 ;0    ;1800 ;423  ;SourceExpr="N§Hoteles" }
+            { 20  ;TextBox      ;8400 ;0    ;2700 ;423  ;SourceExpr=wMDhz }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18500;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden = 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 30  ;TextBox      ;3600 ;0    ;2400 ;423  ;SourceExpr="N§Viajes" }
+            { 27  ;TextBox      ;0    ;0    ;3300 ;423  ;SourceExpr=wRotuloZona }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupFooter;
+            SectionWidth=18500;
+            SectionHeight=1269;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden < 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 21  ;TextBox      ;3600 ;423  ;2400 ;423  ;SourceExpr="N§Visitas" }
+            { 32  ;Shape        ;3600 ;0    ;2400 ;423  ;ShapeStyle=HorzLine }
+            { 22  ;Label        ;0    ;423  ;3300 ;423  ;VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=No;
+                                                         MultiLine=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Total Visitas }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupFooter;
+            SectionWidth=18500;
+            SectionHeight=1269;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden = 3 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 36  ;Shape        ;3600 ;0    ;2400 ;423  ;ShapeStyle=HorzLine }
+            { 33  ;TextBox      ;3600 ;423  ;2400 ;423  ;SourceExpr="N§Viajes" }
+            { 34  ;Label        ;0    ;423  ;3300 ;423  ;FontSize=9;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Total Excursiones }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupFooter;
+            SectionWidth=18500;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Orden = 4 );
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 5   ;TextBox      ;0    ;0    ;3300 ;423  ;VertAlign=Bottom;
+                                                         ForeColor=8388608;
+                                                         BackColor=8388608;
+                                                         BorderColor=8388608;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr=Servicio }
+            { 6   ;TextBox      ;3600 ;0    ;2400 ;423  ;SourceExpr="N§Viajes" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            PrintOnEveryPage=Yes;
+            PlaceInBottom=Yes;
+            SectionWidth=18500;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 10  ;TextBox      ;7650 ;423  ;4500 ;423  ;HorzAlign=Center;
+                                                         SourceExpr=FORMAT(TODAY,0,4) + '-' + USERID }
+            { 11  ;TextBox      ;17850;423  ;600  ;423  ;CaptionML=ESP=P gina;
+                                                         SourceExpr=CurrReport.PAGENO }
+            { 12  ;Label        ;16800;423  ;900  ;423  ;ParentControl=11 }
+            { 14  ;Shape        ;0    ;0    ;18450;423  ;ShapeStyle=HorzLine }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=9020;
+      Height=3410;
+    }
+    CONTROLS
+    {
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355000 : TextConst 'ESP=VARIOS';
+      rParametros@1100253000 : Record 7010311;
+      wVarios@1100253001 : Code[10];
+      rTemporal@1100253002 : Record 7010391;
+      wFiltroFecha@1100253003 : Text[30];
+      "wN§Viajes"@1100253004 : Decimal;
+      wMhz@1100253005 : Decimal;
+      wMzv@1100253006 : Decimal;
+      wMhv@1100253007 : Decimal;
+      wMDhz@1100253008 : Decimal;
+      wOrden@1100253009 : Integer;
+      wEsPrimero@1100253010 : Boolean;
+      wNombreConductor@1100253011 : Text[150];
+      wRotuloZona@1100253012 : Text[50];
+
+    BEGIN
+    {
+      wMhz  : Media Hoteles x Zona
+      wMzv  : Media Zona    x Viaje
+      wMhv   : Media Hoteles x Viaje
+      wMDhz : Nedia Detallada hoteles x zona
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

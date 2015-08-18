@@ -1,0 +1,1291 @@
+OBJECT Report 7010181 Transferencia pago
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/03/14;
+    Time=10:38:41;
+    Modified=Yes;
+    Version List=AIC2009,GOC;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Payment Transfer;
+               ESP=Transferencia pago];
+    TopMargin=2150;
+    PaperSize=Letter 8 1/2 x 11 in;
+    HorzGrid=210;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table81;
+        DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Posting Date,Document No.);
+        DataItemVarName=LinDiaGen;
+        OnPreDataItem=BEGIN
+
+                        {
+                        IF CurrReport.PREVIEW THEN
+                          ERROR(Text000);
+                        }
+
+
+                        IF ReimprimCheq THEN BEGIN
+                          SETRANGE("Bank Payment Type","Bank Payment Type"::Transferencia);
+                          SETRANGE("Check Printed",TRUE);
+                        END;
+
+                        IF UtilNoCheque = '' THEN
+                          ERROR(Text001);
+
+                        IF TestImpr THEN
+                          CurrReport.BREAK;
+
+                        IF (GETFILTER("Line No.") <> '') OR (GETFILTER("Document No.") <> '') THEN
+                          ERROR(
+                            Text002,FIELDCAPTION("Line No."),FIELDCAPTION("Document No."));
+
+                        PrimerPag := TRUE;
+
+                        //**********
+
+                        InfoEmpresa.GET;
+                        InfoEmpresa.CALCFIELDS(Picture);
+                        IF NOT TestImpr THEN BEGIN
+                          FormatDire.Company(DirEmpresa,InfoEmpresa);
+                          CtaBanco2.GET(CtaBanco2."No.");
+                          CtaBanco2.TESTFIELD(Blocked,FALSE);
+                          SETRANGE("Bank Payment Type","Bank Payment Type"::Transferencia);
+                          SETRANGE("Check Printed",ReimprimCheq);
+                        END ELSE BEGIN
+                          CLEAR(DirEmpresa);
+                          FOR i := 1 TO 5 DO
+                            DirEmpresa[i] := Text003;
+                        END;
+                        IF InfoEmpresa.Picture.HASVALUE THEN
+                          DirEmpresa[1]:='';
+
+                        CheqsImpresos := 0;
+
+                        SETRANGE("Account Type",LinDiaGen."Account Type"::"Fixed Asset");
+                        IF FIND('-') THEN
+                          LinDiaGen.FIELDERROR("Account Type");
+                        SETRANGE("Account Type");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF wConceptoImprimir = '' THEN BEGIN
+                             wConceptoImprimir := Description;
+                           END;
+
+                           wFechaRegistro    := "Posting Date";
+
+                           IF NOT TestImpr THEN BEGIN
+
+                             IF Amount = 0 THEN
+                               CurrReport.SKIP;
+
+                             Concepto := LinDiaGen.Description;
+                             NoDoc    := LinDiaGen."External Document No.";
+                             FechaDoc := LinDiaGen."Posting Date";
+
+                             TESTFIELD("Bal. Account Type","Bal. Account Type"::"Bank Account");
+
+
+                             IF "Bal. Account No." <> CtaBanco2."No." THEN
+                               CurrReport.SKIP;
+
+                             IF ("Account No." <> '') AND ("Bal. Account No." <> '') THEN BEGIN
+                               TipoContrapa := "Account Type";
+                               NoContrapa := "Account No.";
+                               ImpoPendiente := Amount;
+
+                               IF UnChequePorProv THEN BEGIN
+                                 MetodoLiq := MetodoLiq::MuchasLinUnMov;
+                                 LinDiaGen2.RESET;
+                                 LinDiaGen2.SETCURRENTKEY("Journal Template Name","Journal Batch Name","Posting Date","Document No.");
+                                 LinDiaGen2.SETRANGE("Journal Template Name","Journal Template Name");
+                                 LinDiaGen2.SETRANGE("Journal Batch Name","Journal Batch Name");
+                                 LinDiaGen2.SETRANGE("Posting Date","Posting Date");
+                                 LinDiaGen2.SETRANGE("Document No.","Document No.");
+                                 LinDiaGen2.SETRANGE("Account Type","Account Type");
+                                 LinDiaGen2.SETRANGE("Account No.","Account No.");
+                                 LinDiaGen2.SETRANGE("Bal. Account Type","Bal. Account Type");
+                                 LinDiaGen2.SETRANGE("Bal. Account No.","Bal. Account No.");
+                                 LinDiaGen2.SETRANGE("Bank Payment Type","Bank Payment Type");
+                                 LinDiaGen2.FIND('-');
+                                 ImpoPendiente := 0;
+                               END ELSE
+                                 IF "Applies-to Doc. No." <> '' THEN
+                                   MetodoLiq := MetodoLiq::UnaLinUnMov
+                                 ELSE
+                                   IF "Applies-to ID" <> '' THEN
+                                     MetodoLiq := MetodoLiq::OneLinID
+                                   ELSE
+                                     MetodoLiq := MetodoLiq::Pago;
+                             END ELSE
+                               IF "Account No." = '' THEN
+                                 FIELDERROR("Account No.",Text004)
+                               ELSE
+                                 FIELDERROR("Bal. Account No.",Text004);
+
+                             CLEAR(DirCheque);
+                             TexContacto := '';
+                             CLEAR(RepreVtasComp);
+                             CASE TipoContrapa OF
+                               TipoContrapa::Cuenta:
+                                 BEGIN
+                                   DirCheque[1] := LinDiaGen.Description;
+                                 END;
+                               TipoContrapa::Cliente:
+                                 BEGIN
+                                   Clie.GET(NoContrapa);
+                                   Clie.TESTFIELD(Blocked, Clie.Blocked::All);
+                                   Clie.Contact := '';
+                                   FormatDire.Customer(DirCheque,Clie);
+                                   IF CtaBanco2."Currency Code" <> "Currency Code" THEN
+                                     ERROR(Text005);
+                                   IF Clie."Salesperson Code" <> '' THEN BEGIN
+                                     TexContacto := Text006;
+                                     RepreVtasComp.GET(Clie."Salesperson Code");
+                                   END;
+                                 END;
+                               TipoContrapa::Proveedor:
+                                 BEGIN
+                                   Prov.GET(NoContrapa);
+                                   Prov.TESTFIELD(Blocked, Prov.Blocked::" ");
+                                   Prov.Contact := '';
+
+                                   //FormatDire.Proveedor(DirCheque,Prov);  Linea anulada AJS 02.05.01
+                                   DirCheque[1] := Description;
+
+                                   IF CtaBanco2."Currency Code" <> "Currency Code" THEN
+                                     ERROR(Text005);
+                                   IF Prov."Purchaser Code" <> '' THEN BEGIN
+                                     TexContacto := Text007;
+                                     RepreVtasComp.GET(Prov."Purchaser Code");
+                                   END;
+                                 END;
+                               TipoContrapa::Banco:
+                                 BEGIN
+                                   CtaBanco.GET(NoContrapa);
+                                   CtaBanco.TESTFIELD(Blocked,FALSE);
+                                   CtaBanco.Contact := '';
+                                   FormatDire.BankAcc(DirCheque,CtaBanco);
+                                   IF CtaBanco2."Currency Code" <> CtaBanco."Currency Code" THEN
+                                     ERROR(Text008);
+                                   IF CtaBanco."Our Contact Code" <> '' THEN BEGIN
+                                     TexContacto := Text009;
+                                     RepreVtasComp.GET(CtaBanco."Our Contact Code");
+                                   END;
+                                 END;
+                             END;
+
+                               FechaCheque := "Posting Date";
+                               TextFechaCheque := FORMAT("Posting Date",0,4);
+
+                           END ELSE BEGIN
+                             IF CheqsImpresos > 0 THEN
+                               CurrReport.BREAK;
+                             TipoContrapa := TipoContrapa::Proveedor;
+                             NoContrapa := Text010;
+                             CLEAR(DirCheque);
+                             FOR i := 1 TO 5 DO
+                               DirCheque[i] := Text003;
+                             TexContacto := '';
+                             CLEAR(RepreVtasComp);
+                             TexNoCheque := Text011;
+                             TextFechaCheque := Text012;
+                           END;
+                         END;
+
+        ReqFilterFields=Journal Template Name,Journal Batch Name,Posting Date;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=PagCheque;
+        OnPreDataItem=BEGIN
+                        PrimerPag := TRUE;
+                        BuscarUlt := FALSE;
+                        TotImpoLinea := 0;
+                        TotDtoLinea := 0;
+                        TotImpoLinea2 := 0;
+                        TotDtoLinea2 := 0;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF BuscarUlt THEN
+                             CurrReport.BREAK;
+
+                           UtilNoCheque := INCSTR(UtilNoCheque);
+                           IF NOT TestImpr THEN
+                             TexNoCheque := UtilNoCheque
+                           ELSE
+                             TexNoCheque := Text011;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF ReimprimCheq THEN
+                           EXIT;
+
+                         IF NOT TestImpr THEN BEGIN
+                           IF UtilNoCheque <> LinDiaGen."Document No." THEN BEGIN
+                             LinDiaGen3.RESET;
+                             LinDiaGen3.SETCURRENTKEY("Journal Template Name","Journal Batch Name","Posting Date","Document No.");
+                             LinDiaGen3.SETRANGE("Journal Template Name",LinDiaGen."Journal Template Name");
+                             LinDiaGen3.SETRANGE("Journal Batch Name",LinDiaGen."Journal Batch Name");
+                             LinDiaGen3.SETRANGE("Posting Date",LinDiaGen."Posting Date");
+                             LinDiaGen3.SETRANGE("Document No.",UtilNoCheque);
+                             IF LinDiaGen3.FIND('-') THEN
+                               LinDiaGen3.FIELDERROR("Document No.",STRSUBSTNO(Text013,UtilNoCheque));
+                           END;
+
+                           IF MetodoLiq <> MetodoLiq::MuchasLinUnMov THEN BEGIN
+                             LinDiaGen3 := LinDiaGen;
+                             LinDiaGen3.TESTFIELD("Posting No. Series",'');
+                             LinDiaGen3."Document No." := UtilNoCheque;
+                             LinDiaGen3."Check Printed" := TRUE;
+                             LinDiaGen3.MODIFY;
+                           END ELSE BEGIN
+                             IF LinDiaGen2.FIND('-') THEN BEGIN
+                               MayorNoL¡nea := LinDiaGen2."Line No.";
+                               REPEAT
+                                 IF LinDiaGen2."Line No." > MayorNoL¡nea THEN
+                                   MayorNoL¡nea := LinDiaGen2."Line No.";
+                                 LinDiaGen3 := LinDiaGen2;
+                                 LinDiaGen3.TESTFIELD("Posting No. Series",'');
+                                 LinDiaGen3."Bal. Account No." := '';
+                                 LinDiaGen3."Bank Payment Type" := LinDiaGen3."Bank Payment Type"::" ";
+                                 LinDiaGen3."Document No." := UtilNoCheque;
+                                 LinDiaGen3."Check Printed" := TRUE;
+                                 LinDiaGen3.VALIDATE(Amount);
+                                 LinDiaGen3.MODIFY;
+                               UNTIL LinDiaGen2.NEXT = 0;
+                             END;
+
+                             LinDiaGen3.RESET;
+                             LinDiaGen3 := LinDiaGen;
+                             LinDiaGen3.SETRANGE("Journal Template Name",LinDiaGen."Journal Template Name");
+                             LinDiaGen3.SETRANGE("Journal Batch Name",LinDiaGen."Journal Batch Name");
+                             LinDiaGen3."Line No." := MayorNoL¡nea;
+                             IF LinDiaGen3.NEXT = 0 THEN
+                               LinDiaGen3."Line No." := MayorNoL¡nea + 10000
+                             ELSE BEGIN
+                               WHILE LinDiaGen3."Line No." = MayorNoL¡nea + 1 DO BEGIN
+                                 MayorNoL¡nea := LinDiaGen3."Line No.";
+                                 IF LinDiaGen3.NEXT = 0 THEN
+                                   LinDiaGen3."Line No." := MayorNoL¡nea + 20000;
+                               END;
+                               LinDiaGen3."Line No." := (LinDiaGen3."Line No." + MayorNoL¡nea) DIV 2;
+                             END;
+                             LinDiaGen3.INIT;
+                             LinDiaGen3.VALIDATE("Posting Date",LinDiaGen."Posting Date");
+                             LinDiaGen3."Document Type" := LinDiaGen."Document Type";
+                             LinDiaGen3."Document No." := UtilNoCheque;
+                             LinDiaGen3."Account Type" := LinDiaGen3."Account Type"::"Bank Account";
+                             LinDiaGen3.VALIDATE("Account No.",CtaBanco2."No.");
+
+                             // AJS 25.11.2003
+                             // Se modifica la descripcion del asiento para mostrar el nombre del proveedor
+
+                             IF TipoContrapa <> TipoContrapa::Cuenta THEN BEGIN
+                               IF Prov.GET(NoContrapa) THEN
+                                 LinDiaGen3.Description := STRSUBSTNO(Text014, Prov.Name) //+$001
+                               ELSE
+                                 LinDiaGen3.Description := STRSUBSTNO(Text015, TipoContrapa, NoContrapa);
+                             END;
+                             LinDiaGen3.VALIDATE(Amount,-TotImpoLinea);
+                             LinDiaGen3."Bank Payment Type" := LinDiaGen3."Bank Payment Type"::Transferencia;
+                             LinDiaGen3."Check Printed" := TRUE;
+                             LinDiaGen3."Source Code"    := LinDiaGen."Source Code";
+                             LinDiaGen3."Reason Code" := LinDiaGen."Reason Code";
+                             LinDiaGen3.INSERT;
+                           END;
+                         END;
+
+                         CtaBanco2."Ultimo No. Transferencia" := UtilNoCheque;
+                         CtaBanco2.MODIFY;
+
+                         COMMIT;
+                       END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(>0));
+        DataItemVarName=BucleImprLiq;
+        OnPreDataItem=BEGIN
+                        IF ReimprimCheq THEN
+                          EXIT;
+
+                        ImpoPendiente2 := ImpoPendiente;
+
+                        IF NOT TestImpr THEN
+                          IF PrimerPag THEN BEGIN
+                            BuscarUlt := TRUE;
+                            CASE MetodoLiq OF
+                              MetodoLiq::UnaLinUnMov:
+                                BuscarUlt := FALSE;
+                              MetodoLiq::OneLinID:
+                                CASE TipoContrapa OF
+                                  TipoContrapa::Cliente:
+                                    BEGIN
+                                      MovClie.RESET;
+                                      MovClie.SETCURRENTKEY("Customer No.",Open,Positive);
+                                      MovClie.SETRANGE("Customer No.",NoContrapa);
+                                      MovClie.SETRANGE(Open,TRUE);
+                                      MovClie.SETRANGE(Positive,TRUE);
+                                      MovClie.SETRANGE("Applies-to ID",LinDiaGen."Applies-to ID");
+                                      BuscarUlt := NOT MovClie.FIND('-');
+                                      IF BuscarUlt THEN BEGIN
+                                        MovClie.SETRANGE(Positive,FALSE);
+                                        BuscarUlt := NOT MovClie.FIND('-');
+                                        BuscaNeg := TRUE;
+                                      END ELSE
+                                        BuscaNeg := FALSE;
+                                    END;
+                                  TipoContrapa::Proveedor:
+                                    BEGIN
+                                      MovProv.RESET;
+                                      MovProv.SETCURRENTKEY("Vendor No.",Open,Positive);
+                                      MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                      MovProv.SETRANGE(Open,TRUE);
+                                      MovProv.SETRANGE(Positive,TRUE);
+                                      MovProv.SETRANGE("Applies-to ID",LinDiaGen."Applies-to ID");
+                                      BuscarUlt := NOT MovProv.FIND('-');
+                                      IF BuscarUlt THEN BEGIN
+                                        MovProv.SETRANGE(Positive,FALSE);
+                                        BuscarUlt := NOT MovProv.FIND('-');
+                                        BuscaNeg := TRUE;
+                                      END ELSE
+                                        BuscaNeg := FALSE;
+                                    END;
+                                END;
+                              MetodoLiq::MuchasLinUnMov:
+                                BuscarUlt := FALSE;
+                            END;
+                          END
+
+                        ELSE
+                          BuscarUlt := FALSE;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF NOT TestImpr THEN BEGIN
+                             IF BuscarUlt THEN BEGIN
+                               IF ImpoPendiente <> 0 THEN BEGIN
+                                 TipoDoc := Text016;
+                           //      NoDoc := '';               // L¡nea comentada porque me sobreescrib¡a el n§ de doc. (Tomeu)
+                                 ImpoLinea := ImpoPendiente;
+                                 DtoLinea := 0;
+                                 ImpoPendiente := 0;
+                               END ELSE
+                                 CurrReport.BREAK;
+                             END ELSE BEGIN
+                               CASE MetodoLiq OF
+                                 MetodoLiq::UnaLinUnMov:
+                                   BEGIN
+                                     CASE TipoContrapa OF
+                                       TipoContrapa::Cliente:
+                                         BEGIN
+                                           MovClie.RESET;
+                                           MovClie.SETCURRENTKEY("Document Type","Document No.","Customer No.");
+                                           MovClie.SETRANGE("Document Type",LinDiaGen."Applies-to Doc. Type");
+                                           MovClie.SETRANGE("Document No.",LinDiaGen."Applies-to Doc. No.");
+                                           MovClie.SETRANGE("Customer No.",NoContrapa);
+                                           MovClie.FIND('-');
+                                           ActlzrImpoClien(MovClie,ImpoPendiente);
+                                         END;
+                                       TipoContrapa::Proveedor:
+                                         BEGIN
+                                           MovProv.RESET;
+                                           MovProv.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                           MovProv.SETRANGE("Document Type",LinDiaGen."Applies-to Doc. Type");
+                                           MovProv.SETRANGE("Document No.",LinDiaGen."Applies-to Doc. No.");
+                                           MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                           MovProv.FIND('-');
+                                           ActlzrImpoProv(MovProv,ImpoPendiente);
+                                         END;
+                                     END;
+                                     ImpoPendiente := ImpoPendiente - ImpoLinea;
+                                     BuscarUlt := TRUE;
+                                   END;
+                                 MetodoLiq::OneLinID:
+                                   BEGIN
+                                     CASE TipoContrapa OF
+                                       TipoContrapa::Cliente:
+                                         BEGIN
+                                           ActlzrImpoClien(MovClie,ImpoPendiente);
+                                           BuscarUlt := (MovClie.NEXT = 0) OR (ImpoPendiente <= 0);
+                                           IF BuscarUlt AND NOT BuscaNeg THEN BEGIN
+                                             MovClie.SETRANGE(Positive,FALSE);
+                                             BuscarUlt := NOT MovClie.FIND('-');
+                                             BuscaNeg := TRUE;
+                                           END;
+                                         END;
+                                       TipoContrapa::Proveedor:
+                                         BEGIN
+                                           ActlzrImpoProv(MovProv,ImpoPendiente);
+                                           BuscarUlt := (MovProv.NEXT = 0) OR (ImpoPendiente <= 0);
+                                           IF BuscarUlt AND NOT BuscaNeg THEN BEGIN
+                                             MovProv.SETRANGE(Positive,FALSE);
+                                             BuscarUlt := NOT MovProv.FIND('-');
+                                             BuscaNeg := TRUE;
+                                           END;
+                                         END;
+                                     END;
+                                     ImpoPendiente := ImpoPendiente - ImpoLinea;
+                                   END;
+                                 MetodoLiq::MuchasLinUnMov:
+                                   BEGIN
+                                     ImpoLinActual := LinDiaGen2.Amount;
+                                     IF LinDiaGen2."Applies-to ID" <> '' THEN
+                                       ERROR(
+                                         Text017 +
+                                         Text018 +
+                                         Text019);
+                                     LinDiaGen2.TESTFIELD("Check Printed",FALSE);
+                                     LinDiaGen2.TESTFIELD("Bank Payment Type",LinDiaGen2."Bank Payment Type"::Transferencia);
+
+                                     IF LinDiaGen2."Applies-to Doc. No." = '' THEN BEGIN
+                                       TipoDoc := Text016;
+                                       NoDoc := '';
+                                       ImpoLinea := ImpoLinActual;
+                                       DtoLinea := 0;
+                                     END ELSE BEGIN
+                                       CASE TipoContrapa OF
+                                         TipoContrapa::Cuenta:
+                                           BEGIN
+                                             TipoDoc := FORMAT(LinDiaGen2."Document Type");
+                                             NoDoc := LinDiaGen2."Document No.";
+                                             ImpoLinea := ImpoLinActual;
+                                             DtoLinea := 0;
+                                           END;
+                                         TipoContrapa::Cliente:
+                                           BEGIN
+                                             MovClie.RESET;
+                                             MovClie.SETCURRENTKEY("Document Type","Document No.","Customer No.");
+                                             MovClie.SETRANGE("Document Type",LinDiaGen2."Applies-to Doc. Type");
+                                             MovClie.SETRANGE("Document No.",LinDiaGen2."Applies-to Doc. No.");
+                                             MovClie.SETRANGE("Customer No.",NoContrapa);
+                                             MovClie.FIND('-');
+                                             ActlzrImpoClien(MovClie,ImpoLinActual);
+                                             ImpoLinea := ImpoLinActual;
+                                           END;
+                                         TipoContrapa::Proveedor:
+                                           BEGIN
+                                             MovProv.RESET;
+                                             MovProv.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                             MovProv.SETRANGE("Document Type",LinDiaGen2."Applies-to Doc. Type");
+                                             MovProv.SETRANGE("Document No.",LinDiaGen2."Applies-to Doc. No.");
+                                             MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                             MovProv.FIND('-');
+                                             ActlzrImpoProv(MovProv,ImpoLinActual);
+                                             ImpoLinea := ImpoLinActual;
+                                           END;
+                                         TipoContrapa::Banco:
+                                           BEGIN
+                                             TipoDoc := FORMAT(LinDiaGen2."Document Type");
+                                             NoDoc := LinDiaGen2."Document No.";
+                                             ImpoLinea := ImpoLinActual;
+                                             DtoLinea := 0;
+                                           END;
+                                       END;
+                                     END;
+                                     BuscarUlt := LinDiaGen2.NEXT = 0;
+                                   END;
+                               END;
+                             END;
+
+                             TotImpoLinea := TotImpoLinea + ImpoLinea;
+                             TotDtoLinea := TotDtoLinea + DtoLinea;
+                           END ELSE BEGIN
+                             IF BuscarUlt THEN
+                               CurrReport.BREAK;
+                             BuscarUlt := TRUE;
+                             TipoDoc := Text020;
+                             NoDoc := Text010;
+                             ImpoLinea := 0;
+                             DtoLinea := 0;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(>0));
+        DataItemVarName=BucleImprLiq2;
+        OnPreDataItem=BEGIN
+                        PrimerPag := TRUE;
+
+                        ImpoPendiente := ImpoPendiente2;
+                        TotImpoLinea3 := TotImpoLinea;
+                        TotDtoLinea3  := TotDtoLinea;
+                        //TotImpoLinea := TotImpoLinea2;
+                        TotDtoLinea  := TotDtoLinea2;
+                        TotImpoLinea2 := TotImpoLinea3;
+                        TotDtoLinea2  := TotDtoLinea3;
+
+
+                        IF NOT TestImpr THEN
+                          IF PrimerPag THEN BEGIN
+                            BuscarUlt := TRUE;
+                            CASE MetodoLiq OF
+                              MetodoLiq::UnaLinUnMov:
+                                BuscarUlt := FALSE;
+                              MetodoLiq::OneLinID:
+                                CASE TipoContrapa OF
+                                  TipoContrapa::Cliente:
+                                    BEGIN
+                                      MovClie.RESET;
+                                      MovClie.SETCURRENTKEY("Customer No.",Open,Positive);
+                                      MovClie.SETRANGE("Customer No.",NoContrapa);
+                                      MovClie.SETRANGE(Open,TRUE);
+                                      MovClie.SETRANGE(Positive,TRUE);
+                                      MovClie.SETRANGE("Applies-to ID",LinDiaGen."Applies-to ID");
+                                      BuscarUlt := NOT MovClie.FIND('-');
+                                      IF BuscarUlt THEN BEGIN
+                                        MovClie.SETRANGE(Positive,FALSE);
+                                        BuscarUlt := NOT MovClie.FIND('-');
+                                        BuscaNeg := TRUE;
+                                      END ELSE
+                                        BuscaNeg := FALSE;
+                                    END;
+                                  TipoContrapa::Proveedor:
+                                    BEGIN
+                                      MovProv.RESET;
+                                      MovProv.SETCURRENTKEY("Vendor No.",Open,Positive);
+                                      MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                      MovProv.SETRANGE(Open,TRUE);
+                                      MovProv.SETRANGE(Positive,TRUE);
+                                      MovProv.SETRANGE("Applies-to ID",LinDiaGen."Applies-to ID");
+                                      BuscarUlt := NOT MovProv.FIND('-');
+                                      IF BuscarUlt THEN BEGIN
+                                        MovProv.SETRANGE(Positive,FALSE);
+                                        BuscarUlt := NOT MovProv.FIND('-');
+                                        BuscaNeg := TRUE;
+                                      END ELSE
+                                        BuscaNeg := FALSE;
+                                    END;
+                                END;
+                              MetodoLiq::MuchasLinUnMov:
+                                BuscarUlt := FALSE;
+                            END;
+                          END
+                        ELSE
+                          BuscarUlt := FALSE;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF NOT TestImpr THEN BEGIN
+                             IF BuscarUlt THEN BEGIN
+                               IF ImpoPendiente <> 0 THEN BEGIN
+                                 TipoDoc := Text016;
+                           //      NoDoc := '';               // L¡nea comentada porque me sobreescrib¡a el n§ de doc. (Tomeu)
+                                 ImpoLinea := ImpoPendiente;
+                                 DtoLinea := 0;
+                                 ImpoPendiente := 0;
+                               END ELSE
+                                 CurrReport.BREAK;
+                             END ELSE BEGIN
+                               CASE MetodoLiq OF
+                                 MetodoLiq::UnaLinUnMov:
+                                   BEGIN
+                                     CASE TipoContrapa OF
+                                       TipoContrapa::Cliente:
+                                         BEGIN
+                                           MovClie.RESET;
+                                           MovClie.SETCURRENTKEY("Document Type","Document No.","Customer No.");
+                                           MovClie.SETRANGE("Document Type",LinDiaGen."Applies-to Doc. Type");
+                                           MovClie.SETRANGE("Document No.",LinDiaGen."Applies-to Doc. No.");
+                                           MovClie.SETRANGE("Customer No.",NoContrapa);
+                                           MovClie.FIND('-');
+                                           ActlzrImpoClien(MovClie,ImpoPendiente);
+                                         END;
+                                       TipoContrapa::Proveedor:
+                                         BEGIN
+                                           MovProv.RESET;
+                                           MovProv.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                           MovProv.SETRANGE("Document Type",LinDiaGen."Applies-to Doc. Type");
+                                           MovProv.SETRANGE("Document No.",LinDiaGen."Applies-to Doc. No.");
+                                           MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                           MovProv.FIND('-');
+                                           ActlzrImpoProv(MovProv,ImpoPendiente);
+                                         END;
+                                     END;
+                                     ImpoPendiente := ImpoPendiente - ImpoLinea;
+                                     BuscarUlt := TRUE;
+                                   END;
+                                 MetodoLiq::OneLinID:
+                                   BEGIN
+                                     CASE TipoContrapa OF
+                                       TipoContrapa::Cliente:
+                                         BEGIN
+                                           ActlzrImpoClien(MovClie,ImpoPendiente);
+                                           BuscarUlt := (MovClie.NEXT = 0) OR (ImpoPendiente <= 0);
+                                           IF BuscarUlt AND NOT BuscaNeg THEN BEGIN
+                                             MovClie.SETRANGE(Positive,FALSE);
+                                             BuscarUlt := NOT MovClie.FIND('-');
+                                             BuscaNeg := TRUE;
+                                           END;
+                                         END;
+                                       TipoContrapa::Proveedor:
+                                         BEGIN
+                                           ActlzrImpoProv(MovProv,ImpoPendiente);
+                                           BuscarUlt := (MovProv.NEXT = 0) OR (ImpoPendiente <= 0);
+                                           IF BuscarUlt AND NOT BuscaNeg THEN BEGIN
+                                             MovProv.SETRANGE(Positive,FALSE);
+                                             BuscarUlt := NOT MovProv.FIND('-');
+                                             BuscaNeg := TRUE;
+                                           END;
+                                         END;
+                                     END;
+                                     ImpoPendiente := ImpoPendiente - ImpoLinea;
+                                   END;
+                                 MetodoLiq::MuchasLinUnMov:
+                                   BEGIN
+                                     ImpoLinActual := LinDiaGen2.Amount;
+                                     IF LinDiaGen2."Applies-to ID" <> '' THEN
+                                       ERROR(
+                                         Text017 +
+                                         Text018 +
+                                         Text019);
+                                     LinDiaGen2.TESTFIELD("Check Printed",FALSE);
+                                     LinDiaGen2.TESTFIELD("Bank Payment Type",LinDiaGen2."Bank Payment Type"::Transferencia);
+
+                                     IF LinDiaGen2."Applies-to Doc. No." = '' THEN BEGIN
+                                       TipoDoc := Text016;
+                                       NoDoc := '';
+                                       ImpoLinea := ImpoLinActual;
+                                       DtoLinea := 0;
+                                     END ELSE BEGIN
+                                       CASE TipoContrapa OF
+                                         TipoContrapa::Cuenta:
+                                           BEGIN
+                                             TipoDoc := FORMAT(LinDiaGen2."Document Type");
+                                             NoDoc := LinDiaGen2."Document No.";
+                                             ImpoLinea := ImpoLinActual;
+                                             DtoLinea := 0;
+                                           END;
+                                         TipoContrapa::Cliente:
+                                           BEGIN
+                                             MovClie.RESET;
+                                             MovClie.SETCURRENTKEY("Document Type","Document No.","Customer No.");
+                                             MovClie.SETRANGE("Document Type",LinDiaGen2."Applies-to Doc. Type");
+                                             MovClie.SETRANGE("Document No.",LinDiaGen2."Applies-to Doc. No.");
+                                             MovClie.SETRANGE("Customer No.",NoContrapa);
+                                             MovClie.FIND('-');
+                                             ActlzrImpoClien(MovClie,ImpoLinActual);
+                                             ImpoLinea := ImpoLinActual;
+                                           END;
+                                         TipoContrapa::Proveedor:
+                                           BEGIN
+                                             MovProv.RESET;
+                                             MovProv.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                             MovProv.SETRANGE("Document Type",LinDiaGen2."Applies-to Doc. Type");
+                                             MovProv.SETRANGE("Document No.",LinDiaGen2."Applies-to Doc. No.");
+                                             MovProv.SETRANGE("Vendor No.",NoContrapa);
+                                             MovProv.FIND('-');
+                                             ActlzrImpoProv(MovProv,ImpoLinActual);
+                                             ImpoLinea := ImpoLinActual;
+                                           END;
+                                         TipoContrapa::Banco:
+                                           BEGIN
+                                             TipoDoc := FORMAT(LinDiaGen2."Document Type");
+                                             NoDoc := LinDiaGen2."Document No.";
+                                             ImpoLinea := ImpoLinActual;
+                                             DtoLinea := 0;
+                                           END;
+                                       END;
+                                     END;
+                                     BuscarUlt := LinDiaGen2.NEXT = 0;
+                                   END;
+                               END;
+                             END;
+
+                           //  TotImpoLinea := TotImpoLinea + ImpoLinea;
+                           //  TotDtoLinea := TotDtoLinea + DtoLinea;
+
+                           END ELSE BEGIN
+                             IF BuscarUlt THEN
+                               CurrReport.BREAK;
+                             BuscarUlt := TRUE;
+                             TipoDoc := Text020;
+                             NoDoc := Text010;
+                             ImpoLinea := 0;
+                             DtoLinea := 0;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=3;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        MaxIteration=1;
+        DataItemVarName=Impresion;
+        OnAfterGetRecord=BEGIN
+                           IF TipoContrapa = TipoContrapa::Proveedor THEN BEGIN
+                             rProv.GET(NoContrapa);
+                             rBanco.GET(CtaBanco2."No.");
+                             IF NOT rBancProv.GET(NoContrapa,rProv."Default Bank Acc. Code") THEN
+                               ERROR(Text021,NoContrapa);
+                             wTotalTrans := TotImpoLinea;
+                             wDivisa     := rBancProv."Currency Code";
+                             IF wDivisa = '' THEN BEGIN
+                               rConfCont.FIND('-');
+                               wDivisa := rConfCont."LCY Code";
+                             END;
+                           END
+                           ELSE BEGIN
+                             CLEAR(wDivisa);
+                             CLEAR(wTotalTrans);
+                             CLEAR(rProv);
+                             CLEAR(rBanco);
+                             CLEAR(rBancProv);
+                           END;
+                           RegMovCh; // Inserta el movimiento de cheque
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=3384;
+          }
+          CONTROLS
+          {
+            { 35  ;TextBox      ;0    ;2538 ;9240 ;423  ;FontSize=9;
+                                                         SourceExpr=DirEmpresa[2]+' '+DirEmpresa[3]+' '+DirEmpresa[4] }
+            { 36  ;PictureBox   ;0    ;0    ;8820 ;2538 ;SourceExpr=InfoEmpresa.Picture }
+            { 37  ;TextBox      ;10080;2538 ;2310 ;423  ;FontSize=9;
+                                                         CaptionML=[ENU=Phone No.;
+                                                                    ESP=N§ tel‚fono];
+                                                         SourceExpr=InfoEmpresa."Phone No." }
+            { 38  ;TextBox      ;13440;2538 ;2310 ;423  ;FontSize=9;
+                                                         CaptionML=[ENU=No. Fax;
+                                                                    ESP=N§ fax];
+                                                         SourceExpr=InfoEmpresa."Fax No." }
+            { 41  ;Label        ;12600;2538 ;840  ;423  ;ParentControl=38;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Fax.;
+                                                                    ESP=Fax.] }
+            { 42  ;Label        ;9450 ;2538 ;630  ;423  ;ParentControl=37;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Phon.;
+                                                                    ESP=Tel.] }
+            { 43  ;Shape        ;0    ;2961 ;18900;423  ;ShapeStyle=HorzLine }
+            { 31  ;TextBox      ;0    ;846  ;8820 ;423  ;FontSize=12;
+                                                         FontBold=Yes;
+                                                         SourceExpr=DirEmpresa[1] }
+            { 44  ;TextBox      ;15330;0    ;3570 ;423  ;HorzAlign=Right;
+                                                         FontSize=11;
+                                                         SourceExpr=wFechaRegistro }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=19881;
+          }
+          CONTROLS
+          {
+            { 1   ;TextBox      ;1950 ;0    ;10080;423  ;FontSize=11;
+                                                         SourceExpr=rBanco.Name }
+            { 2   ;Label        ;0    ;0    ;1800 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Mrs:;
+                                                                    ESP=Se¤ores:] }
+            { 3   ;TextBox      ;1950 ;846  ;5670 ;423  ;FontSize=11;
+                                                         SourceExpr=rBanco.Contact }
+            { 4   ;Label        ;0    ;846  ;1800 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=FAO. Mr.:;
+                                                                    ESP=Att. Sr.:] }
+            { 5   ;TextBox      ;13050;0    ;5460 ;423  ;HorzAlign=Right;
+                                                         FontSize=11;
+                                                         SourceExpr=rProv."No." }
+            { 6   ;TextBox      ;13020;846  ;5460 ;423  ;HorzAlign=Right;
+                                                         FontSize=11;
+                                                         SourceExpr=rProv.Name }
+            { 7   ;Label        ;0    ;1692 ;12180;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Please do the transfer with charge to our account No.;
+                                                                    ESP=Favor realizar una transferencia con cargo a nuestra cuenta No] }
+            { 8   ;Label        ;16170;1692 ;2100 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=in favor of;
+                                                                    ESP=a favor de:] }
+            { 9   ;TextBox      ;12600;1692 ;3150 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         SourceExpr=rBanco."CCC No." }
+            { 10  ;Label        ;0    ;2961 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Beneficiary:;
+                                                                    ESP=Beneficiario:] }
+            { 11  ;Label        ;0    ;3807 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Bank:;
+                                                                    ESP=Banco:] }
+            { 12  ;Label        ;0    ;4653 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Bank Address:;
+                                                                    ESP=Direcci¢n de Banco:] }
+            { 13  ;TextBox      ;4200 ;2961 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rProv."Name 2" }
+            { 14  ;TextBox      ;4200 ;3807 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rBancProv.Name }
+            { 15  ;TextBox      ;4200 ;4653 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rBancProv.Address }
+            { 16  ;TextBox      ;4200 ;6345 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rBancProv.City + ' ' +  rBancProv.County  + ' ' + rBancProv."Post Code" }
+            { 17  ;TextBox      ;4200 ;7191 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rBancProv."Country/Region Code" }
+            { 18  ;Label        ;0    ;8883 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Account:;
+                                                                    ESP=Cuenta:] }
+            { 19  ;Label        ;0    ;9729 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=SWIFT:;
+                                                                    ESP=SWIFT:] }
+            { 20  ;Label        ;0    ;10575;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=ABA:;
+                                                                    ESP=ABA:] }
+            { 21  ;Label        ;0    ;11421;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Amount to transfer;
+                                                                    ESP=Monto a transferir:] }
+            { 22  ;TextBox      ;4200 ;9729 ;5880 ;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         SourceExpr=rBancProv."SWIFT Code" }
+            { 23  ;TextBox      ;4200 ;10575;5880 ;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         SourceExpr=rBancProv.ABA }
+            { 24  ;TextBox      ;4200 ;8883 ;9870 ;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         SourceExpr=rBancProv."CCC No." }
+            { 25  ;TextBox      ;4200 ;11421;4050 ;423  ;FontSize=11;
+                                                         SourceExpr=wTotalTrans;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr=wDivisa }
+            { 26  ;TextBox      ;8400 ;11421;2100 ;423  ;FontSize=11;
+                                                         SourceExpr=wDivisa }
+            { 27  ;Label        ;3600 ;12267;10050;423  ;HorzAlign=Center;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=(Discount Expenses of the total amount);
+                                                                    ESP=(Descontar Gastos del monto total)] }
+            { 28  ;Shape        ;0    ;13113;18900;423  ;BorderWidth=3pt;
+                                                         ShapeStyle=HorzLine }
+            { 29  ;Label        ;0    ;14805;10050;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=For further information do not doubt to contact us;
+                                                                    ESP=Para cualquier aclaraci¢n no dude contactarnos.] }
+            { 30  ;Label        ;0    ;15651;10050;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Kind regards.;
+                                                                    ESP=Un cordial Saludo.] }
+            { 33  ;Label        ;0    ;18612;13020;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Please include in the transfer description the next code:;
+                                                                    ESP=Favor incluir en la descripci¢n de la tranferencia el siguiente codigo:] }
+            { 34  ;TextBox      ;13230;18612;2250 ;423  ;FontSize=11;
+                                                         SourceExpr=rProv."No." }
+            { 39  ;TextBox      ;0    ;17766;8820 ;423  ;HorzAlign=Center;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         SourceExpr=rBanco."Persona autorizada 1" }
+            { 40  ;TextBox      ;9870 ;17766;8820 ;423  ;HorzAlign=Center;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         SourceExpr=rBanco."Persona autorizada 2" }
+            { 32  ;TextBox      ;4200 ;5499 ;9900 ;423  ;FontSize=11;
+                                                         SourceExpr=rBancProv."Address 2" }
+            { 45  ;TextBox      ;2940 ;19458;12600;423  ;FontSize=11;
+                                                         SourceExpr=wConceptoImprimir }
+            { 46  ;Label        ;0    ;19458;2730 ;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=[ENU=Notes;
+                                                                    ESP=Anotaciones] }
+            { 1103355000;Label  ;0    ;8037 ;3990 ;423  ;FontSize=11;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=IBAN :;
+                                                                    ESP=IBAN :] }
+            { 1103355001;TextBox;4200 ;8037 ;9870 ;423  ;HorzAlign=Left;
+                                                         FontSize=11;
+                                                         SourceExpr=rBancProv.IBAN }
+            { 1103355002;TextBox;7770 ;846  ;5040 ;423  ;FontSize=11;
+                                                         SourceExpr=rBanco."Search Name" }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=16720;
+      Height=4510;
+      CaptionML=[ENU=Transfer GOC 2;
+                 ESP=Transferencia GOC 2];
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF CtaBanco2."No." <> '' THEN BEGIN
+                     IF CtaBanco2.GET(CtaBanco2."No.") THEN
+                       UtilNoCheque := CtaBanco2."Ultimo No. Transferencia"
+                     ELSE BEGIN
+                       CtaBanco2."No." := '';
+                       UtilNoCheque := '';
+                     END;
+                   END;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;2200 ;440  ;CaptionML=[ENU=Bank;
+                                                              ESP=Banco];
+                                                   SourceExpr=CtaBanco2."No.";
+                                                   TableRelation="Bank Account";
+                                                   OnValidate=BEGIN
+                                                                IF CtaBanco2."No." <> '' THEN BEGIN
+                                                                  CtaBanco2.GET(CtaBanco2."No.");
+                                                                  CtaBanco2.TESTFIELD("Ultimo No. Transferencia");
+                                                                  UtilNoCheque := CtaBanco2."Ultimo No. Transferencia";
+                                                                END;
+                                                              END;
+                                                               }
+      { 2   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 3   ;TextBox      ;3410 ;550  ;2200 ;440  ;CaptionML=[ENU=Last Transfer No.;
+                                                              ESP=Ult. n§ transferencia];
+                                                   SourceExpr=UtilNoCheque }
+      { 4   ;Label        ;0    ;550  ;3300 ;440  ;ParentControl=3 }
+      { 5   ;CheckBox     ;3410 ;3850 ;440  ;440  ;Visible=No;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Reprint transfer;
+                                                              ESP=Reimprimir transferencia];
+                                                   SourceExpr=ReimprimCheq }
+      { 6   ;Label        ;0    ;3850 ;3300 ;440  ;ParentControl=5 }
+      { 9   ;CheckBox     ;3410 ;2750 ;440  ;440  ;Visible=No;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Test Print;
+                                                              ESP=Test impresi¢n];
+                                                   SourceExpr=TestImpr }
+      { 10  ;Label        ;0    ;2750 ;3300 ;440  ;ParentControl=9 }
+      { 11  ;CheckBox     ;3410 ;1650 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=One transfer per supplier and document no.;
+                                                              ESP=Una transferencia por proveedor y n§ documento];
+                                                   SourceExpr=UnChequePorProv }
+      { 12  ;Label        ;0    ;1320 ;3300 ;770  ;ParentControl=11;
+                                                   VertAlign=Bottom;
+                                                   MultiLine=Yes }
+      { 13  ;CheckBox     ;3410 ;3300 ;440  ;440  ;Visible=No;
+                                                   ShowCaption=No;
+                                                   SourceExpr=SeriePreimpresa }
+      { 14  ;Label        ;0    ;3300 ;3300 ;440  ;ParentControl=13;
+                                                   CaptionML=[ENU=Preprinted Serial;
+                                                              ESP=Serie preimpresa] }
+      { 7   ;Label        ;0    ;2200 ;3300 ;440  ;ParentControl=8 }
+      { 8   ;TextBox      ;3410 ;2200 ;9130 ;440  ;CaptionML=[ENU=Notes;
+                                                              ESP=Anotaciones];
+                                                   SourceExpr=wConceptoImprimir }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355073 : TextConst 'ENU=Preview is not allowed.;ESP=No est  permitida la vista preliminar.';
+      Text001@1103355074 : TextConst 'ENU=Last Check No. must be filled in.;ESP=Debe rellenar el £lt. n§ cheque.';
+      Text002@1103355075 : TextConst 'ENU=Filters on %1 and %2 are not allowed.;ESP=No est n permitidos filtros en %1 y %2.';
+      Text003@1103355076 : TextConst 'ENU=XXXXXXXXXXXXXXXX;ESP=XXXXXXXXXXXXXXXX';
+      Text004@1103355077 : TextConst 'ENU=must be entered.;ESP=se debe introducir.';
+      Text005@1103355078 : TextConst 'ENU=The Bank Account and the General Journal Line must have the same currency.;ESP=El banco y la cuenta contable deben tener la misma divisa.';
+      Text006@1103355079 : TextConst 'ENU=Sales Representative;ESP=Representante';
+      Text007@1103355080 : TextConst 'ENU=Purchaser;ESP=Comprador';
+      Text008@1103355081 : TextConst 'ENU=Both Bank Accounts must have the same currency.;ESP=Ambos bancos deben tener la misma divisa.';
+      Text009@1103355082 : TextConst 'ENU=Our Contact;ESP=Ntro. contacto';
+      Text010@1103355083 : TextConst 'ENU=XXXXXXXXXX;ESP=XXXXXXXXXX';
+      Text011@1103355084 : TextConst 'ENU=XXXX;ESP=XXXX';
+      Text012@1103355085 : TextConst 'ENU=XX.XXXXXXXXXX.XXXX;ESP=XX.XXXXXXXXXX.XXXX';
+      Text013@1103355086 : TextConst 'ENU=%1 already exists.;ESP=Ya existe %1.';
+      Text014@1103355087 : TextConst 'ENU=TRF to #1################################################;ESP=TRF para #1################################################';
+      Text015@1103355088 : TextConst 'ENU=Transfer to %1 %2;ESP=Transferencia para %1 %2';
+      Text016@1103355089 : TextConst 'ENU=Payment;ESP=Pago';
+      Text017@1103355090 : TextConst 'ENU=In the Check report, One Check per Supplier and Document No.\;ESP=En informe de cheques, Un cheque por proveedor y n§ documento\';
+      Text018@1103355091 : TextConst 'ENU=It must not be actived when specifying ID by Sett.;ESP=no debe estar activado cuando se especificado Liq. por ID';
+      Text019@1103355092 : TextConst 'ENU=in the diary lines.;ESP=en las l¡neas del diario.';
+      Text020@1103355093 : TextConst 'ENU=XXX;ESP=XXX';
+      Text021@1103355094 : TextConst 'ENU=Fill the generical bank code in supplier %1;ESP=Rellene el codigo banco generico en proveedor %1';
+      Text022@1103355095 : TextConst 'ENU=%1 \  is a number too long.;ESP=%1 \ es un n£mero demasiado largo.';
+      Text023@1103355096 : TextConst 'ENU=" is already applied to %1 %2 for client %3.";ESP=" ya hay sido liquidado por %1 %2 para el cliente %3."';
+      Text024@1103355097 : TextConst 'ENU=Invoice;ESP=Factura';
+      Text025@1103355098 : TextConst 'ENU=" is already applied to %1 %2 for supplier %3.";ESP=" ya se ha liquidado a %1 %2 para el proveedor %3."';
+      InfoEmpresa@1103355000 : Record 79;
+      RepreVtasComp@1103355001 : Record 13;
+      LinDiaGen2@1103355002 : Record 81;
+      LinDiaGen3@1103355003 : Record 81;
+      Clie@1103355004 : Record 18;
+      MovClie@1103355005 : Record 21;
+      Prov@1103355006 : Record 23;
+      MovProv@1103355007 : Record 25;
+      CtaBanco@1103355008 : Record 270;
+      CtaBanco2@1103355009 : Record 270;
+      FormatDire@1103355010 : Codeunit 365;
+      cFunPagGO@1103355011 : Codeunit 7009910;
+      GestionCheque@1103355012 : Codeunit 367;
+      DirEmpresa@1103355013 : ARRAY [8] OF Text[50];
+      DirCheque@1103355014 : ARRAY [8] OF Text[50];
+      TipoContrapa@1103355015 : 'Cuenta,Cliente,Proveedor,Banco';
+      NoContrapa@1103355016 : Code[20];
+      TexContacto@1103355017 : Text[30];
+      TexNoCheque@1103355018 : Text[30];
+      TextFechaCheque@1103355019 : Text[30];
+      TexImporteCheque@1103355020 : Text[30];
+      DescriLinea@1103355021 : ARRAY [2] OF Text[75];
+      TipoDoc@1103355022 : Text[30];
+      NoDoc@1103355023 : Text[30];
+      TextAnul@1103355024 : Text[30];
+      wConceptoImprimir@1103355025 : Text[50];
+      ImpoLinea@1103355026 : Decimal;
+      DtoLinea@1103355027 : Decimal;
+      TotImpoLinea@1103355028 : Decimal;
+      TotImpoLinea2@1103355029 : Decimal;
+      TotImpoLinea3@1103355030 : Decimal;
+      TotDtoLinea@1103355031 : Decimal;
+      TotDtoLinea2@1103355032 : Decimal;
+      TotDtoLinea3@1103355033 : Decimal;
+      ImpoPendiente@1103355034 : Decimal;
+      ImpoPendiente2@1103355035 : Decimal;
+      ImpoLinActual@1103355036 : Decimal;
+      UtilNoCheque@1103355037 : Code[20];
+      BuscarUlt@1103355038 : Boolean;
+      ReimprimCheq@1103355039 : Boolean;
+      TestImpr@1103355040 : Boolean;
+      PrimerPag@1103355041 : Boolean;
+      UnChequePorProv@1103355042 : Boolean;
+      BuscaNeg@1103355043 : Boolean;
+      MetodoLiq@1103355044 : 'Pago,UnaLinUnMov,OneLinID,MuchasLinUnMov';
+      CheqsImpresos@1103355045 : Integer;
+      MayorNoL¡nea@1103355046 : Integer;
+      SeriePreimpresa@1103355047 : Boolean;
+      TotalTexto@1103355048 : Text[10];
+      FechaDoc@1103355049 : Date;
+      wFechaRegistro@1103355050 : Date;
+      i@1103355051 : Integer;
+      Recordar@1103355052 : Integer;
+      CentenaMillom@1103355053 : Integer;
+      DecenaMilon@1103355054 : Integer;
+      UdadMillon@1103355055 : Integer;
+      CentenaMiles@1103355056 : Integer;
+      DecenaMiles@1103355057 : Integer;
+      UdadsMiles@1103355058 : Integer;
+      Centenas@1103355059 : Integer;
+      Decenas@1103355060 : Integer;
+      Cantidades@1103355061 : Integer;
+      NroDecimales@1103355062 : Integer;
+      Concepto@1103355063 : Text[50];
+      FechaCheque@1103355064 : Date;
+      rProv@1103355067 : Record 23;
+      rBanco@1103355068 : Record 270;
+      rBancProv@1103355069 : Record 288;
+      rConfCont@1103355070 : Record 98;
+      wTotalTrans@1103355071 : Decimal;
+      wDivisa@1103355072 : Code[10];
+
+    LOCAL PROCEDURE AddToNoText@2(VAR NoText@1103355000 : ARRAY [2] OF Text[75];VAR NoTextInd@1103355001 : Integer;SumaTexto@1103355002 : Text[30]);
+    BEGIN
+      WHILE STRLEN(NoText[NoTextInd] + SumaTexto) > MAXSTRLEN(NoText[1]) DO BEGIN
+        NoTextInd := NoTextInd + 1;
+        IF NoTextInd > ARRAYLEN(NoText) THEN
+          ERROR(Text022,SumaTexto);
+      END;
+
+      NoText[NoTextInd] := DELCHR(NoText[NoTextInd] + SumaTexto,'<');
+    END;
+
+    LOCAL PROCEDURE ActlzrImpoClien@3(VAR MovCliente2@1103355000 : Record 21;ImportPndiente2@1103355001 : Decimal);
+    BEGIN
+      IF (MetodoLiq = MetodoLiq::UnaLinUnMov) OR
+         (MetodoLiq = MetodoLiq::MuchasLinUnMov)
+      THEN BEGIN
+        LinDiaGen3.RESET;
+        LinDiaGen3.SETCURRENTKEY(
+          "Account Type","Account No.","Applies-to Doc. Type","Applies-to Doc. No.");
+        LinDiaGen3.SETRANGE("Account Type",LinDiaGen3."Account Type"::Customer);
+        LinDiaGen3.SETRANGE("Account No.",MovCliente2."Customer No.");
+        LinDiaGen3.SETRANGE("Applies-to Doc. Type",MovCliente2."Document Type");
+        LinDiaGen3.SETRANGE("Applies-to Doc. No.",MovCliente2."Document No.");
+        IF MetodoLiq = MetodoLiq::UnaLinUnMov THEN
+          LinDiaGen3.SETFILTER("Line No.",'<>%1', LinDiaGen."Line No.")
+        ELSE
+          LinDiaGen3.SETFILTER("Line No.",'<>%1', LinDiaGen2."Line No.");
+        IF LinDiaGen3.FIND('-') THEN
+          LinDiaGen3.FIELDERROR(
+            "Applies-to Doc. No.",
+            STRSUBSTNO(
+              Text023,
+              MovCliente2."Document Type",MovCliente2."Document No.",
+              MovCliente2."Customer No."));
+      END;
+
+      TipoDoc := FORMAT(MovCliente2."Document Type");
+      NoDoc := MovCliente2."Document No.";
+      FechaDoc := MovCliente2."Posting Date";
+      //Concepto := MovCliente2.Descripci¢n;
+      Concepto := Text024+MovCliente2."External Document No.";
+      IF (MovCliente2."Document Type" = MovCliente2."Document Type"::Invoice) AND
+         (LinDiaGen."Posting Date" <= MovClie."Pmt. Discount Date") AND
+         (MovCliente2."Remaining Amount" - MovCliente2."Original Pmt. Disc. Possible" <= ImportPndiente2)
+      THEN BEGIN
+        ImpoLinea := MovCliente2."Remaining Amount" - MovCliente2."Original Pmt. Disc. Possible";
+        DtoLinea := MovCliente2."Original Pmt. Disc. Possible";
+      END ELSE BEGIN
+        IF MovCliente2."Remaining Amount" <= ImportPndiente2 THEN
+          ImpoLinea := MovCliente2."Remaining Amount"
+        ELSE
+          ImpoLinea := ImportPndiente2;
+        DtoLinea := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ActlzrImpoProv@4(VAR MovProveedor2@1103355000 : Record 25;ImportPndiente2@1103355001 : Decimal);
+    BEGIN
+      // ActlzrImpoProv
+
+      IF (MetodoLiq = MetodoLiq::UnaLinUnMov) OR
+         (MetodoLiq = MetodoLiq::MuchasLinUnMov)
+      THEN BEGIN
+        LinDiaGen3.RESET;
+        LinDiaGen3.SETCURRENTKEY(
+          "Account Type","Account No.","Applies-to Doc. Type","Applies-to Doc. No.");
+        LinDiaGen3.SETRANGE("Account Type",LinDiaGen3."Account Type"::Vendor);
+        LinDiaGen3.SETRANGE("Account No.",MovProveedor2."Vendor No.");
+        LinDiaGen3.SETRANGE("Applies-to Doc. Type",MovProveedor2."Document Type");
+        LinDiaGen3.SETRANGE("Applies-to Doc. No.",MovProveedor2."Document No.");
+        IF MetodoLiq = MetodoLiq::UnaLinUnMov THEN
+          LinDiaGen3.SETFILTER("Line No.",'<>%1',LinDiaGen."Line No.")
+        ELSE
+          LinDiaGen3.SETFILTER("Line No.",'<>%1',LinDiaGen2."Line No.");
+        IF LinDiaGen3.FIND('-') THEN
+          LinDiaGen3.FIELDERROR(
+            "Applies-to Doc. No.",
+            STRSUBSTNO(
+              Text025,
+              MovProveedor2."Document Type",MovProveedor2."Document No.",
+              MovProveedor2."Vendor No."));
+      END;
+
+      TipoDoc := FORMAT(MovProveedor2."Document Type");
+      NoDoc := MovProveedor2."External Document No.";
+      FechaDoc := MovProveedor2."Posting Date";
+      //Concepto := MovProveedor2.Descripci¢n;
+      Concepto := Text024+MovProveedor2."External Document No.";
+      IF (MovProveedor2."Document Type" = MovProveedor2."Document Type"::Invoice) AND
+         (LinDiaGen."Posting Date" <= MovProveedor2."Pmt. Discount Date") AND
+         (-(MovProveedor2."Remaining Amount" - MovProveedor2."Original Pmt. Disc. Possible") <= ImportPndiente2)
+      THEN BEGIN
+        ImpoLinea := -(MovProveedor2."Remaining Amount" - MovProveedor2."Original Pmt. Disc. Possible");
+        DtoLinea := -MovProveedor2."Original Pmt. Disc. Possible";
+      END ELSE BEGIN
+        IF -MovProveedor2."Remaining Amount" <= ImportPndiente2 THEN
+          ImpoLinea := -MovProveedor2."Remaining Amount"
+        ELSE
+          ImpoLinea := ImportPndiente2;
+        DtoLinea := 0;
+      END;
+    END;
+
+    PROCEDURE IniciarParametros@6(CtaBanco@1103355000 : Code[20];UltNoCheque@1103355001 : Code[20];UnChequePorProvNuevo@1103355002 : Boolean;ReImprChequeNuevo@1103355003 : Boolean;TestImprNuevo@1103355004 : Boolean;NoPreImprNueva@1103355005 : Boolean);
+    BEGIN
+      IF CtaBanco <> '' THEN
+        IF CtaBanco2.GET(CtaBanco) THEN BEGIN
+          UtilNoCheque := UltNoCheque;
+          UnChequePorProv := UnChequePorProvNuevo;
+          ReimprimCheq := ReImprChequeNuevo;
+          TestImpr := TestImprNuevo;
+          SeriePreimpresa := NoPreImprNueva;
+        END;
+    END;
+
+    PROCEDURE RegMovCh@1();
+    VAR
+      MovCheque@1103355000 : Record 272;
+    BEGIN
+      // RegMovCh
+      // Inserta el movimiento de cheque
+
+      MovCheque.INIT;
+      MovCheque."Bank Account No."            := rBanco."No.";
+      MovCheque."Posting Date"      := LinDiaGen."Posting Date";
+      MovCheque."Document Type"      := LinDiaGen."Document Type";
+      MovCheque."Document No."        := UtilNoCheque;
+      MovCheque.Description           := LinDiaGen.Description;
+      MovCheque."Bal. Account Type"  := TipoContrapa;
+      MovCheque."Bal. Account No."  := NoContrapa;
+      MovCheque."Bank Payment Type" := MovCheque."Bank Payment Type"::"Electronic Payment";
+      MovCheque."Entry Status"   := MovCheque."Entry Status"::Printed;
+      MovCheque.Amount               := wTotalTrans;
+      MovCheque."Check Date"        := LinDiaGen."Posting Date";
+      MovCheque."Check No."           := UtilNoCheque;
+      MovCheque."Original Entry Status" := MovCheque."Original Entry Status"::Printed;
+
+      GestionCheque.InsertCheck(MovCheque);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 12032014 Corrijo un error de sobrepasamiento en el nombre del proveedor
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

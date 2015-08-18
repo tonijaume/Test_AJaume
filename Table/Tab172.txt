@@ -1,0 +1,180 @@
+OBJECT Table 172 Standard Customer Sales Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Standard Customer Sales Code;
+               ESP=C¢digo ventas cliente est ndar];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Customer No.        ;Code20        ;TableRelation=Customer;
+                                                   CaptionML=[ENU=Customer No.;
+                                                              ESP=N§ cliente];
+                                                   NotBlank=Yes }
+    { 2   ;   ;Code                ;Code10        ;TableRelation="Standard Sales Code";
+                                                   OnValidate=VAR
+                                                                StdSalesCode@1000 : Record 170;
+                                                              BEGIN
+                                                                IF Code = '' THEN
+                                                                  EXIT;
+                                                                StdSalesCode.GET(Code);
+                                                                Description := StdSalesCode.Description;
+                                                              END;
+
+                                                   CaptionML=[ENU=Code;
+                                                              ESP=C¢digo];
+                                                   NotBlank=Yes }
+    { 3   ;   ;Description         ;Text50        ;CaptionML=[ENU=Description;
+                                                              ESP=Descripci¢n] }
+  }
+  KEYS
+  {
+    {    ;Customer No.,Code                       ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    PROCEDURE InsertSalesLines@1(SalesHeader@1000 : Record 36);
+    VAR
+      Currency@1008 : Record 4;
+      SalesLine@1002 : Record 37;
+      StdCustSalesCode@1001 : Record 172;
+      StdSalesLine@1003 : Record 171;
+      StdSalesCode@1006 : Record 170;
+      DimDoc@1009 : Record 357;
+      Factor@1007 : Integer;
+    BEGIN
+      SalesHeader.TESTFIELD("No.");
+      SalesHeader.TESTFIELD("Sell-to Customer No.");
+      IF SalesHeader."Currency Code" = '' THEN
+        Currency.InitRoundingPrecision
+      ELSE
+        Currency.GET(SalesHeader."Currency Code");
+
+      StdCustSalesCode.FILTERGROUP := 2;
+      StdCustSalesCode.SETRANGE("Customer No.",SalesHeader."Sell-to Customer No.");
+      StdCustSalesCode.FILTERGROUP := 0;
+      IF FORM.RUNMODAL(FORM::"Standard Customer Sales Codes",StdCustSalesCode) = ACTION::LookupOK THEN BEGIN
+        StdCustSalesCode.TESTFIELD(Code);
+        StdCustSalesCode.TESTFIELD("Customer No.",SalesHeader."Sell-to Customer No.");
+        StdSalesCode.GET(StdCustSalesCode.Code);
+        StdSalesCode.TESTFIELD("Currency Code",SalesHeader."Currency Code");
+        StdSalesLine.SETRANGE("Standard Sales Code",StdCustSalesCode.Code);
+        SalesLine."Document Type" := SalesHeader."Document Type";
+        SalesLine."Document No." := SalesHeader."No.";
+        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        IF SalesHeader."Prices Including VAT" THEN
+          Factor := 1
+        ELSE
+          Factor := 0;
+        DimDoc.LOCKTABLE;
+        SalesLine.LOCKTABLE;
+        StdSalesLine.LOCKTABLE;
+        IF StdSalesLine.FIND('-') THEN
+          REPEAT
+            SalesLine.INIT;
+            SalesLine."Line No." := 0;
+            SalesLine.VALIDATE(Type,StdSalesLine.Type);
+            IF StdSalesLine.Type = StdSalesLine.Type::" " THEN BEGIN
+              SalesLine.VALIDATE("No.",StdSalesLine."No.");
+              SalesLine.Description := StdSalesLine.Description
+            END ELSE BEGIN
+              IF NOT StdSalesLine.EmptyLine THEN BEGIN
+                StdSalesLine.TESTFIELD("No.");
+                SalesLine.VALIDATE("No.",StdSalesLine."No.");
+                IF StdSalesLine."Variant Code" <> '' THEN
+                  SalesLine.VALIDATE("Variant Code",StdSalesLine."Variant Code");
+                SalesLine.VALIDATE(Quantity,StdSalesLine.Quantity);
+                IF StdSalesLine."Unit of Measure Code" <> '' THEN
+                  SalesLine.VALIDATE("Unit of Measure Code",StdSalesLine."Unit of Measure Code");
+                SalesLine.Description := StdSalesLine.Description;
+                IF (StdSalesLine.Type = StdSalesLine.Type::"G/L Account") OR
+                   (StdSalesLine.Type = StdSalesLine.Type::"Charge (Item)")
+                THEN
+                  SalesLine.VALIDATE(
+                    "Unit Price",
+                     ROUND(StdSalesLine."Amount Excl. VAT" *
+                     (SalesLine."VAT %" / 100 * Factor + 1),Currency."Unit-Amount Rounding Precision"));
+              END;
+            END;
+            IF StdSalesLine.InsertLine THEN BEGIN
+              SalesLine."Line No." := GetNextLineNo(SalesLine);
+              SalesLine.INSERT(TRUE);
+              UpDateDim(SalesLine,StdSalesLine);
+              InsertExtendedText(SalesLine);
+            END;
+          UNTIL StdSalesLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpDateDim@2(SalesLine@1000 : Record 37;StdSalesLine@1001 : Record 171);
+    VAR
+      DimDoc@1002 : Record 357;
+      DimDoc2@1003 : Record 357;
+    BEGIN
+      DimDoc."Table ID" := DATABASE::"Sales Line";
+      DimDoc."Document Type" := SalesLine."Document Type";
+      DimDoc."Document No." := SalesLine."Document No.";
+      DimDoc."Line No." := SalesLine."Line No.";
+      DimDoc2."Table ID" := DATABASE::"Standard Sales Line";
+      DimDoc2."Document Type" := DimDoc2."Document Type"::" ";
+      DimDoc2."Document No." := StdSalesLine."Standard Sales Code";
+      DimDoc2."Line No." := StdSalesLine."Line No.";
+
+      DimDoc.SETRANGE("Table ID",DATABASE::"Sales Line");
+      DimDoc.SETRANGE("Document Type",SalesLine."Document Type");
+      DimDoc.SETRANGE("Document No.",SalesLine."Document No.");
+      DimDoc.SETRANGE("Line No.",SalesLine."Line No.");
+      DimDoc2.SETRANGE("Table ID",DATABASE::"Standard Sales Line");
+      DimDoc2.SETRANGE("Document Type",DimDoc2."Document Type"::" ");
+      DimDoc2.SETRANGE("Document No.",StdSalesLine."Standard Sales Code");
+      DimDoc2.SETRANGE("Line No.",StdSalesLine."Line No.");
+
+      IF DimDoc2.FIND('-') THEN
+        REPEAT
+          DimDoc."Dimension Code" := DimDoc2."Dimension Code";
+          DimDoc."Dimension Value Code" := '';
+          IF DimDoc.FIND THEN BEGIN
+            IF DimDoc."Dimension Value Code" <> DimDoc2."Dimension Value Code" THEN BEGIN
+              DimDoc."Dimension Value Code" := DimDoc2."Dimension Value Code";
+              DimDoc.MODIFY(TRUE);
+            END;
+          END ELSE BEGIN
+            DimDoc."Dimension Value Code" := DimDoc2."Dimension Value Code";
+            DimDoc.INSERT(TRUE);
+          END;
+        UNTIL DimDoc2.NEXT = 0;
+    END;
+
+    PROCEDURE InsertExtendedText@3(SalesLine@1000 : Record 37);
+    VAR
+      TransferExtendedText@1001 : Codeunit 378;
+    BEGIN
+      IF TransferExtendedText.SalesCheckIfAnyExtText(SalesLine,FALSE) THEN
+        TransferExtendedText.InsertSalesExtText(SalesLine);
+    END;
+
+    PROCEDURE GetNextLineNo@4(SalesLine@1001 : Record 37) : Integer;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesLine."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesLine."Document No.");
+      IF SalesLine.FIND('+') THEN
+        EXIT(SalesLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,370 @@
+OBJECT Codeunit 7010148 Margenes dia excursion
+{
+  OBJECT-PROPERTIES
+  {
+    Date=18/04/15;
+    Time=[ 9:27:42];
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355011 : TextConst 'ENU=EXCI;ESP=EXCI';
+      Text001@1103355012 : TextConst 'ENU=EXAC;ESP=EXAC';
+      Text004@1103355015 : TextConst 'ENU=EXCC;ESP=EXCC';
+      Text005@1103355016 : TextConst 'ENU=EXGO;ESP=EXGO';
+      rPar@1100253003 : Record 7009700;
+      rVerMargen@1103355000 : Record 7010176;
+      rTipoCambio@1100253000 : Record 330;
+      rRsv@1100253004 : Record 7010162;
+      codVAL@1103355003 : Codeunit 7010143;
+      cFunExc@1100217000 : Codeunit 7010141;
+      TantoxCiento@1100253005 : Decimal;
+
+    PROCEDURE MargenesDiaExcursion@1(rSer@1103355000 : Record 7010163);
+    VAR
+      rServicio@1100253007 : Record 7010163;
+      rMargenes@1100253008 : Record 7010174;
+      IngresoServicio@1100253006 : Decimal;
+      CosteServicio@1100253005 : Decimal;
+      CosteAutocar@1100253004 : Decimal;
+      CosteGV@1100253003 : Decimal;
+      CosteTO@1100253002 : Decimal;
+      CosteGO@1100253001 : Decimal;
+      CosteProvExc@1100253000 : Decimal;
+    BEGIN
+      rVerMargen.RESET;
+      rVerMargen.SETRANGE(Delegacion,rSer.Delegacion);
+      rVerMargen.SETRANGE(Usuario, USERID);
+      IF rVerMargen.FIND('-') THEN
+        rVerMargen.DELETEALL;
+
+      rVerMargen.SETRANGE(Delegacion);
+      rVerMargen.SETRANGE(Usuario);
+
+      rServicio.SETCURRENTKEY(Estado,
+                              Fecha,
+                              "Zona Excursion",
+                              Excursion);
+
+      rServicio.SETFILTER(Estado, '%1|%2', rServicio.Estado::Pendiente, rServicio.Estado::Generada);
+      rServicio.SETRANGE (Fecha , rSer.Fecha);
+      IF rServicio.FINDSET THEN BEGIN
+        REPEAT
+          rMargenes.RESET;
+          rMargenes.SETRANGE(Delegacion,rServicio.Delegacion);
+          rMargenes.SETRANGE("N§ Servicio", rServicio."N§ Servicio");
+          rMargenes.DELETEALL;
+
+          IngresoServicio := 0;
+          CosteServicio := 0;
+          CosteAutocar := 0;
+          CosteGV := 0;
+          CosteTO := 0;
+          CosteProvExc := 0;
+          CosteGO := 0;
+
+          rServicio."Tipo Calculo" := rServicio."Tipo Calculo"::Margenes;
+          rServicio.MODIFY;
+          COMMIT;
+
+          codVAL.CostesIngresosExcursion(rServicio, TRUE); //+$002
+
+          TotalesPorServicio(rServicio, IngresoServicio, CosteServicio, CosteAutocar, CosteProvExc, CosteGO, CosteTO, CosteGV);
+
+          rServicio.GET(rServicio.Delegacion, rServicio."N§ Servicio");
+          rServicio."Tipo Calculo" := rServicio."Tipo Calculo"::"C/I";
+          rServicio.MODIFY;
+
+          IF (IngresoServicio <> 0) THEN
+            TantoxCiento := ((IngresoServicio - CosteServicio) / IngresoServicio) * 100
+          ELSE
+            TantoxCiento := 0;
+
+          rRsv.RESET;
+          rRsv.SETCURRENTKEY("N§ Servicio");
+          rRsv.SETRANGE("N§ Servicio", rServicio."N§ Servicio");
+
+          CLEAR(rVerMargen);
+          rVerMargen.Delegacion               := rSer.Delegacion;
+          rVerMargen.Usuario                  := USERID;
+          rVerMargen."N§ Servicio"            := rServicio."N§ Servicio";
+          rVerMargen.Fecha                    := rServicio.Fecha;
+          rVerMargen.Excursion                := rServicio.Excursion;
+          rVerMargen.Reservas                 := rRsv.COUNT;
+          rVerMargen.Anuladas                 := rServicio."Reservas Anuladas";
+
+          rVerMargen.Coste                    := CosteServicio;
+          rVerMargen.Ingreso                  := IngresoServicio;
+          rVerMargen."Coste Autocar"          := CosteAutocar;
+          rVerMargen."Coste Guia Venta"       := CosteGV;
+          rVerMargen."Descuento TourOperador" := CosteTO;
+          rVerMargen."Coste Guia Oficial"     := CosteGO;
+          rVerMargen."Coste Excursion"        := CosteProvExc;
+
+          rVerMargen.Margen                   := IngresoServicio - CosteServicio;
+          rVerMargen."Porcentaje Beneficio"   := TantoxCiento;
+          rVerMargen.INSERT;
+        UNTIL rServicio.NEXT = 0;
+      END;
+
+      rServicio.RESET;
+      COMMIT;
+
+      rVerMargen.RESET;
+      rVerMargen.FILTERGROUP(2);
+      rVerMargen.SETRANGE(Delegacion, rSer.Delegacion);
+      rVerMargen.SETRANGE(Usuario   , USERID);
+      rVerMargen.FILTERGROUP(0);
+      FORM.RUN(7010221, rVerMargen);
+    END;
+
+    PROCEDURE TotalesPorServicio@1100253000(prServicio@1100253010 : Record 7010163;VAR pwIngresoServicio@1100253003 : Decimal;VAR pwCosteServicio@1100253004 : Decimal;VAR pwCosteAutocar@1100253005 : Decimal;VAR pwCosteProveedor@1100253006 : Decimal;VAR pwCosteGuiaOficial@1100253007 : Decimal;VAR pwCosteTouroperador@1100253008 : Decimal;VAR pwCosteGuiaVenta@1100253009 : Decimal);
+    VAR
+      lrCont@1100217000 : Record 7010142;
+      rMargenes@1100253011 : Record 7010174;
+      CosteTOReserva@1100253000 : Decimal;
+      CosteGVReserva@1100253001 : Decimal;
+      IngresoReserva@1100253012 : Decimal;
+    BEGIN
+      // TotalesPorServicio
+
+      IniciaVariables(pwIngresoServicio, pwCosteServicio, pwCosteAutocar, pwCosteProveedor, pwCosteGuiaOficial,
+                      pwCosteTouroperador, pwCosteGuiaVenta);
+
+      //. El calculo de ingresos y comisiones se hace directamente sobre las reservas
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY("N§ Servicio");
+      rRsv.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF rRsv.FINDSET THEN BEGIN
+        REPEAT
+          //. Ingresos
+          IngresoReserva := rRsv."Ingreso reserva neto";
+          IF rRsv.Divisa <> '' THEN
+            IngresoReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              IngresoReserva);
+          pwIngresoServicio += IngresoReserva;
+
+          //. Comisiones
+          CosteTOReserva := -rRsv."Comision Touroperador";
+          CosteGVReserva := rRsv."Comision Guia Venta";
+
+          IF rRsv.Divisa <> '' THEN
+          BEGIN
+            CosteTOReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              CosteTOReserva);
+
+            CosteGVReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              CosteGVReserva);
+          END;
+
+          pwCosteGuiaVenta    += CosteGVReserva;
+
+          //. En funcion del contrato del touroperador se decide si es un m s coste o un menos ingreso de la excursion
+          cFunExc.GetContratoTouroperador(rRsv, lrCont);
+
+          IF NOT lrCont."Aplica comision en factura" THEN
+          BEGIN
+            pwCosteTouroperador += CosteTOReserva;
+            pwCosteServicio     += CosteTOReserva
+          END
+          ELSE
+            pwIngresoServicio -= CosteTOReserva;
+
+          pwCosteServicio += CosteGVReserva;
+        UNTIL rRsv.NEXT = 0;
+      END;
+
+      rMargenes.RESET;
+      rMargenes.SETCURRENTKEY(Delegacion,
+                              "N§ Servicio",
+                              Concepto);
+      rMargenes.SETRANGE(Delegacion   , prServicio.Delegacion);
+      rMargenes.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      rMargenes.SETRANGE(Concepto     , Text001); {coste autocar}
+      IF rMargenes.FINDFIRST THEN BEGIN
+        rMargenes.CALCSUMS("Importe sin impuestos");
+        pwCosteAutocar  := -(rMargenes."Importe sin impuestos");
+        pwCosteServicio := pwCosteServicio + pwCosteAutocar;
+      END;
+
+      rMargenes.SETRANGE(Concepto, Text004);  {coste proveedor de servicios}
+      IF rMargenes.FINDFIRST THEN BEGIN
+        rMargenes.CALCSUMS("Importe sin impuestos");
+        pwCosteProveedor := -(rMargenes."Importe sin impuestos");
+        pwCosteServicio  := pwCosteServicio + pwCosteProveedor;
+      END;
+
+      rMargenes.SETRANGE(Concepto, Text005);  {coste Guia Oficial}
+      IF rMargenes.FINDFIRST THEN BEGIN
+        rMargenes.CALCSUMS("Importe sin impuestos");
+        pwCosteGuiaOficial := -(rMargenes."Importe sin impuestos");
+        pwCosteServicio    := pwCosteServicio + pwCosteGuiaOficial;
+      END;
+    END;
+
+    PROCEDURE TotalesPorServicioConf@1100253002(prServicio@1100253007 : Record 7010163;VAR pwIngresoServicio@1100253006 : Decimal;VAR pwCosteServicio@1100253005 : Decimal;VAR pwCosteAutocar@1100253004 : Decimal;VAR pwCosteProveedor@1100253003 : Decimal;VAR pwCosteGuiaOficial@1100253002 : Decimal;VAR pwCosteTouroperador@1100253000 : Decimal;VAR pwCosteGuiaVenta@1100253001 : Decimal;pwConImpuestos@1100217001 : Boolean;pwTouroperador@1100217002 : Code[10]);
+    VAR
+      rCI@1100253011 : Record 7010166;
+      lrCont@1100217000 : Record 7010142;
+      CosteTOReserva@1100253009 : Decimal;
+      CosteGVReserva@1100253008 : Decimal;
+      IngresoReserva@1100253012 : Decimal;
+    BEGIN
+      // TotalesPorServicioConf
+
+      IniciaVariables(pwIngresoServicio, pwCosteServicio, pwCosteAutocar, pwCosteProveedor, pwCosteGuiaOficial,
+                      pwCosteTouroperador, pwCosteGuiaVenta);
+
+      //. El calculo de ingresos y comisiones se hace directamente sobre las reservas
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY("N§ Servicio");
+      rRsv.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF pwTouroperador <> '' THEN
+        rRsv.SETRANGE(TourOperador, pwTouroperador);
+      IF rRsv.FINDSET THEN BEGIN
+        REPEAT
+          //. Ingresos
+          IF pwConImpuestos THEN
+            IngresoReserva := rRsv."Ingreso reserva"
+          ELSE
+            IngresoReserva := rRsv."Ingreso reserva neto";
+
+          IF rRsv.Divisa <> '' THEN
+            IngresoReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              IngresoReserva);
+          pwIngresoServicio += IngresoReserva;
+
+          //. Comisiones, no se ven afectadas por impuestos de momento
+          CosteTOReserva := -rRsv."Comision Touroperador";
+          CosteGVReserva := rRsv."Comision Guia Venta";
+
+          IF rRsv.Divisa <> '' THEN
+          BEGIN
+            CosteTOReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              CosteTOReserva);
+
+            CosteGVReserva := rTipoCambio.ExchangeAmtFCYToFCY(rRsv."Fecha cambio",
+                                                              rRsv.Divisa,
+                                                              '',
+                                                              CosteGVReserva);
+          END;
+
+          pwCosteGuiaVenta    += CosteGVReserva;
+
+          //. En funcion del contrato del touroperador se decide si es un m s coste o un menos ingreso de la excursion
+          cFunExc.GetContratoTouroperador(rRsv, lrCont);
+
+          IF NOT lrCont."Aplica comision en factura" THEN
+          BEGIN
+            pwCosteTouroperador += CosteTOReserva;
+            pwCosteServicio     += CosteTOReserva
+          END
+          ELSE
+            pwIngresoServicio -= CosteTOReserva;
+
+          pwCosteServicio += CosteGVReserva;
+        UNTIL rRsv.NEXT = 0;
+      END;
+
+
+      rCI.RESET;
+      rCI.SETCURRENTKEY(Delegacion,
+                        "N§ Servicio",
+                        TourOperador,
+                        Zona,
+                        Concepto);
+      rCI.SETRANGE(Delegacion   , prServicio.Delegacion);
+      rCI.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF pwTouroperador <> '' THEN
+        rCI.SETRANGE(TourOperador, pwTouroperador);
+      rCI.SETRANGE(Concepto     , Text001); {coste autocar}
+      IF rCI.FINDFIRST THEN BEGIN
+        IF pwConImpuestos THEN
+        BEGIN
+          rCI.CALCSUMS("Importe con impuestos (DL)");
+          pwCosteAutocar  := -(rCI."Importe con impuestos (DL)");
+        END
+        ELSE
+        BEGIN
+          rCI.CALCSUMS("Importe sin impuestos (DL)");
+          pwCosteAutocar  := -(rCI."Importe sin impuestos (DL)");
+        END;
+        pwCosteServicio := pwCosteServicio + pwCosteAutocar;
+      END;
+
+      rCI.SETRANGE(Concepto, Text004);  {coste proveedor de servicios}
+      IF rCI.FINDFIRST THEN BEGIN
+        IF pwConImpuestos THEN
+        BEGIN
+          rCI.CALCSUMS("Importe con impuestos (DL)");
+          pwCosteProveedor := -(rCI."Importe con impuestos (DL)");
+        END
+        ELSE
+        BEGIN
+          rCI.CALCSUMS("Importe sin impuestos (DL)");
+          pwCosteProveedor := -(rCI."Importe sin impuestos (DL)");
+        END;
+        pwCosteServicio  := pwCosteServicio + pwCosteProveedor;
+      END;
+
+      rCI.SETRANGE(Concepto, Text005);  {coste Guia Oficial}
+      IF rCI.FINDFIRST THEN BEGIN
+        IF pwConImpuestos THEN
+        BEGIN
+          rCI.CALCSUMS("Importe con impuestos (DL)");
+          pwCosteGuiaOficial := -(rCI."Importe con impuestos (DL)");
+        END
+        ELSE
+        BEGIN
+          rCI.CALCSUMS("Importe sin impuestos (DL)");
+          pwCosteGuiaOficial := -(rCI."Importe sin impuestos (DL)");
+        END;
+        pwCosteServicio    := pwCosteServicio + pwCosteGuiaOficial;
+      END;
+    END;
+
+    PROCEDURE IniciaVariables@1100253001(VAR pwIngresoServicio@1100253006 : Decimal;VAR pwCosteServicio@1100253005 : Decimal;VAR pwCosteAutocar@1100253004 : Decimal;VAR pwCosteProveedor@1100253003 : Decimal;VAR pwCosteGuiaOficial@1100253002 : Decimal;VAR pwCosteTouroperador@1100253001 : Decimal;VAR pwCosteGuiaVenta@1100253000 : Decimal);
+    BEGIN
+      // IniciaVariables
+
+      pwIngresoServicio   := 0;
+      pwCosteServicio     := 0;
+      pwCosteAutocar      := 0;
+      pwCosteProveedor    := 0;
+      pwCosteGuiaOficial  := 0;
+      pwCosteTouroperador := 0;
+      pwCosteGuiaVenta    := 0;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 12112012 Elimino el uso de los campos "Reservas Manuales" y "Reservas automaticas" de la tabla
+                        "Reserva excursiones"
+
+      $002 AJS 13052014 Nuevo parametro en funcion de calcular servicios
+
+      $003 AJS 18042015 Cambio en el sentido del campo Aplicar comision touroperador
+    }
+    END.
+  }
+}

@@ -1,0 +1,847 @@
+OBJECT Codeunit 7009764 Interface WS Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/06/15;
+    Time=16:11:40;
+    Modified=Yes;
+    Version List=AIC2009,CNT;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            LrWSReservation@1100253000 : Record 7009893;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cFunImp@1100253000 : Codeunit 7009909;
+      Text001@1100253001 : TextConst 'ENU=Destination %1 is set to import %2;ESP=La delegaci¢n %1 no est  configurada en la importaci¢n %2';
+      rParAg@1100253002 : Record 7009700;
+      Text002@1100253003 : TextConst 'ENU=Import Control;ESP=Control Importaci¢n';
+      Text003@1100253004 : TextConst 'ESP=AtenneaIncoming@SistemasdeGestion.com';
+      rwsResv@1100253008 : TEMPORARY Record 7009893;
+      rwsProd@1100253007 : TEMPORARY Record 7009894;
+      rwsPers@1100253006 : TEMPORARY Record 7009895;
+      rwsComm@1100253005 : TEMPORARY Record 7009896;
+      Text004@1100253009 : TextConst 'ESP=Procesando';
+      rParInt@1100217000 : Record 7010081;
+
+    PROCEDURE MaintainReservation@1100253000(VAR xmlReservation@1100253000 : XMLport 7009700;VAR xmlReply@1100217002 : XMLport 7009701) status : Boolean;
+    VAR
+      lwDestination@1100253001 : Code[10];
+      lrEmpImp@1100253002 : Record 7009859;
+      lcControlError@1100217000 : Codeunit 7009777;
+      lrCabIFS@1100217001 : Record 7010076;
+      lwRecordId@1100253004 : Integer;
+      lwFile@1100253006 : File;
+      lwOutStrm@1100253005 : OutStream;
+      lwPte@1100253007 : Boolean;
+      lwDestinations@1100253003 : Text[50];
+    BEGIN
+
+      // status := xmlReservation.IMPORT;  // NO HACER NUNCA ASI. No se devuelven los errores
+      xmlReservation.IMPORT;
+
+      rParInt.FINDFIRST;
+
+      xmlReservation.GetTables(rwsResv,rwsProd,rwsPers,rwsComm);
+
+      // Guardamos el archivo
+      CLEAR(lwOutStrm);
+      lwFile.CREATE(GetTmpFilename);
+      lwFile.CREATEOUTSTREAM(lwOutStrm);
+      xmlReservation.SETDESTINATION(lwOutStrm);
+      xmlReservation.EXPORT;
+      lwFile.CLOSE;
+
+      CLEAR(lwDestinations);
+      CLEAR(status);
+      CLEAR(lwPte);
+      // Comprobamos que todos los destinos est‚n configurados
+      IF rwsResv.FINDSET THEN
+      BEGIN
+        status := TRUE;
+        REPEAT
+          lwDestination := rwsResv.Destination;
+          CLEAR(lrEmpImp);
+          lrEmpImp.SETRANGE(Tipo   , lrEmpImp.Tipo::"Reserva WS");
+          lrEmpImp.SETRANGE(Destino, lwDestination);
+          IF lrEmpImp.FINDFIRST THEN BEGIN
+            rwsResv.Company := lrEmpImp.Empresa;
+            rwsResv.MODIFY;
+          END;
+
+          lwPte := lwPte OR (rwsResv.Company = '');
+          IF rwsResv.Company='' THEN
+          BEGIN
+            IF STRPOS(lwDestinations, lwDestination) = 0 THEN
+            BEGIN
+              IF lwDestinations <> '' THEN
+                lwDestinations += ', ';
+              lwDestinations += lwDestination;
+            END;
+          END;
+        UNTIL rwsResv.NEXT = 0;
+
+        _CreateInterfaceFile(lwRecordId, lwPte);
+        CreateInterfaceData(lwRecordId, TRUE);
+
+        //+$004 <
+        IF rParInt."Enviar respuesta XML" THEN
+        BEGIN
+          lrCabIFS.RESET;
+          lrCabIFS.SETRANGE(Fichero, lwRecordId);
+          IF lrCabIFS.FINDSET THEN
+          BEGIN
+            lcControlError.comprobar_errores(lrCabIFS);
+            REPEAT
+              lrCabIFS.CALCFIELDS(Errores);
+              IF lrCabIFS.Errores <> 0 THEN
+              BEGIN
+                CLEAR(xmlReply);
+                xmlReply.PassParameters(lrCabIFS.Fichero, lrCabIFS."ID Cabecera");
+                xmlReply.EXPORT;
+              END;
+            UNTIL lrCabIFS.NEXT = 0;
+          END;
+        END;
+        //+$004 >
+      END;
+
+      IF lwPte AND rParInt."Send Mail Error Delegation" THEN
+        _SendErrorMail(lwDestinations, lwRecordId);
+    END;
+
+    LOCAL PROCEDURE _CreateInterfaceFile@1100253001(VAR pwRecordId@1100253001 : Integer;pwPteDest@1100253000 : Boolean) : Boolean;
+    VAR
+      lrResImp@1100253003 : Record 7009899;
+      lwRecordId@1100253002 : Integer;
+    BEGIN
+      // _CreateInterfaceFile
+
+      CLEAR(lrResImp);
+      lrResImp."Fecha importacion" := TODAY;
+      lrResImp."Hora importacion"  := TIME;
+      lrResImp."Pendiente Destino" := pwPteDest;
+      lrResImp.Fichero.IMPORT(GetTmpFilename);
+      lrResImp.INSERT;
+
+      pwRecordId := lrResImp."N§ Fichero";
+    END;
+
+    PROCEDURE CreateInterfaceData@1100253005(pwRecordID@1100253001 : Integer;pwImportacionWS@1100217001 : Boolean) : Boolean;
+    VAR
+      lrCabI@1100253003 : Record 7010076;
+      lrVuelosI@1100253004 : Record 7010077;
+      lrHotelI@1100253005 : Record 7010078;
+      lrPaxI@1100253006 : Record 7010079;
+      lrPaxI2@1100217000 : Record 7010079;
+      lrServI@1100253007 : Record 7010080;
+      lrComI@1100253008 : Record 7009858;
+      lrTmpVue@1100253018 : TEMPORARY Record 7010077;
+      lwIdCab@1100253012 : Integer;
+      lwIdHotel@1100253013 : Integer;
+      lwIdPax@1100253014 : Integer;
+      lwCntPax@1100253015 : Integer;
+      lwIdVuelo@1100253019 : Integer;
+      lwCntVuelo@1100253020 : Integer;
+      lwIdServ@1100253021 : Integer;
+      lwIdPaxResp@1100253022 : Integer;
+      lwEnc@1100253017 : Boolean;
+      lwTipPer@1100253016 : ',Adulto,Ni¤o,Infant';
+      lwCompany@1100253000 : Text[30];
+      lwVent@1100253002 : Dialog;
+      lwTotal@1100253009 : Integer;
+      lwCont@1100253010 : Integer;
+      lrConvTO@1000000000 : Record 7010161;
+    BEGIN
+      // CreateInterfaceData
+      // Crea los registros de la tabla interfase
+
+      CLEAR(lwIdPax);
+      CLEAR(lwIdVuelo);
+      CLEAR(lwIdServ);
+      CLEAR(lwIdHotel);
+
+      _RepasaVuelos;
+      CLEAR(lwIdCab);
+      IF rwsResv.FINDSET THEN BEGIN
+        IF GUIALLOWED THEN BEGIN
+          lwVent.OPEN(Text004 + ' @1@@@@@@@@@');
+          lwTotal := rwsResv.COUNT;
+          CLEAR(lwCont);
+        END;
+        REPEAT
+          CLEAR(lrCabI);
+          CLEAR(lrVuelosI);
+          CLEAR(lrHotelI);
+          CLEAR(lrPaxI);
+          CLEAR(lrServI);
+          CLEAR(lrComI);
+          lwCompany := rwsResv.Company;
+          IF lwCompany <> '' THEN BEGIN
+            lrCabI.CHANGECOMPANY(lwCompany);
+            lrVuelosI.CHANGECOMPANY(lwCompany);
+            lrHotelI.CHANGECOMPANY(lwCompany);
+            lrPaxI.CHANGECOMPANY(lwCompany);
+            lrServI.CHANGECOMPANY(lwCompany);
+            lrComI.CHANGECOMPANY(lwCompany);
+          END;
+
+          CLEAR(lwCntPax);
+          CLEAR(lwCntVuelo);
+          CLEAR(lwIdPaxResp);
+
+          // LLenamos un temporal de vuelos
+          CLEAR(lrTmpVue);
+          lrTmpVue.DELETEALL;
+
+          lrCabI.INIT;
+          lrCabI.Fichero               := pwRecordID;
+          lrCabI."ID Cabecera"         := _Inc(lwIdCab);
+          lrCabI.TourOperador          := rwsResv.Touroperator;
+          lrCabI.Bono                  := rwsResv.Voucher;
+
+          IF rwsResv."Booking Date" <> 0D THEN
+            lrCabI."Fecha creacion" := rwsResv."Booking Date"
+          ELSE
+            lrCabI."Fecha creacion" := TODAY;
+
+          IF rwsResv.Season <> '' THEN
+            lrCabI.Temporada := rwsResv.Season
+          ELSE
+            lrCabI.Temporada := FORMAT(DATE2DMY(lrCabI."Fecha creacion", 3));
+
+          lrCabI.Paquete               := rwsResv."Package Code";
+          lrCabI.Adultos               := 0;
+          lrCabI.Ni¤os                 := 0;
+          lrCabI.Infants               := 0;
+          lrCabI."Tipo Registro"       := rwsResv.Action;
+          //. En funcion del tipo de registro rellenar las fechas de modificacion/cancelacion
+          CASE lrCabI."Tipo Registro" OF
+            lrCabI."Tipo Registro"::Modificacion: lrCabI."Fecha modificacion" := TODAY;
+            lrCabI."Tipo Registro"::Borrado: lrCabI."Fecha cancelacion" := TODAY;
+          END;
+
+          lrCabI."Usuario proceso"     := USERID;
+          lrCabI.Destino               := rwsResv.Destination;
+          lrCabI."Pendiente Destino"   := rwsResv.Company = '';
+          lrCabI."Fecha Importacion"   := TODAY; //+$003
+          //+$006 <
+          IF rwsResv."Operation type" = 'F' THEN
+            lrCabI."Tipo operacion" := lrCabI."Tipo operacion"::Regular
+          ELSE
+            lrCabI."Tipo operacion" := lrCabI."Tipo operacion"::Charter;
+          //+$006 >
+          lrCabI.INSERT;
+
+          // Producto
+          // rwsProd.SETRANGE("Reservation ID", rwsResv.ID);
+          rwsProd.SETRANGE(Voucher, rwsResv.Voucher);
+          IF rwsProd.FINDSET THEN BEGIN
+            REPEAT
+              // Solo a¤adimos el producto si tiene algun pax
+              // De la forma en que viene la informaci¢n (ShaunInsland) los paxes repetidos sobreescriben los anteriores
+              // lo que puede dar lugar a lineas de productos sin pax
+              //rwsPers.SETRANGE("Reservation ID", rwsProd."Reservation ID");
+              rwsPers.SETRANGE(Voucher     , rwsProd.Voucher);
+              rwsPers.SETRANGE("Product ID", rwsProd.ID);
+              IF rwsPers.FINDFIRST THEN BEGIN
+                lrHotelI.SETCURRENTKEY(Fichero,Touroperador,Bono,Temporada,"Fecha entrada","Fecha salida");
+                lrHotelI.SETRANGE(Fichero        , lrCabI.Fichero);
+                lrHotelI.SETRANGE(Touroperador   , lrCabI.TourOperador);
+                lrHotelI.SETRANGE(Bono           , lrCabI.Bono);
+                lrHotelI.SETRANGE(Temporada      , lrCabI.Temporada);
+                lrHotelI.SETRANGE(Hotel          , rwsProd."Hotel Code");
+                lrHotelI.SETRANGE("Fecha entrada", rwsProd."Arrival Date");
+                lrHotelI.SETRANGE("Fecha salida" , rwsProd."Departure Date");
+                lrHotelI.SETRANGE(Habitacion     , rwsProd."Room Code");
+                IF pwImportacionWS THEN
+                  lrHotelI.SETRANGE("Id Importacion", rwsProd."ID Imp");
+                //. SUNWING Esta mandando las reservas sin regimen, CNT solicita que pongamos siempre AI
+                IF rwsProd."Boarding Code" <> '' THEN
+                  lrHotelI.SETRANGE(Regimen        , rwsProd."Boarding Code")
+                ELSE
+                  lrHotelI.SETRANGE(Regimen        , 'AI');
+
+                lrHotelI.SETRANGE("Tipo Registro", rwsProd.Action);
+                IF NOT lrHotelI.FINDFIRST THEN BEGIN
+                  lrHotelI.Fichero            := lrCabI.Fichero;
+                  lrHotelI."ID Hotel"         := _Inc(lwIdHotel);
+                  lrHotelI.Touroperador       := lrCabI.TourOperador;
+                  lrHotelI.Bono               := lrCabI.Bono;
+                  lrHotelI.Temporada          := lrCabI.Temporada;
+                  lrHotelI.Hotel              := rwsProd."Hotel Code";
+                  lrHotelI."Fecha entrada"    := rwsProd."Arrival Date";
+                  lrHotelI."Fecha salida"     := rwsProd."Departure Date";
+                  lrHotelI."N§ Habitaciones"  := rwsProd."Number of Rooms";
+                  lrHotelI.Habitacion         := rwsProd."Room Code";
+                  //. SUNWING Esta mandando las reservas sin regimen, CNT solicita que pongamos siempre AI
+                  IF rwsProd."Boarding Code" <> '' THEN
+                    lrHotelI.Regimen            := rwsProd."Boarding Code"
+                  ELSE
+                    lrHotelI.Regimen            := 'AI';
+                  CASE rwsProd.Action OF
+                    rwsProd.Action::New:    lrHotelI."Tipo Registro" := lrHotelI."Tipo Registro"::Ok;
+                    rwsProd.Action::Modification:  lrHotelI."Tipo Registro" := lrHotelI."Tipo Registro"::Ok;
+                    rwsProd.Action::Delete: lrHotelI."Tipo Registro" := lrHotelI."Tipo Registro"::Cancelacion;
+                  END;
+                  lrHotelI."Id Importacion" := rwsProd."ID Imp";
+                  IF pwImportacionWS THEN
+                    lrHotelI."N§ Servicio" := rwsProd."ID Imp"  //+$001
+                  ELSE
+                    lrHotelI."N§ Servicio" := _Inc(lrCabI."No Servicios");
+                  lrHotelI."Paquete asociado" :=  lrCabI.Paquete;
+                  lrHotelI.Insercion          := lrHotelI."Tipo Registro" = lrHotelI."Tipo Registro"::Ok;
+                  lrHotelI."Fecha venta"      := rwsProd."Booking Date"; //+$002
+                  //+$005 <
+                  lrHotelI."Servicio transfer llegada" := rwsProd."Arrival transfer";
+                  lrHotelI."Servicio transfer salida"  := rwsProd."Departure transfer";
+                  //+$005 >
+                  lrHotelI.INSERT;
+                END;
+
+                // Personas x Producto
+                // rwsPers.SETRANGE("Reservation ID", rwsProd."Reservation ID");
+                rwsPers.SETRANGE(Voucher         , rwsProd.Voucher);
+                rwsPers.SETRANGE("Product ID"    , rwsProd.ID);
+                IF rwsPers.FINDSET THEN BEGIN
+                  REPEAT
+                    IF NOT pwImportacionWS THEN
+                    BEGIN
+                      // Evitamos que se duplique el PAX. Filtramos por nombre y tipo persona
+                      lrPaxI2.COPY(lrPaxI);
+                      lrPaxI2.SETCURRENTKEY(Fichero,TourOperador,Bono,Temporada);
+                      lrPaxI2.SETRANGE(Fichero       , lrHotelI.Fichero);
+                      lrPaxI2.SETRANGE(TourOperador  , lrHotelI.Touroperador);
+                      lrPaxI2.SETRANGE(Bono          , lrHotelI.Bono);
+                      lrPaxI2.SETRANGE(Temporada     , lrHotelI.Temporada);
+                      lrPaxI2.SETRANGE(Nombre        , rwsPers.Name);
+                      lrPaxI2.SETRANGE("Tipo Persona", rwsPers."Type of Person");
+                      lrPaxI2.SETRANGE(Contador      , rwsPers.ID);
+                      // Si ya existe el ultimo sobreescribe
+                      lwEnc :=  lrPaxI2.FINDFIRST;
+                    END
+                    ELSE
+                      lwEnc := FALSE;
+
+                    lrPaxI.INIT;
+                    lrPaxI.Fichero := lrHotelI.Fichero;
+
+                    IF lwEnc THEN
+                      lrPaxI."ID Pax" := lrPaxI2."ID Pax"
+                    ELSE
+                      lrPaxI."ID Pax" := _Inc(lwIdPax);
+
+                    lrPaxI.TourOperador       := lrHotelI.Touroperador;
+                    lrPaxI.Bono               := lrHotelI.Bono;
+                    lrPaxI.Temporada          := lrHotelI.Temporada;
+                    // lrPaxI.Contador           := _Inc(lwCntPax);
+                    lrPaxI.Contador           := rwsPers.ID;
+                    lrPaxI."Tipo Persona"     := rwsPers."Type of Person";
+                    lrPaxI.Nombre             := rwsPers.Name;
+                    lrPaxI.Edad               := rwsPers.Age;
+                    CASE rwsPers.Action OF
+                      rwsPers.Action::New          : lrPaxI."Tipo Registro" := lrPaxI."Tipo Registro"::Ok;
+                      rwsPers.Action::Modification : lrPaxI."Tipo Registro" := lrPaxI."Tipo Registro"::Modificacion;
+                      rwsPers.Action::Delete       : lrPaxI."Tipo Registro" := lrPaxI."Tipo Registro"::Cancelacion;
+                    END;
+                    lrPaxI."Fecha Entrada"    := rwsPers."Arrival Date";
+                    lrPaxI."Fecha Salida"     := rwsPers."Departure Date";
+                    lrPaxI.Habitacion         := rwsProd."Room Code";
+                    lrPaxI."ID Servicio"      := rwsProd."ID Imp";
+                    IF lwEnc THEN
+                      lrPaxI.MODIFY
+                    ELSE
+                      lrPaxI.INSERT;
+
+                    IF lwIdPaxResp=0 THEN
+                      lwIdPaxResp := lwIdPax;
+
+                    IF pwImportacionWS THEN
+                      _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI."ID Pax", lrHotelI."N§ Servicio", lrServI."Tipo Servicio"::Hotel)
+                    ELSE
+                      _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI.Contador, lrHotelI."N§ Servicio", lrServI."Tipo Servicio"::Hotel);
+
+                    lwTipPer := cFunImp.TipoPax(lrConvTO.ConversionTouroperador(lrPaxI.TourOperador, lrCabI.Destino),
+                                                lrPaxI."Tipo Persona"); //+$008
+                    CASE lwTipPer OF
+                      lwTipPer::Adulto : lrCabI.Adultos += 1;
+                      lwTipPer::Ni¤o   : lrCabI.Ni¤os   += 1;
+                      lwTipPer::Infant : lrCabI.Infants += 1;
+                    END;
+
+                    IF rwsPers."Arrival Date" <> 0D THEN
+                      IF (lrCabI."Fecha Entrada" =0D) OR (lrCabI."Fecha Entrada" > rwsPers."Arrival Date") THEN
+                        lrCabI."Fecha Entrada" := rwsPers."Arrival Date";
+
+                    // Rellenamos un temporal de vuelos
+                    // Llegada
+                    IF (rwsPers."Arr Flight Number"<>'') AND
+                       (rwsPers."Arr Date" = lrHotelI."Fecha entrada") THEN BEGIN // $007 debe coincidir el vuelo con la entrada al hotel
+                      CLEAR(lrTmpVue);
+                      lrTmpVue.SETRANGE("Tipo Vuelo", lrTmpVue."Tipo Vuelo"::Entrada);
+                      lrTmpVue.SETRANGE(Fecha       , rwsPers."Arrival Date");
+                      lrTmpVue.SETRANGE(Compa¤ia    , rwsPers."Arr Airline Code");
+                      lrTmpVue.SETRANGE(Vuelo       , rwsPers."Arr Flight Number");
+                      lwEnc := lrTmpVue.FINDSET;
+                      IF NOT lwEnc THEN BEGIN
+                        lrTmpVue.Fichero        := lrCabI.Fichero;
+                        lrTmpVue."ID Vuelo"     := _Inc(lwIdVuelo);
+                        lrTmpVue.TourOperador   := lrCabI.TourOperador;
+                        lrTmpVue.Bono           := lrCabI.Bono;
+                        lrTmpVue.Temporada      := lrCabI.Temporada;
+                        lrTmpVue.Contador       := _Inc(lwCntVuelo);
+                        lrTmpVue."Tipo Vuelo"   := lrTmpVue."Tipo Vuelo"::Entrada;
+                        lrTmpVue.Fecha          := rwsPers."Arr Date";
+                        lrTmpVue.Compa¤ia       := rwsPers."Arr Airline Code";
+                        lrTmpVue.Vuelo          := rwsPers."Arr Flight Number";
+                        lrTmpVue."N§ Servicio"  := 10000 + _Inc(lrCabI."No Servicios");
+                        lrTmpVue.INSERT;
+                      END;
+
+                      IF pwImportacionWS THEN
+                        _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI."ID Pax", lrTmpVue."N§ Servicio",
+                                     lrServI."Tipo Servicio"::Transfer)
+                      ELSE
+                        _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI.Contador, lrTmpVue."N§ Servicio",
+                                     lrServI."Tipo Servicio"::Transfer);
+
+                      IF lrTmpVue."IATA origen" = '' THEN
+                        lrTmpVue."IATA origen"  := rwsPers."Arr Departure IATA";
+                      IF lrTmpVue."IATA destino" = '' THEN
+                        lrTmpVue."IATA destino" := rwsPers."Arr Arrival IATA";
+                      IF lrTmpVue.Hora = 0T THEN
+                        lrTmpVue.Hora           := rwsPers."Arr Time";
+                      lrTmpVue.MODIFY;
+                    END;
+
+                    // Salida
+                    IF (rwsPers."Dep Flight Number" <> '') AND
+                       (rwsPers."Dep Date" = lrHotelI."Fecha salida") THEN BEGIN // $007 debe coincidir el vuelo con la salida al hotel
+                      CLEAR(lrTmpVue);
+                      lrTmpVue.SETRANGE("Tipo Vuelo", lrTmpVue."Tipo Vuelo"::Salida);
+                      lrTmpVue.SETRANGE(Fecha       , rwsPers."Departure Date");
+                      lrTmpVue.SETRANGE(Compa¤ia    , rwsPers."Dep Airline Code");
+                      lrTmpVue.SETRANGE(Vuelo       , rwsPers."Dep Flight Number");
+                      lwEnc := lrTmpVue.FINDSET;
+                      IF NOT lwEnc THEN BEGIN
+                        lrTmpVue.Fichero        := lrCabI.Fichero;
+                        lrTmpVue."ID Vuelo"     := _Inc(lwIdVuelo);
+                        lrTmpVue.TourOperador   := lrCabI.TourOperador;
+                        lrTmpVue.Bono           := lrCabI.Bono;
+                        lrTmpVue.Temporada      := lrCabI.Temporada;
+                        lrTmpVue.Contador       := _Inc(lwCntVuelo);
+                        lrTmpVue."Tipo Vuelo"   := lrTmpVue."Tipo Vuelo"::Salida;
+                        lrTmpVue.Fecha          := rwsPers."Dep Date";
+                        lrTmpVue.Compa¤ia       := rwsPers."Dep Airline Code";
+                        lrTmpVue.Vuelo          := rwsPers."Dep Flight Number";
+                        lrTmpVue."N§ Servicio"  := 10000 + _Inc(lrCabI."No Servicios");
+                        lrTmpVue.INSERT;
+                      END;
+
+                      IF pwImportacionWS THEN
+                        _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI."ID Pax", lrTmpVue."N§ Servicio",
+                                     lrServI."Tipo Servicio"::Transfer)
+                      ELSE
+                        _InsServicio(lrServI, lrCabI, lwIdServ, lrPaxI.Contador, lrTmpVue."N§ Servicio",
+                                     lrServI."Tipo Servicio"::Transfer);
+
+                      IF lrTmpVue."IATA origen"= '' THEN
+                        lrTmpVue."IATA origen"  := rwsPers."Dep Departure IATA";
+                      IF lrTmpVue."IATA destino" = '' THEN
+                        lrTmpVue."IATA destino" := rwsPers."Dep Arrival IATA";
+                      IF lrTmpVue.Hora= 0T THEN
+                        lrTmpVue.Hora           := rwsPers."Dep Time";
+                      lrTmpVue.MODIFY;
+                    END;
+                  UNTIL rwsPers.NEXT=0;
+                END;
+
+                // Comentarios
+                // rwsComm.SETRANGE("Reservation ID", rwsProd."Reservation ID");
+                rwsComm.SETRANGE(Voucher         , rwsProd.Voucher);
+                rwsComm.SETRANGE("Product ID"    , rwsProd.ID);
+                IF rwsComm.FINDSET THEN BEGIN
+                  REPEAT
+                    lrComI.NoLin   := lrComI.NewIdComp(lwCompany);
+                    lrComI.Fichero := pwRecordID;
+                    lrComI.IDPax   := lwIdPaxResp; // Id Pax Responsable
+                    lrComI.Texto   := rwsComm.Comment;
+                    lrComI.INSERT;
+                  UNTIL rwsComm.NEXT=0;
+                END;
+              END;
+            UNTIL rwsProd.NEXT=0;
+          END;
+
+          // Vuelos Interfase
+          // Pasamos el temporal a real
+          CLEAR(lrTmpVue);
+          IF lrTmpVue.FINDSET THEN BEGIN
+            REPEAT
+              lrVuelosI.TRANSFERFIELDS(lrTmpVue);
+              lrVuelosI.INSERT;
+            UNTIL lrTmpVue.NEXT=0;
+          END;
+
+          lrCabI.MODIFY;
+
+          IF GUIALLOWED THEN BEGIN
+            lwCont +=1;
+            IF lwCont MOD 10 = 0 THEN
+              lwVent.UPDATE(1, ROUND(lwCont/lwTotal*10000,1));
+          END;
+        UNTIL rwsResv.NEXT=0;
+        IF GUIALLOWED THEN
+          lwVent.CLOSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE _Inc@1100253010(VAR pwValor@1100253000 : Integer) : Integer;
+    BEGIN
+      // _Inc
+      // Incrementea en uno el pwValor
+
+      pwValor +=1;
+      EXIT(pwValor)
+    END;
+
+    LOCAL PROCEDURE _InsServicio@1100253003(VAR prServ@1100253001 : Record 7010080;VAR prCab@1100253000 : Record 7010076;VAR pwIDServ@1100253002 : Integer;VAR pwContador@1100253003 : Integer;VAR pwNoServ@1100253005 : Integer;pwTipoServ@1100253004 : 'Hotel,Transfer');
+    VAR
+      lrServ2@1100217000 : Record 7010080;
+    BEGIN
+      // _InsServicio
+
+      lrServ2.COPY(prServ);
+      lrServ2.SETCURRENTKEY(Fichero,Touroperador,Bono,Temporada,Persona);
+      lrServ2.SETRANGE(Fichero        , prCab.Fichero);
+      lrServ2.SETRANGE(Touroperador   , prCab.TourOperador);
+      lrServ2.SETRANGE(Bono           , prCab.Bono);
+      lrServ2.SETRANGE(Persona       , pwContador);
+      lrServ2.SETRANGE("Tipo Servicio", pwTipoServ);
+      lrServ2.SETRANGE("N§ Servicio"  , pwNoServ);
+      IF lrServ2.FINDFIRST THEN
+        EXIT;
+
+      prServ.INIT;
+      prServ.Fichero         := prCab.Fichero;
+      prServ."ID Servicio"   := _Inc(pwIDServ);
+      prServ.Touroperador    := prCab.TourOperador;
+      prServ.Bono            := prCab.Bono;
+      prServ.Temporada       := prCab.Temporada;
+      prServ.Persona        := pwContador;
+      prServ."N§ Servicio"   := pwNoServ;
+      prServ."Tipo Servicio" := pwTipoServ;
+      prServ.INSERT;
+    END;
+
+    LOCAL PROCEDURE _SendErrorMail@1100253008(pwDestinations@1100253001 : Code[50];pwRecordId@1100253002 : Integer);
+    VAR
+      lcMail@1100253000 : Codeunit 7009776;
+      lwText@1100253003 : Text[250];
+    BEGIN
+      // _SendErrorMail
+
+      CLEAR(lcMail);
+
+      rParAg.FINDFIRST;
+      lwText := STRSUBSTNO(Text001, pwDestinations, pwRecordId);
+
+      IF rParAg."Direccion Correo Supervisor" <> '' THEN BEGIN
+        lcMail.CreateMessage(Text002,Text003, rParAg."Direccion Correo Supervisor", lwText,lwText, TRUE);
+        lcMail.Send;
+      END;
+    END;
+
+    LOCAL PROCEDURE _SaveXML@1100253002(VAR xmlReservation@1100253000 : XMLport 7009700);
+    VAR
+      lwFile@1100253001 : File;
+      lwOutStrm@1100253002 : OutStream;
+    BEGIN
+      // _SaveXML
+
+      CLEAR(lwOutStrm);
+      lwFile.CREATE(GetTmpFilename);
+      lwFile.CREATEOUTSTREAM(lwOutStrm);
+      xmlReservation.SETDESTINATION(lwOutStrm);
+      xmlReservation.EXPORT;
+      lwFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE _RepasaVuelos@1100217003();
+    VAR
+      lrsPers2@1100217000 : TEMPORARY Record 7009895;
+    BEGIN
+      // _RepasaVuelos
+      // JPT 03/10/12
+      // El objeto de esta funci¢n es repasar los vuelos de llegada y salida de cada Pax x Producto.
+      // Resulta que en el XML no viene la fecha de vuelo, por lo que se le asigna la fecha de llegada
+      // o de salida, segun sea. El problema viene cuando el pax tiene dos estancias ya que las fechas de llegada y
+      // salida no tienen porque ser las del vuelo.
+      // Como soluci¢n, tomaremos la primera fecha de llegada para el vuelo de llegada y la ultima para el vuelo de salida
+      // Para ello eliminaremos el codigo de vuelo del que no proceda.
+      // La curiosa manera de trabajar con un segundo apuntador
+      // viene dado porque rwsPers es un temporal, por lo que tenemos una sola instancia real
+
+      CLEAR(rwsPers);
+      IF rwsPers.FINDSET THEN BEGIN
+        REPEAT
+          lrsPers2.COPY(rwsPers); // Copiamos el valor a otro apuntador
+          // rwsPers.SETRANGE("Reservation ID", lrsPers2."Reservation ID");
+          rwsPers.SETRANGE(Voucher, lrsPers2.Voucher);
+          rwsPers.SETRANGE(ID, lrsPers2.ID);
+          rwsPers.SETFILTER("Product ID", '<>%1' ,lrsPers2."Product ID");
+          IF rwsPers.FINDSET THEN BEGIN
+            REPEAT
+              IF (rwsPers."Arr Flight Number" = lrsPers2."Arr Flight Number") AND
+              (rwsPers."Arrival Date" > lrsPers2."Arrival Date") THEN BEGIN
+                rwsPers."Arr Flight Number" := '';
+                rwsPers.MODIFY;
+              END;
+              IF (rwsPers."Dep Flight Number" = lrsPers2."Dep Flight Number") AND
+                (rwsPers."Departure Date" < lrsPers2."Departure Date") THEN BEGIN
+                rwsPers."Dep Flight Number" := '';
+                rwsPers.MODIFY;
+              END;
+            UNTIL rwsPers.NEXT=0;
+          END;
+          rwsPers.COPY(lrsPers2); // recuperamos el apuntador
+        UNTIL rwsPers.NEXT=0;
+      END;
+      CLEAR(rwsPers);
+    END;
+
+    PROCEDURE GetTmpFilename@1100253004() : Text[1024];
+    VAR
+      lwFilename@1100253000 : Text[1024];
+    BEGIN
+      // GetTmpFilename
+
+      // Determinamos el fichero temporal
+      lwFilename := TEMPORARYPATH + 'Import.XML';
+      EXIT(lwFilename);
+    END;
+
+    PROCEDURE SetTables@1100253006(VAR prwsResv@1100253003 : TEMPORARY Record 7009893;VAR prwsProd@1100253002 : TEMPORARY Record 7009894;VAR prwsPers@1100253001 : TEMPORARY Record 7009895;VAR prwsComm@1100253000 : TEMPORARY Record 7009896);
+    BEGIN
+      // SetTables
+      // Introduce las tablas desde afuera
+
+      CLEAR(rwsResv);
+      rwsResv.DELETEALL;
+      CLEAR(rwsProd);
+      rwsProd.DELETEALL;
+      CLEAR(rwsPers);
+      rwsPers.DELETEALL;
+      CLEAR(rwsComm);
+      rwsComm.DELETEALL;
+
+      CLEAR(prwsResv);
+      IF prwsResv.FINDSET THEN BEGIN
+        REPEAT
+          rwsResv := prwsResv;
+          rwsResv.INSERT;
+        UNTIL prwsResv.NEXT=0;
+      END;
+
+      CLEAR(prwsProd);
+      IF prwsProd.FINDSET THEN BEGIN
+        REPEAT
+          rwsProd := prwsProd;
+          rwsProd.INSERT;
+        UNTIL prwsProd.NEXT=0;
+      END;
+
+      CLEAR(prwsPers);
+      IF prwsPers.FINDSET THEN BEGIN
+        REPEAT
+          rwsPers := prwsPers;
+          rwsPers.INSERT;
+        UNTIL prwsPers.NEXT=0;
+      END;
+
+      CLEAR(prwsComm);
+      IF prwsComm.FINDSET THEN  BEGIN
+        REPEAT
+          rwsComm := prwsComm;
+          rwsComm.INSERT;
+        UNTIL prwsComm.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE ExcursionReservation@1100217002(VAR xmlReserva@1100217000 : XMLport 7009711) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7009950;
+      lrWSRsv@1100217005 : Record 7009950;
+      lrEmpImp@1000000003 : Record 7009859;
+      lwFile@1000000001 : File;
+      lwOutStrm@1000000000 : OutStream;
+      lwDestination@1000000002 : Text[30];
+      lwRecordId@1000000004 : Integer;
+      lwPte@1000000005 : Boolean;
+    BEGIN
+      // RequestExcursionReservation
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP);
+
+      // Guardamos el archivo
+      CLEAR(lwOutStrm);
+      lwFile.CREATE(GetTmpFilename);
+      lwFile.CREATEOUTSTREAM(lwOutStrm);
+      xmlReserva.SETDESTINATION(lwOutStrm);
+      xmlReserva.EXPORT;
+      lwFile.CLOSE;
+
+      IF lrWSRsvTMP.FINDSET THEN
+      BEGIN
+        _CreateInterfaceFile(lwRecordId, lwPte);
+
+        REPEAT
+          lwDestination := lrWSRsvTMP.Destination;
+
+          CLEAR(lrEmpImp);
+          lrEmpImp.SETRANGE(Tipo   , lrEmpImp.Tipo::"Reserva WS");
+          lrEmpImp.SETRANGE(Destino, lwDestination);
+          IF lrEmpImp.FINDFIRST THEN
+          BEGIN
+            lrWSRsvTMP."NAV Company" := lrEmpImp.Empresa;
+            lrWSRsvTMP.MODIFY;
+          END;
+
+          //. Pasamos los registros de la tabla temporal a un apuntador real
+          IF lrWSRsvTMP."NAV Company" <> '' THEN
+            lrWSRsv.CHANGECOMPANY(lrWSRsvTMP."NAV Company");
+
+          lrWSRsv.TRANSFERFIELDS(lrWSRsvTMP);
+          lrWSRsv."File ID" := lwRecordId;
+          lrWSRsv.ID := 0; //. Hay que ponerlo a cero para el AutoIncrement
+          lrWSRsv.INSERT(TRUE);
+        UNTIL lrWSRsvTMP.NEXT = 0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckBooking@1000000000(pwDestino@1000000000 : Code[10];pwTouroperador@1000000001 : Code[10];pwBono@1000000002 : Code[10]) existe : Boolean;
+    VAR
+      lrEmpImp@1000000003 : Record 7009859;
+      lrConvTO@1000000004 : Record 7010161;
+      lrRes@1000000005 : Record 7009741;
+    BEGIN
+      existe := FALSE;
+
+      CLEAR(lrEmpImp);
+      lrEmpImp.SETRANGE(Tipo   , lrEmpImp.Tipo::"Reserva WS");
+      lrEmpImp.SETRANGE(Destino, pwDestino);
+      IF lrEmpImp.FINDFIRST THEN BEGIN
+        IF lrRes.CHANGECOMPANY(lrEmpImp.Empresa) THEN BEGIN
+          lrRes.RESET;
+          lrRes.SETRANGE(lrRes.TourOperador, lrConvTO.ConversionTouroperador(pwTouroperador, pwDestino));
+          lrRes.SETRANGE(lrRes.Bono, pwBono);
+          IF lrRes.FINDFIRST THEN
+            EXIT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE TransferReservation@1000000001(VAR xmlReserva@1100217000 : XMLport 7009712) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7009951;
+      lrWSRsv@1100217005 : Record 7009951;
+      lrWSPerson@1000000006 : Record 7009952;
+      lrWSPersonTMP@1000000007 : TEMPORARY Record 7009952;
+      lrEmpImp@1000000003 : Record 7009859;
+      lwFile@1000000001 : File;
+      lwOutStrm@1000000000 : OutStream;
+      lwDestination@1000000002 : Text[30];
+      lwRecordId@1000000004 : Integer;
+      lwPte@1000000005 : Boolean;
+    BEGIN
+      // RequestExcursionReservation
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP,lrWSPersonTMP);
+
+      // Guardamos el archivo
+      CLEAR(lwOutStrm);
+      lwFile.CREATE(GetTmpFilename);
+      lwFile.CREATEOUTSTREAM(lwOutStrm);
+      xmlReserva.SETDESTINATION(lwOutStrm);
+      xmlReserva.EXPORT;
+      lwFile.CLOSE;
+
+      IF lrWSRsvTMP.FINDSET THEN
+      BEGIN
+        _CreateInterfaceFile(lwRecordId, lwPte);
+
+        REPEAT
+          lwDestination := lrWSRsvTMP.Destination;
+
+          CLEAR(lrEmpImp);
+          lrEmpImp.SETRANGE(Tipo   , lrEmpImp.Tipo::"Reserva WS");
+          lrEmpImp.SETRANGE(Destino, lwDestination);
+          IF lrEmpImp.FINDFIRST THEN
+          BEGIN
+            lrWSRsvTMP."NAV Company" := lrEmpImp.Empresa;
+            lrWSRsvTMP.MODIFY;
+          END;
+
+          //. Pasamos los registros de la tabla temporal a un apuntador real
+          IF lrWSRsvTMP."NAV Company" <> '' THEN
+            lrWSRsv.CHANGECOMPANY(lrWSRsvTMP."NAV Company");
+
+          lrWSRsv.TRANSFERFIELDS(lrWSRsvTMP);
+          lrWSRsv."File ID" := lwRecordId;
+          lrWSRsv.ID := 0; //. Hay que ponerlo a cero para el AutoIncrement
+          lrWSRsv.INSERT(TRUE);
+
+          lrWSPersonTMP.RESET;
+          lrWSPersonTMP.SETRANGE(lrWSPersonTMP."Reservation ID", lrWSRsvTMP.ID);
+          IF lrWSPersonTMP.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              CLEAR(lrWSPerson);
+              lrWSPerson."Reservation ID" := lrWSRsv.ID;
+              lrWSPerson.Name := lrWSPersonTMP.Name;
+              lrWSPerson."Person type" := lrWSPersonTMP."Person type";
+              lrWSPerson.INSERT(TRUE);
+            UNTIL lrWSPersonTMP.NEXT = 0;
+          END;
+
+        UNTIL lrWSRsvTMP.NEXT = 0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      19/10/12 Cambiamos la clave primaria de WS- reservas, de Id a Voucher
+
+      $001 AJS 19032013 Cuando la importacion es a traves del XML el N§ de servicio hotel es el ID de importacion
+
+      $002 AJS 28062013 Guardamos la informacion de la fecha de venta de cada producto
+
+      $003 AJS 09072013 Rellenar el campo Fecha importacion de la cabecera
+
+      $004 AJS 30062014 CNT-OC-14078, Llamar a la funcion de revision de errores para reenviar los errores al touroperador
+
+      $005 AJS 09092014 CNT-OC-14080, Rellenar nuevos campos que indican el servicio de transfer asociado al producto
+
+      $006 AJS 09092014 CNT-OC-14080, Rellenar nuevo campo Tipo operacion para distinguir charter y regular
+
+      $007 ARM 12092014 CNT-OC-13013, Nuevos campos Fecha en el vuelo de llegada y de salida.
+
+      $008 AJS 15012015 Utilizar la funcion de conversion touroperador de la propia tabla
+
+      $009 ARM 01062015 CNT-CAR-14122 Nueva funci¢n TransferReservation
+    }
+    END.
+  }
+}

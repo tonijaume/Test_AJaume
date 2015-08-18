@@ -1,0 +1,221 @@
+OBJECT Codeunit 7010454 Cancel sales shipment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009,AF3.10.01;
+  }
+  PROPERTIES
+  {
+    TableNo=110;
+    Permissions=TableData 32=rimd,
+                TableData 37=rimd,
+                TableData 44=rimd,
+                TableData 110=rimd,
+                TableData 111=rimd,
+                TableData 5802=rimd,
+                TableData 7010454=rimd,
+                TableData 7010455=rimd;
+    OnRun=BEGIN
+            // Verifications
+
+            ConfExist.GET;
+            IF ConfExist."Automatic Cost Posting" THEN
+              ERROR(Text90000);
+
+            LinAlbaranVenta.SETCURRENTKEY(LinAlbaranVenta."Document No.",LinAlbaranVenta."Line No.");
+            LinAlbaranVenta.SETRANGE(LinAlbaranVenta."Document No.","No.");
+            IF LinAlbaranVenta.FIND('-') THEN
+              REPEAT
+                IF LinAlbaranVenta."Quantity Invoiced" <> 0 THEN
+                  ERROR(Text90001);
+
+                LinAlbBorrado.INIT;
+                LinAlbBorrado.TRANSFERFIELDS(LinAlbaranVenta);
+                LinAlbBorrado.INSERT;
+                CASE LinAlbaranVenta.Type OF
+                  0:;
+                  LinAlbaranVenta.Type::"G/L Account":
+                    IF LinAlbaranVenta.Quantity <> 0 THEN
+                      ModiPedido(Rec);
+                  LinAlbaranVenta.Type::Item:
+                    IF LinAlbaranVenta.Quantity > 0 THEN BEGIN
+                      IF MovProd.GET(LinAlbaranVenta."Item Shpt. Entry No.") THEN BEGIN
+                        IF MovProd."Drop Shipment" THEN
+                          ERROR(Text90002);
+                        IF NoSig = 0 THEN BEGIN
+                          MovProd2.LOCKTABLE;
+                          IF MovProd2.FIND('+') THEN
+                            NoSig := MovProd2."Entry No.";
+                          NoSig := NoSig + 1;
+                        END;
+                        MovProd2.INIT;
+                        MovProd2 := MovProd;
+                        MovProd2."Entry No." :=NoSig;
+                        MovProd2."Entry Type" := MovProd2."Entry Type"::"Positive Adjmt.";
+                        MovProd2.Description := Text90003 + COPYSTR(MovProd2.Description,1,50 - STRLEN(Text90003));
+                        MovProd2.Quantity := -MovProd2.Quantity;
+                        MovProd2."Remaining Quantity" := MovProd2.Quantity;
+                        MovProd2."Invoiced Quantity" := -MovProd2."Invoiced Quantity";
+                        MovProd2."Applies-to Entry" := 0;
+                        MovProd2.Open := TRUE;
+                        MovProd2.Positive := TRUE;
+                        MovProd2.INSERT;
+                        NoSig := NoSig + 1;
+                        MovProd.MODIFY;
+                      END ELSE
+                        ERROR(Text90004);
+                      ModiPedido(Rec);
+                      NoSig := 0;
+                      ValueEntry.RESET;
+                      //Frg 201005 a¤adimos clave
+                      ValueEntry.SETCURRENTKEY("Item Ledger Entry No.","Expected Cost","Document No.",
+                                               "Partial Revaluation","Entry Type","Variance Type",Adjustment);
+                      //Fin Frg 201005
+                      ValueEntry.SETRANGE(ValueEntry."Item Ledger Entry No.",LinAlbaranVenta."Item Shpt. Entry No.");
+                      IF ValueEntry.FIND('-') THEN BEGIN
+                        IF ValueEntry."Drop Shipment" THEN
+                          ERROR(Text90002);
+                        IF NoSig = 0 THEN BEGIN
+                          ValueEntry2.LOCKTABLE;
+                          IF ValueEntry2.FIND('+') THEN
+                            NoSig := ValueEntry2."Entry No.";
+                          NoSig := NoSig + 1;
+                        END;
+                        ValueEntry2.INIT;
+                        ValueEntry2 := ValueEntry;
+                        ValueEntry2."Entry No." := NoSig;
+                        ValueEntry2."Item Ledger Entry No." := MovProd2."Entry No.";
+                        ValueEntry2."Valued Quantity" := - ValueEntry."Valued Quantity";
+                        ValueEntry2."Item Ledger Entry Type" := ValueEntry2."Item Ledger Entry Type"::"Positive Adjmt.";
+                        ValueEntry2.Description := Text90003 +
+                        COPYSTR(ValueEntry2.Description,1,50 - STRLEN(Text90003));
+                        ValueEntry2."Cost Amount (Actual)" := - ValueEntry."Cost Amount (Actual)";
+                        ValueEntry2."Cost Amount (Actual) (ACY)" := - ValueEntry."Cost Amount (Actual) (ACY)";
+                        ValueEntry."User ID" := USERID;
+                        ValueEntry2.INSERT;
+                        NoSig := NoSig + 1;
+                        ValueEntry.MODIFY;
+                      END;
+                    END ELSE
+                      IF LinAlbaranVenta.Quantity < 0 THEN
+                        ERROR(Text90005);
+                  LinAlbaranVenta.Type::Resource:
+                    IF LinAlbaranVenta.Quantity <> 0 THEN
+                      ModiPedido(Rec);
+
+                END;
+              UNTIL LinAlbaranVenta.NEXT = 0;
+
+            CabAlbBorrado.INIT;
+            CabAlbBorrado.TRANSFERFIELDS(Rec);
+            CabAlbBorrado.INSERT;
+            LinAlbaranVenta.DELETEALL;
+            AnulaDimensiones.DeleteDimensions("No.","Posting Date");
+            AnulaDimensiones.DeleteDocDimensions("No.");
+            DELETE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text90000@1100018 : TextConst 'ENU=Post inventory cost is automatic.;ESP=La variaci¢n de existencias est  configurada como autom tica.';
+      Text90001@1100019 : TextConst 'ENU=Shipment has been invoiced.;ESP=Este albar n ha sido facturado previamente.';
+      Text90002@1100020 : TextConst 'ENU=Drop shipments lines exist.;ESP=Existen l¡neas de env¡o directo.';
+      Text90003@1100021 : TextConst 'ENU="Cancel Shipment ";ESP="Anulaci¢n albar n "';
+      Text90004@1100022 : TextConst 'ENU=You can not modify this shipment.;ESP=No se puede modificar este albar n.';
+      Text90005@1100023 : TextConst 'ENU=You can not modify items with negative quantities.;ESP=No se pueden modificar productos con cantidades negativas.';
+      Text90006@1100024 : TextConst 'ENU=Order can not be modified.;ESP=No existe el pedido y no se puede modificar.';
+      ConfExist@1100000 : Record 313;
+      LinAlbaranVenta@1100001 : Record 111;
+      MovProd@1100002 : Record 32;
+      MovProd2@1100003 : Record 32;
+      ConfCG@1100004 : Record 98;
+      Divisa@1100005 : Record 4;
+      TipoCambioDiv@1100006 : Record 330;
+      LinPedidoVta@1100007 : Record 37;
+      CabAlbBorrado@1100008 : Record 7010454;
+      LinAlbBorrado@1100009 : Record 7010455;
+      ValueEntry@1100016 : Record 5802;
+      ValueEntry2@1100017 : Record 5802;
+      PrecRed@1100010 : Decimal;
+      ImporteIVAInclDL@1100011 : Decimal;
+      NoSig@1100012 : Integer;
+      LinComentVenta@1100013 : Record 44;
+      LinComentVenta2@1100014 : Record 44;
+      AnulaDimensiones@1100015 : Codeunit 7010452;
+
+    PROCEDURE ModiPedido@1(Cab@1100000 : Record 110);
+    BEGIN
+      LinPedidoVta.LOCKTABLE;
+
+      IF LinPedidoVta.GET(1,LinAlbaranVenta."Order No.",LinAlbaranVenta."Order Line No.") = FALSE THEN
+        ERROR(Text90006);
+
+      ConfCG.GET();
+      IF LinPedidoVta."Currency Code" <> '' THEN BEGIN
+        Divisa.GET(LinPedidoVta."Currency Code");
+        PrecRed := Divisa."Amount Rounding Precision";
+        ImporteIVAInclDL := TipoCambioDiv.ExchangeAmtFCYToLCY(
+          Cab."Posting Date",
+          LinPedidoVta."Currency Code",
+          LinPedidoVta."Amount Including VAT",
+          TipoCambioDiv.ExchangeRate(
+            Cab."Posting Date",
+            LinPedidoVta."Currency Code"));
+      END ELSE BEGIN
+        PrecRed := ConfCG."Amount Rounding Precision";
+        ImporteIVAInclDL := LinPedidoVta."Amount Including VAT";
+      END;
+
+
+      LinPedidoVta."Outstanding Quantity" := LinPedidoVta."Outstanding Quantity" + LinAlbaranVenta.Quantity;
+      LinPedidoVta."Qty. to Ship" := LinPedidoVta."Qty. to Ship" + LinAlbaranVenta.Quantity;
+      LinPedidoVta."Quantity Shipped" := LinPedidoVta."Quantity Shipped" - LinAlbaranVenta.Quantity;
+      LinPedidoVta."Qty. Shipped Not Invoiced" := LinPedidoVta."Quantity Shipped" - LinPedidoVta."Quantity Invoiced";
+      LinPedidoVta."Shipped Not Invoiced" :=
+        ROUND(
+          LinPedidoVta."Amount Including VAT" * LinPedidoVta."Qty. Shipped Not Invoiced" / LinPedidoVta.Quantity,PrecRed);
+      LinPedidoVta."Outstanding Amount" :=
+        ROUND(
+          LinPedidoVta."Amount Including VAT" * LinPedidoVta."Outstanding Quantity" / LinPedidoVta.Quantity,PrecRed);
+
+      LinPedidoVta."Outstanding Qty. (Base)" :=  LinPedidoVta."Outstanding Qty. (Base)" + LinAlbaranVenta."Quantity (Base)";
+      LinPedidoVta."Qty. to Ship (Base)" := LinPedidoVta."Qty. to Ship (Base)" + LinAlbaranVenta."Quantity (Base)";
+      LinPedidoVta."Qty. Shipped (Base)" := LinPedidoVta."Qty. Shipped (Base)" - LinAlbaranVenta."Quantity (Base)";
+      LinPedidoVta."Qty. Shipped Not Invd. (Base)" := LinPedidoVta."Qty. Shipped (Base)" - LinPedidoVta."Qty. Invoiced (Base)";
+
+      LinPedidoVta."Shipped Not Invoiced (LCY)" :=
+        ROUND(
+          ImporteIVAInclDL * LinPedidoVta."Qty. Shipped Not Invd. (Base)" / LinPedidoVta."Quantity (Base)"
+          ,ConfCG."Amount Rounding Precision");
+      LinPedidoVta."Outstanding Amount (LCY)" :=
+        ROUND(
+          ImporteIVAInclDL * LinPedidoVta."Outstanding Qty. (Base)" / LinPedidoVta."Quantity (Base)"
+          ,ConfCG."Amount Rounding Precision");
+      LinPedidoVta.Planned := FALSE;
+      LinPedidoVta.MODIFY;
+      LinAlbaranVenta.MODIFY;
+    END;
+
+    PROCEDURE CopiarLinsComent@22(DesdeTipoDocument@1100000 : Integer;HastaTipoDocument@1100001 : Integer;DesdeNro@1100002 : Code[20];HastaNro@1100003 : Code[20]);
+    BEGIN
+      LinComentVenta.SETRANGE("Document Type",DesdeTipoDocument);
+      LinComentVenta.SETRANGE("No.",DesdeNro);
+      IF LinComentVenta.FIND('-') THEN
+        REPEAT
+          LinComentVenta2 := LinComentVenta;
+          LinComentVenta2."Document Type" := HastaTipoDocument;
+          LinComentVenta2."No." := HastaNro;
+          LinComentVenta2.INSERT;
+        UNTIL LinComentVenta.NEXT = 0;
+      LinComentVenta.DELETEALL;
+    END;
+
+    BEGIN
+    END.
+  }
+}

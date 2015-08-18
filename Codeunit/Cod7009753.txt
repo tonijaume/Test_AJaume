@@ -1,0 +1,527 @@
+OBJECT Codeunit 7009753 Importacion generica reservas
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/11/14;
+    Time=[ 9:52:42];
+    Modified=Yes;
+    Version List=AIC2009,CNT;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            SeleccionFicheros;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rParI@1100253000 : Record 7010081;
+      rwsResv@1100253004 : TEMPORARY Record 7009893;
+      rwsProd@1100253003 : TEMPORARY Record 7009894;
+      rwsPers@1100253002 : TEMPORARY Record 7009895;
+      rwsComm@1100253001 : TEMPORARY Record 7009896;
+      cFunIntef@1100253005 : Codeunit 7009764;
+      Text001@1100253006 : TextConst 'ESP=¨Est  seguro que desea importar los archivos seleccionados?';
+
+    PROCEDURE SeleccionFicheros@1100253001();
+    VAR
+      lrImp@1100253000 : Record 7009899;
+      lrArchivos@1100253003 : Record 2000000022;
+      lwDirect@1100253001 : Form 7010229;
+      lwNomArch@1100253002 : Text[1024];
+    BEGIN
+      // SeleccionFicheros
+
+      CLEAR(rParI);
+      rParI.FINDFIRST;
+      rParI.TESTFIELD("Directorio Importacion");
+
+      lwDirect.FiltrarDirectorio(rParI."Directorio Importacion");
+      IF NOT(lwDirect.RUNMODAL IN [ACTION::LookupCancel,ACTION::Cancel]) THEN BEGIN
+        IF lwDirect.OK THEN BEGIN
+          lwDirect.PasarArchivos(lrArchivos);
+          lrArchivos.SETRANGE("Is a file",TRUE);
+          lrArchivos.SETFILTER(Name,'%1','@*.TXT');
+          IF lrArchivos.FINDSET THEN BEGIN
+            IF NOT CONFIRM(Text001) THEN
+              EXIT;
+            REPEAT
+              lwNomArch := lrArchivos.Path;
+              IF lwNomArch[STRLEN(lwNomArch)] <> '\'  THEN
+                lwNomArch += '\';
+              lwNomArch += lrArchivos.Name;
+
+              CLEAR(lrImp);
+              lrImp.Type         := lrImp.Type::TXT;
+              lrImp."Fecha importacion"   := TODAY;
+              lrImp."Hora importacion"    := TIME;
+              lrImp."Usuario Importacion" := USERID;
+              lrImp.Touroperator     := _ExtractFileTTOO(lwNomArch);
+              lrImp."Nombre Archivo" := _ExtractFileName(lwNomArch);
+              GETSTAMP(lwNomArch, lrImp."Fecha Archivo", lrImp."Hora Archivo");
+              lrImp.INSERT(TRUE);
+
+              _ProcesaFichero(lwNomArch, lrImp.Touroperator);
+              cFunIntef.SetTables(rwsResv,rwsProd,rwsPers,rwsComm);
+              cFunIntef.CreateInterfaceData(lrImp."N§ Fichero", FALSE);
+
+              AseguraCarpeta(lrImp.GetFilePath);
+              RENAME(lwNomArch, lrImp.GetFilename);
+            UNTIL lrArchivos.NEXT=0;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _ProcesaFichero@1100253002(pwFilename@1100253000 : Text[1024];pwTouroperator@1100253001 : Code[10]);
+    VAR
+      lwFile@1100253002 : File;
+      lwBono@1100253009 : Code[10];
+      lwHotel@1100253013 : Code[10];
+      lwHab@1100253015 : Code[10];
+      lwReg@1100253016 : Code[10];
+      lwSeason@1100217004 : Code[10];
+      lwText@1100253003 : Text[1024];
+      lwText2@1100253005 : Text[1024];
+      lwDia@1100253004 : Dialog;
+      lwNewResv@1100253010 : Boolean;
+      lwNewProd@1100217005 : Boolean;
+      lwNewPers@1100217007 : Boolean;
+      lwEsComentario@1100253012 : Boolean;
+      lwIdResv@1100253014 : Integer;
+      lwIdCom@1100253006 : Integer;
+      lwCnt@1100253007 : Integer;
+      lwID@1100217003 : Integer;
+      lwChar@1100253018 : Text[1];
+      lrRelHD@1100253008 : Record 7009897;
+      lrEmpImp@1100253011 : Record 7009859;
+      lrsPers2@1100217006 : TEMPORARY Record 7009895;
+      lwNombreP@1100217001 : Text[250];
+      lwTipoP@1100217002 : Text[30];
+      lwServicioTransferE@1000000000 : Text[1];
+      lwServicioTransferS@1000000002 : Text[1];
+      lwTipoOperacion@1000000001 : Text[1];
+    BEGIN
+      // _ProcesaFichero
+
+      IF pwFilename='' THEN
+        EXIT;
+
+      CLEAR(lwIdResv);
+      CLEAR(lwCnt);
+
+      // Se vacian las tablas
+      CLEAR(rwsResv);
+      rwsResv.DELETEALL;
+      CLEAR(rwsProd);
+      rwsProd.DELETEALL;
+      CLEAR(rwsPers);
+      rwsPers.DELETEALL;
+      CLEAR(rwsComm);
+      rwsComm.DELETEALL;
+
+      lwFile.TEXTMODE(TRUE);
+      lwFile.OPEN(pwFilename);
+      lwDia.OPEN('@1@@@@@@@@@@@\Lin.#2#######');
+      REPEAT
+        lwCnt +=1;
+        lwDia.UPDATE(2, lwCnt);
+
+        lwFile.READ(lwText);
+        lwChar := _Copia(lwText,1,1);
+        lwEsComentario := lwChar IN [' ',''];
+        IF lwEsComentario THEN BEGIN
+          lwText2 := lwText;
+          lwText2 := DELCHR(lwText,'<>');
+          IF lwText2  <> '' THEN BEGIN
+            CLEAR(rwsComm);
+            rwsComm."Reservation ID" := rwsResv.ID;
+            rwsComm."Product ID"     := rwsProd.ID;
+            rwsComm."Pax ID"         := rwsPers.ID;
+            REPEAT
+              rwsComm.ID      := _Inc(lwIdCom);
+              rwsComm.Comment := _Copia(lwText2,1,MAXSTRLEN(rwsComm.Comment));
+              rwsComm.INSERT;
+              lwText2 := _Copia(lwText2, MAXSTRLEN(rwsComm.Comment)+1,0);
+            UNTIL lwText2 ='';
+          END;
+        END
+        ELSE
+        BEGIN
+          CLEAR(rwsPers);
+          lwBono                      := _Copia(lwText,1,8);
+          lwHab                       := _Copia(lwText,51,5);
+          lwReg                       := _Copia(lwText,56,4);
+          lwHotel                     := _Copia(lwText,43,8);
+          lwNombreP                   := _Copia(lwText,14,26);
+          lwTipoP                     := _Copia(lwText,9,5);
+          lwServicioTransferE         := _Copia(lwText, 125, 1); //+$001
+          lwServicioTransferS         := _Copia(lwText, 126, 1); //+$001
+          lwTipoOperacion             := _Copia(lwText, 201, 1); //+$002
+
+          // No podemos asignarle el id que viene en el archivo ya que No es unico por bono
+          // Creamos un contador que empiza de 1 por reserva
+          // rwsPers.ID                  := _ToInt(_Copia(lwText,180,19));
+          // JPT 11/10/12 En el dia de hoy optamos por que si un pax viene con el mismo nombre, hotel y tipo de persona, es el
+          // mismo pax. Para ello le asignamos el mismo ID
+
+          CLEAR(rwsPers);
+          rwsPers.SETCURRENTKEY(Voucher);
+          rwsPers.SETRANGE(Name            , lwNombreP);
+          rwsPers.SETRANGE("Type of Person", lwTipoP);
+          rwsPers.SETRANGE(Hotel           , lwHotel);
+          rwsPers.SETRANGE(Voucher         , lwBono);
+          lwNewPers := NOT rwsPers.FINDFIRST;
+          IF lwNewPers THEN BEGIN
+            // El ID ser  el contador de persona dentro de la reserva
+            CLEAR(rwsPers);
+            rwsPers.SETCURRENTKEY(Voucher);
+            rwsPers.SETRANGE(Voucher     , lwBono);
+            lwID := rwsPers.COUNT +1;
+          END
+          ELSE BEGIN
+            // El mismo nombre, tipo persona y hotel hemos de suponer que es el mismo
+            // La ultima linea sobreescribe la anterior, por lo que borramos el pax anterior
+            rwsPers.DELETE;
+            lwID := rwsPers.ID;
+          END;
+
+          CLEAR(rwsPers);
+          rwsPers.ID                  :=  lwID;
+          rwsPers."Arrival Date"      := _ToDate(_Copia(lwText,60,9));
+          rwsPers."Arr Date"          := rwsPers."Arrival Date";
+          rwsPers."Departure Date"    := _ToDate(_Copia(lwText,69,8));
+          rwsPers."Dep Date"          := rwsPers."Departure Date";
+          rwsPers."Type of Person"    := lwTipoP;
+          rwsPers.Name                := lwNombreP;
+          rwsPers.Age                 := _ToInt(_Copia(lwText,40,3));
+          rwsPers."Boarding Code"     := lwReg;
+          IF DELCHR(_Copia(lwText,199,2),'<>') <> '' THEN
+            rwsPers.Action := rwsPers.Action::Delete;
+          _SeparateFlight(_Copia(lwText,81,8), rwsPers."Arr Airline Code", rwsPers."Arr Flight Number");
+          rwsPers."Arr Time"          := _ToTime(_Copia(lwText,104,6));
+          rwsPers."Arr Departure IATA":= _Copia(lwText,110,5);
+          rwsPers."Arr Arrival IATA"  := _Copia(lwText,115,5);
+          _SeparateFlight(_Copia(lwText,132,8), rwsPers."Dep Airline Code", rwsPers."Dep Flight Number");
+          rwsPers."Dep Time"          := _ToTime(_Copia(lwText,159,6));
+          rwsPers."Dep Departure IATA":= _Copia(lwText,149,5);
+          rwsPers."Dep Arrival IATA"  := _Copia(lwText,154,5);
+          rwsPers.Hotel               := lwHotel;
+          rwsPers.Voucher             := lwBono;
+
+          CLEAR(lrRelHD);
+          lrRelHD.GET(lwHotel);
+          lrRelHD.TESTFIELD(Destination);
+
+          // JPT 24/09/12 Modifico ya que se duplican las reservas
+          // lwNewResv := (rwsPers.ID = 1) OR (lwBono <> rwsResv.Voucher) OR (rwsResv.Voucher='');
+          // Buscamos ya que solo puede haber una cabecera por bono y TTOO
+          // lwNewResv := (lwBono <> rwsResv.Voucher) OR (rwsResv.Voucher='');
+
+          lwSeason := FORMAT(DATE2DMY(rwsPers."Arrival Date", 3));
+
+          CLEAR(rwsResv);
+          rwsResv.SETRANGE(Touroperator, pwTouroperator);
+          rwsResv.SETRANGE(Voucher     , lwBono);
+          //rwsResv.SETRANGE(Season      , lwSeason);
+          lwNewResv := NOT rwsResv.FINDFIRST;
+          IF lwNewResv THEN
+            lwID := _Inc(lwIdResv)
+          ELSE
+            lwID := rwsResv.ID;
+
+          CLEAR(rwsResv);
+          rwsResv.ID              := lwID;
+          rwsResv.Destination     := lrRelHD.Destination;
+          rwsResv.Touroperator    := pwTouroperator;
+          rwsResv.Season          := lwSeason;
+          rwsResv."Booking Date"  := _ToDate(_Copia(lwText,171,9));
+
+          IF (lwServicioTransferE = 'N') AND (lwServicioTransferS = 'N') THEN
+            rwsResv."Package Code"  := rParI."Paquete Solo Hotel"
+          ELSE
+            rwsResv."Package Code"  := rParI."Paquete Solo Transfer";
+
+          rwsResv.Action           := rwsPers.Action;
+          rwsResv.Voucher          := lwBono;
+          rwsResv."Operation type" := lwTipoOperacion; //+$002
+
+          // Buscamos la empresa a la que debe moverse
+          CLEAR(lrEmpImp);
+          lrEmpImp.SETRANGE(Tipo      , lrEmpImp.Tipo::"Reserva WS");
+          lrEmpImp.SETRANGE(Destino, lrRelHD.Destination);
+          lrEmpImp.FINDFIRST;
+          lrEmpImp.TESTFIELD(Empresa);
+          rwsResv.Company := lrEmpImp.Empresa;
+
+          // Si vienen duplicados, la ultima sobreescribe
+          IF lwNewResv THEN  // Nueva Reserva
+            rwsResv.INSERT
+          ELSE
+            rwsResv.MODIFY;
+
+          rwsPers."Reservation ID" := rwsResv.ID;
+
+          CLEAR(rwsProd);
+          rwsProd.SETRANGE("Reservation ID", rwsResv.ID);
+          rwsProd.SETRANGE("Hotel Code"    , lwHotel);
+          rwsProd.SETRANGE("Arrival Date"  , rwsPers."Arrival Date");
+          rwsProd.SETRANGE("Departure Date", rwsPers."Departure Date");
+          rwsProd.SETRANGE("Room Code"     , lwHab);
+          rwsProd.SETRANGE("Boarding Code" , lwReg);
+          rwsProd.SETRANGE(Action          , rwsPers.Action);
+          lwNewProd := NOT rwsProd.FINDFIRST;
+          IF lwNewProd THEN BEGIN
+            CLEAR(rwsProd);
+            rwsProd.SETRANGE("Reservation ID", rwsResv.ID);
+            lwID :=  rwsProd.COUNT +1;
+          END
+          ELSE
+            lwID := rwsProd.ID;
+
+          // Si ya existe el ultimo sobreescribe el registro
+          rwsProd."Reservation ID"  := rwsResv.ID;
+          rwsProd.Voucher           := lwBono;
+          rwsProd.ID                := lwID;
+          rwsProd."Hotel Code"      := lwHotel;
+          rwsProd."Arrival Date"    := rwsPers."Arrival Date";
+          rwsProd."Departure Date"  := rwsPers."Departure Date";
+          rwsProd."Room Code"       := lwHab;
+          rwsProd."Boarding Code"   := lwReg;
+          rwsProd."Number of Rooms" := _ToInt(_Copia(lwText,128,4));
+          rwsProd."Booking Date"    := _ToDate(_Copia(lwText,171,9));
+          rwsProd.Action            := rwsPers.Action;
+          //+$001 <
+          rwsProd."Arrival transfer"   := lwServicioTransferE;
+          rwsProd."Departure transfer" := lwServicioTransferS;
+          //+$001 >
+          IF lwNewProd THEN
+            rwsProd.INSERT
+          ELSE
+            rwsProd.MODIFY;
+
+          rwsPers."Product ID"        := rwsProd.ID;
+
+          // Si existe ya la persona, se reescribe
+
+          lrsPers2  := rwsPers;
+          lwNewPers := NOT rwsPers.FIND;
+          rwsPers   := lrsPers2;
+          IF lwNewPers THEN
+            rwsPers.INSERT
+          ELSE
+            rwsPers.MODIFY;
+
+          IF rwsResv.Action <> rwsPers.Action THEN BEGIN
+            rwsResv.Action := rwsResv.Action::Modification;
+            rwsResv.MODIFY;
+          END;
+          IF rwsProd.Action <> rwsPers.Action THEN BEGIN
+            rwsProd.Action := rwsProd.Action::Modification;
+            rwsProd.MODIFY;
+          END;
+
+        END;
+        lwDia.UPDATE(1, ROUND(lwFile.POS/lwFile.LEN*10000,1));
+      UNTIL lwFile.POS = lwFile.LEN;
+
+      lwFile.CLOSE;
+      lwDia.CLOSE;
+    END;
+
+    LOCAL PROCEDURE _ToInt@1100253005(pwVal@1100253000 : Text[30]) pwInt : Integer;
+    BEGIN
+      // _ToInt
+      IF NOT EVALUATE(pwInt ,pwVal) THEN
+        pwInt :=0;
+    END;
+
+    LOCAL PROCEDURE _ToDate@1100253008(pwVal@1100253000 : Text[30]) pwDate : Date;
+    BEGIN
+      // _ToDate
+      EVALUATE(pwDate ,pwVal);
+    END;
+
+    LOCAL PROCEDURE _ToTime@1100253016(pwVal@1100253000 : Text[30]) pwTime : Time;
+    VAR
+      lwOk@1100217000 : Boolean;
+    BEGIN
+      // _ToTime
+
+      lwOk := EVALUATE(pwTime ,pwVal);
+    END;
+
+    LOCAL PROCEDURE _Inc@1100253011(VAR pwVal@1100253000 : Integer) : Integer;
+    BEGIN
+      // _Inc
+      pwVal +=1;
+      EXIT(pwVal);
+    END;
+
+    LOCAL PROCEDURE _Copia@1100253007(pwText@1100253000 : Text[1024];pwPos@1100253002 : Integer;pwLenght@1100253003 : Integer) : Text[1024];
+    VAR
+      lwVal@1100253001 : Text[1024];
+    BEGIN
+      // _Copia
+
+      IF pwLenght=0 THEN
+        lwVal := COPYSTR(pwText,pwPos)
+      ELSE
+        lwVal := COPYSTR(pwText,pwPos,pwLenght);
+      lwVal := DELCHR(lwVal, '<>');
+
+      EXIT(lwVal);
+    END;
+
+    LOCAL PROCEDURE _SeparateFlight@1100253019(pwCode@1100253000 : Code[10];VAR pwCompany@1100253001 : Code[10];VAR pwFlightNo@1100253002 : Code[10]);
+    VAR
+      lwModo@1100253003 : 'Company,Flight,Error';
+      lwCnt@1100253004 : Integer;
+      lwChar@1100253005 : Char;
+    BEGIN
+      // _SeparateFlight
+
+      IF pwCode='' THEN
+        EXIT;
+
+      CLEAR(lwModo);
+      FOR lwCnt := 1 TO STRLEN(pwCode) DO BEGIN
+        lwChar := pwCode[lwCnt];
+
+        IF lwChar = '-' THEN
+          lwModo := lwModo::Error
+        ELSE
+        BEGIN
+          IF (lwChar IN ['0'..'9']) AND (lwCnt > 2) THEN //+$003
+            lwModo := lwModo::Flight
+          ELSE
+            lwModo := lwModo::Company
+        END;
+
+        CASE lwModo OF
+          lwModo::Company: pwCompany := pwCompany + FORMAT(lwChar);
+          lwModo::Flight : pwFlightNo:= pwFlightNo + FORMAT(lwChar);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _ExtractFileName@1100253000(pwFielName@1100253000 : Text[1024]) : Text[1024];
+    VAR
+      lwFileName@1100253001 : Text[1024];
+      lwPos@1100253002 : Integer;
+    BEGIN
+      // _ExtractFileName
+
+      IF pwFielName = '' THEN
+        EXIT;
+
+      lwFileName := pwFielName;
+      REPEAT
+        lwPos      := STRPOS(lwFileName,'\');
+        lwFileName := COPYSTR(lwFileName, lwPos+1);
+      UNTIL lwPos=0;
+
+      EXIT(lwFileName);
+    END;
+
+    LOCAL PROCEDURE _ExtractFileTTOO@1100253003(pwFielName@1100253000 : Text[1024]) : Text[1024];
+    VAR
+      lwFileName@1100253001 : Text[1024];
+      lwTTOO@1100253003 : Text[1024];
+      lwPos@1100253002 : Integer;
+    BEGIN
+      // _ExtractFileTTOO
+      // Devuelve la ultima carpeta que ser  el nombre del touroperador
+
+      IF pwFielName = '' THEN
+        EXIT;
+
+      lwFileName := pwFielName;
+      REPEAT
+        lwPos      := STRPOS(lwFileName,'\');
+        IF lwPos <> 0 THEN BEGIN
+          lwTTOO     := lwFileName;
+          lwFileName := COPYSTR(lwFileName, lwPos+1);
+        END;
+      UNTIL lwPos=0;
+
+      lwPos := STRPOS(lwTTOO,'\');
+      IF lwPos = 0 THEN
+        lwTTOO := ''
+      ELSE
+        lwTTOO := COPYSTR(lwTTOO,1, lwPos-1);
+
+      lwTTOO := COPYSTR(lwTTOO,1,10);
+      EXIT(lwTTOO);
+    END;
+
+    PROCEDURE AseguraCarpeta@1100253004(pwPath@1100253000 : Text[1024]);
+    VAR
+      lwDirectorio@1100253001 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      lwPath@1100253002 : Text[1024];
+      lwPath2@1100253004 : Text[1024];
+      lwPos@1100253003 : Integer;
+    BEGIN
+      // AseguraCarpeta
+      // Asegura que existan todas las carpetas de la ruta especificada
+
+      IF pwPath = '' THEN
+        EXIT;
+
+      CREATE(lwDirectorio);
+
+      lwPath := pwPath;
+      CLEAR(lwPath2);
+      REPEAT
+        lwPos   := STRPOS(lwPath,'\');
+        IF lwPos <> 0 THEN BEGIN
+          lwPath2 += COPYSTR(lwPath,1, lwPos);
+          lwPath  := COPYSTR(lwPath, lwPos+1);
+          IF NOT lwDirectorio.FolderExists(lwPath2) THEN
+          BEGIN
+            IF lwPath2 <> '\\' THEN
+              lwDirectorio.CreateFolder(lwPath2);
+          END;
+        END;
+      UNTIL lwPos=0;
+
+      CLEAR(lwDirectorio);
+    END;
+
+    PROCEDURE VisualizaReservas@1100253006(pwIdFichero@1100253000 : Integer);
+    VAR
+      lrPer@1100253001 : Record 7009742;
+      lfForm@1100253002 : Form 7009869;
+    BEGIN
+      // VisualizaReservas
+
+      IF pwIdFichero =0 THEN
+        EXIT;
+
+      CLEAR(lrPer);
+      lrPer.SETCURRENTKEY("N§ Fichero");
+      lrPer.FILTERGROUP(2);
+      lrPer.SETRANGE("N§ Fichero", pwIdFichero);
+      lrPer.FILTERGROUP(0);
+      lfForm.SETTABLEVIEW(lrPer);
+      lfForm.RUN;
+      // FORM.RUN(7009869,lrPer);
+    END;
+
+    BEGIN
+    {
+      JPT 18/04/12 CNT-CAR-12004
+
+      $001 AJS 09092014 CNT-OC-14080, Vacation express va a utilizar el campo Option Mark para indicar la
+                        informacion de transfer de la reserva
+
+      $002 AJS 09092014 CNT-OC-14080, Incluimos el procesamiento del caracter 201 para indicar si es Charter o Regular
+
+      $003 AJS 10112014 Modifico la funcion _SeparateFlight para considerar siempre los 2 primeros caracteres como Aerolinea aunque
+                        contenga un numero
+    }
+    END.
+  }
+}

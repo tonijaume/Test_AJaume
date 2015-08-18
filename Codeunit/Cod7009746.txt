@@ -1,0 +1,754 @@
+OBJECT Codeunit 7009746 Enviar confirmacion touroperad
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/07/15;
+    Time=12:33:16;
+    Modified=Yes;
+    Version List=AIC2009,CNT-OC-14035,COM;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rParPer@1100217000 : Record 7009701;
+
+    PROCEDURE GenerarConfTouroperador@1100217002(VAR prCab@1100217001 : Record 7009741;pwCancelacion@1100217013 : Boolean);
+    VAR
+      lrTouroperador@1100217002 : Record 7009717;
+      lrAco@1100217005 : Record 7009748;
+      lrPer@1100217010 : Record 7009742;
+      lrProd@1100217011 : Record 7009752;
+      lrServTra@1100217014 : Record 7009916;
+      lcFileMgt@1100217006 : Codeunit 412;
+      lwRuta@1100217000 : Text[1024];
+      lwOStream@1100217003 : OutStream;
+      lwFichero@1100217004 : File;
+      lwAdults@1100217007 : Integer;
+      lwChilds@1100217008 : Integer;
+      lwInfants@1100217009 : Integer;
+      lwImporte@1100217012 : Decimal;
+    BEGIN
+      // GenerarConfTouroperador
+
+      IF NOT pwCancelacion THEN
+        IF prCab."Confirmacion servicios enviada" THEN
+          EXIT;
+
+      IF NOT lrTouroperador.GET(prCab."TourOperador Venta") THEN
+        EXIT;
+
+      IF NOT lrTouroperador."Requiere confirmaci¢n por rsv" THEN
+        EXIT;
+
+      rParPer.FINDFIRST;
+
+      prCab."Texto confirmacion".CREATEOUTSTREAM(lwOStream);
+
+      IF pwCancelacion THEN
+      BEGIN
+        lwOStream.WRITETEXT('CANCELLATION');
+        lwOStream.WRITETEXT();
+        lwOStream.WRITETEXT();
+      END;
+
+      //. Datos de la cabecera
+      lwOStream.WRITETEXT('CONF #' + ' ' + FORMAT(prCab."N§ Interno"));
+      lwOStream.WRITETEXT();
+
+      //. Buscamos el touroperador para grabar el nombre
+      lwOStream.WRITETEXT(lrTouroperador.Nombre);
+      lwOStream.WRITETEXT();
+
+      //. Grabamos la referencia del touroperador
+      lwOStream.WRITETEXT('YOUR REF #' + ' ' + prCab.Bono);
+      lwOStream.WRITETEXT();
+
+      //+$005
+      //. Mostar el tipo de operacion de la reserva
+      lwOStream.WRITETEXT('OPERATION TYPE' + ' ' + FORMAT(prCab."Tipo Operacion"));
+      lwOStream.WRITETEXT();
+
+      //. Contamos las personas
+      lrAco.RESET;
+      lrAco.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrAco.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrAco.SETRANGE(Generado    , TRUE);
+      IF NOT lrAco.FINDSET THEN
+        EXIT;
+
+      lwAdults  := 0;
+      lwChilds  := 0;
+      lwInfants := 0;
+      REPEAT
+        CASE lrAco."Tipo Persona" OF
+          rParPer."Codigo Adulto" : lwAdults  += 1;
+          rParPer."Codigo Ni¤o"   : lwChilds  += 1;
+          rParPer."Codigo Infant" : lwInfants += 1;
+        END;
+      UNTIL lrAco.NEXT = 0;
+
+      //. Grabamos el nombre y las personas
+      lwOStream.WRITETEXT(prCab.Nombre + ', ' + FORMAT(lwAdults) + ' AD' + ' + ' +
+                                                FORMAT(lwChilds) + ' CHD' + ' + ' +
+                                                FORMAT(lwInfants) + ' INF');
+      lwOStream.WRITETEXT();
+
+      //. Detalle de los servicios a partir de los periodos de reserva
+      lrPer.RESET;
+      lrPer.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrPer.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrPer.SETRANGE(Generada    , TRUE);
+      IF NOT lrPer.FINDSET THEN
+        EXIT;
+
+      lwImporte := 0;
+      REPEAT
+        lrProd.SETRANGE(Paquete, lrPer.Paquete);
+        lrProd.FINDFIRST;
+        REPEAT
+          lwOStream.WRITETEXT(); //. Linea en blanco para separar la informacion de cada producto
+          CASE lrProd."Tipo Producto" OF
+            lrProd."Tipo Producto"::Hotel: lwImporte += _GrabarLineaHotel(lrPer, lwOStream);
+            lrProd."Tipo Producto"::Transfer: lwImporte += _GrabarLineaTransfer(lrPer, lwOStream);
+            lrProd."Tipo Producto"::Excursion: lwImporte += _GrabarLineaExcursion(lrPer, lwOStream);
+          END;
+        UNTIL lrProd.NEXT = 0;
+      UNTIL lrPer.NEXT = 0;
+
+      //. Buscamos los posibles servicios de traslado en destino
+
+      lrServTra.RESET;
+      lrServTra.SETRANGE(Delegacion    , prCab.Delegacion);
+      lrServTra.SETRANGE("Num. Reserva", prCab."N§ Interno");
+      lrServTra.SETRANGE(Confirmado    , TRUE);
+      IF lrServTra.FINDSET THEN
+      BEGIN
+        REPEAT
+          lwOStream.WRITETEXT(); //. Linea en blanco para separar la informacion de cada servicio
+          lwImporte += _GrabarLineaTrasDest(lrServTra, prCab."TourOperador Venta", lwOStream);
+        UNTIL lrServTra.NEXT = 0;
+      END;
+
+      //. Grabamos el total de la reserva
+      lwOStream.WRITETEXT(); //. Linea en blanco para separar la informacion del total
+      lwOStream.WRITETEXT('TOTAL = ' + FORMAT(lwImporte));
+
+      //. Grabamos la informacion en la reserva
+      prCab.VALIDATE("Confirmacion servicios enviada", TRUE);
+      prCab.MODIFY;
+
+      VerConfirmacion(prCab);
+    END;
+
+    LOCAL PROCEDURE _GrabarLineaHotel@1100217012(prPer@1100217000 : Record 7009742;VAR pOStream@1100217001 : OutStream) : Decimal;
+    VAR
+      lrRsv@1100217002 : Record 7009743;
+      lcCalc@1100217003 : Codeunit 7009707;
+    BEGIN
+      // _GrabarLineaHotel
+
+      //. Buscaremos la reserva de hotel para valorarla y poder grabar el importe
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY(Delegacion, "N§ Interno", "N§ Periodo");
+      lrRsv.SETRANGE(Delegacion  , prPer.Delegacion);
+      lrRsv.SETRANGE("N§ Interno", prPer."N§ Interno");
+      lrRsv.SETRANGE("N§ Periodo", prPer."N§ Periodo");
+      lrRsv.SETRANGE(Responsable , TRUE);
+      IF NOT lrRsv.FINDFIRST THEN
+        EXIT;
+
+      lcCalc.calculo_reserva(lrRsv, FALSE);
+
+      //. Falta detallar como se muestra esta informacion
+    END;
+
+    LOCAL PROCEDURE _GrabarLineaTransfer@1100217013(prPer@1100217001 : Record 7009742;VAR pOStream@1100217000 : OutStream) vCosteSer : Decimal;
+    VAR
+      lrRsv@1100217002 : Record 7009744;
+      lrCont@1100217003 : Record 7009788;
+      lrHotel@1100217004 : Record 7009724;
+      lrRsvTMP@1000000000 : TEMPORARY Record 7009744;
+      lrAeropuerto@1100217013 : Record 7009704;
+      lwPrecioAD@1100217008 : Decimal;
+      lwPrecioCH@1100217009 : Decimal;
+      lwCosteServicioE@1100217011 : Decimal;
+      lwCosteServicioS@1100217012 : Decimal;
+      lwPrecioServicio@1100217010 : Boolean;
+    BEGIN
+      // _GrabarLineaTransfer
+
+      lwPrecioAD       := 0;
+      lwPrecioCH       := 0;
+      lwCosteServicioE := 0;
+      lwCosteServicioS := 0;
+
+      //. Hacemos un calcfields de tipo operacion
+      prPer.CALCFIELDS("Tipo operacion");
+
+      CLEAR(lrRsvTMP);
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY(Delegacion, "N§ Interno", "N§ Periodo");
+      lrRsv.SETRANGE(Delegacion  , prPer.Delegacion);
+      lrRsv.SETRANGE("N§ Interno", prPer."N§ Interno");
+      lrRsv.SETRANGE("N§ Periodo", prPer."N§ Periodo");
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsvTMP.RESET;
+          lrRsvTMP.SETRANGE(Delegacion            , lrRsv.Delegacion);
+          lrRsvTMP.SETRANGE("N§ Interno"          , lrRsv."N§ Interno");
+          lrRsvTMP.SETRANGE("N§ Periodo"          , lrRsv."N§ Periodo");
+          lrRsvTMP.SETRANGE("Compa¤ia entrada"    , lrRsv."Compa¤ia entrada");
+          lrRsvTMP.SETRANGE("Vuelo entrada"       , lrRsv."Vuelo entrada");
+          lrRsvTMP.SETRANGE("Fecha entrada"       , lrRsv."Fecha entrada");
+          lrRsvTMP.SETRANGE("Terminal entrada"    , lrRsv."Terminal entrada");
+          lrRsvTMP.SETRANGE("Hora entrada"        , lrRsv."Hora entrada");
+          lrRsvTMP.SETRANGE("IATA origen entrada" , lrRsv."IATA origen entrada");
+          lrRsvTMP.SETRANGE("IATA destino entrada", lrRsv."IATA destino entrada");
+          lrRsvTMP.SETRANGE("Compa¤ia salida"     , lrRsv."Compa¤ia salida");
+          lrRsvTMP.SETRANGE("Vuelo salida"        , lrRsv."Vuelo salida");
+          lrRsvTMP.SETRANGE("Fecha salida"        , lrRsv."Fecha salida");
+          lrRsvTMP.SETRANGE("Terminal salida"     , lrRsv."Terminal salida");
+          lrRsvTMP.SETRANGE("Hora salida"         , lrRsv."Hora salida");
+          lrRsvTMP.SETRANGE("IATA origen salida"  , lrRsv."IATA origen salida");
+          lrRsvTMP.SETRANGE("IATA destino salida" , lrRsv."IATA destino salida");
+          IF lrRsvTMP.FINDFIRST THEN
+          BEGIN
+            CASE lrRsv."Tipo Persona" OF
+              rParPer."Codigo Adulto" : lrRsvTMP."N§ Personas"  += 1;
+              rParPer."Codigo Ni¤o"   : lrRsvTMP."N§ Ni¤os"  += 1;
+              rParPer."Codigo Infant" : lrRsvTMP."N§ Bebes" += 1;
+            END;
+            lrRsvTMP.MODIFY;
+          END
+          ELSE
+          BEGIN
+            lrRsvTMP := lrRsv;
+            //. Inicializo el numero de personas
+            lrRsvTMP."N§ Personas" := 0;
+            lrRsvTMP."N§ Ni¤os"    := 0;
+            lrRsvTMP."N§ Bebes"    := 0;
+
+            CASE lrRsv."Tipo Persona" OF
+              rParPer."Codigo Adulto" : lrRsvTMP."N§ Personas"  := 1;
+              rParPer."Codigo Ni¤o"   : lrRsvTMP."N§ Ni¤os"  := 1;
+              rParPer."Codigo Infant" : lrRsvTMP."N§ Bebes" := 1;
+            END;
+            lrRsvTMP.INSERT;
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+
+      vCosteSer := 0;
+      lrRsvTMP.RESET;
+      IF lrRsvTMP.FINDSET THEN
+      BEGIN
+        //. Buscamos el contrato de venta
+        _GetContratoTransfer(lrCont, lrRsvTMP."TourOperador facturacion", lrRsvTMP."Fecha entrada", lrRsvTMP."IATA destino entrada");
+
+        REPEAT
+          //. Solo grabamos la linea para la primera persona de la reserva
+          //IF lrRsvTMP."N§ Reserva" = lrRsv."N§ Responsable" THEN
+          //BEGIN
+            IF lrCont."Tipo de Facturacion" = lrCont."Tipo de Facturacion"::Separado THEN
+            BEGIN
+              //+$004
+              //. Solo incluimos el servicio si el aeropuerto local esta rellenado
+              IF (lrRsvTMP."IATA destino entrada" <> '') AND ((lrRsvTMP."N§ Personas" <> 0) OR
+                 (lrRsvTMP."N§ Ni¤os" <> 0)) THEN
+              BEGIN
+                lrHotel.GET(lrRsvTMP."Hotel entrada");
+
+                lrAeropuerto.GET(lrRsvTMP."IATA destino entrada");
+
+                //. Buscamos el precio
+                //+$003
+                _GetPrecioTransfer(lrCont, lrAeropuerto."Zona fisica", lrHotel."Zona Fisica", lrRsvTMP."Servicio transfer entrada",
+                                   _GetPaxTransferFacturados(lrRsvTMP), lrRsvTMP."Fecha entrada", prPer."Tipo operacion",
+                                   lrRsvTMP."Tipo vehiculo solicitado", lwPrecioAD, lwPrecioCH, lwPrecioServicio);
+
+                //. El coste del servicio dependera de como es el precio
+                IF lwPrecioServicio THEN
+                  lwCosteServicioE := lwPrecioAD
+                ELSE
+                  lwCosteServicioE := (lwPrecioAD * lrRsvTMP."N§ Personas") + (lwPrecioCH * lrRsvTMP."N§ Ni¤os");
+                vCosteSer := vCosteSer + lwCosteServicioE;
+
+                //. Un servicio para la entrada y otro para la salida
+                //. Entrada
+                pOStream.WRITETEXT(_FormatoFecha(lrRsvTMP."Fecha entrada"));
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT('TRANSFER IN');
+                pOStream.WRITETEXT(' - ');
+                // -$008
+                //IF lrRsv."Transfer Privado Llegada" THEN //+$003
+                //  pOStream.WRITETEXT('PRIVATE')
+                //ELSE
+                //  pOStream.WRITETEXT('REGULAR');
+                pOStream.WRITETEXT(FORMAT(lrRsvTMP."Servicio transfer entrada"));  // +$008
+                pOStream.WRITETEXT(' - ');
+                //+$005 <
+                //. Si se ha especificado un tipo de vehiculo, lo mostramos aqui
+                IF lrRsvTMP."Tipo vehiculo solicitado" <> '' THEN
+                BEGIN
+                  pOStream.WRITETEXT('VEHICLE REQUESTED: ' + lrRsvTMP."Tipo vehiculo solicitado");
+                  pOStream.WRITETEXT(' - ');
+                END;
+                //+$005 >
+                pOStream.WRITETEXT(lrRsvTMP."IATA destino entrada" + '/' + lrHotel.Nombre);
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT(lrRsvTMP."Compa¤ia entrada" + lrRsvTMP."Vuelo entrada");
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT(
+                                   FORMAT(lrRsvTMP."N§ Personas") + ' AD' + ' X ' + FORMAT(lwPrecioAD) + ' - ' +
+                                   FORMAT(lrRsvTMP."N§ Ni¤os") + ' CHD' + ' X ' + FORMAT(lwPrecioCH) + ' = ' +
+                                   FORMAT(lwCosteServicioE)
+                                  );
+                pOStream.WRITETEXT();
+              END;
+
+              //.--------
+              //. Salida
+              //.--------
+              //+$004
+              //. Solo incluimos el servicio si el vuelo est  rellenado
+              IF (lrRsvTMP."IATA origen salida" <> '') AND ((lrRsvTMP."N§ Personas" <> 0) OR
+                 (lrRsvTMP."N§ Ni¤os" <> 0)) THEN
+              BEGIN
+                //. Buscamos el contrato de venta para contemplar las reservas que salen de un aeropuerto distinto al de llegada
+                _GetContratoTransfer(lrCont, lrRsvTMP."TourOperador facturacion", lrRsvTMP."Fecha salida", lrRsvTMP."IATA origen salida");
+
+                lrHotel.GET(lrRsvTMP."Hotel salida");
+
+                lrAeropuerto.GET(lrRsvTMP."IATA origen salida");
+
+                //. Buscamos el precio
+                //+$003
+                _GetPrecioTransfer(lrCont, lrAeropuerto."Zona fisica", lrHotel."Zona Fisica", lrRsvTMP."Servicio transfer salida",
+                                   _GetPaxTransferFacturados(lrRsvTMP), lrRsvTMP."Fecha salida", prPer."Tipo operacion",
+                                   lrRsvTMP."Tipo vehiculo solicitado", lwPrecioAD, lwPrecioCH, lwPrecioServicio);
+
+                //. El coste del servicio dependera de como es el precio
+                IF lwPrecioServicio THEN
+                  lwCosteServicioS := lwPrecioAD
+                ELSE
+                  lwCosteServicioS := (lwPrecioAD * lrRsvTMP."N§ Personas") + (lwPrecioCH * lrRsvTMP."N§ Ni¤os");
+                vCosteSer := vCosteSer + lwCosteServicioS;
+
+                pOStream.WRITETEXT(_FormatoFecha(lrRsvTMP."Fecha salida"));
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT('TRANSFER OUT');
+                pOStream.WRITETEXT(' - ');
+                // -$008
+                //IF lrRsv."Transfer Privado Salida" THEN //+$003
+                //  pOStream.WRITETEXT('PRIVATE')
+                //ELSE
+                //  pOStream.WRITETEXT('REGULAR');
+                pOStream.WRITETEXT(FORMAT(lrRsvTMP."Servicio transfer salida"));  // +$008
+                pOStream.WRITETEXT(' - ');
+                //+$005 <
+                //. Si se ha especificado un tipo de vehiculo, lo mostramos aqui
+                IF lrRsvTMP."Tipo vehiculo solicitado" <> '' THEN
+                BEGIN
+                  pOStream.WRITETEXT('VEHICLE REQUESTED: ' + lrRsvTMP."Tipo vehiculo solicitado");
+                  pOStream.WRITETEXT(' - ');
+                END;
+                //+$005 >
+                pOStream.WRITETEXT(lrHotel.Nombre + '/' + lrRsvTMP."IATA origen salida");
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT(lrRsvTMP."Compa¤ia salida" + lrRsvTMP."Vuelo salida");
+                pOStream.WRITETEXT(' - ');
+                pOStream.WRITETEXT(
+                                   FORMAT(lrRsvTMP."N§ Personas") + ' AD' + ' X ' + FORMAT(lwPrecioAD) + ' - ' +
+                                   FORMAT(lrRsvTMP."N§ Ni¤os") + ' CHD' + ' X ' + FORMAT(lwPrecioCH) + ' = ' +
+                                   FORMAT(lwCosteServicioS)
+                                  );
+                pOStream.WRITETEXT();
+
+              END;
+            END
+            //. lrCont."Tipo de Facturacion"::Entrada y Salida
+            ELSE
+            BEGIN
+              lrHotel.GET(lrRsvTMP."Hotel entrada");
+
+              lrAeropuerto.GET(lrRsvTMP."IATA destino entrada");
+
+              //. Buscamos el precio
+              //+$003
+              _GetPrecioTransfer(lrCont, lrAeropuerto."Zona fisica", lrHotel."Zona Fisica", lrRsvTMP."Servicio transfer entrada",
+                                 _GetPaxTransferFacturados(lrRsvTMP), lrRsvTMP."Fecha entrada", prPer."Tipo operacion",
+                                 lrRsvTMP."Tipo vehiculo solicitado", lwPrecioAD, lwPrecioCH, lwPrecioServicio);
+
+              //. El coste del servicio dependera de como es el precio
+              IF lwPrecioServicio THEN
+                lwCosteServicioE := lwPrecioAD
+              ELSE
+                lwCosteServicioE := (lwPrecioAD * lrRsvTMP."N§ Personas") + (lwPrecioCH * lrRsvTMP."N§ Ni¤os");
+              vCosteSer := vCosteSer + lwCosteServicioE;
+
+              //.----------
+              //. El servicio para la ENTRADA del cliente tendr  precio
+              //.----------
+              pOStream.WRITETEXT(_FormatoFecha(lrRsvTMP."Fecha entrada"));
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT('TRANSFER IN/OUT');
+              pOStream.WRITETEXT(' - ');
+              // -$008
+              //IF lrRsv."Transfer Privado Llegada" THEN //+$003
+              //  pOStream.WRITETEXT('PRIVATE')
+              //ELSE
+              //  pOStream.WRITETEXT('REGULAR');
+              pOStream.WRITETEXT(FORMAT(lrRsvTMP."Servicio transfer entrada"));  // +$008
+              pOStream.WRITETEXT(' - ');
+              //+$005 <
+              //. Si se ha especificado un tipo de vehiculo, lo mostramos aqui
+              IF lrRsvTMP."Tipo vehiculo solicitado" <> '' THEN
+              BEGIN
+                pOStream.WRITETEXT('VEHICLE REQUESTED: ' + lrRsvTMP."Tipo vehiculo solicitado");
+                pOStream.WRITETEXT(' - ');
+              END;
+              //+$005 >
+              pOStream.WRITETEXT(lrRsvTMP."IATA destino entrada" + '/' + lrHotel.Nombre);
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT(lrRsvTMP."Compa¤ia entrada" + lrRsvTMP."Vuelo entrada");
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT(
+                                 FORMAT(lrRsvTMP."N§ Personas") + ' AD' + ' X ' + FORMAT(lwPrecioAD) + ' - ' +
+                                 FORMAT(lrRsvTMP."N§ Ni¤os") + ' CHD' + ' X ' + FORMAT(lwPrecioCH) + ' = ' +
+                                 FORMAT(lwCosteServicioE)
+                                );
+              pOStream.WRITETEXT();
+              //. --------------
+              //. SALIDA sin ingreso
+              //. --------------
+              lrHotel.GET(lrRsvTMP."Hotel salida");
+
+              pOStream.WRITETEXT(_FormatoFecha(lrRsvTMP."Fecha salida"));
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT('TRANSFER OUT');
+              pOStream.WRITETEXT(' - ');
+              // -$008
+              //IF lrRsv."Transfer Privado Salida" THEN //+$003
+              //  pOStream.WRITETEXT('PRIVATE')
+              //ELSE
+              //  pOStream.WRITETEXT('REGULAR');
+              pOStream.WRITETEXT(FORMAT(lrRsvTMP."Servicio transfer salida"));  // +$008
+              pOStream.WRITETEXT(' - ');
+              //+$005 <
+              //. Si se ha especificado un tipo de vehiculo, lo mostramos aqui
+              IF lrRsvTMP."Tipo vehiculo solicitado" <> '' THEN
+              BEGIN
+                pOStream.WRITETEXT('VEHICLE REQUESTED: ' + lrRsvTMP."Tipo vehiculo solicitado");
+                pOStream.WRITETEXT(' - ');
+              END;
+              //+$005 >
+              pOStream.WRITETEXT(lrHotel.Nombre + '/' + lrRsvTMP."IATA origen salida");
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT(lrRsvTMP."Compa¤ia salida" + lrRsvTMP."Vuelo salida");
+              pOStream.WRITETEXT(' - ');
+              pOStream.WRITETEXT(
+                                 FORMAT(lrRsvTMP."N§ Personas") + ' AD' + ' - ' +
+                                 FORMAT(lrRsvTMP."N§ Ni¤os") + ' CHD'
+                                );
+            END;
+          //END;
+        UNTIL lrRsvTMP.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GrabarLineaTrasDest@1100217004(prServTra@1100217001 : Record 7009916;pwTouroperador@1100217003 : Code[10];VAR pOStream@1100217000 : OutStream) : Decimal;
+    VAR
+      lrCont@1100217002 : Record 7009788;
+      lwPrecioAD@1100217004 : Decimal;
+      lwPrecioCH@1100217005 : Decimal;
+      lwCosteServicio@1100217007 : Decimal;
+      lwPrecioServicio@1100217006 : Boolean;
+    BEGIN
+      // _GrabarLineaTrasDest
+
+      prServTra.CALCFIELDS(Personas, Adultos, Ni¤os, "Tipo operacion");
+
+      //. Buscamos el contrato de venta
+      _GetContratoTransfer(lrCont, pwTouroperador, prServTra."Fecha servicio", prServTra."Zona origen");
+
+      //. Buscamos el precio
+      _GetPrecioTransfer(lrCont, prServTra."Zona origen", prServTra."Zona destino", prServTra."Tipo Servicio", prServTra.Personas,
+                         prServTra."Fecha servicio", prServTra."Tipo operacion", '', lwPrecioAD, lwPrecioCH, lwPrecioServicio);
+
+      //. El coste del servicio dependera de como es el precio
+      IF lwPrecioServicio THEN
+        lwCosteServicio := lwPrecioAD
+      ELSE
+        lwCosteServicio := (lwPrecioAD * prServTra.Adultos) + (lwPrecioCH * prServTra.Ni¤os);
+
+      //. Un servicio para la entrada y otro para la salida
+      //. Entrada
+      pOStream.WRITETEXT(_FormatoFecha(prServTra."Fecha servicio"));
+      pOStream.WRITETEXT(' - ');
+      pOStream.WRITETEXT('CHANGE ZONE');
+      pOStream.WRITETEXT(' - ');
+      // -$008
+      //IF prServTra."Servicio privado" THEN
+      //  pOStream.WRITETEXT('PRIVATE')
+      //ELSE
+      //  pOStream.WRITETEXT('REGULAR');
+      pOStream.WRITETEXT(FORMAT(prServTra."Tipo Servicio"));  // +$008
+      pOStream.WRITETEXT(' - ');
+      pOStream.WRITETEXT(
+                         prServTra."Descripcion origen" + '(' + prServTra."Zona origen" + ')' + '/' +
+                         prServTra."Descripcion destino"  + '(' + prServTra."Zona destino" + ')'
+                        );
+      pOStream.WRITETEXT(' - ');
+      pOStream.WRITETEXT(
+                         FORMAT(prServTra.Adultos) + ' AD' + ' X ' + FORMAT(lwPrecioAD) + ' - ' +
+                         FORMAT(prServTra.Ni¤os) + ' CHD' + ' X ' + FORMAT(lwPrecioCH) + ' = ' +
+                         FORMAT(lwCosteServicio)
+                        );
+      pOStream.WRITETEXT();
+
+      EXIT(lwCosteServicio);
+    END;
+
+    LOCAL PROCEDURE _GrabarLineaExcursion@1100217014(prPer@1100217001 : Record 7009742;VAR pOStream@1100217000 : OutStream) : Decimal;
+    BEGIN
+      // _GrabarLineaExcursion
+
+      //. Pendiente definicion con el cliente
+    END;
+
+    LOCAL PROCEDURE _GetContratoTransfer@1100217003(VAR prCont@1100217000 : Record 7009788;pwTouroperador@1100217001 : Code[10];pwFecha@1100217002 : Date;pwPuntoReferencia@1100217003 : Code[10]);
+    BEGIN
+      // _GetContratoTransfer
+
+      //. Buscamos el contrato de venta
+      prCont.RESET;
+      prCont.SETRANGE (TourOperador           , pwTouroperador);
+      prCont.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      prCont.SETFILTER("Fecha final contrato" , '>=%1', pwFecha);
+      //-$007prCont.SETRANGE ("OLD_Punto Origen/Destino" , pwPuntoReferencia);
+      prCont.SETRANGE (Comercializadora       , FALSE); //+$009
+      prCont.SETRANGE (Confirmado             , TRUE);
+      prCont.FINDFIRST; //+$007
+
+      //-$007IF NOT prCont.FINDFIRST THEN
+      //-$007BEGIN
+        //-$007prCont.SETRANGE("OLD_Punto Origen/Destino", '');
+        //-$007IF NOT prCont.FINDFIRST THEN
+        //-$007BEGIN
+
+          //-$007prCont.SETRANGE("OLD_Punto Origen/Destino");
+          //-$007prCont.FINDFIRST;
+        //-$007END;
+      //-$007END;
+    END;
+
+    LOCAL PROCEDURE _GetPrecioTransfer@1100217025(prCont@1100217000 : Record 7009788;pwZonaDesde@1100217013 : Code[10];pwZonaHasta@1100217001 : Code[10];pwTipoServicio@1100217002 : 'Regular,Privado,Deluxe';pwPaxes@1100217006 : Integer;pwFecha@1100217009 : Date;pwTipoOperacion@1100217011 : 'Charter,Regular';pwVehiculo@1100217012 : Code[10];VAR pwPrecioAD@1100217003 : Decimal;VAR pwPrecioCH@1100217004 : Decimal;VAR pwPrecioServicio@1100217007 : Boolean);
+    VAR
+      lrPre@1100217005 : Record 7009790;
+      lrPre2@1100217010 : Record 7009790;
+      lrZona@1100217008 : Record 7009791;
+      lwZonaDesde@1100217014 : Code[10];
+      lwZonaHasta@1100217015 : Code[10];
+    BEGIN
+      // _GetPrecioTransfer
+
+      pwPrecioAD := 0;
+      pwPrecioCH := 0;
+      pwPrecioServicio := FALSE;
+
+      IF pwPaxes = 0 THEN
+        EXIT;
+
+      //. Buscamos las zonas que componen la ruta
+      lrZona.RESET;
+      lrZona.SETRANGE(Contrato       , prCont."N§ Contrato Venta");
+      lrZona.SETRANGE("Tipo contrato", lrZona."Tipo contrato"::Venta);
+      lrZona.SETRANGE("Zona fisica"  , pwZonaDesde);
+      IF NOT lrZona.FINDFIRST THEN
+        EXIT;
+      lwZonaDesde := lrZona.Zona;
+
+      lrZona.SETRANGE("Zona fisica"  , pwZonaHasta);
+      IF NOT lrZona.FINDFIRST THEN
+        EXIT;
+      lwZonaHasta := lrZona.Zona;
+
+      lrPre.RESET;
+      lrPre.SETRANGE (Delegacion     , prCont.Delegacion);
+      lrPre.SETRANGE ("N§ Contrato"  , prCont."N§ Contrato Venta");
+      lrPre.SETRANGE ("Codigo precio", lrPre."Codigo precio"::"Precio Base");
+      lrPre.SETFILTER("Fecha desde"  , '<=%1', pwFecha);
+      lrPre.SETFILTER("Fecha hasta"  , '>=%1', pwFecha);
+      lrPre.SETRANGE (Origen         , lwZonaDesde);
+      lrPre.SETRANGE (Destino        , lwZonaHasta);
+      // -$008
+      //IF pwPrivado THEN
+      //  lrPre.SETRANGE("Tipo Traslado", lrPre."Tipo Traslado"::Privado)
+      //ELSE
+      //  lrPre.SETRANGE("Tipo Traslado", lrPre."Tipo Traslado"::Regular);
+      lrPre.SETRANGE("Tipo Traslado", pwTipoServicio); // +$008
+      lrPre.SETFILTER("Rango desde"  , '<=%1', pwPaxes);
+      lrPre.SETFILTER("Rango hasta"  , '>=%1', pwPaxes);
+
+      IF pwVehiculo <> '' THEN
+        lrPre.SETRANGE("Tipo vehiculo", pwVehiculo);
+
+      IF pwTipoOperacion = pwTipoOperacion::Charter THEN
+        lrPre.SETFILTER("Tipo operacion", '%1|%2', lrPre."Tipo operacion"::Ambos, lrPre."Tipo operacion"::Charter)
+      ELSE
+        lrPre.SETFILTER("Tipo operacion", '%1|%2', lrPre."Tipo operacion"::Ambos, lrPre."Tipo operacion"::Regular);
+
+      lrPre.SETRANGE (Activo, TRUE);
+      IF NOT lrPre.FINDFIRST THEN
+      BEGIN
+        lrPre.SETRANGE(Destino, lwZonaDesde);
+        lrPre.SETRANGE(Origen , lwZonaHasta);
+      END;
+
+      IF lrPre.FINDFIRST THEN
+      BEGIN
+        //. Hemos encontrado precio, vamos a ver si existe para el tipo de operacion de esta reserva
+        lrPre2.COPY(lrPre);
+        lrPre2.SETRANGE("Tipo operacion", pwTipoOperacion + 1);
+        IF lrPre2.FINDFIRST THEN
+          lrPre := lrPre2;
+
+        IF lrPre."Tipo Aplicacion" = lrPre."Tipo Aplicacion"::Vehiculo THEN
+        BEGIN
+          pwPrecioAD       := lrPre.Precio;
+          pwPrecioServicio := TRUE;
+        END
+        ELSE
+        BEGIN
+          pwPrecioAD       := lrPre."Precio Adulto";
+          pwPrecioCH       := lrPre."Precio Ni¤o";
+          pwPrecioServicio := FALSE;
+        END;
+      END;
+    END;
+
+    PROCEDURE VerConfirmacion@1100217000(prCab@1100217000 : Record 7009741);
+    VAR
+      lwRuta@1100217001 : Text[1024];
+      lwFichero@1100217002 : Text[1024];
+    BEGIN
+      // VerConfirmacion
+
+      lwRuta := TEMPORARYPATH + FORMAT(prCab."N§ Interno") + '.TXT';
+      lwFichero := FORMAT(prCab."N§ Interno") + '.TXT';
+
+      prCab.CALCFIELDS("Texto confirmacion");
+      IF ISSERVICETIER THEN
+        DOWNLOAD(lwFichero, '', TEMPORARYPATH, '', lwRuta)
+      ELSE
+        prCab."Texto confirmacion".EXPORT(lwRuta, FALSE);
+
+      //. Mostrar el fichero resultante
+      HYPERLINK(lwRuta);
+    END;
+
+    LOCAL PROCEDURE _FormatoFecha@1100217001(pwFecha@1100217000 : Date) : Text[30];
+    VAR
+      lwFecha@1100217001 : Text[30];
+    BEGIN
+      // _FormatoFecha
+
+      CASE DATE2DMY(pwFecha, 2) OF
+        1 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'JAN' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        2 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'FEB' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        3 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'MAR' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        4 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'APR' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        5 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'MAY' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        6 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'JUN' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        7 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'JUL' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        8 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'AUG' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        9 : lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'SEP' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        10: lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'OCT' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        11: lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'NOV' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+        12: lwFecha := FORMAT(pwFecha, 0, '<Day>') + '.' + 'DEC' +  '.' + FORMAT(pwFecha, 0, '<Year4>');
+      END;
+
+      EXIT(lwFecha);
+    END;
+
+    LOCAL PROCEDURE _GetPaxTransferFacturados@1000000000(VAR prRsvTMP@1000000000 : Record 7009744) lwPaxes : Integer;
+    VAR
+      lrRsv@1000000001 : Record 7009744;
+    BEGIN
+      // _GetPaxTransferFacturados
+
+      //+$012
+
+      lwPaxes := 0;
+
+      lrRsv.RESET;
+      lrRsv.SETRANGE(Delegacion             , prRsvTMP.Delegacion);
+      lrRsv.SETRANGE("N§ Interno"           , prRsvTMP."N§ Interno");
+      lrRsv.SETRANGE("N§ Periodo"           , prRsvTMP."N§ Periodo");
+      lrRsv.SETRANGE("Compa¤ia entrada"     , prRsvTMP."Compa¤ia entrada");
+      lrRsv.SETRANGE("Vuelo entrada"        , prRsvTMP."Vuelo entrada");
+      lrRsv.SETRANGE("Fecha entrada"        , prRsvTMP."Fecha entrada");
+      lrRsv.SETRANGE("Terminal entrada"     , prRsvTMP."Terminal entrada");
+      lrRsv.SETRANGE("Hora entrada"         , prRsvTMP."Hora entrada");
+      lrRsv.SETRANGE("IATA origen entrada"  , prRsvTMP."IATA origen entrada");
+      lrRsv.SETRANGE("IATA destino entrada" , prRsvTMP."IATA destino entrada");
+      lrRsv.SETRANGE("Compa¤ia salida"      , prRsvTMP."Compa¤ia salida");
+      lrRsv.SETRANGE("Vuelo salida"         , prRsvTMP."Vuelo salida");
+      lrRsv.SETRANGE("Fecha salida"         , prRsvTMP."Fecha salida");
+      lrRsv.SETRANGE("Terminal salida"      , prRsvTMP."Terminal salida");
+      lrRsv.SETRANGE("Hora salida"          , prRsvTMP."Hora salida");
+      lrRsv.SETRANGE("IATA origen salida"   , prRsvTMP."IATA origen salida");
+      lrRsv.SETRANGE("IATA destino salida"  , prRsvTMP."IATA destino salida");
+      lrRsv.SETRANGE("Invitado TourOperador", FALSE);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+           CASE lrRsv."Tipo Persona" OF
+             rParPer."Codigo Adulto", rParPer."Codigo Ni¤o": lwPaxes += 1;
+           END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+
+      EXIT(lwPaxes);
+    END;
+
+    BEGIN
+    {
+      $000 AJS Inicialmente todos los textos se ponen en ingles sin necesidad de trabajar con TEXTCONSTANTS
+
+      $001 AJS 18032014 CNT-OC-14035, Nueva funcion GenerarConfTouroperador para aquellos touroperadores que esten configurados
+
+      $002 AJS 02042014 Cuando hay facturacion por separado hay que buscar el contrato con los datos de salida
+
+      $003 AJS 29052014 La marca de transfer privado se separa en dos en reserva transfer, llegada y salida
+
+      $004 AJS 03062014 En los touroperadores con facturacion por separado solo mostramos el servicio si el aeropuerto local
+                        esta rellenado
+
+      $005 AJS 09062014 CNT-OC-14046, A¤adimos el tipo de operacion y el vehiculo solicitado
+
+      $006 AJS 10062014 CNT-OC-14046, Buscamos el precio por el tipo de operacion y el vehiculo solicitado
+
+      $007 AJS 10062014 CNT-OC-14046, Los contratos de venta transfer dejan de ir por Aeropuerto
+
+      $008 ARM 29092014 CNT-CAR-14063, Se a¤ade el nuevo campo Servicio transfer entrada y salida
+
+      $009 AJS 13032015 CNT-CAR-14096, Los contratos no tienen que ser de comercializadora
+
+      $010 ARM 09062015 CNT-OC-14122 Solo se valora entrada o salida si el cliente la tiene contratada
+
+      $011 AJS 01072015 Elimina referencias a campos obsoletos de reserva transfer
+
+      $012 AJS 07072015 Hay que tener en cuenta las marcas de Invitado Touroperador
+    }
+    END.
+  }
+}

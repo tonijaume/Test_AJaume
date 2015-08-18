@@ -1,0 +1,1991 @@
+OBJECT Codeunit 7035327 Funciones LOGISPLAN
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/07/15;
+    Time=11:44:00;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            rParGen.FINDFIRST;
+            IF rParGen."Empresa Real" = rParGen."Empresa Real"::TRN THEN
+              ExportacionDiaria
+            ELSE
+              cLogisIBZ.ExportacionDiaria;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      wVentana@1100244000 : Dialog;
+      wActual@1100244001 : Integer;
+      wTotal@1100244002 : Integer;
+      Text001@1100244003 : TextConst 'ESP=EXPORTANDO SERVICIOS @1@@@@@@@@@@@@@';
+      wLinea@1100244007 : Text[1000];
+      wDia@1100244011 : Date;
+      rPar@1100244005 : Record 7035332;
+      rParGen@1100244006 : Record 7010311;
+      rInfExc@1103350007 : Record 7035371;
+      rInfTras@1103350008 : Record 7035368;
+      cCalcR@1100253000 : Codeunit 7010407;
+      cLogisIBZ@1000000000 : Codeunit 7010414;
+      rFich@1100244004 : File;
+      Text002@1100244008 : TextConst 'ESP=Es necesario determinar un vehiculo preferente para el conductor %1';
+      Text003@1100244009 : TextConst 'ESP=Desea iniciar la exportacion de ficheros para OPTRAT';
+      Text004@1100244010 : TextConst 'ESP=Introduzca fecha a exportar #1########';
+      Text005@1100244012 : TextConst 'ESP=EXPORTANDO CONDUCTORES @1@@@@@@@@@@@@@';
+      Text006@1100244013 : TextConst 'ESP=EXPORTANDO VEHICULOS @1@@@@@@@@@@@@@';
+      Text007@1103350000 : TextConst 'ESP=EXPORTANDO PROVEEDORES\@1@@@@@@@@@@@@@';
+      Text008@1103350002 : TextConst 'ESP=EXPORTANDO ASOCIACION RECURSOS\@1@@@@@@@@@@@@@';
+      Text009@1103350003 : TextConst 'ESP=EXPORTANDO RESTRICCIONES CONDUCTOR\@1@@@@@@@@@@@@@';
+      Text010@1103350004 : TextConst 'ESP=EXPORTANDO RESTRICCIONES HOTEL - VEHICULO\@1@@@@@@@@@@@@@';
+      Text011@1103350005 : TextConst 'ESP=EXPORTANDO DEFINICION TURNOS CONDUCTOR\@1@@@@@@@@@@@@@';
+      Text012@1103350006 : TextConst 'ESP=EXPORTANDO RESTRICCIONES IMAGEN POR TOUROPERADOR\@1@@@@@@@@@@@@@';
+      Text013@1103355000 : TextConst 'ESP=OPTRAT\IMPORTADOS\';
+      Text014@1103355001 : TextConst 'ESP=OPTRAT\';
+      Text016@1103355003 : TextConst 'ESP=No se encuentra el archivo\%1';
+      Text017@1103355004 : TextConst 'ESP=Partes.TXT';
+      Text018@1103355005 : TextConst 'ESP=Conductores.TXT';
+      Text019@1103355006 : TextConst;
+      Text020@1103355002 : TextConst 'ESP=®Desea realmente realizar una nueva importaci¢n de resultados de Planificador?';
+      Text021@1103355007 : TextConst 'ESP=Los siguientes Partes no se han encontrado:\%1';
+      Text022@1103355008 : TextConst 'ESP=Los siguientes Conductores no se han encontrado:\%1';
+      Text023@1103355009 : TextConst 'ESP=No se pudo mover el archivo %1 a %2';
+      Sp@1103350001 : TextConst 'ESP=|';
+      wImporteCoste@1103350009 : Decimal;
+      wImporteTicket@1103350010 : Decimal;
+      wImporteIngreso@1103355010 : Decimal;
+      Text024@1103355011 : TextConst 'ESP=Actualizando Conductores : @1@@@@@@@@@@@@@';
+
+    PROCEDURE ExportacionDiaria@1100244003();
+    BEGIN
+      // ExportacionDiaria
+      //
+
+      wVentana.OPEN(Text004);
+      wVentana.INPUT(1, wDia);
+      wVentana.CLOSE;
+
+      IF wDia = 0D THEN
+        EXIT;
+
+      IF NOT CONFIRM(Text003) THEN
+        EXIT;
+
+      rParGen.FINDFIRST;
+      rPar.FINDFIRST;
+
+      GeneraFicheroPartes;
+
+      GeneraFicheroConductores;
+
+      GeneraFicheroVehiculos;
+
+      GeneraFicheroProveedores;
+      GeneraFicheroAsociacionRecurso;
+      GeneraFicheroRestriccionesCond;
+      GeneraFicheroRestrHotelVeh;
+      GeneraFicheroDefTurnoCond;
+      GeneraFicheroRestriccionesTTOO;
+    END;
+
+    PROCEDURE GeneraFicheroPartes@1100244000();
+    VAR
+      lrParte@1100244000 : Record 7010360;
+      lrSerPar@1100244001 : Record 7010359;
+      lrSerPar2@1103355000 : Record 7010359;
+      lwPrimeraLinea@1100244002 : Boolean;
+    BEGIN
+      // GeneraFicheroPartes
+      //
+
+      lrParte.RESET;
+      lrParte.SETCURRENTKEY(Fecha);
+
+      // AJS 13.03.2007
+      // Cambio de la clave activa para las lineas de recogida
+      //lrSerPar.SETCURRENTKEY("Nß Parte");
+
+      lrSerPar.RESET;
+      lrSerPar.SETCURRENTKEY("Nß Parte", "Hora recogida", Letra);
+
+      // En principio vamos a exportar los servicios con fecha de ma§ana
+
+      lrParte.SETRANGE(Fecha, wDia);
+      IF lrParte.FINDSET THEN
+      BEGIN
+        wVentana.OPEN(Text001);
+        wActual := 0;
+        wTotal  := lrParte.COUNTAPPROX;
+
+        // Crear el fichero de texto
+
+        CreaFicheroServicios('OPT0001.TXT');
+
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND(wActual / wTotal * 10000, 1));
+
+          IF NOT lrParte."No Exportar" THEN BEGIN
+            lwPrimeraLinea := TRUE;
+            lrSerPar.SETRANGE("Nß Parte", lrParte."Nß Parte");
+            IF lrSerPar.FINDSET THEN
+            BEGIN
+
+              // AJS 13.03.2007
+              // Si hay lineas sin hora de recogida cambiamos la ordenacion y volvemos a coger el primer hotel
+
+              lrSerPar2.RESET;
+              lrSerPar2.SETCURRENTKEY("Nß Parte",
+                                      "Hora recogida");
+              lrSerPar2.SETRANGE("Nß Parte"     , lrParte."Nß Parte");
+              lrSerPar2.SETRANGE("Hora recogida", 0T);
+              IF lrSerPar2.FINDFIRST THEN BEGIN
+                lrSerPar.SETCURRENTKEY("Nß Parte", "Nß Linea");
+                lrSerPar.FINDSET;
+              END;
+
+              REPEAT
+                LineaFicheroServicios(lrParte, lrSerPar, lwPrimeraLinea);
+                lwPrimeraLinea := FALSE;
+              UNTIL lrSerPar.NEXT = 0;
+            END;
+          END;
+        UNTIL lrParte.NEXT = 0;
+        wVentana.CLOSE;
+
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE CreaFicheroServicios@1100244006(pwNombre@1100244001 : Text[30]);
+    VAR
+      lwNombreFichero@1100244000 : Text[250];
+    BEGIN
+      // CreaFicheroServicios
+      //
+      rPar.TESTFIELD("Directorio Archivos");
+
+      lwNombreFichero := rPar."Directorio Archivos" + '\OPTRAT\' + pwNombre;
+      IF EXISTS(lwNombreFichero) THEN
+        ERASE(lwNombreFichero);
+
+      rFich.CREATE(lwNombreFichero);
+      rFich.WRITEMODE(TRUE);
+      rFich.TEXTMODE(TRUE);
+    END;
+
+    PROCEDURE LineaFicheroServicios@1100244010(prParte@1100244001 : Record 7010360;prSerPar@1100244002 : Record 7010359;pwPrimeraLinea@1100244005 : Boolean);
+    VAR
+      lrMar@1100244004 : Record 7010412;
+      lrZonTra@1100244000 : Record 7010429;
+      lrRestricHot@1100244009 : Record 7035363;
+      lrRestricNoAsig@1100244010 : Record 7035369;
+      lrRestricTTOO@1100244011 : Record 7035365;
+      lrPunt@1103355000 : Record 7010315;
+      lwProveedorAnt@1100244006 : Code[20];
+    BEGIN
+      // LineaFicheroServicios
+      //
+      CLEAR(wLinea);
+
+      // Datos fijos del parte
+
+      wLinea := FORMAT(prParte."Nß Parte");
+      wLinea += '|' + FORMAT(prParte.Fecha);
+      wLinea += '|' + FORMAT(prParte.Fecha);
+      wLinea += '|' + DELCHR(prParte.Cliente, '<>');
+      wLinea += '|' + DELCHR(prParte."Tipo Servicio", '<>');
+      wLinea += '|' + DELCHR(DescTipoServicio(prParte."Tipo Servicio"), '<>');
+      wLinea += '|' + DELCHR(prParte."Codigo Servicio", '<>');
+      wLinea += '|' + DELCHR(DescCodigoServicio(prParte."Codigo Servicio"), '<>');
+      wLinea += '|' + DELCHR(prParte.Vehiculo, '<>');
+      wLinea += '|' + DELCHR(prParte."Cod Conductor", '<>');
+      wLinea += '|' + DELCHR(prParte."Zona trabajo", '<>');
+      wLinea += '|' + DELCHR(DescZonaTrabajo(prParte."Zona trabajo"), '<>');
+
+      // Datos de servicios - partes
+
+      wLinea += '|' + FORMAT(prSerPar."Nß Linea");
+      wLinea += '|' + DELCHR(prSerPar."Punto recogida", '<>');
+
+      // JPT 02/05/06
+      // A§adimos las coordenadas del punto de recogida para IBZ
+
+      IF rParGen."Empresa Real" IN [rParGen."Empresa Real"::IBZ, rParGen."Empresa Real"::SJO] THEN BEGIN
+        IF NOT lrPunt.GET(prSerPar."Punto recogida") THEN
+          CLEAR(lrPunt);
+        wLinea += '|' + FORMAT(lrPunt."Coordenada X",0,'<Sign><Integer><Decimals,3>');
+        wLinea += '|' + FORMAT(lrPunt."Coordenada Y",0,'<Sign><Integer><Decimals,3>');
+      END;
+
+      wLinea += '|' + DELCHR(DescPuntoRecogida(prSerPar."Punto recogida"), '<>');
+      wLinea += '|' + DELCHR(prSerPar."Zona fisica", '<>');
+      wLinea += '|' + DELCHR(DescZonaFisica(prSerPar."Zona fisica"), '<>');
+      wLinea += '|' + DELCHR(prSerPar.Touroperador, '<>');
+      wLinea += '|' + DELCHR(NomTouroperador(prSerPar.Touroperador), '<>');
+      wLinea += '|' + FORMAT(prSerPar."Adultos transportados");
+      wLinea += '|' + FORMAT(prSerPar."Ni§os transportados");
+
+      // AJS 11.08.2004
+      // Jordi pide que se ponga la hora primer vuelo
+      //wLinea += '|' + FORMAT(prSerPar."Hora Vuelo");
+
+      wLinea += '|' + FORMAT(prParte."Hora 1er Vuelo");
+
+      wLinea += '|' + FORMAT(prSerPar."Hora recogida");
+
+      // Datos calculados de Ticket
+
+      IF pwPrimeraLinea THEN
+        wImporteTicket := CalculoTicket(prParte);
+
+      wLinea += '|' + FormatoDec(wImporteTicket);
+
+
+      // Coste del servicio subcontratado subcontrato
+      // Para calcular el coste es necesario disponer de un proveedor, para eso iremos a la zona de trabajo donde se
+      // habra indicado un proveedor por defecto
+
+      IF pwPrimeraLinea THEN BEGIN
+        CLEAR(wImporteCoste);
+        IF NOT lrZonTra.GET(prParte."Zona trabajo") THEN
+          CLEAR(lrZonTra);
+
+        wImporteCoste := CalculaCoste(prParte, lrZonTra."Proveedor x defecto");
+
+        // AJS 27.03.2008
+        // Calculamos los ingresos sin impuestos generados por el parte
+
+        wImporteIngreso := CalculaIngresos(prParte);
+      END;
+
+      wLinea += '|' + FormatoDec(wImporteCoste);
+
+      // Datos adicionales correspondientes a las excursiones
+
+      DatosInformacionExcursiones(prParte."Codigo Servicio", prParte."Zona parte", prParte.Fecha, pwPrimeraLinea);
+
+      // Datos adicionales correspondientes a los traslados
+
+      DatosInformacionTraslados(prParte.Fecha, pwPrimeraLinea);
+
+      // Datos adicionales de los hoteles
+
+      lrRestricHot.SETRANGE("Punto Recogida", prSerPar."Punto recogida");
+      IF NOT lrRestricHot.FINDFIRST THEN
+        CLEAR(lrRestricHot);
+
+      wLinea += '|' + FORMAT(lrRestricHot."Plazas desde");
+      wLinea += '|' + FORMAT(lrRestricHot."Plazas hasta");
+
+      // Restricciones de servicios no asignables
+
+      lrRestricNoAsig.SETRANGE("Codigo Servicio", prParte."Codigo Servicio");
+      IF NOT lrRestricNoAsig.FINDFIRST THEN
+        CLEAR(lrRestricNoAsig);
+
+      wLinea += '|' + FORMAT(lrRestricNoAsig."Pax desde");
+      wLinea += '|' + FORMAT(lrRestricNoAsig."Pax Hasta");
+
+      // Restricciones de antiguedad x touroperador
+
+      IF NOT lrRestricTTOO.GET(prSerPar.Touroperador) THEN
+        CLEAR(lrRestricTTOO);
+
+      wLinea += '|' + FORMAT(lrRestricTTOO.Antiguedad);
+      wLinea += '|' + FormatoDec(lrRestricTTOO.Kilometros);
+      wLinea += '|' + FORMAT(prParte."Dia siguiente");
+
+      // AJS 26.06.2006
+      // Incluir las marcas de transporte escolar y adaptado minusvalidos
+
+      wLinea += '|' + FORMAT(prParte."Vehiculo Escolar");
+      wLinea += '|' + FORMAT(prParte."Vehiculo Minusvalidos");
+
+      // AJS 25.02.2008
+      // Incluir el campo Origen/Destino
+
+      wLinea += '|' + prParte."Origen/Destino";
+
+      // JPT 17/03/08 A§ado campo Agrupaci¢n
+
+      wLinea += '|' + prParte.Agrupacion;
+
+      // AJS 27.03.2008
+      // Incluimos los ingresos sin impuestos
+
+      wLinea += '|' + FORMAT(wImporteIngreso);
+
+      rFich.WRITE(wLinea);
+    END;
+
+    PROCEDURE DatosInformacionExcursiones@1100244009(pwCodServicio@1100244001 : Code[10];pwZonaFisica@1100244002 : Code[10];pwDia@1100244003 : Date;pwPrimeraLinea@1100244004 : Boolean);
+    BEGIN
+      // DatosInformacionExcursiones
+      //
+
+      // Solo se buscara el registro una vez por parte para acelerar en lo posible el proceso
+
+      IF pwPrimeraLinea THEN BEGIN
+        rInfExc.SETRANGE ("Codigo Servicio", pwCodServicio);
+        rInfExc.SETRANGE ("Zona fisica"    , pwZonaFisica);
+        rInfExc.SETFILTER("Fecha Desde"    , '<=%1', pwDia);
+        rInfExc.SETFILTER("Fecha Hasta"    , '>=%1', pwDia);
+        IF NOT rInfExc.FINDFIRST THEN
+          CLEAR(rInfExc);
+      END;
+
+      wLinea += '|' + FORMAT(rInfExc."Hora Inicio");
+      wLinea += '|' + FORMAT(rInfExc."Hora Fin");
+      wLinea += '|' + FormatoDec(rInfExc.Kilometros);
+      wLinea += '|' + FORMAT(rInfExc."Vehiculo a disposicion");
+      wLinea += '|' + FORMAT(rInfExc."Mismo vehiculo");
+      wLinea += '|' + DELCHR(rInfExc."Punto Desde Subtrayecto", '<>');
+      wLinea += '|' + DELCHR(DescPuntoRecogida(rInfExc."Punto Desde Subtrayecto"), '<>');
+      wLinea += '|' + DELCHR(rInfExc."Punto Hasta Subtrayecto", '<>');
+      wLinea += '|' + DELCHR(DescPuntoRecogida(rInfExc."Punto Hasta Subtrayecto"), '<>');
+      wLinea += '|' + FORMAT(rInfExc."Hora Desde Subtrayecto");
+      wLinea += '|' + FORMAT(rInfExc."Hora Hasta Subtrayecto");
+    END;
+
+    PROCEDURE DatosInformacionTraslados@1100244024(pwDia@1100244001 : Date;pwPrimeraLinea@1100244002 : Boolean);
+    BEGIN
+      // DatosInformacionTraslados
+      //
+
+      // Solo se buscara el registro una vez por parte para acelerar en lo posible el proceso
+
+      IF pwPrimeraLinea THEN BEGIN
+        rInfTras.SETFILTER("Fecha Desde", '<=%1', pwDia);
+        rInfTras.SETFILTER("Fecha Hasta", '>=%1', pwDia);
+        IF NOT rInfTras.FINDFIRST THEN
+          CLEAR(rInfTras);
+      END;
+
+      wLinea += '|' + FormatoDec(rInfTras."Salida aeropuerto tras llegada");
+      wLinea += '|' + FormatoDec(rInfTras."Tiempo x pax en llegada");
+      wLinea += '|' + FormatoDec(rInfTras."Tiempo descarga para salida");
+      wLinea += '|' + FormatoDec(rInfTras."Tiempo x pax en salida");
+      wLinea += '|' + FormatoDec(rInfTras."Descarga x hotel");
+      wLinea += '|' + FormatoDec(rInfTras."Tiempo x pax en hotel");
+      wLinea += '|' + FormatoDec(rInfTras."Antelaci¢n aeropuerto llegada");
+    END;
+
+    PROCEDURE CalculoTicket@1100244002(prParte@1100244001 : Record 7010360) : Decimal;
+    VAR
+      lrCondVar@1100244000 : Record 7010330;
+      lwHayPrecio@1100244002 : Boolean;
+      lwImporteTicket@1100244003 : Decimal;
+    BEGIN
+      // CalculoTicket
+      //
+
+      lwImporteTicket := 0;
+
+      // Calculamos MALETAS
+
+      IF BuscaPrecio(lrCondVar, prParte, rParGen."Codigo Maletas") THEN BEGIN
+        prParte.CALCFIELDS("Adultos transportados", "Ni§os transportados");
+
+        IF prParte."Adultos transportados" + prParte."Ni§os transportados" > lrCondVar."Cantidad Minima" THEN
+          lwImporteTicket += (prParte."Adultos transportados" + prParte."Ni§os transportados") * lrCondVar.Precio
+        ELSE
+          lwImporteTicket += lrCondVar."Cantidad Minima" * lrCondVar.Precio;
+      END;
+
+      // Calcular VIAJES
+
+      IF BuscaPrecio(lrCondVar, prParte, rParGen."Codigo Viajes") THEN
+        lwImporteTicket += lrCondVar.Precio;
+
+      EXIT(lwImporteTicket);
+    END;
+
+    PROCEDURE BuscaPrecio@1100244008(VAR prCondVar@1100244000 : Record 7010330;prParte@1100244001 : Record 7010360;pwConcepto@1100244002 : Code[10]) : Boolean;
+    VAR
+      lrZonCond@1103350000 : Record 7010396;
+      lrCondVar2@1103350001 : Record 7010330;
+      lrZonPart@1103350004 : Record 7010366;
+      lwGrado@1103350002 : Integer;
+      lwMejorGrado@1103350003 : Integer;
+      lwOK@1103350005 : ARRAY [3] OF Boolean;
+      lwEncontrado@1103350006 : Boolean;
+    BEGIN
+      // BuscaPrecio
+      //
+      // JPT 17/03/05 Modificamos el codigo para no filtrar directamente por zona fisica sino a traves de su tabla
+
+      CLEAR(prCondVar);
+      CLEAR(lrCondVar2);
+      CLEAR(lwEncontrado);
+      prCondVar.SETCURRENTKEY(Confirmado,
+                              Garaje,
+                              "Concepto variable",
+                              "Asociado a",
+                              Valor,
+                              "Fecha desde",
+                              "Fecha hasta");
+      prCondVar.SETRANGE (Confirmado         , TRUE);
+      prCondVar.SETRANGE ("Concepto variable", pwConcepto);
+      prCondVar.SETFILTER("Fecha desde"      , '<=%1', prParte.Fecha);
+      prCondVar.SETFILTER("Fecha hasta"      , '>=%1', prParte.Fecha);
+      // prCondVar.SETRANGE ("Zona fisica"      , prParte."Zona parte");
+      // prCondVar.SETRANGE ("Tipo Servicio"    , prParte."Tipo Servicio");
+      // prCondVar.SETRANGE ("C¢digo Servicio"  , prParte."Codigo Servicio");
+
+      // De momento no filtramos por tipo de vehiculo porque no hay modo de obtenerlo
+      // lrCondVar.SETRANGE ("Tipo Vehiculo"    ,
+
+      prParte.CALCFIELDS("Adultos transportados", "Ni§os transportados");
+
+      prCondVar.SETFILTER("Rango M°nimo", '<=%1', prParte."Adultos transportados" + prParte."Ni§os transportados");
+      prCondVar.SETFILTER("Rango M†ximo", '>=%1', prParte."Adultos transportados" + prParte."Ni§os transportados");
+
+      // JPT 17/03/05 Basado en la funci¢n Automata2 de la codunit Calculo Ingresos. Buscamos la mejor condici¢n
+      // La zona fisica ya no es fija si no que se encuentra en otra tabla
+      IF prCondVar.FINDSET THEN BEGIN
+        lwMejorGrado:=100;
+        REPEAT
+          lwGrado:=lwMejorGrado;
+          IF prCondVar."Zona Independiente" THEN BEGIN // Tiene un solo grupo de zonas
+            IF lrZonCond.GET(prCondVar."Nß", prParte."Zona parte") THEN BEGIN
+              CASE prCondVar."C¢digo Servicio" OF
+                prParte."Codigo Servicio": lwGrado := 1;
+                ''                       : lwGrado := 3;
+              END;
+            END
+            ELSE BEGIN
+              lrZonCond.RESET;
+              lrZonCond.SETRANGE(Condicion, prCondVar."Nß"); // Puede ser que no tengan ninguna zona fisica (que sea generica)
+              IF NOT lrZonCond.FINDFIRST THEN BEGIN
+                CASE prCondVar."C¢digo Servicio" OF
+                  prParte."Codigo Servicio": lwGrado := 2;
+                  ''                       : lwGrado := 4;
+                END;
+              END;
+            END;
+          END
+          ELSE BEGIN // Si es una condici¢n variable con dos grupos de zonas
+            CLEAR(lrZonPart);
+            CLEAR(lrZonCond);
+            CLEAR(lwOK);
+            lrZonPart.SETRANGE("Nß Parte", prParte."Nß Parte");
+            IF lrZonPart.FINDSET THEN BEGIN
+              REPEAT
+                IF lrZonCond.GET(prCondVar."Nß", lrZonPart."Zona fisica") THEN BEGIN
+                  IF lrZonCond.Grupo IN [1,2]  THEN
+                    lwOK[lrZonCond.Grupo] := TRUE;
+                END;
+                lwOK[3]:=lwOK[1] AND lwOK[2]; // Ser† Ok solo cuando el parte contenga una zona en cada grupo
+              UNTIL (lrZonPart.NEXT=0) OR lwOK[3];
+            END;
+            IF lwOK[3] THEN BEGIN
+              CASE prCondVar."C¢digo Servicio" OF
+                prParte."Codigo Servicio": lwGrado := 0;
+                ''                       : lwGrado := 3;
+              END;
+            END
+            ELSE BEGIN
+              lrZonCond.RESET;
+              lrZonCond.SETRANGE(Condicion,prCondVar."Nß"); // Puede ser que no tengan ninguna zona fisica (que sea generica)
+              IF NOT lrZonCond.FINDFIRST THEN BEGIN
+                CASE prCondVar."C¢digo Servicio" OF
+                  prParte."Codigo Servicio": lwGrado := 2;
+                  ''                       : lwGrado := 4;
+                END;
+              END;
+            END;
+          END;
+
+          //Devolvemos TRUE si hemos encontrado un condici¢n m†s adecuada.
+          IF lwGrado < lwMejorGrado THEN BEGIN
+            lwEncontrado  := TRUE;
+            lwMejorGrado  := lwGrado;
+            lrCondVar2    := prCondVar;
+          END;
+        UNTIL (prCondVar.NEXT=0) OR (lwMejorGrado=0);
+        // lwMejorGrado=0 Es el mejor de los casos, ya no puede haber nada mejor
+      END;
+
+      CLEAR(prCondVar);
+      // Devolvemos la mejor condici¢n
+      prCondVar:= lrCondVar2;
+
+      EXIT(lwEncontrado);
+    END;
+
+    PROCEDURE DescTipoServicio@1100244012(pwTipoServicio@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrTipoSer@1100244000 : Record 7010319;
+    BEGIN
+      // DescTipoServicio
+      //
+      IF lrTipoSer.GET(pwTipoServicio) THEN
+        EXIT(lrTipoSer.Descripcion);
+
+      EXIT('');
+    END;
+
+    PROCEDURE DescCodigoServicio@1100244014(pwCodigoServicio@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrCodSer@1100244000 : Record 7010320;
+    BEGIN
+      // DescCodigoServicio
+      //
+      IF lrCodSer.GET(pwCodigoServicio) THEN
+        EXIT(lrCodSer.Descripcion);
+
+      EXIT('');
+    END;
+
+    PROCEDURE DescPuntoRecogida@1100244022(pwPuntoRecogida@1100244001 : Code[10]) : Text[50];
+    VAR
+      lrPunto@1100244000 : Record 7010315;
+    BEGIN
+      // DescPuntoRecogida
+      //
+      IF lrPunto.GET(pwPuntoRecogida) THEN
+        EXIT(lrPunto.Descripci¢n);
+
+      EXIT('');
+    END;
+
+    PROCEDURE DescZonaTrabajo@1100244001(pwZonaTrabajo@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrZonTra@1100244000 : Record 7010429;
+    BEGIN
+      // DescZonaTrabajo
+      //
+      IF lrZonTra.GET(pwZonaTrabajo) THEN
+        EXIT(lrZonTra.Descripcion);
+
+      EXIT('');
+    END;
+
+    PROCEDURE DescZonaFisica@1100244004(pwZonaFisica@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrZonFis@1100244000 : Record 7010314;
+    BEGIN
+      // DescZonaFisica
+      //
+      IF lrZonFis.GET(pwZonaFisica) THEN
+        EXIT(lrZonFis.Descripcion);
+
+      EXIT('');
+    END;
+
+    PROCEDURE DescCampa@1100244025(pwCampa@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrCampa@1100244000 : Record 7035373;
+    BEGIN
+      // DescCampa
+      //
+      IF lrCampa.GET(pwCampa) THEN
+        EXIT(lrCampa.Descripci¢n);
+
+      EXIT('');
+    END;
+
+    PROCEDURE AliasImagen@1100244032(pwImagen@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrImagen@1100244000 : Record 7035372;
+    BEGIN
+      // AliasImagen
+      //
+      IF lrImagen.GET(pwImagen) THEN
+        EXIT(lrImagen.Alias);
+
+      EXIT('');
+    END;
+
+    PROCEDURE NomTouroperador@1100244005(pwTTOO@1100244001 : Code[10]) : Text[30];
+    VAR
+      lrTTOO@1100244000 : Record 7010312;
+    BEGIN
+      // NomTouroperador
+      //
+      IF lrTTOO.GET(pwTTOO) THEN
+        EXIT(lrTTOO.Nombre);
+
+      EXIT('');
+    END;
+
+    PROCEDURE NomProveedor@1100244030(pwProveedor@1100244001 : Code[20]) : Text[30];
+    VAR
+      lrVendor@1100244000 : Record 23;
+    BEGIN
+      // NomProveedor
+      //
+      IF lrVendor.GET(pwProveedor) THEN
+        EXIT(lrVendor.Name);
+
+      EXIT('');
+    END;
+
+    PROCEDURE GeneraFicheroConductores@1100244007();
+    VAR
+      lrCond@1100244000 : Record 7010327;
+    BEGIN
+      // GeneraFicheroConductores
+      //
+
+      // Vamos a exportar los conductores que no esten bloqueados y tengan contrato
+
+      lrCond.RESET;
+      lrCond.SETRANGE(Bloqueado, FALSE);
+
+      IF lrCond.FINDSET THEN BEGIN
+        wVentana.OPEN(Text005);
+        wActual := 0;
+        wTotal  := lrCond.COUNTAPPROX;
+
+        // Crear el fichero de texto
+
+        CreaFicheroServicios('OPT0002.TXT');
+
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND(wActual / wTotal * 10000, 1));
+
+          CLEAR(wLinea);
+
+          IF (BuscaContratoConductor(lrCond.Conductor)) OR (lrCond.Externo) THEN BEGIN
+            wLinea := DELCHR(lrCond.Conductor, '<>');
+            wLinea += '|' + DELCHR(lrCond.Nombre, '<>');
+            wLinea += '|' + DELCHR(lrCond.Apellidos, '<>');
+            wLinea += '|' + DELCHR(lrCond."Nombre Abreviado", '<>');
+            wLinea += '|' + DELCHR(lrCond."Grupo Vehiculo", '<>');
+            wLinea += '|' + FORMAT(lrCond.Turno);
+            wLinea += '|' + FORMAT(lrCond."Hora ultimo trabajo");
+            wLinea += '|' + FORMAT(lrCond."Fecha ultimo trabajo");
+            wLinea += '|' + FORMAT(CalculaHoraInicio(lrCond));
+
+            DatosDieta(lrCond);
+
+            DatosTurno(lrCond);
+
+            MarcaConductorOperativo(lrCond);
+
+            DatosSeguridadConductor(lrCond);
+
+            // Datos de informacion de acumulado
+
+            // AJS 27.02.2008
+            // Sustituyo la funcion AcumulaTicketChofer por DatosAcumuladosChofer que suma directamente del registro de
+            // actividad, peticion de Yolanda Soriano
+            //AcumulaTicketChofer(lrCond);
+
+            DatosAcumuladosChofer(lrCond);
+
+            rFich.WRITE(wLinea);
+          END;
+        UNTIL lrCond.NEXT = 0;
+        wVentana.CLOSE;
+
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE BuscaContratoConductor@1100244011(pwCond@1100244000 : Code[10]) : Boolean;
+    VAR
+      lrContrato@1100244001 : Record 7010331;
+    BEGIN
+      // BuscaContratoConductor
+      //
+      lrContrato.SETRANGE (Conductor   , pwCond);
+      lrContrato.SETFILTER("Fecha Alta", '<=%1', wDia);
+      lrContrato.SETFILTER("Fecha Baja", '>=%1|%2', wDia, 0D);
+      lrContrato.SETRANGE (Confirmado  , TRUE);
+      IF lrContrato.FINDFIRST THEN BEGIN
+        CASE DATE2DWY(wDia, 1) OF
+          1: EXIT(lrContrato.Lunes);
+          2: EXIT(lrContrato.Martes);
+          3: EXIT(lrContrato.Miercoles);
+          4: EXIT(lrContrato.Jueves);
+          5: EXIT(lrContrato.Viernes);
+          6: EXIT(lrContrato.Sabado);
+          7: EXIT(lrContrato.Domingo);
+        END;
+      END
+      ELSE
+        EXIT;
+    END;
+
+    PROCEDURE CalculaHoraInicio@1100244013(prCond@1100244001 : Record 7010327) : Time;
+    VAR
+      lrCondSeg@1100244004 : Record 7035360;
+      lrIncid@1100244000 : Record 7010333;
+      lrVehAsig@1100244005 : Record 7035354;
+      lrVeh@1100244006 : Record 7010346;
+      lrTurnos@1100244009 : Record 7035366;
+      lwTempHora@1100244003 : Time;
+      lwVieneDeLibre@1100244007 : Boolean;
+      lwVieneDeTrabajo@1100244008 : Boolean;
+    BEGIN
+      // CalculaHoraInicio
+      //
+
+      // Buscar el vehiculo asignado como preferente al chofer
+
+      IF NOT prCond.Externo THEN BEGIN
+        lrVehAsig.SETRANGE ("Cod. Conductor"     , prCond.Conductor);
+        lrVehAsig.SETFILTER("Fecha Desde"        , '<=%1', wDia - 1);
+        lrVehAsig.SETFILTER("Fecha Hasta"        , '>=%1', wDia - 1);
+        lrVehAsig.SETRANGE ("Vehiculo Preferente", TRUE);
+        IF NOT lrVehAsig.FINDFIRST THEN
+          ERROR(Text002, prCond.Conductor);
+
+        lrVeh.GET(lrVehAsig.Matricula);
+      END
+      ELSE
+        CLEAR(lrVeh);
+
+      // Buscamos los parametros de seguridad
+
+      IF NOT lrCondSeg.GET(lrVeh."Tipo vehiculo") THEN
+        CLEAR(lrCondSeg);
+
+
+      // Primero buscaremos si el conductor tiene alguna incidencia para hoy y lo trataremos en consecuencia, siempre
+      // buscamos la incidencia mas prioritaria.
+      //    a) Si no tiene incidencia a la hora de ultimo trabajo le sumaremos "hora descanso entre dias" y
+      //       comprobaremos contra la hora de inicio del turno que tiene asignado para ma§ana
+      //          1. Si la hora de inicio del turno es posterior a la hora calculada entonces
+      //             devolveremos esta como inicio del conductor
+      //
+      //          2. Si la hora de inicio del turno es anterior a la hora calculada entonces
+      //             la hora de inicio del conductor ser† la calculada
+      //    b) Si tiene incidencia puede ser dia libre, en este caso le sumaremos "hora descanso tras libre" y
+      //       comprobaremos contra la hora de inicio del turno que tiene asignado para ma§ana y procederemos
+      //       como en el caso anterior
+      //    c) Si la incidencia no es de libre pondremos directamente la hora de inicio del turno como hora de
+      //       inicio del conductor
+      //
+
+      lwVieneDeLibre   := FALSE;
+      lwVieneDeTrabajo := FALSE;
+
+      lrIncid.SETCURRENTKEY(Conductor,
+                            Prioridad,
+                            "Fecha Desde",
+                            "Fecha Hasta");
+      lrIncid.SETRANGE (Conductor    , prCond.Conductor);
+      lrIncid.SETFILTER("Fecha Desde", '<=%1', wDia - 1);
+      lrIncid.SETFILTER("Fecha Hasta", '>=%1', wDia - 1);
+      lrIncid.ASCENDING(FALSE);
+      IF lrIncid.FINDFIRST THEN BEGIN
+        IF lrIncid.Motivo = lrIncid.Motivo::"Dia Libre" THEN BEGIN
+          IF prCond."Hora ultimo trabajo" <> 0T THEN
+            lwTempHora := prCond."Hora ultimo trabajo" + (lrCondSeg."Hora descanso tras libre" * 3600000)
+          ELSE
+            lwTempHora := 0T;
+          lwVieneDeLibre := TRUE;
+        END;
+      END
+      ELSE BEGIN
+        IF prCond."Hora ultimo trabajo" <> 0T THEN
+          lwTempHora := prCond."Hora ultimo trabajo" + (lrCondSeg."Horas descanso entre dias" * 3600000)
+        ELSE
+          lwTempHora := 0T;
+
+        lwVieneDeTrabajo := TRUE;
+      END;
+
+      // Localizar el rango horario del turno que tiene asignado el conductor
+
+      lrTurnos.SETRANGE (Turno        , prCond.Turno);
+      lrTurnos.SETFILTER("Fecha desde", '<=%1', wDia - 1);
+      lrTurnos.SETFILTER("Fecha hasta", '>=%1', wDia - 1);
+      IF NOT lrTurnos.FINDFIRST THEN
+        CLEAR(lrTurnos);
+
+      IF lwVieneDeLibre OR lwVieneDeTrabajo THEN BEGIN
+        IF lrTurnos."Hora inicio" > lwTempHora THEN
+          EXIT(lrTurnos."Hora inicio")
+        ELSE
+          EXIT(lwTempHora);
+      END
+      ELSE
+        EXIT(lrTurnos."Hora inicio");
+    END;
+
+    PROCEDURE DatosDieta@1100244027(prCond@1100244000 : Record 7010327);
+    VAR
+      lrConvenio@1100244001 : Record 7010337;
+      lrCondVar@1100244002 : Record 7010330;
+    BEGIN
+      // DatosDieta
+      //
+
+      CLEAR(lrCondVar);
+      lrCondVar.SETCURRENTKEY(Confirmado,
+                              Garaje,
+                              "Concepto variable",
+                              "Asociado a",
+                              Valor,
+                              "Fecha desde",
+                              "Fecha hasta");
+      lrCondVar.SETRANGE (Confirmado         , TRUE);
+      lrCondVar.SETRANGE ("Concepto variable", rParGen."Codigo Dieta");
+      lrCondVar.SETFILTER("Fecha desde"      , '<=%1', wDia);
+      lrCondVar.SETFILTER("Fecha hasta"      , '>=%1', wDia);
+      IF lrCondVar.FINDFIRST THEN
+        wLinea += '|' + FormatoDec(lrCondVar.Precio)
+      ELSE
+        wLinea += '|' + FORMAT(0);
+
+      // La definicion de las dietas tiene 2 registros por cada periodo, el primero es para la comida y el segundo
+      // para la cena
+
+      lrConvenio.SETRANGE ("Tipo Acuerdo"        , prCond."Tipo Acuerdo");
+      lrConvenio.SETFILTER("Fecha Inicio Validez", '<=%1', wDia);
+      lrConvenio.SETFILTER("Fecha Fin Validez"   , '>=%1', wDia);
+      IF lrConvenio.FINDFIRST THEN BEGIN
+        wLinea += '|' + FORMAT(lrConvenio."Hora Inicio");
+        wLinea += '|' + FORMAT(lrConvenio."Hora Fin");
+        IF lrConvenio.NEXT <> 0 THEN BEGIN
+          wLinea += '|' + FORMAT(lrConvenio."Hora Inicio");
+          wLinea += '|' + FORMAT(lrConvenio."Hora Fin");
+        END
+        ELSE BEGIN
+          wLinea += '|' + FORMAT(0T);
+          wLinea += '|' + FORMAT(0T);
+        END;
+      END
+      ELSE BEGIN
+        wLinea += '|' + FORMAT(0T);
+        wLinea += '|' + FORMAT(0T);
+        wLinea += '|' + FORMAT(0T);
+        wLinea += '|' + FORMAT(0T);
+      END;
+    END;
+
+    PROCEDURE DatosTurno@1100244034(prCond@1100244000 : Record 7010327);
+    VAR
+      lrTurnos@1100244001 : Record 7035366;
+    BEGIN
+      // DatosTurno
+      //
+
+      lrTurnos.SETRANGE (Turno        , prCond.Turno);
+      lrTurnos.SETFILTER("Fecha desde", '<=%1', wDia - 1);
+      lrTurnos.SETFILTER("Fecha hasta", '>=%1', wDia - 1);
+      IF NOT lrTurnos.FINDFIRST THEN
+        CLEAR(lrTurnos);
+
+      wLinea += '|' + FORMAT(prCond.Turno);
+      wLinea += '|' + FORMAT(lrTurnos."Hora inicio");
+      wLinea += '|' + FORMAT(lrTurnos."Hora final");
+    END;
+
+    PROCEDURE MarcaConductorOperativo@1100244039(prCond@1100244000 : Record 7010327);
+    VAR
+      lrIncid@1100244001 : Record 7010333;
+    BEGIN
+      // MarcaConductorOperativo
+      //
+      lrIncid.SETCURRENTKEY(Conductor,
+                            Prioridad,
+                            "Fecha Desde",
+                            "Fecha Hasta");
+      lrIncid.SETRANGE (Conductor    , prCond.Conductor);
+      lrIncid.SETFILTER("Fecha Desde", '<=%1', wDia - 1);
+      lrIncid.SETFILTER("Fecha Hasta", '>=%1', wDia - 1);
+      lrIncid.ASCENDING(FALSE);
+      IF lrIncid.FINDFIRST THEN
+        wLinea += '|' + FORMAT('Si')
+      ELSE
+        wLinea += '|' + FORMAT('No')
+    END;
+
+    PROCEDURE DatosSeguridadConductor@1100244016(prCond@1100244003 : Record 7010327);
+    VAR
+      lrCondSeg@1100244002 : Record 7035360;
+      lrVehAsig@1100244000 : Record 7035354;
+      lrVeh@1100244004 : Record 7010346;
+    BEGIN
+      // DatosSeguridadConductor
+      //
+
+      // Buscar el vehiculo asignado como preferente al chofer
+
+      IF NOT prCond.Externo THEN BEGIN
+        lrVehAsig.SETRANGE ("Cod. Conductor"     , prCond.Conductor);
+        lrVehAsig.SETFILTER("Fecha Desde"        , '<=%1', wDia);
+        lrVehAsig.SETFILTER("Fecha Hasta"        , '>=%1', wDia);
+        lrVehAsig.SETRANGE ("Vehiculo Preferente", TRUE);
+        IF NOT lrVehAsig.FINDFIRST THEN
+          ERROR(Text002);
+
+        lrVeh.GET(lrVehAsig.Matricula);
+      END
+      ELSE
+        CLEAR(lrVeh);
+
+      // Buscamos los parametros de seguridad
+
+      IF NOT lrCondSeg.GET(lrVeh."Tipo vehiculo") THEN
+        CLEAR(lrCondSeg);
+
+      wLinea += '|' + FormatoDec(lrCondSeg."Horas descanso entre dias");
+      wLinea += '|' + FormatoDec(lrCondSeg."Maximo horas diario");
+      wLinea += '|' + FormatoDec(lrCondSeg."Maximo sin descansos");
+      wLinea += '|' + FormatoDec(lrCondSeg."Tiempo de descanso");
+      wLinea += '|' + FormatoDec(lrCondSeg."Hora descanso tras libre");
+      wLinea += '|' + FormatoDec(lrCondSeg."Fraccion minimo descanso");
+      wLinea += '|' + FORMAT(lrCondSeg."Contar paradas como descanso");
+    END;
+
+    PROCEDURE AcumulaTicketChofer@1100244015(prCond@1100244000 : Record 7010327);
+    VAR
+      lrAcum@1100244001 : Record 7035367;
+      lwDiasAcumulados@1100244003 : Integer;
+      lwImporteAcumulado@1100244004 : Decimal;
+      lwFechaInicial@1100244002 : Date;
+    BEGIN
+      // AcumulaTicketChofer
+      //
+
+      // Si el ma§ana es superior al dia de inicio de ticket acumulamos de este mes, sino empezamos en el mes pasado
+
+      rPar.TESTFIELD("Dia inicio periodo ticket");
+      lwFechaInicial := DMY2DATE(rPar."Dia inicio periodo ticket", DATE2DMY(wDia, 2), DATE2DMY(wDia, 3));
+      IF DATE2DMY(wDia, 1) <= rPar."Dia inicio periodo ticket" THEN
+        lwFechaInicial := CALCDATE('-1M',lwFechaInicial);
+
+      lrAcum.SETRANGE (Conductor, prCond.Conductor);
+      lrAcum.SETFILTER(Fecha    , '>=%1', lwFechaInicial);
+
+      lwDiasAcumulados   := 0;
+      lwImporteAcumulado := 0;
+
+      IF lrAcum.FINDLAST THEN
+      BEGIN
+        REPEAT
+          lwDiasAcumulados += 1;
+
+          IF lrAcum."Importe real" <> 0 THEN
+            lwImporteAcumulado += lrAcum."Importe real"
+          ELSE
+            lwImporteAcumulado += lrAcum."Importe previsto";
+        UNTIL lrAcum.NEXT = 0;
+      END;
+
+      wLinea += '|' + FormatoDec(lrAcum."Num dias trabajados");
+      wLinea += '|' + FormatoDec(lwImporteAcumulado);
+    END;
+
+    PROCEDURE DatosAcumuladosChofer@1103355001(prCond@1103355000 : Record 7010327);
+    VAR
+      lrRegAct@1103355001 : Record 7010332;
+      lwDias@1103355002 : Integer;
+    BEGIN
+      // DatosAcumuladosChofer
+
+      // 1. Buscamos en el registro de actividad para ver en cuantos dias tiene actividad
+
+      lwDias := 0;
+
+      lrRegAct.RESET;
+      lrRegAct.SETRANGE(Fecha    , rParGen."Fecha Inicio Acumulados", wDia - 1);
+      lrRegAct.SETRANGE(Conductor, prCond.Conductor);
+      IF lrRegAct.FINDSET THEN BEGIN
+        REPEAT
+          // AJS 28.03.2008
+          // Por indicacion de Miquel Costa (IBIZATOURS) la comprobacion de dia trabajado se hace
+          // en funcion del campo Nß Periodos en lugar de Nß Partes
+          //lrRegAct.CALCFIELDS("Nß Partes");
+          //IF lrRegAct."Nß Partes" <> 0 THEN
+
+          lrRegAct.CALCFIELDS("Nß Periodos");
+          IF lrRegAct."Nß Periodos" <> 0 THEN
+            lwDias += 1;
+        UNTIL lrRegAct.NEXT = 0;
+      END;
+
+      // 2. Buscamos los ingresos generados por el conductor desde el inicio de la temporada
+
+      prCond.SETRANGE("Filtro Fechas", rParGen."Fecha Inicio Acumulados", wDia -1);
+      prCond.CALCFIELDS(Ingresos);
+
+      // 3. Exportamos los campos con el fichero de texto
+
+      wLinea += '|' + FormatoDec(lwDias);
+      wLinea += '|' + FormatoDec(prCond.Ingresos);
+    END;
+
+    PROCEDURE GeneraFicheroVehiculos@1100244017();
+    VAR
+      lrVeh@1100244000 : Record 7010346;
+      lwAntiguedad@1100244001 : Integer;
+    BEGIN
+      // GeneraFicheroVehiculos
+      //
+      // Vamos a exportar los conductores que no esten marcados como no imprimir estadisticas y no esten vendidos
+
+      lrVeh.RESET;
+      //lrVeh.SETRANGE(Bloqueado, FALSE);
+      lrVeh.SETRANGE("No Imprimir estadisticas", FALSE);
+      IF lrVeh.FINDSET THEN BEGIN
+        wVentana.OPEN(Text006);
+        wActual := 0;
+        wTotal  := lrVeh.COUNTAPPROX;
+
+        // Crear el fichero de texto
+
+        CreaFicheroServicios('OPT0003.TXT');
+
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND(wActual / wTotal * 10000, 1));
+
+          CLEAR(wLinea);
+
+          IF (lrVeh."Fecha venta" >= wDia) OR (lrVeh."Fecha venta" = 0D) THEN BEGIN
+
+            wLinea := DELCHR(lrVeh.Matricula, '<>');
+            wLinea += '|' + DELCHR(lrVeh.Numero, '<>');
+            wLinea += '|' + DELCHR(lrVeh."Tipo vehiculo", '<>');
+            wLinea += '|' + FORMAT(lrVeh.Plazas);
+            wLinea += '|' + FORMAT(lrVeh."Vehiculo propio");
+            wLinea += '|' + FormatoDec(lrVeh."Coste estandar x km");
+            wLinea += '|' + DELCHR(lrVeh.Campa, '<>');
+            wLinea += '|' + DELCHR(DescCampa(lrVeh.Campa), '<>');
+            wLinea += '|' + DELCHR(lrVeh."Imagen Vehiculo", '<>');
+            wLinea += '|' + DELCHR(AliasImagen(lrVeh."Imagen Vehiculo"), '<>');
+
+            // Buscamos la antigÅedad
+
+            IF lrVeh."Fecha compra" <> 0D THEN
+              lwAntiguedad := ROUND( (wDia - lrVeh."Fecha compra") / 30, 1)
+            ELSE
+              lwAntiguedad := 0;
+            wLinea += '|' + FORMAT(lwAntiguedad);
+
+            MarcaVehiculoOperativo(lrVeh);
+
+            // Datos de proveedores y agregados
+
+            wLinea += '|' + FORMAT(lrVeh.Agregado);
+            wLinea += '|' + DELCHR(lrVeh."Empresa propietaria", '<>');
+            wLinea += '|' + DELCHR(NomProveedor(lrVeh."Empresa propietaria"), '<>');
+
+            // Datos de garantia
+
+            DatosGarantiaVehiculo(lrVeh);
+
+            // AJS 26.06.2006
+            // Marcas de Transporte escolar y minusvalidos
+
+            wLinea += '|' + FORMAT(lrVeh."Transporte escolar");
+            wLinea += '|' + FORMAT(lrVeh."Adaptado minusvalidos");
+
+            wLinea += '|' + FORMAT(lrVeh."Vehiculo especial"); //+$001
+
+            rFich.WRITE(wLinea);
+          END;
+        UNTIL lrVeh.NEXT = 0;
+        wVentana.CLOSE;
+
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE MarcaVehiculoOperativo@1100244021(prVeh@1100244000 : Record 7010346);
+    VAR
+      lrIncid@1100244001 : Record 7010348;
+    BEGIN
+      // MarcaVehiculoOperativo
+      //
+      lrIncid.SETRANGE (Matricula                , prVeh.Matricula);
+      lrIncid.SETFILTER("Fecha inicio reparacion", '<=%1', TODAY + 1);
+      lrIncid.SETFILTER("Fecha final reparacion" , '>=%1', TODAY + 1);
+      IF NOT lrIncid.FINDFIRST THEN
+        wLinea += '|' + FORMAT('Si')
+      ELSE
+        wLinea += '|' + FORMAT('No')
+    END;
+
+    PROCEDURE DatosGarantiaVehiculo@1100244019(prVeh@1100244000 : Record 7010346);
+    VAR
+      lrGar@1100244001 : Record 7035375;
+      lrAcum@1100244002 : Record 7035370;
+      lwDiasAcumulados@1100244003 : Integer;
+      lwImporteAcumulado@1100244004 : Decimal;
+    BEGIN
+      // DatosGarantiaVehiculo
+      //
+
+      lrGar.SETRANGE (Vehiculo     , prVeh.Matricula);
+      lrGar.SETFILTER("Fecha Desde", '>=%1', TODAY + 1);
+      lrGar.SETFILTER("Fecha Hasta", '<=%1', TODAY + 1);
+      IF NOT lrGar.FINDFIRST THEN
+        CLEAR(lrGar);
+
+      wLinea += '|' + FormatoDec(lrGar."Horas diarias garantia");
+      wLinea += '|' + FormatoDec(lrGar."Importe garantia");
+
+      lrAcum.SETRANGE(Matricula, prVeh.Matricula);
+      lrAcum.SETRANGE("Fecha Desde"   , lrGar."Fecha Desde", lrGar."Fecha Hasta");
+
+      lwDiasAcumulados   := 0;
+      lwImporteAcumulado := 0;
+
+      IF lrAcum.FINDLAST THEN
+      BEGIN
+        REPEAT
+          lwDiasAcumulados += 1;
+
+          IF lrAcum."Importe real" <> 0 THEN
+            lwImporteAcumulado += lrAcum."Importe real"
+          ELSE
+            lwImporteAcumulado += lrAcum."Importe previsto";
+        UNTIL lrAcum.NEXT = 0;
+      END;
+
+      wLinea += '|' + FormatoDec(lwImporteAcumulado);
+      wLinea += '|' + FORMAT(lrAcum."Num dias operativo");
+    END;
+
+    PROCEDURE GeneraFicheroProveedores@1103350000();
+    VAR
+      lrProv@1103350000 : Record 23;
+    BEGIN
+      // GeneraFicheroProveedores
+
+      // Se exportan TODOS los proveedores
+      // Sp es una textconstant del separador de campos
+
+      lrProv.RESET;
+      IF lrProv.FINDSET THEN BEGIN
+        wVentana.OPEN(Text007);
+        CLEAR(wActual);
+        wTotal := lrProv.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0004.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := DELCHR(lrProv."No.",'<>');
+          wLinea += Sp + DELCHR(FORMAT(lrProv.Name),'<>');
+          wLinea += Sp + FORMAT(lrProv."Num pax desde");
+          wLinea += Sp + FORMAT(lrProv."Num pax hasta");
+          wLinea += Sp + FORMAT(lrProv."Pertenece grupo TUI");
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrProv.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GeneraFicheroAsociacionRecurso@1103350010();
+    VAR
+      lrAsoc@1103350000 : Record 7035354;
+    BEGIN
+      // GeneraFicheroAsociacionRecurso
+
+      // Se exportan los registros de Asociaci¢n recursos entre fechas
+      // Sp es una textconstant del separador de campos
+
+      CLEAR(lrAsoc);
+      lrAsoc.SETCURRENTKEY("Fecha Desde","Fecha Hasta");
+      lrAsoc.SETFILTER("Fecha Desde" ,'<=%1', wDia);
+      lrAsoc.SETFILTER("Fecha Hasta" ,'>=%1', wDia);
+      IF lrAsoc.FINDSET THEN BEGIN
+        wVentana.OPEN(Text008);
+        CLEAR(wActual);
+        wTotal := lrAsoc.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0005.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := FORMAT(lrAsoc."Nß mov.");
+          wLinea += Sp + DELCHR(lrAsoc."Cod. Conductor",'<>');
+          wLinea += Sp + DELCHR(lrAsoc.Matricula,'<>');
+          wLinea += Sp + FORMAT(lrAsoc."Vehiculo Preferente");
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrAsoc.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GeneraFicheroRestriccionesCond@1103350018();
+    VAR
+      lrRestr@1103350000 : Record 7035362;
+    BEGIN
+      // GeneraFicheroRestriccionesCond
+
+      // Se exportan TODOS los registros de Restriccion Conductor
+      // Sp es una textconstant del separador de campos
+
+      CLEAR(lrRestr);
+      IF lrRestr.FINDSET THEN BEGIN
+        wVentana.OPEN(Text009);
+        CLEAR(wActual);
+        wTotal := lrRestr.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0006.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := DELCHR(lrRestr.Conductor,'<>');
+          wLinea += Sp + DELCHR(lrRestr.Touroperador,'<>');
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrRestr.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GeneraFicheroRestrHotelVeh@1103350024();
+    VAR
+      lrRest@1103350000 : Record 7035364;
+    BEGIN
+      // GeneraFicheroRestrHotelVeh
+
+      // Se exportan TODOS los registros de Restricciones Hotel-Vehiculo
+      // Sp es una textconstant del separador de campos
+
+      CLEAR(lrRest);
+      IF lrRest.FINDSET THEN BEGIN
+        wVentana.OPEN(Text010);
+        CLEAR(wActual);
+        wTotal := lrRest.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0007.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := DELCHR(lrRest."Punto Recogida",'<>');
+          wLinea += Sp + DELCHR(lrRest.Matricula  ,'<>');
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrRest.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GeneraFicheroDefTurnoCond@1103350026();
+    VAR
+      lrDef@1103350000 : Record 7035366;
+    BEGIN
+      // GeneraFicheroDefTurnoCond
+
+      // Se exportan los registros de Definicion Turnos Conductor entre fechas
+      // Sp es una textconstant del separador de campos
+
+      CLEAR(lrDef);
+      lrDef.SETCURRENTKEY("Fecha desde","Fecha hasta");
+      lrDef.SETFILTER("Fecha desde",'<=%1',wDia);
+      lrDef.SETFILTER("Fecha hasta",'>=%1',wDia);
+      IF lrDef.FINDSET THEN BEGIN
+        wVentana.OPEN(Text011);
+        CLEAR(wActual);
+        wTotal := lrDef.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0008.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := FORMAT(lrDef.Turno);;
+          wLinea += Sp + FORMAT(lrDef."Hora inicio");
+          wLinea += Sp + FORMAT(lrDef."Hora final");
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrDef.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE GeneraFicheroRestriccionesTTOO@1103350031();
+    VAR
+      lrRest@1103350000 : Record 7035374;
+    BEGIN
+      // GeneraFicheroRestriccionesTTOO
+
+      // Se exportan TODOS los registros de Restricciones Imagen por Touroperador
+      // Sp es una textconstant del separador de campos
+
+      CLEAR(lrRest);
+      IF lrRest.FINDSET THEN BEGIN
+        wVentana.OPEN(Text012);
+        CLEAR(wActual);
+        wTotal := lrRest.COUNT;
+        // Crear el fichero de texto
+        CreaFicheroServicios('OPT0009.TXT');
+        REPEAT
+          CLEAR(wLinea);
+          wLinea := DELCHR(lrRest."Codigo TTOO",'<>');
+          wLinea += Sp + DELCHR(lrRest."Codigo Imagen",'<>');
+          rFich.WRITE(wLinea);
+          wActual +=1;
+          wVentana.UPDATE(1,ROUND(wActual/wTotal*10000,1));
+        UNTIL lrRest.NEXT=0;
+        wVentana.CLOSE;
+        rFich.CLOSE;
+      END;
+    END;
+
+    PROCEDURE FormatoDec@1103350001(pwDec@1103350000 : Decimal) : Text[30];
+    VAR
+      lwText@1103350001 : Text[30];
+    BEGIN
+      // FormatoDec
+      // Devuelve el formato decimal sin separador de miles y con punto como separador de decimales
+
+      lwText := FORMAT(pwDec,0,'<Sign><Integer>.<Decimals>');
+      lwText := DELCHR(lwText,'=',',');
+      EXIT(lwText);
+    END;
+
+    PROCEDURE CalculaCoste@1103350002(VAR prParte@1103350000 : Record 7010360;pwProvDefect@1103350001 : Code[10]) : Decimal;
+    VAR
+      lwCalcMarge@1103350002 : Boolean;
+      lrCI@1103350003 : Record 7010414;
+      lrMar@1103350005 : Record 7010412;
+      lwImporte@1103350004 : Decimal;
+      lwProveedorAnt@1103350007 : Code[10];
+      lwTipCalAnt@1103350008 : 'Margen,Confirmacion';
+      lwConfirmadoAnt@1103350009 : Boolean;
+    BEGIN
+      // CalculaCoste
+      // Tiene que calcularse margenes si el parte no esta confirmado, o si esta confirmado pero sin proveedor (se le simula uno)
+
+      lwCalcMarge := FALSE; // Indica si se tiene que calcular margen o no
+      CLEAR(lwImporte);
+
+
+      IF prParte.Confirmado THEN BEGIN
+        CLEAR(lrCI);
+        lrCI.SETCURRENTKEY("Nß Parte",Concepto);
+        lrCI.SETRANGE("Nß Parte" , prParte."Nß Parte");
+        lrCI.SETRANGE(Concepto   , lrCI.Concepto::Coste);
+        IF lrCI.FINDSET THEN BEGIN
+          lrCI.CALCSUMS("Importe con impuesto DL");
+          lwImporte := lrCI."Importe con impuesto DL";
+        END
+        ELSE
+          lwCalcMarge := TRUE
+      END
+      ELSE
+        lwCalcMarge := TRUE;
+
+      IF lwCalcMarge THEN BEGIN // Si no se puede sacar de las Lineas de Coste Ingreso se calcula el margen
+        IF pwProvDefect = '' THEN
+          pwProvDefect := prParte.Proveedor;
+
+        IF pwProvDefect <> '' THEN BEGIN
+          lwProveedorAnt := prParte.Proveedor;
+          lwTipCalAnt    := prParte."Tipo Calculo";
+          lwConfirmadoAnt:= prParte.Confirmado;
+
+
+          prParte.Proveedor      := pwProvDefect;
+          prParte."Tipo Calculo" := prParte."Tipo Calculo"::Margen;
+          prParte.Confirmado     := FALSE;
+
+          prParte.MODIFY;
+
+          // JPT 27/12/05 Cambio a las nuevas funciones de calculo
+          // lcCal.calculo_parte(prParte, FALSE, TRUE, FALSE, FALSE);
+          cCalcR.CalculoParte(prParte, FALSE, TRUE, FALSE, FALSE, TRUE);
+
+          prParte.Proveedor      := lwProveedorAnt;
+          prParte."Tipo Calculo" := lwTipCalAnt;
+          prParte.Confirmado     := lwConfirmadoAnt;
+          prParte.MODIFY;
+        END;
+
+        // Se comprueba que no haya generado errores
+        prParte.CALCFIELDS(Errores);
+        IF NOT prParte.Errores THEN BEGIN
+
+          lrMar.SETCURRENTKEY(Usuario,
+                              "Nß Parte",
+                              Touroperador,
+                              Concepto,
+                              "Tipo linea");
+          lrMar.SETRANGE(Usuario   , USERID);
+          lrMar.SETRANGE("Nß Parte", prParte."Nß Parte");
+          lrMar.SETRANGE(Concepto  , lrMar.Concepto::Coste);
+          IF lrMar.FINDFIRST THEN
+          BEGIN
+            lrMar.CALCSUMS("Importe con impuesto");
+            lwImporte := lrMar."Importe con impuesto";
+          END;
+        END;
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    PROCEDURE CalculaIngresos@1103355003(prParte@1103355000 : Record 7010360) : Decimal;
+    VAR
+      lrMar@1103355001 : Record 7010412;
+      lwImporte@1103355002 : Decimal;
+      lrParte2@1100253000 : Record 7010360;
+      lrTTOOPart@1100253001 : Record 7010365;
+    BEGIN
+      // Author        : AJS
+      // Name          : CalculaIngresos
+      // Date          : 27.03.2008
+      // Purpose       : Calcular los ingresos sin impuestos del parte de trabajo
+      // Last Modified : 27.03.2008
+
+      // JPT 18/08/10 M.Costa Modifico funci¢n de calculo ingresos para dejar el campo "Ingreso Precios por"
+      // igual a como estaba antes del calculo. Solicitado por IBZ
+      lrParte2 := prParte;
+
+      lwImporte := 0;
+
+      cCalcR.CalculoParte(prParte, FALSE, FALSE, TRUE, FALSE, TRUE);
+
+      // Se comprueba que no haya generado errores
+
+      prParte.CALCFIELDS(Errores);
+      IF NOT prParte.Errores THEN BEGIN
+        lrMar.SETCURRENTKEY(Usuario,
+                            "Nß Parte",
+                            Touroperador,
+                            Concepto,
+                            "Tipo linea");
+        lrMar.SETRANGE(Usuario   , USERID);
+        lrMar.SETRANGE("Nß Parte", prParte."Nß Parte");
+        lrMar.SETRANGE(Concepto  , lrMar.Concepto::Ingreso);
+        IF lrMar.FINDSET THEN BEGIN
+          lrMar.CALCSUMS("Importe sin impuesto");
+          lwImporte := lrMar."Importe sin impuesto";
+        END;
+      END;
+
+      // JPT 18/08/10 Si el calculo ha modificado el campo "Busca precio pasaje x zona" lo volvemos a dejar como estaba
+      IF prParte.FIND THEN BEGIN
+        IF prParte."Ingreso Precios por" <> lrParte2."Ingreso Precios por" THEN BEGIN
+           prParte."Ingreso Precios por"        := lrParte2."Ingreso Precios por";
+           prParte."Busca precio pasaje x zona ing" := lrParte2."Busca precio pasaje x zona ing";
+           prParte.MODIFY;
+
+           CLEAR(lrTTOOPart);
+           lrTTOOPart.SETRANGE("Nß Parte", prParte."Nß Parte");
+           lrTTOOPart.MODIFYALL("Ingreso Precios Por", lrParte2."Ingreso Precios por");
+        END;
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    PROCEDURE MueveArchivo@4(VAR prHistImp@1100244000 : Record 7035333;pwNomArch@1100244006 : Text[500]);
+    VAR
+      lwDirectorio@1100244001 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      lwSubdirectorio@1100244002 : Text[250];
+      lwSubd2@1103355001 : Text[250];
+      lwSubd3@1103355002 : Text[250];
+      lwContador@1100244003 : Integer;
+      lwArch1@1100244004 : Text[250];
+      lwArch2@1100244005 : Text[250];
+      lwCodFecha@1103355000 : Code[10];
+    BEGIN
+      // MueveArchivo
+      // Esta funci¢n se encarga de abrir un Subdiectorio para esa importaci¢n y mover
+      // all° todos los archivos importados
+      // pwNoImportacion Es el Nß asignado a esa importaci¢n.
+
+      CREATE(lwDirectorio);
+
+      rPar.TESTFIELD("Directorio Archivos");
+      lwSubdirectorio := rPar."Directorio Archivos";
+
+      IF lwSubdirectorio[STRLEN(lwSubdirectorio)] <> '\' THEN
+        lwSubdirectorio := lwSubdirectorio + '\';
+
+      lwSubd3 := lwSubdirectorio + Text013;
+      IF NOT lwDirectorio.FolderExists (lwSubd3) THEN
+        lwDirectorio.CreateFolder (lwSubd3);
+
+      lwSubd2 := Text013 + FORMAT(TODAY,0,'<Month Text><Year>') + '\';
+      lwSubd3 := lwSubdirectorio + lwSubd2;
+      IF NOT lwDirectorio.FolderExists (lwSubd3) THEN
+        lwDirectorio.CreateFolder (lwSubd3);
+
+      lwSubd2 := lwSubd2  + 'IMP_' + PonCeros(prHistImp."No Importacion" , 4) + '_' + PonFecha(TODAY);
+      prHistImp.Archivo := lwSubd2;
+      prHistImp.MODIFY;
+
+      lwSubd3 := lwSubdirectorio + lwSubd2;
+      IF NOT lwDirectorio.FolderExists (lwSubd3) THEN
+        lwDirectorio.CreateFolder (lwSubd3);
+
+      lwArch1 := pwNomArch;
+      IF EXISTS(lwArch1) THEN BEGIN
+        lwArch2 := lwSubd3 + '\' + lwDirectorio.GetFileName(pwNomArch);
+        //lwDirectorio.MoveFile(lwArch1 , lwArch2);
+        IF NOT RENAME(lwArch1 , lwArch2) THEN
+          MESSAGE (Text023,lwArch1 , lwArch2);
+      END;
+
+      CLEAR(lwDirectorio);
+    END;
+
+    PROCEDURE PonCeros@6(pwNumero@1100244000 : Integer;pwCuantos@1100244001 : Integer) : Code[20];
+    VAR
+      lwTexto@1100244002 : Code[20];
+    BEGIN
+      // PonCeros
+      // A partir del entero pasado como parametro "pwNumero" devuelve un code, pero CON ceros delante en "pwCuantos" cifras
+
+
+      lwTexto := FORMAT (pwNumero);
+
+      IF STRLEN (lwTexto) < pwCuantos THEN
+        REPEAT
+          lwTexto := '0' + lwTexto;
+        UNTIL STRLEN (lwTexto) >= pwCuantos;
+
+      EXIT(lwTexto);
+    END;
+
+    PROCEDURE PonFecha@7(pwFecha@1100244000 : Date) : Code[8];
+    BEGIN
+      // PonFecha
+      // Devuelve la fecha en formato code y sin barras
+      EXIT(PonCeros(DATE2DMY(pwFecha,1),2) + PonCeros(DATE2DMY(pwFecha,2),2) + FORMAT(pwFecha,0,'<YEAR>'));
+    END;
+
+    PROCEDURE ImportaResultados@1103355011(pwUsarFichConds@1103355015 : Boolean);
+    VAR
+      lrHistImp@1103355000 : Record 7035333;
+      lrParte@1103355008 : Record 7010360;
+      lrCond@1103355011 : Record 7010327;
+      lwArch@1103355001 : File;
+      lwTexto@1103355002 : Text[1024];
+      lwNomArch@1103355003 : Text[1024];
+      lwDirect@1103355004 : Text[1024];
+      lwParte@1103355005 : Code[10];
+      lwConductor@1103355006 : Code[20];
+      lwNumVehiculo@1103355007 : Code[10];
+      lwFecha@1103355009 : Date;
+      lwHora@1103355010 : Time;
+      lwNoencontrados@1103355012 : Text[1024];
+      lrCondsTMP@1103355013 : TEMPORARY Record 7010327;
+      lwIndex@1103355014 : Integer;
+    BEGIN
+      // ImportaResultados
+      //: Actualizamos los datos de vehiculos y conductores con los resultados
+      //: del LOGISPLAN.
+      //: @pwUsarFichConds: Indica si vamos a usar el fichero de conductores para actualizar la
+      //:                   informaci¢n de conductores. en caso negativo la extrapolamos de el fichero
+      //:                   de partes.
+
+      IF NOT CONFIRM(Text020) THEN
+        EXIT;
+
+      rPar.FINDFIRST;
+
+      rPar.TESTFIELD("Directorio Archivos");
+      lwDirect := rPar."Directorio Archivos";
+      IF lwNomArch[STRLEN(lwDirect)] <> '\' THEN
+        lwDirect += '\';
+
+      lwDirect += Text014;
+      lwArch.TEXTMODE(TRUE);
+
+
+      wVentana.OPEN('#1##############\#3##############\@2@@@@@@@@@@@@@@');
+
+      // Creamos el historico de importaciones;
+      CLEAR(lrHistImp);
+      lrHistImp.Tipo:= lrHistImp.Tipo::"Resultados Optrat";
+      lrHistImp.INSERT(TRUE);
+
+
+      // Primero importamos los partes
+      lwNomArch := lwDirect + Text017;
+      wVentana.UPDATE(1,Text017);
+      IF NOT EXISTS(lwNomArch) THEN
+        ERROR(Text016,lwNomArch);
+      lwArch.OPEN(lwNomArch);
+
+      // AJF 10/08/09
+      IF NOT pwUsarFichConds THEN
+        InicializarConductoresTEMP(lrCondsTMP, lwIndex);
+
+      CLEAR(lrParte);
+      CLEAR(lwNoencontrados);
+      WHILE lwArch.POS < lwArch.LEN DO BEGIN
+        lwArch.READ(lwTexto);
+        LeeDatosParte(lwTexto,lwParte,lwConductor,lwNumVehiculo);
+        wVentana.UPDATE(3,lwParte);
+        IF lrParte.GET(lwParte) THEN BEGIN
+
+          lrParte.SetBol(2,TRUE); // Evita la asignaci¢n automatica  de conductores y vehiculos
+          CLEAR(lrCond);
+          lrCond.SETCURRENTKEY("Nombre Abreviado",Garaje);
+          lrCond.SETRANGE("Nombre Abreviado", lwConductor);
+          IF NOT lrCond.FINDFIRST THEN
+            CLEAR(lrCond);
+
+          lrParte.VALIDATE("Cod Conductor", lrCond.Conductor);
+          // JPT 02/06/06 No les interesa que busque si tiene incidencias, etc... pongo asignacion rapida
+          lrParte."Asignacion rapida" :=TRUE;
+          lrParte.VALIDATE("Nß Vehiculo"  , lwNumVehiculo);
+          lrParte."Asignacion rapida" :=FALSE;
+          lrParte.MODIFY(TRUE);
+
+          // AJF 10/08/09
+          IF NOT pwUsarFichConds THEN
+            AcumularConductoresTEMP(lrCondsTMP, lrParte, lwIndex, lwConductor);
+
+        END
+        ELSE
+          IF STRLEN(lwNoencontrados) + STRLEN(lwParte) + 2 <= MAXSTRLEN(lwNoencontrados) THEN
+            lwNoencontrados += lwParte + ', ';
+        wVentana.UPDATE(2,ROUND(lwArch.POS/lwArch.LEN * 10000,1));
+
+      END;
+      lwArch.CLOSE;
+
+      IF lwNoencontrados <> '' THEN
+        MESSAGE(Text021, lwNoencontrados);
+      MueveArchivo(lrHistImp, lwNomArch);
+
+      IF pwUsarFichConds THEN BEGIN
+
+        // Luego los conductores
+        lwNomArch := lwDirect + Text018;
+
+        wVentana.UPDATE(1,Text018);
+        wVentana.UPDATE(2,0);
+        IF NOT EXISTS(lwNomArch) THEN
+          ERROR(Text016,lwNomArch);
+        lwArch.OPEN(lwNomArch);
+        CLEAR(lwNoencontrados);
+        WHILE lwArch.POS < lwArch.LEN DO BEGIN
+          lwArch.READ(lwTexto);
+          LeeDatosConductor(lwTexto,lwConductor,lwHora,lwFecha);
+          wVentana.UPDATE(3,lwConductor);
+          CLEAR(lrCond);
+          lrCond.SETCURRENTKEY("Nombre Abreviado",Garaje);
+          lrCond.SETRANGE("Nombre Abreviado", lwConductor);
+          IF lrCond.FINDFIRST THEN BEGIN
+            lrCond.VALIDATE("Hora ultimo trabajo"  , lwHora);
+            lrCond.VALIDATE("Fecha ultimo trabajo", lwFecha);
+            lrCond.MODIFY;
+          END
+          ELSE
+            IF STRLEN(lwNoencontrados) + STRLEN(lwConductor) + 2 <= MAXSTRLEN(lwNoencontrados) THEN
+              lwNoencontrados += lwConductor + ', ';
+          wVentana.UPDATE(2,ROUND(lwArch.POS/lwArch.LEN * 10000,1));
+        END;
+        lwArch.CLOSE;
+        wVentana.CLOSE;
+
+      END
+      ELSE BEGIN
+
+        wVentana.CLOSE;
+        // AJF 11/08/09
+        TrapasaConductores(lrCondsTMP, lwNoencontrados);
+
+      END;
+
+      IF lwNoencontrados <> '' THEN
+        MESSAGE(Text022, lwNoencontrados);
+      MueveArchivo(lrHistImp, lwNomArch);
+    END;
+
+    PROCEDURE LeeDatosParte@1103355017(pwTexto@1103355003 : Text[1024];VAR pwParte@1103355002 : Code[10];VAR pwConductor@1103355001 : Code[20];VAR pwNumVehiculo@1103355000 : Code[10]);
+    VAR
+      lwN@1103355004 : Integer;
+      lwCont@1103355005 : Integer;
+      lwChar@1103355006 : Text[1];
+      lwParte@1103355011 : Text[10];
+      lwConductor@1103355010 : Text[20];
+      lwNumVehiculo@1103355008 : Text[10];
+    BEGIN
+      // LeeDatosParte
+
+      CLEAR(pwParte);
+      CLEAR(pwConductor);
+      CLEAR(pwNumVehiculo);
+
+      // AJF 11/08/09
+      // Cambio el funcionamiento ya que si asignamos un espacio
+      // a la parte de atr†s de un code lo elimina automaticamente.
+      // A§ado variables text intermedias.
+
+      pwTexto := ConvertANSIASCII(pwTexto);
+
+      lwCont:=1;
+      FOR lwN:=1 TO STRLEN(pwTexto) DO BEGIN
+
+        lwChar := COPYSTR(pwTexto, lwN, 1);
+
+        IF lwChar = '|' THEN
+          lwCont +=1
+        ELSE BEGIN
+
+
+          CASE lwCont OF
+            1: lwParte       := lwParte       + lwChar;
+            2: lwConductor   := lwConductor   + lwChar;
+            3: lwNumVehiculo := lwNumVehiculo + lwChar;
+          END;
+        END;
+
+      END;
+
+      pwParte       := lwParte;
+      pwConductor   := lwConductor;
+      pwNumVehiculo := lwNumVehiculo;
+    END;
+
+    PROCEDURE LeeDatosConductor@1103355021(pwTexto@1103355003 : Text[1024];VAR pwConductor@1103355001 : Code[20];VAR pwHora@1103355000 : Time;VAR pwFecha@1103355002 : Date);
+    VAR
+      lwN@1103355004 : Integer;
+      lwCont@1103355005 : Integer;
+      lwChar@1103355006 : Text[1];
+      lwTextoHora@1103355007 : Text[30];
+      lwTextoFecha@1103355008 : Text[30];
+      lwConductor@1103355009 : Text[20];
+    BEGIN
+      // LeeDatosConductor
+
+      CLEAR(pwConductor);
+      CLEAR(lwTextoFecha);
+      CLEAR(lwTextoHora);
+      CLEAR(pwHora);
+      CLEAR(pwFecha);
+
+      // AJF 11/08/09
+      // Cambio el funcionamiento ya que si asignamos un espacio
+      // a la parte de atr†s de un code lo elimina automaticamente.
+      // A§ado variable text intermedia para el conductor.
+
+      lwCont:=1;
+      FOR lwN:=1 TO STRLEN(pwTexto) DO BEGIN
+        lwChar := COPYSTR(pwTexto, lwN, 1);
+        IF lwChar = '|' THEN
+          lwCont +=1
+        ELSE BEGIN
+          CASE lwCont OF
+            1: lwConductor  := lwConductor + FORMAT(lwChar);
+            2: lwTextoHora  := lwTextoHora + FORMAT(lwChar);
+            3: lwTextoFecha := lwTextoFecha + FORMAT(lwChar);
+          END;
+        END;
+      END;
+
+      pwConductor := lwConductor;
+
+      IF lwTextoHora <> '' THEN
+        EVALUATE(pwHora, lwTextoHora);
+
+      IF lwTextoFecha <> '' THEN
+        EVALUATE(pwFecha, lwTextoFecha);
+    END;
+
+    PROCEDURE VerArchvio@1103355000(prHistImp@1103355000 : Record 7035333;pwArc@1103355001 : 'Partes,Conductores');
+    VAR
+      lwDir@1103355002 : Text[1024];
+    BEGIN
+      // VerArchvio
+
+      rPar.FINDFIRST;
+
+      rPar.TESTFIELD("Directorio Archivos");
+      lwDir := rPar."Directorio Archivos";
+
+      IF lwDir[STRLEN(lwDir)] <> '\' THEN
+        lwDir := lwDir + '\';
+
+      lwDir := lwDir + prHistImp.Archivo;
+
+      CASE pwArc OF
+        pwArc::Partes     : lwDir := lwDir + '\' + Text017;
+        pwArc::Conductores: lwDir := lwDir + '\' + Text018;
+      END;
+
+      IF NOT EXISTS (lwDir) THEN
+        ERROR(Text016,lwDir);
+
+      // AJF 11/08/09
+      // Uso hiperlink que no da el confirm para abrir el fichero.
+      //SHELL(STRSUBSTNO('Notepad.EXE %1',lwDir));
+      HYPERLINK(lwDir);
+    END;
+
+    LOCAL PROCEDURE AcumularConductoresTEMP@1103355004(VAR prCondsTMP@1103355000 : TEMPORARY Record 7010327;VAR prParte@1103355001 : Record 7010360;VAR pwIndex@1103355002 : Integer;pwAbrev@1103355004 : Code[20]);
+    VAR
+      lrConds@1103355003 : Record 7010327;
+      lwDTUlt@1103355005 : DateTime;
+      lwDTParte@1103355006 : DateTime;
+    BEGIN
+      // AcumularConductoresTEMP.
+      //: Acumulamos los conductores asignados a los partes para que actuen como el fichero de conductores.
+      //: @prCondsTMP: temporary donde se guardan los conductores.
+      //: @prParte: parte del que se acaba de asignar el conductor.
+      //: @pwIndex: contador para asignar un Id £nico al registro del temporary.
+      //: @pwAbrev: Nombre abreviado del conductor proveniente del fichero de partes.
+
+      prCondsTMP.RESET;
+      prCondsTMP.SETCURRENTKEY("Nombre Abreviado", Garaje);
+      prCondsTMP.SETRANGE ("Nombre Abreviado", pwAbrev);
+
+      IF NOT prCondsTMP.FINDFIRST THEN BEGIN
+
+        pwIndex += 1;
+
+        prCondsTMP.INIT;
+        prCondsTMP.Conductor              := FORMAT(pwIndex);
+        prCondsTMP."Nombre Abreviado"     := pwAbrev;
+        prCondsTMP."Fecha ultimo trabajo" := prParte.Fecha;
+        prCondsTMP."Hora ultimo trabajo"  := prParte."Hora inicio";
+        prCondsTMP.INSERT;
+
+      END
+      ELSE BEGIN
+
+        IF (prParte.Fecha <> 0D) AND (prParte."Hora inicio" <> 0T) THEN
+          lwDTParte := CREATEDATETIME(prParte.Fecha, prParte."Hora inicio")
+        ELSE
+          EXIT;
+
+        IF (prCondsTMP."Fecha ultimo trabajo" <> 0D) AND (prCondsTMP."Hora ultimo trabajo" <> 0T) THEN
+          lwDTUlt   := CREATEDATETIME(prCondsTMP."Fecha ultimo trabajo", prCondsTMP."Hora ultimo trabajo");
+
+        IF (lwDTUlt = 0DT) OR (lwDTParte > lwDTUlt) THEN BEGIN
+          prCondsTMP."Fecha ultimo trabajo" := prParte.Fecha;
+          prCondsTMP."Hora ultimo trabajo"  := prParte."Hora inicio";
+          prCondsTMP.MODIFY;
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE InicializarConductoresTEMP@1103355005(VAR prCondsTMP@1103355000 : TEMPORARY Record 7010327;VAR pwIndex@1103355001 : Integer);
+    BEGIN
+      // InicializarConductoresTEMP.
+      //: Borramos la informaci¢n que pueda haber en el temporary y inicializamos el indice.
+      //: @prCondsTMP: temporary donde se guardan los conductores.
+      //: @pwIndex: contador para asignar un Id £nico al registro del temporary.
+
+      prCondsTMP.RESET;
+      prCondsTMP.DELETEALL;
+
+      pwIndex := 0;
+    END;
+
+    LOCAL PROCEDURE TrapasaConductores@1103355009(VAR prCondsTMP@1103355000 : TEMPORARY Record 7010327;VAR pwNoEnc@1103355004 : Text[1024]);
+    VAR
+      lrConds@1103355001 : Record 7010327;
+      lwDTUlt@1103355002 : DateTime;
+      lwDTTemp@1103355003 : DateTime;
+      lwDialog@1103355005 : Dialog;
+      lwCont@1103355006 : Integer;
+      lwTot@1103355007 : Integer;
+    BEGIN
+      // TrapasaConductores.
+      //: Traspasamos la informaci¢n recogida del fichero de partes a conductores.
+      //: @prCondsTMP: Temporary con la informaci¢n de conductores recogida.
+
+      pwNoEnc := '';
+
+      prCondsTMP.RESET;
+
+      lwTot := prCondsTMP.COUNT;
+
+      IF prCondsTMP.FINDSET THEN BEGIN
+
+        lwDialog.OPEN(Text024);
+
+        REPEAT
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont / lwTot * 10000, 1));
+
+          lrConds.SETCURRENTKEY("Nombre Abreviado", Garaje);
+          lrConds.SETRANGE ("Nombre Abreviado", prCondsTMP."Nombre Abreviado");
+
+          IF lrConds.FINDFIRST THEN BEGIN
+
+            lwDTTemp := CREATEDATETIME(prCondsTMP."Fecha ultimo trabajo", prCondsTMP."Hora ultimo trabajo");
+
+
+            IF (lrConds."Fecha ultimo trabajo" <> 0D) AND (lrConds."Hora ultimo trabajo" <> 0T) THEN
+              lwDTUlt := CREATEDATETIME(lrConds."Fecha ultimo trabajo", lrConds."Hora ultimo trabajo");
+
+            IF (lwDTUlt = 0DT) OR (lwDTTemp > lwDTUlt) THEN BEGIN
+              lrConds.VALIDATE("Hora ultimo trabajo" , prCondsTMP."Hora ultimo trabajo");
+              lrConds.VALIDATE("Fecha ultimo trabajo", prCondsTMP."Fecha ultimo trabajo");
+              lrConds.MODIFY;
+
+            END;
+          END
+          ELSE BEGIN
+
+            IF STRLEN(pwNoEnc) + STRLEN(prCondsTMP."Nombre Abreviado") + 2 <= MAXSTRLEN(pwNoEnc) THEN
+              pwNoEnc += prCondsTMP."Nombre Abreviado" + ', ';
+
+          END;
+
+        UNTIL prCondsTMP.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+    END;
+
+    PROCEDURE ConvertANSIASCII@1103355002(pwTexto@1103355002 : Text[1024]) rvText : Text[1024];
+    VAR
+      AsciiStr@1103355001 : TextConst 'ESP="ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ›››››µ∂∑∏››++Ωæ++--+-+∆«++--›-+œ–—“”‘i÷◊ÿ++›_›ﬁÓ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔÒ=ÛÙıˆ˜¯˘˙˚¸˝›"';
+      AnsiStr@1103355000 : TextConst 'ESP="«¸È‚‰‡ÂÁÍÎËÔÓÏƒ≈…Ê∆ÙˆÚ˚˘ˇ÷‹¯£ÿ◊É·ÌÛ˙Ò—™∫øÆ¨Ωº°´ª___¶¶¡¬¿©¶¶++¢•++--+-+„√++--¶-+§– À»iÕŒœ++__¶ÃØ”ﬂ‘“ı’µ˛ﬁ⁄€Ÿ˝›Ø¥≠±=æ∂ß˜∏∞®∑π≥≤_"';
+    BEGIN
+      // Convierte un Texto en codificaci¢n de Windows a codificaci¢n MSDOS.
+
+      rvText := CONVERTSTR(pwTexto,AnsiStr,AsciiStr);
+    END;
+
+    BEGIN
+    {
+      Nombre de los ficheros
+
+      Partes                       - OPT0001
+      Conductores                  - OPT0002
+      Vehiculos                    - OPT0003
+      Proveedores                  - OPT0004
+      Asociacion Recursos          - OPT0005
+      Restricciones Conductor      - OPT0006
+      Restricciones Hotel-Vehiculo - OPT0007
+      Definicion Turnos Conductor  - OPT0008
+      Restricciones Imagen x TTOO  - OPT0009
+
+
+      ## AJF 10/08/09
+
+        .- (09/00417) Al importar los resultados elimino la necesidad del fichero de conductores.
+           A§adido parametro en ImportaResultados para usar el fichero de conductores o extrapolar la informaci¢n
+           de conductores del fichero de partes.
+
+      ## AJF 11/08/09
+
+        .- (09/00417) Varias modificaciones para que funcione la importaci¢n.
+
+      JPT 18/08/10 Modifico las funciones de calculo ingresos para dejar el campo "Ingreso Precios Por" igual a como estaba antes del calc
+
+      $001 AJS 22072015 Incluyo la columna "Vehiculo especial" en la exportacion de vehiculos
+    }
+    END.
+  }
+}

@@ -1,0 +1,243 @@
+OBJECT Table 7010362 Extras parte
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:30:43;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF "N§ Parte" <> '' THEN BEGIN
+                 rParte.GET("N§ Parte");
+                 IF rParte.Confirmado THEN
+                   ERROR(err1);
+
+                 IF MantenNoExp(rParte, FALSE) THEN // Mantenemos el campo "Num Exportacion Prov"
+                   rParte.MODIFY;
+               END;
+               // Insertar en el historico
+               //
+               rHist.inserta_registro(rHist."Tipo Fichero"::Parte, "N§ Parte", 0, text2,
+                                      FORMAT("N§ Extra"), '');
+             END;
+
+    OnModify=BEGIN
+               IF "N§ Parte" <> '' THEN BEGIN
+                 rParte.GET("N§ Parte");
+                 IF rParte.Confirmado THEN
+                   ERROR(err2);
+
+                 IF MantenNoExp(rParte, TRUE) THEN // Mantenemos el campo "Num Exportacion Prov"
+                   rParte.MODIFY;
+               END;
+               // Insertar modificacion en el historico
+               //
+               rHist.inserta_registro(rHist."Tipo Fichero"::Parte, "N§ Parte", 0, STRSUBSTNO(text3, "N§ Extra"),
+                                      Extra, FORMAT(Importe));
+             END;
+
+    OnDelete=BEGIN
+               IF "N§ Parte" <> '' THEN BEGIN
+                 rParte.GET("N§ Parte");
+                 IF rParte.Confirmado THEN
+                   ERROR(err3);
+
+                 IF MantenNoExp(rParte, FALSE) THEN // Mantenemos el campo "Num Exportacion Prov"
+                   rParte.MODIFY;
+               END;
+               // Insertar borrado en el historico
+               //
+               rHist.inserta_registro(rHist."Tipo Fichero"::Parte, "N§ Parte", 0, STRSUBSTNO(text1, "N§ Extra"),
+                                      Extra, FORMAT(Importe));
+             END;
+
+    CaptionML=ESP=Extras parte;
+  }
+  FIELDS
+  {
+    { 1   ;   ;N§ Parte            ;Code10        ;TableRelation=Parte."N§ Parte";
+                                                   CaptionML=ESP=N§ Parte;
+                                                   SQL Data Type=Varchar;
+                                                   Description=PK, FK Parte;
+                                                   Editable=No }
+    { 3   ;   ;N§ Extra            ;Integer       ;CaptionML=ESP=N§ Extra;
+                                                   Description=PK;
+                                                   Editable=No }
+    { 5   ;   ;Extra               ;Code10        ;TableRelation=Extra.Codigo;
+                                                   OnValidate=VAR
+                                                                rExtra@1100244000 : Record 7010321;
+                                                              BEGIN
+                                                                rExtra.RESET;
+                                                                IF rExtra.GET(Extra) THEN
+                                                                  Porcentaje := rExtra.Porcentaje;
+                                                              END;
+
+                                                   CaptionML=ESP=Extra;
+                                                   SQL Data Type=Varchar;
+                                                   NotBlank=Yes;
+                                                   Description=FK Extra }
+    { 7   ;   ;Importe             ;Decimal       ;OnValidate=BEGIN
+                                                                VALIDATE("Cod. Divisa");
+                                                              END;
+
+                                                   CaptionML=ESP=Importe;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="Cod. Divisa" }
+    { 9   ;   ;Cod. Divisa         ;Code10        ;TableRelation=Currency.Code;
+                                                   OnValidate=BEGIN
+                                                                IF "Cod. Divisa" <> '' THEN BEGIN
+                                                                  IF TODAY = 0D THEN
+                                                                    "Importe DL" := 0
+                                                                  ELSE
+                                                                    "Importe DL" := rTipo.ExchangeAmtFCYToLCY(TODAY, "Cod. Divisa", Importe,
+                                                                                                          rTipo.ExchangeRate(TODAY, "Cod. Divisa"));
+                                                                END
+                                                                ELSE
+                                                                  "Importe DL" := Importe;
+                                                              END;
+
+                                                   CaptionML=ESP=Cod. Divisa;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Divisa }
+    { 11  ;   ;Importe DL          ;Decimal       ;CaptionML=ESP=Importe DL;
+                                                   Editable=No;
+                                                   AutoFormatType=1 }
+    { 13  ;   ;Tipo Extra          ;Option        ;CaptionML=ESP=Tipo Extra;
+                                                   OptionCaptionML=ESP=Ambos,Coste,Ingreso;
+                                                   OptionString=Ambos,Coste,Ingreso }
+    { 15  ;   ;Touroperador        ;Code10        ;TableRelation=Cliente/TTOO.TTOO;
+                                                   OnValidate=VAR
+                                                                rComp@1100244000 : Record 7010313;
+                                                                lrContVent@1100244001 : Record 7010403;
+                                                              BEGIN
+                                                                IF Touroperador <> xRec.Touroperador THEN BEGIN
+                                                                  // Hay que comprobar que exista la composicion entre el cliente del parte y el touroperador
+                                                                  // que indicamos en el extra.
+                                                                  rParte.RESET; rParte.INIT;
+                                                                  rParte.GET("N§ Parte");
+                                                                  rComp.RESET; rComp.INIT;
+                                                                  IF NOT rComp.GET(rParte.Cliente, Touroperador) THEN
+                                                                    ERROR(err4, rParte.Cliente, Touroperador);
+
+                                                                END;
+
+                                                                // ----  Calcula la divisa a partir del contrato del cliente del parte y el touroperador  ----
+
+                                                                lrContVent.RESET;
+                                                                lrContVent.SETCURRENTKEY(Cliente,
+                                                                                         Touroperador,
+                                                                                         "Fecha inicio contrato",
+                                                                                         "Fecha final contrato");
+                                                                lrContVent.SETRANGE (Cliente                , rParte.Cliente);
+                                                                lrContVent.SETRANGE (Touroperador           , Touroperador);
+                                                                lrContVent.SETFILTER("Fecha inicio contrato", '<=%1', rParte.Fecha);
+                                                                lrContVent.SETFILTER("Fecha final contrato" , '>=%1', rParte.Fecha);
+                                                                IF lrContVent.FINDFIRST THEN
+                                                                  VALIDATE ("Cod. Divisa", lrContVent."Cod. Divisa");
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lrTOxParte@1100244000 : Record 7010365;
+                                                            BEGIN
+                                                              rParte.GET("N§ Parte");
+                                                              {*
+                                                              rCliTo.RESET; rCliTo.INIT;
+                                                              rCliTo.SETRANGE(Cliente, rParte.Cliente);
+                                                              IF FORM.RUNMODAL(0, rCliTo) = ACTION::LookupOK THEN
+                                                                VALIDATE(Touroperador, rCliTo.TTOO);
+                                                              *}
+
+                                                              lrTOxParte.RESET;
+                                                              lrTOxParte.SETRANGE("N§ Parte", rParte."N§ Parte");
+                                                              IF FORM.RUNMODAL(0, lrTOxParte) = ACTION::LookupOK THEN
+                                                                VALIDATE(Touroperador, lrTOxParte.Touroperador);
+                                                            END;
+
+                                                   CaptionML=ESP=Touroperador;
+                                                   Description=FK Touroperador }
+    { 17  ;   ;Porcentaje          ;Boolean       ;CaptionML=ESP=Porcentaje }
+  }
+  KEYS
+  {
+    {    ;N§ Parte,N§ Extra                       ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      rTipo@1100244000 : Record 330;
+      rHist@1100244001 : Record 7010361;
+      text1@1100244002 : TextConst 'ESP=BORRADO EXTRA %1';
+      text2@1100244003 : TextConst 'ESP=INSERTAR EXTRA';
+      text3@1100244004 : TextConst 'ESP=MODIFICACION EXTRA %1';
+      err1@1100244005 : TextConst 'ESP=No se pueden insertar lineas asociadas a un parte confirmado.';
+      err2@1100244006 : TextConst 'ESP=No se pueden modificar lineas asociadas a un parte confirmado.';
+      err3@1100244007 : TextConst 'ESP=No se pueden borrar lineas asociadas a un parte confirmado.';
+      rParte@1100244008 : Record 7010360;
+      err4@1100244009 : TextConst 'ESP=No existe la composicion formada por el cliente %1 y el touroperador %2.';
+      rCliTo@1100244010 : Record 7010313;
+
+    PROCEDURE nom_extra@1() : Text[30];
+    VAR
+      rExtra@1100244000 : Record 7010321;
+    BEGIN
+      // nom_extra
+      //
+      IF NOT rExtra.GET(Extra) THEN
+        EXIT('')
+      ELSE
+        EXIT(rExtra.Descripcion);
+    END;
+
+    PROCEDURE MantenNoExp@1100253007(VAR prParte@1100253000 : Record 7010360;pwModificacion@1100253009 : Boolean) : Boolean;
+    VAR
+      lwNoCamps@1100253001 : ARRAY [20] OF Integer;
+      lwRParte@1100253002 : RecordRef;
+      lwRXrecParte@1100253003 : RecordRef;
+      lwNo@1100253004 : Integer;
+      lwField@1100253005 : FieldRef;
+      lwXrecField@1100253006 : FieldRef;
+      lwOk@1100253007 : Boolean;
+      lwOk2@1100253008 : Boolean;
+    BEGIN
+      // MantenNoExp
+      // JPT 29/03/06 Mantemeos el campo "Num Exportacion Prov" para volver a exportarlo si ha habido cambios
+
+      // Si pwModificacion= False lo marcamos de todos modos
+      // Si es una modificacion borramos el numero de exportacion si dicha modificaci¢n afecta a alguno de los siguientes campos
+
+      IF prParte."Num Exportacion Prov"=0 THEN // Si no se ha exportado a£n , salimos
+        EXIT;
+
+      lwOk:= TRUE;
+
+      IF pwModificacion THEN BEGIN
+        lwRParte.GETTABLE(Rec);
+        lwRXrecParte.GETTABLE(xRec);
+        lwOk2 := TRUE;
+        FOR lwNo:=1 TO lwRParte.FIELDCOUNT DO BEGIN
+          lwField     := lwRParte.FIELDINDEX(lwNo);
+          lwXrecField := lwRXrecParte.FIELDINDEX(lwNo);
+          // Campos que afectan al Parte
+          IF lwField.NUMBER IN [5,7,9,13,15,17] THEN
+            lwOk2 := lwOk2 AND (lwField.VALUE = lwXrecField.VALUE);
+          IF NOT lwOk2 THEN  // Si ya hay alguna diferencia se realiza una salida prematura del bucle
+            lwNo:= lwRParte.FIELDCOUNT;
+        END;
+        lwOk := NOT lwOk2;
+      END;
+
+      IF lwOk THEN
+        prParte.MantenNoExp(FALSE);
+
+      EXIT(lwOk);
+    END;
+
+    BEGIN
+    END.
+  }
+}

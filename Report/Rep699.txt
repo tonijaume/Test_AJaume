@@ -1,0 +1,274 @@
+OBJECT Report 699 Calculate Plan - Req. Wksh.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Calculate Plan - Req. Wksh.;
+               ESP=Calcular plan - Hoja demanda];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  Counter := 0;
+                  MaxDate:= 31129999D;
+                  IF FromDate = 0D THEN
+                    ERROR(Text002);
+                  IF ToDate = 0D THEN
+                    ERROR(Text003);
+                  PeriodLength := ToDate - FromDate + 1;
+                  IF PeriodLength <= 0 THEN
+                    ERROR(Text004);
+
+                  IF (Item.GETFILTER("Variant Filter") <> '') AND
+                     (MfgSetup."Current Production Forecast" <> '')
+                  THEN BEGIN
+                    ForecastEntry.SETCURRENTKEY("Production Forecast Name","Item No.","Location Code","Forecast Date","Component Forecast");
+                    ForecastEntry.SETRANGE("Production Forecast Name",MfgSetup."Current Production Forecast");
+                    Item.COPYFILTER("No.",ForecastEntry."Item No.");
+                    IF MfgSetup."Use Forecast on Locations" THEN
+                      Item.COPYFILTER("Location Filter",ForecastEntry."Location Code");
+                    IF ForecastEntry.FIND('-') THEN
+                      ERROR(Text005);
+                  END;
+
+                  ReqLine.SETRANGE("Worksheet Template Name",CurrTemplateName);
+                  ReqLine.SETRANGE("Journal Batch Name",CurrWorksheetName);
+
+                  Window.OPEN(
+                    Text006 +
+                    Text007);
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table27;
+        DataItemTableView=SORTING(Low-Level Code);
+        OnPreDataItem=BEGIN
+                        SKU.SETCURRENTKEY("Item No.");
+                        Item.COPYFILTER("Variant Filter",SKU."Variant Code");
+                        Item.COPYFILTER("Location Filter",SKU."Location Code");
+
+                        Item.COPYFILTER("Variant Filter",PlanningAssignment."Variant Code");
+                        Item.COPYFILTER("Location Filter",PlanningAssignment."Location Code");
+                        PlanningAssignment.SETRANGE(Inactive,FALSE);
+                        PlanningAssignment.SETRANGE("Net Change Planning",TRUE);
+
+                        ReqLineExtern.SETCURRENTKEY(Type,"No.","Variant Code","Location Code");
+                        Item.COPYFILTER("Variant Filter",ReqLineExtern."Variant Code");
+                        Item.COPYFILTER("Location Filter",ReqLineExtern."Location Code");
+
+                        PurchReqLine.SETCURRENTKEY(
+                          Type,"No.","Variant Code","Location Code","Sales Order No.","Planning Line Origin","Due Date");
+                        PurchReqLine.SETRANGE(Type,PurchReqLine.Type::Item);
+                        Item.COPYFILTER("Variant Filter",PurchReqLine."Variant Code");
+                        Item.COPYFILTER("Location Filter",PurchReqLine."Location Code");
+                        PurchReqLine.SETFILTER("Worksheet Template Name",ReqWkshTemplateFilter);
+                        PurchReqLine.SETFILTER("Journal Batch Name",ReqWkshFilter);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Counter MOD 5 = 0 THEN
+                             Window.UPDATE(1,"No.");
+                           Counter := Counter + 1;
+
+                           SKU.SETRANGE("Item No.","No.");
+                           IF NOT SKU.FIND('-') THEN BEGIN
+                             IF (CurrWorksheetType = CurrWorksheetType::Requisition) AND
+                                (Item."Replenishment System" = Item."Replenishment System"::"Prod. Order") THEN
+                               CurrReport.SKIP;
+                             IF Item."Reordering Policy" = Item."Reordering Policy"::" " THEN
+                               CurrReport.SKIP;
+                           END;
+
+                           PlanningAssignment.SETRANGE("Item No.","No.");
+
+                           ReqLine.LOCKTABLE;
+                           ActionMessageEntry.LOCKTABLE;
+
+                           PurchReqLine.SETRANGE("No.","No.");
+                           PurchReqLine.MODIFYALL("Accept Action Message",FALSE);
+                           PurchReqLine.DELETEALL(TRUE);
+
+                           ReqLineExtern.SETRANGE(Type,ReqLine.Type::Item);
+                           ReqLineExtern.SETRANGE("No.",Item."No.");
+                           IF ReqLineExtern.FIND('-') THEN
+                             REPEAT
+                               ReqLineExtern.DELETE(TRUE);
+                             UNTIL ReqLineExtern.NEXT = 0;
+
+                           InvtProfileOffsetting.SetParm(UseForecast,ExcludeForecastBefore);
+                           InvtProfileOffsetting.CalculatePlanFromWorksheet(
+                             Item,
+                             MfgSetup,
+                             CurrTemplateName,
+                             CurrWorksheetName,
+                             FromDate,
+                             ToDate,
+                             FALSE);
+
+                           IF PlanningAssignment.FIND('-') THEN
+                             REPEAT
+                               IF PlanningAssignment."Latest Date" <= ToDate THEN BEGIN
+                                 PlanningAssignment.Inactive := TRUE;
+                                 PlanningAssignment.MODIFY;
+                               END;
+                             UNTIL PlanningAssignment.NEXT = 0;
+
+                           COMMIT;
+
+                           TempItemList := Item;
+                           TempItemList.INSERT;
+                         END;
+
+        ReqFilterFields=No.,Search Description,Location Filter;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=6710;
+      Height=3080;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   MfgSetup.GET;
+                   UseForecast := MfgSetup."Current Production Forecast";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Starting Date;
+                                                              ESP=Fecha inicial];
+                                                   SourceExpr=FromDate }
+      { 2   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 3   ;TextBox      ;3410 ;550  ;1650 ;440  ;CaptionML=[ENU=Ending Date;
+                                                              ESP=Fecha final];
+                                                   SourceExpr=ToDate }
+      { 4   ;Label        ;0    ;550  ;3300 ;440  ;ParentControl=3 }
+      { 5   ;Label        ;0    ;1210 ;3300 ;440  ;ParentControl=6 }
+      { 6   ;TextBox      ;3410 ;1210 ;2750 ;440  ;CaptionML=[ENU=Use Forecast;
+                                                              ESP=Previsi¢n de uso];
+                                                   SourceExpr=UseForecast;
+                                                   TableRelation="Production Forecast Name".Name }
+      { 7   ;TextBox      ;3410 ;1760 ;1650 ;440  ;CaptionML=[ENU=Exclude Forecast Before;
+                                                              ESP=No incluir en la previsi¢n fechas anteriores al];
+                                                   SourceExpr=ExcludeForecastBefore }
+      { 8   ;Label        ;0    ;1760 ;3300 ;440  ;ParentControl=7 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   MfgSetup.GET;
+                   UseForecast := MfgSetup."Current Production Forecast";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Starting Date;
+                             ESP=Fecha inicial];
+                  SourceExpr=FromDate }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Ending Date;
+                             ESP=Fecha final];
+                  SourceExpr=ToDate }
+
+      { 6   ;2   ;Field     ;
+                  CaptionML=[ENU=Use Forecast;
+                             ESP=Previsi¢n de uso];
+                  SourceExpr=UseForecast;
+                  TableRelation="Production Forecast Name".Name }
+
+      { 7   ;2   ;Field     ;
+                  CaptionML=[ENU=Exclude Forecast Before;
+                             ESP=No incluir en la previsi¢n fechas anteriores al];
+                  SourceExpr=ExcludeForecastBefore }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text002@1000 : TextConst 'ENU=Enter a starting date.;ESP=Especifique una fecha inicial.';
+      Text003@1001 : TextConst 'ENU=Enter an ending date.;ESP=Especifique una fecha final.';
+      Text004@1002 : TextConst 'ENU=The ending date must not be before the order date.;ESP=Fecha final no puede ser anterior a Fecha pedido.';
+      Text005@1003 : TextConst 'ENU=You must not use a variant filter when calculating MPS from a forecast.;ESP=No debe utilizar un filtro variante cuando calcule MPS desde una previsi¢n.';
+      Text006@1004 : TextConst 'ENU=Calculating the plan...\\;ESP=Calculando el plan...\\';
+      Text007@1005 : TextConst 'ENU=Item No.  #1##################;ESP=Prod. n§  #1##################';
+      ReqLine@1006 : Record 246;
+      ActionMessageEntry@1007 : Record 99000849;
+      ReqLineExtern@1008 : Record 246;
+      PurchReqLine@1009 : Record 246;
+      SKU@1010 : Record 5700;
+      PlanningAssignment@1012 : Record 99000850;
+      ForecastEntry@1015 : Record 99000852;
+      MfgSetup@1018 : Record 99000765;
+      TempItemList@1019 : TEMPORARY Record 27;
+      InvtProfileOffsetting@1020 : Codeunit 99000854;
+      CurrWorksheetType@1022 : 'Requisition,Planning';
+      Window@1023 : Dialog;
+      PeriodLength@1024 : Integer;
+      CurrTemplateName@1025 : Code[10];
+      CurrWorksheetName@1026 : Code[10];
+      FromDate@1027 : Date;
+      ToDate@1028 : Date;
+      MaxDate@1029 : Date;
+      ReqWkshTemplateFilter@1030 : Code[50];
+      ReqWkshFilter@1031 : Code[50];
+      Counter@1032 : Integer;
+      UseForecast@1014 : Code[10];
+      ExcludeForecastBefore@1013 : Date;
+
+    PROCEDURE SetTemplAndWorksheet@2(TemplateName@1000 : Code[10];WorksheetName@1001 : Code[10]);
+    BEGIN
+      CurrTemplateName := TemplateName;
+      CurrWorksheetName := WorksheetName;
+    END;
+
+    PROCEDURE InitializeRequest@1(StartDate@1000 : Date;EndDate@1001 : Date);
+    BEGIN
+      FromDate := StartDate;
+      ToDate := EndDate;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

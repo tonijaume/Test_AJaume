@@ -1,0 +1,623 @@
+OBJECT Codeunit 7010322 Funciones abonar factura
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/04/15;
+    Time=19:11:34;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244004 : TextConst 'ESP=ANUL-FACTURA';
+      Text00001@1100244000 : TextConst 'ESP=Seguro que desea abonar la factura %1';
+      Text00002@1100244001 : TextConst 'ESP=Seguro que desea retroceder la factura %1';
+      Text00003@1100244002 : TextConst 'ESP=No se ha encontrado la factura o abono con numero %1.';
+      Text00004@1100244003 : TextConst 'ESP=Usuario no autorizado para ejecutar esta accion.';
+      Text00005@1100244005 : TextConst 'ESP=Anula %1 %2';
+      Text00006@1100244006 : TextConst 'ESP=Prefactura';
+      Text00007@1103350000 : TextConst 'ESP=Desea desconfirmar todos los servicios asociados a la prefactura %1';
+      Text00008@1103350001 : TextConst 'ESP=Se van a desconfirmar los partes filtrados.';
+      Text00009@1103350002 : TextConst 'ESP="Dejar Partes Ptes Facturar,Dejar Partes ya facturados "';
+      Text00010@1103350003 : TextConst 'ESP=NOFAC';
+      rpar@1100253000 : Record 7010311;
+      Text00011@1103355000 : TextConst 'ESP=No se puede abonar una factura ya abonada.';
+      Text00012@1103355001 : TextConst 'ESP=No se puede abonar la factura porque el parte %1 esta desconfirmado.';
+      Text00013@1103355002 : TextConst 'ESP=No se puede abonar la factura porque el parte %1 tiene produccion pendiente de facturar';
+      Text00014@1103355003 : TextConst 'ESP=Eliminar Factura Alternativa,Abonar';
+      Text00015@1103355004 : TextConst 'ESP=No se ha encontrado %1 %2';
+
+    PROCEDURE seleccion_tipoabono@1(pwNoFact@1100244000 : Code[20]);
+    VAR
+      lrPar@1100244001 : Record 7010311;
+      lrPref@1100244002 : Record 7010415;
+      lrCI@1100244003 : Record 7010414;
+      lrCI2@1100244004 : Record 7010414;
+      lrCond@1100244005 : Record 7010420;
+      lrUsu@1100244006 : Record 7010420;
+      lrRestric@1100244007 : Record 7010422;
+      lfSelFra@1100244008 : Form 7035251;
+      lwOpc@1103350001 : Integer;
+      lwBorrarF@1103355000 : Boolean;
+      lwTieneProd@1103355001 : Boolean;
+    BEGIN
+      // seleccion_tipoabono
+      //
+      // INPUT:
+      //    pwNoFact --> Numero de la factura que deseamos abonar
+      //
+
+      // ----  Comprobar que el usuario tiene permisos para ejecutar esta accion  ----
+
+      lrUsu.RESET;
+      IF lrUsu.GET(USERID) THEN BEGIN
+        IF lrRestric.GET(lrUsu."Perfil Transfer", Text000) THEN
+          ERROR(Text00004);
+      END;
+
+      // ----  Buscar las lineas de coste-ingreso para encontrar el numero de factura  ----
+
+      // AJF 07/01/09
+      // Evito borrar el registro, ya que ahora tiene datos permanentes.
+      IF lrCond.GET(USERID) THEN
+        lrCond.LimpiaRegistro
+      ELSE BEGIN
+        lrCond.INIT;
+        lrCond.Usuario := USERID;
+        lrCond.INSERT;
+      END;
+
+      lrCond."N§ Factura" := pwNoFact;
+      lrCond.MODIFY;
+
+      COMMIT;
+
+      lrCond.SETRECFILTER;
+
+      CLEAR(lfSelFra);
+      lfSelFra.SETRECORD(lrCond);
+      IF lfSelFra.RUNMODAL <> ACTION::OK THEN
+        EXIT;
+
+      lrCond.GET(USERID);
+      IF lrCond."N§ Factura" = '' THEN
+        EXIT;
+
+      // ----  Buscar cual es el tipo de contabilizacion que se indica en parametros                                     ----
+      // ----  Si se ha indicado que no hay contabilizacion se borrara la factura, si hay algun tipo de contabilizacion  ----
+      // ----  se genera un abono                                                                                        ----
+
+      lrPar.RESET;
+      lrPar.FINDFIRST;
+
+
+
+
+      // Buscamos la prefactura para saber si es de serie alternativa
+      lrPref.RESET;
+      lrPref.SETCURRENTKEY("N§ Factura");
+      lrPref.SETRANGE("N§ Factura", lrCond."N§ Factura");
+      IF NOT lrPref.FINDFIRST THEN
+        CLEAR(lrPref);
+
+      CLEAR(lwBorrarF);
+      CASE lrPar."Tipo Contabilizaci¢n" OF
+        lrPar."Tipo Contabilizaci¢n"::"Sin contabilidad":
+        BEGIN
+          IF NOT CONFIRM(Text00002, FALSE, lrCond."N§ Factura") THEN
+            EXIT;
+
+          // AJS 30.08.2007
+          // Comprobamos si la factura se puede anular
+
+          ComprobarPartes(lrCond."N§ Factura", lwTieneProd);
+
+          borrar_factura(lrCond."N§ Factura");
+        END
+        ELSE BEGIN
+          IF NOT CONFIRM(Text00001, FALSE, lrCond."N§ Factura") THEN
+            EXIT;
+
+          // AJS 30.08.2007
+          // Comprobamos si la factura se puede anular
+
+          ComprobarPartes(lrCond."N§ Factura", lwTieneProd);
+
+           // JPT 24/07/08
+          // Si se trata de una factura serie alternativa
+          // Damos la opci¢n de abonar la factura o eliminarla
+          CLEAR(lwOpc);
+          IF lrPref."No Serie Alternativa" THEN BEGIN
+            lwOpc := STRMENU(Text00014,1);
+            IF lwOpc=0 THEN
+              EXIT;
+          END;
+          lwBorrarF := lwOpc=1;
+          IF lwBorrarF THEN
+            EliminarFactura(lrPref."Tipo Documento", lrPref."N§ Factura")
+          ELSE
+            abonar_factura(lrCond."N§ Factura", lrPref."No Serie Alternativa");
+        END;
+      END;
+
+      // AJS 03.11.2006
+      // Marcaremos la prefactura como abonada
+      // Estas funciones deben de ir despues de las de abonar factura
+      lrPref.RESET;
+      lrPref.SETCURRENTKEY("N§ Factura");
+      lrPref.SETRANGE("N§ Factura", lrCond."N§ Factura");
+      IF lrPref.FINDFIRST THEN BEGIN
+        lrPref."Factura abonada" := TRUE;
+        IF lwBorrarF THEN BEGIN
+          lrPref.Desactiva;
+          lrPref.Facturada := FALSE;
+        END;
+        lrPref.MODIFY;
+      END;
+
+
+      // JPT 03.08.05 Preguntamos si queremos dejar los partes como facturados
+
+      REPEAT
+        lwOpc := STRMENU(Text00009, 1);
+      UNTIL lwOpc <> 0;
+
+      lrCI.RESET;
+      lrCI.SETCURRENTKEY("N§ Factura");
+      lrCI.SETRANGE("N§ Factura", lrCond."N§ Factura");
+      IF lrCI.FINDSET(TRUE) THEN BEGIN
+        lrCI2.LimpiaTemp;
+        REPEAT
+          lrCI2 := lrCI;
+          CASE lwOpc OF
+            1 : lrCI2.PasarProduccion(TRUE);
+            2 : BEGIN
+                  // AJF 10/11/08
+                  // Si hay lineas de producci¢n pendientes no dejamos dejar CI como facturado.
+                  IF lwTieneProd THEN
+                    ERROR(Text00013, lrCI2."N§ Parte");
+
+                  lrCI2.VALIDATE("N§ Prefactura", Text00010);
+                  lrCI2.VALIDATE("N§ Factura"   , Text00010);
+                  lrCI2.MODIFY(TRUE);
+                END;
+          END;
+        UNTIL lrCI.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE borrar_factura@6(pw_factura@1100244000 : Code[20]);
+    VAR
+      lrCab@1100244001 : Record 36;
+      lrLin@1100244002 : Record 37;
+      lrLinComentVenta@1100244003 : Record 44;
+      lrCabAlbVta@1100244004 : Record 110;
+      lrCabFactVentas@1100244005 : Record 112;
+      lrCabAbonoVentas@1100244006 : Record 114;
+      lrCabRecep@1100244008 : Record 6660;
+      lrCabPrePmt@1103355000 : Record 112;
+      lrCabMemoPrePmt@1103355001 : Record 114;
+      RegisVtas@1100244007 : Codeunit 80;
+    BEGIN
+      // borrar_factura
+      //
+      // INPUT:
+      //    pw_factura: Numero de factura que hay que borrar
+      //
+
+      IF lrCab.GET(lrCab."Document Type"::Invoice, pw_factura) THEN BEGIN
+
+        // ----  AJS 09-05-02 He traido el OnDelete aqui porque segun el estandar no se pueden borrar cab venta desde otro  ----
+        // ----  sitio que no sea la ventana de ficha de factura venta                                                      ----
+
+        RegisVtas.DeleteHeader(lrCab, lrCabAlbVta, lrCabFactVentas, lrCabAbonoVentas, lrCabRecep, lrCabPrePmt, lrCabMemoPrePmt);
+
+        lrLin.LOCKTABLE;
+
+        lrLin.SETRANGE("Document Type", lrCab."Document Type");
+        lrLin.SETRANGE("Document No."  , lrCab."No.");
+        lrLin.DELETEALL(TRUE);
+
+        lrLinComentVenta.SETRANGE("Document Type", lrCab."Document Type");
+        lrLinComentVenta.SETRANGE("No."            , lrCab."No.");
+        lrLinComentVenta.DELETEALL;
+
+        lrCab.DELETE;
+
+      END
+      ELSE BEGIN
+        IF lrCab.GET(lrCab."Document Type"::"Credit Memo", pw_factura) THEN BEGIN
+
+          // ----  AJS 09-05-02 He traido el OnDelete aqui porque segun el estandar no se pueden borrar cab venta desde otro  ----
+          // ----  sitio que no sea la ventana de ficha de factura venta                                                      ----
+
+          RegisVtas.DeleteHeader(lrCab, lrCabAlbVta, lrCabFactVentas, lrCabAbonoVentas, lrCabRecep, lrCabPrePmt, lrCabMemoPrePmt);
+
+          lrLin.LOCKTABLE;
+
+          lrLin.SETRANGE("Document Type", lrCab."Document Type");
+          lrLin.SETRANGE("Document No."  , lrCab."No.");
+          lrLin.DELETEALL(TRUE);
+
+          lrLinComentVenta.SETRANGE("Document Type", lrCab."Document Type");
+          lrLinComentVenta.SETRANGE("No."            , lrCab."No.");
+          lrLinComentVenta.DELETEALL;
+
+          lrCab.DELETE;
+        END
+        ELSE
+          ERROR(Text00003);
+      END;
+    END;
+
+    PROCEDURE EliminarFactura@1103355001(pwTipoDoc@1103355001 : 'Oferta,Pedido,Factura,Abono,Pedido abierto,Devoluci¢n';pwNoDoc@1100244000 : Code[20]);
+    VAR
+      lrCab@1100244001 : Record 36;
+      lrLin@1100244002 : Record 37;
+      lrLinComentVenta@1100244003 : Record 44;
+      lrDim@1103355000 : Record 357;
+    BEGIN
+      // EliminarFactura
+      //
+      // Funci¢n parecida a la anterior, pero elimina del todo la factura sin dejar rastro
+      // INPUT:
+      //    pw_factura: Numero de factura que hay que borrar
+      //
+
+      IF NOT lrCab.GET(pwTipoDoc, pwNoDoc) THEN
+        ERROR(Text00015, pwTipoDoc, pwNoDoc);
+
+      CLEAR(lrLin);
+      lrLin.SETRANGE("Document Type", lrCab."Document Type");
+      lrLin.SETRANGE("Document No."  , lrCab."No.");
+      lrLin.DELETEALL;
+
+      CLEAR(lrLinComentVenta);
+      lrLinComentVenta.SETRANGE("Document Type", lrCab."Document Type");
+      lrLinComentVenta.SETRANGE("No."            , lrCab."No.");
+      lrLinComentVenta.DELETEALL;
+
+      CLEAR(lrDim);
+      lrDim.SETFILTER("Table ID" ,'%1|%2', 36,37);
+      lrDim.SETRANGE("Document Type", lrCab."Document Type");
+      lrDim.SETRANGE("Document No." , lrCab."No.");
+      lrDim.DELETEALL;
+
+      lrCab.DELETE;
+    END;
+
+    PROCEDURE abonar_factura@7(pw_factura@1100244000 : Code[20];pwSerieAlternativa@1103355002 : Boolean);
+    VAR
+      lrCab@1100244001 : Record 36;
+      lrCabAbo@1100244002 : Record 36;
+      lrCabFra@1100244003 : Record 36;
+      lrPref@1103355000 : Record 7010415;
+      lcCopyDocument@1100244004 : Codeunit 6620;
+      lw_TipoDoc@1100244005 : 'Quote,Blanket Order,Order,Invoice,Return Order,Credit Memo,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo';
+      lw_NoDoc@1100244006 : Code[20];
+      lwFechaFact@1103355001 : Date;
+    BEGIN
+      // abonar_factura
+      //
+      // INPUT:
+      //    pw_factura: Numero de factura que hay que abonar
+      //
+
+      // AJS 03.11.2006
+      // Comprobar que la factura no haya sido abonada antes
+
+      lrPref.RESET;
+      lrPref.SETCURRENTKEY("N§ Factura");
+      lrPref.SETRANGE("N§ Factura", pw_factura);
+      IF lrPref.FINDFIRST THEN BEGIN
+        IF lrPref."Factura abonada" THEN
+          ERROR(Text00011);
+      END;
+
+      rpar.FINDFIRST;
+
+      // JPT-15/07/04 la fecha de factura la capturamos de la ultima factura
+
+      lwFechaFact := GetFechaFact;
+
+      IF lrCab.GET(lrCab."Document Type"::Invoice, pw_factura) THEN BEGIN
+
+        // ----  Si es una factura hay que generar un abono que lo contrarreste  ----
+
+        CLEAR(lrCabAbo);
+
+        // JPT 27/10/05 Para Ibizatours creamos solo la prefactura ya que los abonos los tienen en negativo
+        // JPT 08/09/09 Si es Ibizatours giramos los importes de los abonos. Creamos tambien Cab Venta
+        // IF NOT (rpar."Empresa Real" IN [rpar."Empresa Real"::IBZ, rpar."Empresa Real"::UEX])  THEN BEGIN
+
+          lrCabAbo.VALIDATE("Document Type", lrCabAbo."Document Type"::"Credit Memo");
+
+          // AJS 02.05.2007
+          // Si la factura es de serie alternativa, el abono se tiene que hacer con la misma serie de numeracion
+
+          IF lrPref."No Serie Alternativa" THEN BEGIN
+            lrCabAbo.VALIDATE("No. Series"        , lrCab."No. Series");
+            lrCabAbo.VALIDATE("Posting No. Series", lrCab."Posting No. Series");
+          END;
+
+          lrCabAbo.VALIDATE("Posting Date", lwFechaFact); // Es necesario poner la fecha aqui para que coja el n§ de serie correcto
+          lrCabAbo.INSERT(TRUE);
+
+          // AJF 18/09/08 - Migracion 5.01
+          // A¤ado los dos nuevos parametros a SetProperties.
+          CLEAR(lcCopyDocument);
+          lcCopyDocument.SetProperties(TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE);
+          //lcCopyDocument.CopySalesDoc(lrCab."Document Type"::Invoice, pw_factura, lrCabAbo);
+          lcCopyDocument.CopySalesDoc(3, pw_factura, lrCabAbo);
+
+          // Se debe de dejar la copia con los campos de traspaso en blanco
+
+          IF lrCabAbo.FIND THEN BEGIN
+            lrCabAbo.SetHideValidationDialog(TRUE);
+            CLEAR(lrCabAbo.Traspasado);
+            CLEAR(lrCabAbo."Num Traspaso");
+            // JPT 14/08/07 Si es serie alternativa no se debe traspasar
+            lrCabAbo.Traspasado := pwSerieAlternativa;
+
+            // JPT-15/07/04 la fecha de factura la capturamos de la ultima facturada
+
+            lrCabAbo.VALIDATE("Posting Date", lwFechaFact);
+            lrCabFra."Posting Description" := STRSUBSTNO(Text00005, lrCab."Document Type", lrCab."No.");
+            lrCabAbo.MODIFY;
+          END;
+        // END;
+
+        // JPT-15/07/04 Se genera una prefactura para poder imprimirse
+        GenerarPrefactura(lrCab, lrCabAbo); // Genera la prefactura
+
+        // JPT 08/09/09 Si es Ibizatours giramos los importes de los abonos
+        IF rpar."Empresa Real" IN [rpar."Empresa Real"::IBZ]  THEN
+          GirarValores(lrCabAbo);
+
+      END
+      ELSE BEGIN
+        IF lrCab.GET(lrCab."Document Type"::"Credit Memo", pw_factura) THEN BEGIN
+
+          CLEAR(lrCabFra);
+
+          // JPT 27/10/05 Para Ibizatours creamos solo la prefactura ya que los abonos los tienen en negativo
+          // JPT 08/09/09 Creamos tambien Cab Venta aunque sea Ibizatours
+          // IF NOT (rpar."Empresa Real" IN [rpar."Empresa Real"::IBZ, rpar."Empresa Real"::UEX])  THEN BEGIN
+
+            // ----  Si es un abono hay que generar una factura que lo contrarreste  ----
+
+            lrCabFra.VALIDATE("Document Type", lrCabAbo."Document Type"::Invoice);
+            lrCabFra.VALIDATE("Posting Date", lwFechaFact); // Es necesario poner la fecha aqui para que coja el n§ de serie correcto
+
+            // AJS 02.05.2007
+            // Si la factura es de serie alternativa, el abono se tiene que hacer con la misma serie de numeracion
+
+            IF lrPref."No Serie Alternativa" THEN BEGIN
+              lrCabFra.VALIDATE("No. Series"        , lrCab."No. Series");
+              lrCabFra.VALIDATE("Posting No. Series", lrCab."Posting No. Series");
+            END;
+
+            lrCabFra.INSERT(TRUE);
+
+            // AJF 18/09/08 - Migracion 5.01
+            // A¤ado los dos nuevos parametros a SetProperties.
+            CLEAR(lcCopyDocument);
+            lcCopyDocument.SetProperties(TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE);
+            //lcCopyDocument.CopySalesDoc(lrCab."Document Type"::"Credit Memo", pw_factura, lrCabFra);
+            lcCopyDocument.CopySalesDoc(4, pw_factura, lrCabFra);
+
+            // Se debe de dejar la copia con los campos de traspaso en blanco
+
+            IF lrCabFra.FIND THEN BEGIN
+              lrCabFra.SetHideValidationDialog(TRUE);
+              CLEAR(lrCabFra.Traspasado);
+              CLEAR(lrCabFra."Num Traspaso");
+              // JPT 14/08/07 Si es serie alternativa no se debe traspasar
+              lrCabFra.Traspasado := pwSerieAlternativa;
+
+              lrCabFra.VALIDATE("Posting Date", lwFechaFact);
+              lrCabFra."Posting Description" := STRSUBSTNO(Text00005, lrCab."Document Type", lrCab."No.");
+              lrCabFra.MODIFY;
+            END;
+          // END;
+
+          GenerarPrefactura(lrCab,lrCabFra); // Genera la prefactura
+
+          // JPT 08/09/09 Si es Ibizatours giramos los importes de los abonos
+          IF rpar."Empresa Real" IN [rpar."Empresa Real"::IBZ]  THEN
+            GirarValores(lrCabFra);
+        END
+        ELSE
+          ERROR(Text00003);
+      END;
+    END;
+
+    PROCEDURE GetFechaFact@1100244000() : Date;
+    VAR
+      lrPrefac@1100244000 : Record 7010415;
+    BEGIN
+      // GetFechaFact
+      // Busca la ultima fecha facturada
+
+      lrPrefac.RESET;
+      lrPrefac.SETCURRENTKEY(Facturada, "Fecha Registro factura");
+      lrPrefac.SETRANGE(Facturada,TRUE);
+      IF lrPrefac.FINDLAST THEN
+        EXIT(lrPrefac."Fecha Registro factura");
+    END;
+
+    PROCEDURE GenerarPrefactura@1100244001(prCab@1100244000 : Record 36;prCabDest@1100244002 : Record 36);
+    VAR
+      lrPref@1100244001 : Record 7010415;
+      lrPref2@1100244003 : Record 7010415;
+      lrLinPre@1100244004 : Record 7010417;
+      lrLinPre2@1100244005 : Record 7010417;
+    BEGIN
+      // GenerarPrefactura
+
+      CLEAR(lrPref);
+      lrPref.SETCURRENTKEY("N§ Factura","Tipo Documento");
+      lrPref.SETRANGE("N§ Factura"      , prCab."No.");
+      lrPref.SETRANGE("Tipo Documento"  , prCab."Document Type");
+      IF lrPref.FINDFIRST THEN BEGIN
+        CLEAR(lrPref2);
+        lrPref2:= lrPref;
+        CLEAR(lrPref2."N§ Prefactura" );
+        lrPref2."N§ Factura"                      := prCabDest."No.";
+        lrPref2.Facturada                         := lrPref2."N§ Factura"<>'';
+        lrPref2."Tipo Documento"                  := prCabDest."Document Type";
+        lrPref2."Fecha Registro factura"          := prCabDest."Posting Date";
+        lrPref2."Prefactura Impresa"              := FALSE;
+        lrPref2."Factura Impresa"                 := FALSE;
+        lrPref2."Texto Registro"                  := STRSUBSTNO(Text00005, prCab."Document Type", prCab."No.");
+        lrPref2."Importe base sin impuestos"      := - lrPref2."Importe base sin impuestos";
+        lrPref2."Importe suplemen sin impuestos"  := - lrPref2."Importe suplemen sin impuestos";
+        lrPref2."Importe extras sin impuestos"    := - lrPref2."Importe extras sin impuestos";
+        lrPref2."Base imponible factura"          := - lrPref2."Base imponible factura";
+        lrPref2.INSERT(TRUE);
+
+        // Lineas
+        CLEAR(lrLinPre);
+        lrLinPre.SETRANGE("N§ Prefactura", lrPref."N§ Prefactura");
+        IF lrLinPre.FINDSET(TRUE) THEN BEGIN
+          REPEAT
+            lrLinPre2 := lrLinPre;
+            lrLinPre2."N§ Prefactura"           := lrPref2."N§ Prefactura";
+            lrLinPre2."Importe con impuestos"   := - lrLinPre2."Importe con impuestos";
+            lrLinPre2."Importe sin impuestos"   := - lrLinPre2."Importe sin impuestos";
+            lrLinPre2."Cantidad Dto"            := - lrLinPre2."Cantidad Dto";
+            lrLinPre2."Importe Sin IVA Sin Dto" := - lrLinPre2."Importe Sin IVA Sin Dto";
+            lrLinPre2."Importe Con IVA Sin Dto" := - lrLinPre2."Importe Con IVA Sin Dto";
+            lrLinPre2."Precio con impuestos"    := - lrLinPre2."Precio con impuestos";
+            lrLinPre2."Precio sin impuestos"    := - lrLinPre2."Precio sin impuestos";
+            lrLinPre2.INSERT;
+          UNTIL lrLinPre.NEXT=0;
+        END;
+      END;
+    END;
+
+    PROCEDURE DesconfirmarServiciosFactura@1103350000(pwPrefact@1103350000 : Code[20]);
+    VAR
+      lrPI@1103350001 : Record 7035392;
+      lrParte@1103350002 : Record 7010360;
+      lcFunParte@1103350003 : Codeunit 7010318;
+    BEGIN
+      // DesconfirmarServiciosFactura
+      //
+      IF NOT CONFIRM(Text00007, FALSE, pwPrefact) THEN
+        EXIT;
+
+      lrPI.RESET;
+      lrPI.SETCURRENTKEY("N§ Prefactura");
+      lrPI.SETRANGE("N§ Prefactura", pwPrefact);
+      lrPI.SETRANGE("Tipo linea"   , lrPI."Tipo linea"::Base);
+      IF lrPI.FINDSET THEN BEGIN
+        REPEAT
+          IF lrParte.GET(lrPI."N§ Parte") THEN BEGIN
+            IF lrParte.Confirmado THEN
+              lcFunParte.desconfirmar_partes(lrParte, FALSE, '',0);
+          END;
+        UNTIL lrPI.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE DesconfirmarServiciosAutofactu@1103350001(VAR prToPar@1103350000 : Record 7010365);
+    VAR
+      lrParte@1103350001 : Record 7010360;
+      lcFunParte@1103350002 : Codeunit 7010318;
+    BEGIN
+      // DesconfirmarServiciosAutofactu
+      //
+      IF NOT CONFIRM(Text00008, FALSE) THEN
+        EXIT;
+
+      IF prToPar.FINDSET THEN BEGIN
+        REPEAT
+          IF lrParte.GET(prToPar."N§ Parte") THEN BEGIN
+            IF lrParte.Confirmado THEN
+              lcFunParte.desconfirmar_partes(lrParte, FALSE, '',0);
+          END;
+        UNTIL prToPar.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ComprobarPartes@1103355000(pwNumFactura@1103355000 : Code[20];VAR pwTieneProd@1103355004 : Boolean);
+    VAR
+      lrCI@1103355001 : Record 7010414;
+      lrParte@1103355002 : Record 7010360;
+      lrProd@1103355003 : Record 7035392;
+    BEGIN
+      // ComprobarPartes
+
+      lrCI.RESET;
+      lrCI.SETCURRENTKEY("N§ Factura");
+      lrCI.SETRANGE("N§ Factura", pwNumFactura);
+      IF lrCI.FINDSET THEN BEGIN
+        REPEAT
+
+          // Si el parte de trabajo esta desconfirmado no dejamos abonar la factura
+
+          // AJS 05.03.2008
+          // Protejo el GET con un IF porque se pueden abonar los abonos de RAPPEL y en ese caso
+          // no existe parte
+
+          IF lrParte.GET(lrCI."N§ Parte") THEN
+            IF NOT lrParte.Confirmado THEN
+              ERROR(Text00012, lrCI."N§ Parte");
+
+          // Si el parte de trabajo tiene lineas de produccion tampoco dejamos abonar la factura
+          // AJF 10/11/08
+          // En lugar de dar el error sacamos un booleano como parametro y no se deja facturar en el
+          // caso que se abone una factura y se quiera dejar el ingreso como facturado.
+          lrProd.SETRANGE(Facturable , TRUE);
+          lrProd.SETRANGE("N§ Parte", lrCI."N§ Parte");
+          pwTieneProd := lrProd.FINDFIRST;
+          //IF lrProd.FINDFIRST THEN
+            //ERROR(Text00013, lrCI."N§ Parte");
+        UNTIL lrCI.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GirarValores@1103355002(prCab@1103355000 : Record 36);
+    VAR
+      lrlin@1103355001 : Record 37;
+    BEGIN
+      // GirarValores
+      // Ibizatours tiene los abonos en negativo
+
+      IF NOT (rpar."Empresa Real" IN [rpar."Empresa Real"::IBZ])  THEN
+        EXIT;
+
+      IF prCab."No." ='' THEN
+        EXIT;
+
+      CLEAR(lrlin);
+      lrlin.SETRANGE("Document Type", prCab."Document Type");
+      lrlin.SETRANGE("Document No." , prCab."No.");
+      IF lrlin.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          //+$001 <
+          IF lrlin.Type <> 0 THEN
+          BEGIN
+            lrlin.VALIDATE(Quantity, -lrlin.Quantity);
+            lrlin.MODIFY(TRUE);
+          END
+          //+$001 >
+        UNTIL lrlin.NEXT=0;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 29112013 Modifico la funcion GirarValores para evitar un error con las lineas de comentarios
+    }
+    END.
+  }
+}

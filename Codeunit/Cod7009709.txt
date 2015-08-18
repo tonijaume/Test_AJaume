@@ -1,0 +1,691 @@
+OBJECT Codeunit 7009709 Calculo suplementos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/06/14;
+    Time=17:24:49;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1103355028 : TextConst 'ENU=Supplement;ESP=Suplemento';
+      Text003@1103355030 : TextConst 'ENU=SUPLEMENTV;ESP=SUPLEMENTV';
+      cCalRes@1103355000 : Codeunit 7009707;
+      rPreC@1103355001 : Record 7009738;
+      rPreC_aux@1103355002 : Record 7009738;
+      rPreV@1103355003 : Record 7009732;
+      rPreV_aux@1103355004 : Record 7009732;
+      rRsvDia@1103355005 : Record 7009755;
+      rRsvDia2@1103355006 : Record 7009756;
+      rRsv@1103355007 : Record 7009743;
+      rLin@1103355008 : Record 7009736;
+      rConC@1103355009 : Record 7009723;
+      rConV@1103355010 : Record 7009727;
+      rParPer@1103355011 : Record 7009701;
+      w_cantidad@1103355012 : Integer;
+      w_adultos@1103355014 : Integer;
+      w_habitacion@1103355015 : Code[10];
+      w_regimen@1103355016 : Code[10];
+      w_dia@1103355017 : Date;
+      w_precio_suplemento@1103355018 : Decimal;
+      w_garantia@1103355019 : Boolean;
+      w_hp@1103355020 : Boolean;
+      w_edad_hasta@1103355021 : Integer;
+      w_numero_persona_edad@1103355022 : Integer;
+      w_salir_bucle@1103355023 : Boolean;
+      w_habitaciones@1103355024 : Integer;
+      sw_no_acumula@1103355025 : Boolean;
+      ok_suplemento@1103355026 : Boolean;
+
+    PROCEDURE suplementos_coste_hotel@1(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // suplementos_coste_hotel
+
+      rParPer.FINDFIRST;
+
+      w_adultos    := 0;
+      w_habitacion := reserva.Habitacion;
+      w_regimen    := reserva.Regimen;
+      w_cantidad   := reserva."N§ Habitaciones";
+
+      rRsvDia.RESET;
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF rRsv."Tipo Persona" = rParPer."Codigo Adulto" THEN
+            w_adultos := w_adultos + 1;
+          IF rRsv.Responsable THEN
+            w_habitaciones := rRsv."N§ Habitaciones";
+        UNTIL rRsv.NEXT = 0;
+      END;
+
+      IF rRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+            rRsvDia.SETRANGE(Delegacion  , reserva.Delegacion);
+            rRsvDia.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+            rRsvDia.SETRANGE(Dia         , w_dia);
+            rRsvDia.FINDFIRST;
+
+            rLin.INIT;
+            sw_no_acumula := FALSE;
+            buscar_tipos_suplemento(rRsv, rRsvDia);
+            IF w_precio_suplemento <> 0 THEN
+            BEGIN
+              cCalRes.inserta_linea_calculo(rLin, USERID(), Text001, rRsvDia."Contrato compra",
+                                            w_precio_suplemento, rRsv."N§ Reserva", w_dia,
+                                            STRSUBSTNO('%1', rRsv."Tipo Persona Facturacion"), 1,
+                                            w_precio_suplemento, w_garantia, w_hp);
+              cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Coste, rRsv.Bono, reserva."N§ Responsable",
+                                          reserva."Hotel reservado", rConC."Tipo de Contrato",
+                                          reserva."Hotel Factura", reserva.Delegacion,
+                                          rPreC."Validacion HP especial");
+              IF sw_no_acumula THEN
+                cCalRes.borrar_otros_precios_coste(rPreC_aux, rRsv, rRsvDia, w_dia);
+            END;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+      rRsvDia.RESET;
+    END;
+
+    PROCEDURE buscar_tipos_suplemento@2(reserva@1103355000 : Record 7009743;ReservaDia@1103355001 : Record 7009755);
+    BEGIN
+      // buscar_tipos_suplemento
+
+      w_precio_suplemento := 0;
+      w_garantia := FALSE;
+      w_hp := FALSE;
+      ok_suplemento := FALSE;
+
+      // Buscamos suplementos restringidos por Tipo de Habitacion
+      rPreC.RESET;
+      rPreC.SETCURRENTKEY(Delegacion,
+                          "N§ Contrato",
+                          "Codigo Precio",
+                          Codigo,
+                          "Fecha desde",
+                          "Fecha hasta",
+                          "Edad desde",
+                          "Edad hasta");
+      rPreC.SETRANGE (Delegacion       , reserva.Delegacion);
+      rPreC.SETRANGE ("N§ Contrato"    , ReservaDia."Contrato compra");
+      rPreC.SETRANGE ("Codigo Precio"  , rPreC."Codigo Precio"::Suplementos);
+      rPreC.SETRANGE (Codigo           , reserva."Tipo Persona Facturacion");
+      rPreC.SETFILTER("Tipo Habitacion", w_habitacion);
+      rPreC.SETRANGE (Activo           , TRUE);
+      IF rPreC.FINDSET THEN
+      BEGIN
+        REPEAT
+          calcular_tipo_suplemento(reserva, ReservaDia);
+        UNTIL (rPreC.NEXT = 0) OR (ok_suplemento);
+      END;
+      rPreC.RESET;
+      // Buscamos suplementos restringidos por Tipo de Regimen
+      //
+      IF NOT ok_suplemento THEN BEGIN
+        rPreC.SETCURRENTKEY(Delegacion,
+                            "N§ Contrato",
+                            "Codigo Precio",
+                            Codigo,
+                            "Fecha desde",
+                            "Fecha hasta",
+                            "Edad desde",
+                            "Edad hasta");
+        rPreC.SETRANGE (Delegacion       , reserva.Delegacion);
+        rPreC.SETRANGE ("N§ Contrato"    , ReservaDia."Contrato compra");
+        rPreC.SETRANGE ("Codigo Precio"  , rPreC."Codigo Precio"::Suplementos);
+        rPreC.SETRANGE (Codigo           , reserva."Tipo Persona Facturacion");
+        rPreC.SETFILTER("Tipo Regimen"   , '<>%1', '');
+        rPreC.SETRANGE ("Tipo Habitacion", '');
+        rPreC.SETRANGE (Activo           , TRUE);
+        IF rPreC.FINDSET THEN
+        BEGIN
+          REPEAT
+            calcular_tipo_suplemento(reserva, ReservaDia);
+          UNTIL (rPreC.NEXT = 0) OR (ok_suplemento);
+        END;
+        rPreC.RESET;
+      END;
+      // Buscamos suplementos sin restriccion
+      //
+      IF NOT ok_suplemento THEN BEGIN
+        rPreC.SETCURRENTKEY(Delegacion,
+                            "N§ Contrato",
+                            "Codigo Precio",
+                            Codigo,
+                            "Fecha desde",
+                            "Fecha hasta",
+                            "Edad desde",
+                            "Edad hasta");
+        rPreC.SETRANGE(Delegacion        , reserva.Delegacion);
+        rPreC.SETRANGE("N§ Contrato"     , ReservaDia."Contrato compra");
+        rPreC.SETRANGE("Codigo Precio"   , rPreC."Codigo Precio"::Suplementos);
+        rPreC.SETRANGE(Codigo            , reserva."Tipo Persona Facturacion");
+        rPreC.SETRANGE("Tipo Regimen"    , '');
+        rPreC.SETRANGE("Tipo Habitacion" , '');
+        rPreC.SETRANGE (Activo           , TRUE);
+        IF rPreC.FINDSET THEN BEGIN
+          REPEAT
+            calcular_tipo_suplemento(reserva, ReservaDia);
+          UNTIL (rPreC.NEXT = 0) OR (ok_suplemento);
+        END;
+        rPreC.RESET;
+      END;
+    END;
+
+    PROCEDURE calcular_tipo_suplemento@10(reserva@1103355000 : Record 7009743;reservaDia@1103355001 : Record 7009755);
+    BEGIN
+      // calcular_tipo_suplemento
+      //
+      criterios_aplicacion(reserva);
+      IF ok_suplemento THEN BEGIN
+        IF rPreC.Porcentaje THEN
+          w_precio_suplemento := cCalRes.hallar_porcentaje_coste(rPreC, reserva, reservaDia, w_dia)
+        ELSE
+          w_precio_suplemento := rPreC.Importe;
+        w_hp := rPreC."Importe HP";
+        w_garantia := rPreC.Garantizable;
+        IF NOT rPreC."Acumular al total" THEN BEGIN
+          rPreC_aux := rPreC;
+          sw_no_acumula := TRUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE criterios_aplicacion@8(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // criterios_aplicacion
+      //
+      ok_suplemento := TRUE;
+
+      // Comprobacion de la edad
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreC."Edad hasta";
+        IF (reserva.Edad < rPreC."Edad desde") OR (reserva.Edad > w_edad_hasta) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // Comprobacion del n§ de persona
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreC."N§ Persona") AND (rPreC."N§ Persona" <> 0) THEN
+            ok_suplemento := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona(reserva);
+          IF (w_numero_persona_edad <> rPreC."N§ Persona") AND (rPreC."N§ Persona" <> 0) THEN
+            ok_suplemento := FALSE;
+        END;
+      END;
+
+      // Comprobacion por fecha
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (w_dia < rPreC."Fecha desde") OR
+             (w_dia > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fecha entrada" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (w_dia < rPreC."2¦ Fecha desde") OR
+             (w_dia > rPreC."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreC."Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+      END;
+
+      // Comprobacion por N§ Personas acompa¤ante
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreC."N§ Personas acompa¤ante" <> 0) THEN BEGIN
+          IF (rPreC."N§ Acompa¤antes exacto") AND (rPreC."N§ Personas acompa¤ante" <> ROUND(w_adultos / w_habitaciones, 1)) THEN
+            ok_suplemento := FALSE
+          ELSE BEGIN
+            IF rPreC."N§ Personas acompa¤ante" > w_adultos THEN
+              ok_suplemento := FALSE;
+          END;
+        END;
+      END;
+
+      // Comprobacion Tipo de Habitacion
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreC."Tipo Habitacion" <> '') AND (rPreC."Tipo Habitacion" <> w_habitacion) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreC."Tipo Regimen" <> '') AND (rPreC."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // AJS 09.12.2003
+      // Comprobacion por Hotel Oferta especial contra el codigo de hotel del touroperador
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreC."Hotel oferta especial" <> '') AND (rPreC."Hotel oferta especial" <> reserva."Hotel TO") THEN
+          ok_suplemento := FALSE;
+      END;
+    END;
+
+    PROCEDURE buscar_num_persona@6(reserva@1103355000 : Record 7009743);
+    VAR
+      rRsv2@1103355001 : Record 7009743;
+    BEGIN
+      // buscar_num_persona
+      //
+      w_salir_bucle := FALSE;
+      w_numero_persona_edad := 0;
+      rRsv2.SETCURRENTKEY(Delegacion,
+                          "N§ Responsable",
+                          Edad);
+      rRsv2.SETRANGE(Delegacion     , reserva.Delegacion);
+      rRsv2.SETRANGE("N§ Responsable", reserva."N§ Responsable");
+      rRsv2.ASCENDING(FALSE);
+      IF rRsv2.FIND('-') THEN BEGIN
+        REPEAT
+          IF STRSUBSTNO('%1', rRsv2."Tipo Persona Facturacion") = rPreC.Codigo THEN BEGIN
+            IF (rRsv2.Edad >= rPreC."Edad desde") AND (rRsv2.Edad <= w_edad_hasta) THEN
+              w_numero_persona_edad := w_numero_persona_edad + 1;
+          END;
+          IF rRsv2."N§ Reserva" = rRsv."N§ Reserva" THEN
+            w_salir_bucle := TRUE;
+        UNTIL (rRsv2.NEXT = 0) OR (w_salir_bucle);
+
+        IF w_cantidad <> 0 THEN
+          w_numero_persona_edad := ROUND(w_numero_persona_edad / w_cantidad, 1);
+
+        IF w_numero_persona_edad = 0 THEN
+          w_numero_persona_edad := 1;
+      END;
+    END;
+
+    PROCEDURE suplementos_ingreso_hotel@3(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // suplementos_ingreso_hotel
+
+      rParPer.FINDFIRST;
+
+      w_adultos    := 0;
+      w_habitacion := reserva.Habitacion;
+      w_regimen    := reserva.Regimen;
+      w_cantidad   := reserva."N§ Habitaciones";
+
+      rRsvDia2.RESET;
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF rRsv."Tipo Persona" = rParPer."Codigo Adulto" THEN
+            w_adultos := w_adultos + 1;
+          IF rRsv.Responsable THEN
+            w_habitaciones := rRsv."N§ Habitaciones";
+        UNTIL rRsv.NEXT = 0;
+      END;
+      IF rRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          sw_no_acumula := FALSE;
+          FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+            rRsvDia2.SETRANGE(Delegacion  , reserva.Delegacion);
+            rRsvDia2.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+            rRsvDia2.SETRANGE(Dia         , w_dia);
+            rRsvDia2.FINDFIRST;
+
+            rLin.INIT;
+            buscar_tipos_suplemento_ingres(rRsv, rRsvDia2);
+            IF w_precio_suplemento <> 0 THEN BEGIN
+              cCalRes.inserta_linea_calculo(rLin, USERID(), Text003, rRsvDia2."Contrato venta",
+                                            w_precio_suplemento, rRsv."N§ Reserva", w_dia,
+                                            STRSUBSTNO('%1', rRsv."Tipo Persona Facturacion"), 1,
+                                            w_precio_suplemento, w_garantia, w_hp);
+              cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono,
+                                          reserva."N§ Responsable", reserva."Hotel reservado",
+                                          rConC."Tipo de Contrato", reserva."Hotel Factura", reserva.Delegacion,
+                                          rPreC."Validacion HP especial");
+              IF sw_no_acumula THEN
+                cCalRes.borrar_otros_precios_ingreso(rPreV_aux, rRsv, rRsvDia2, w_dia);
+            END;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+      rRsvDia2.RESET;
+    END;
+
+    PROCEDURE buscar_tipos_suplemento_ingres@4(reserva@1103355000 : Record 7009743;ReservaDia@1103355001 : Record 7009756);
+    BEGIN
+      // buscar_tipos_suplemento_ingres
+      //
+      w_precio_suplemento := 0;
+      w_garantia := FALSE;
+      w_hp := FALSE;
+      ok_suplemento := FALSE;
+
+      // Buscamos suplementos restringidos por Tipo de habitacion
+
+      rPreV.RESET;
+      rPreV.SETCURRENTKEY(Delegacion,
+                          "N§ Contrato",
+                          "Codigo Precio",
+                          Codigo,
+                          "Fecha desde",
+                          "Fecha hasta",
+                          "Edad desde",
+                          "Edad hasta");
+      rPreV.SETRANGE (Delegacion       , reserva.Delegacion);
+      rPreV.SETRANGE ("N§ Contrato"    , ReservaDia."Contrato venta");
+      rPreV.SETRANGE ("Codigo Precio"  , rPreV."Codigo Precio"::Suplementos);
+      rPreV.SETRANGE (Codigo           , reserva."Tipo Persona Facturacion");
+      rPreV.SETFILTER("Tipo Habitacion", w_habitacion);
+      rPreV.SETRANGE (Activo           , TRUE);
+      IF rPreV.FINDSET THEN
+      BEGIN
+        REPEAT
+          calcular_tipo_suplemento_ing(reserva, ReservaDia);
+        UNTIL (rPreV.NEXT = 0) OR (ok_suplemento);
+      END;
+      rPreV.RESET;
+      // Buscamos suplementos restringidos por Tipo de Regimen
+      //
+      IF NOT ok_suplemento THEN
+      BEGIN
+        rPreV.RESET;
+        rPreV.SETCURRENTKEY(Delegacion,
+                            "N§ Contrato",
+                            "Codigo Precio",
+                            Codigo,
+                            "Fecha desde",
+                            "Fecha hasta",
+                            "Edad desde",
+                            "Edad hasta");
+        rPreV.SETRANGE (Delegacion       , reserva.Delegacion);
+        rPreV.SETRANGE ("N§ Contrato"    , ReservaDia."Contrato venta");
+        rPreV.SETRANGE ("Codigo Precio"  , rPreV."Codigo Precio"::Suplementos);
+        rPreV.SETRANGE (Codigo           , reserva."Tipo Persona Facturacion");
+        rPreV.SETFILTER("Tipo Regimen"   , '<>%1', '');
+        rPreV.SETRANGE ("Tipo Habitacion", '');
+        rPreV.SETRANGE (Activo           , TRUE);
+        IF rPreV.FINDSET THEN BEGIN
+          REPEAT
+            calcular_tipo_suplemento_ing(reserva, ReservaDia);
+          UNTIL (rPreV.NEXT = 0) OR (ok_suplemento);
+        END;
+        rPreV.RESET;
+      END;
+      // Buscamos suplementos sin restricci¢n
+      //
+      IF NOT ok_suplemento THEN
+      BEGIN
+        rPreV.RESET;
+        rPreV.SETCURRENTKEY(Delegacion,
+                            "N§ Contrato",
+                            "Codigo Precio",
+                            Codigo,
+                            "Fecha desde",
+                            "Fecha hasta",
+                            "Edad desde",
+                            "Edad hasta");
+        rPreV.SETRANGE(Delegacion        , reserva.Delegacion);
+        rPreV.SETRANGE("N§ Contrato"     , ReservaDia."Contrato venta");
+        rPreV.SETRANGE("Codigo Precio"   , rPreV."Codigo Precio"::Suplementos);
+        rPreV.SETRANGE(Codigo            , reserva."Tipo Persona Facturacion");
+        rPreV.SETRANGE("Tipo Regimen"    , '');
+        rPreV.SETRANGE("Tipo Habitacion" , '');
+        rPreV.SETRANGE (Activo           , TRUE);
+        IF rPreV.FINDSET THEN
+        BEGIN
+          REPEAT
+            calcular_tipo_suplemento_ing(reserva, ReservaDia);
+          UNTIL (rPreV.NEXT = 0) OR (ok_suplemento);
+        END;
+        rPreV.RESET;
+      END;
+    END;
+
+    PROCEDURE calcular_tipo_suplemento_ing@5(reserva@1103355000 : Record 7009743;reservaDia@1103355001 : Record 7009756);
+    BEGIN
+      // calcular_tipo_suplemento_ing
+
+      criterios_aplicacion_ingreso(reserva);
+      IF ok_suplemento THEN BEGIN
+        IF rPreV.Porcentaje THEN
+          w_precio_suplemento := cCalRes.hallar_porcentaje_ingreso(rPreV, reserva, reservaDia, w_dia)
+        ELSE
+          w_precio_suplemento := rPreV.Importe;
+        w_hp := rPreV."Importe HP";
+        w_garantia := rPreV.Garantizable;
+        IF NOT rPreV."Acumular al total" THEN BEGIN
+          rPreV_aux := rPreV;
+          sw_no_acumula := TRUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE criterios_aplicacion_ingreso@9(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // criterios_aplicacion_ingreso
+      //
+      ok_suplemento := TRUE;
+
+      // Comprobacion de la edad
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreV."Edad hasta";
+        IF (reserva.Edad < rPreV."Edad desde") OR (reserva.Edad > w_edad_hasta) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // Comprobacion del n§ de persona
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_suplemento := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona_ingreso(reserva);
+          IF (w_numero_persona_edad <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_suplemento := FALSE;
+        END;
+      END;
+
+      // Comprobacion por fecha
+      //
+      IF ok_suplemento THEN BEGIN
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (w_dia < rPreV."Fecha desde") OR (w_dia > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fecha entrada" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (w_dia < rPreV."2¦ Fecha desde") OR
+             (w_dia > rPreV."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreV."Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."Fecha hasta") THEN
+            ok_suplemento := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_suplemento := FALSE;
+        END;
+      END;
+
+      // Comprobacion por N§ Personas acompa¤ante
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreV."N§ Personas acompa¤ante" <> 0) THEN BEGIN
+          IF (rPreV."N§ Acompa¤antes exacto") AND (rPreV."N§ Personas acompa¤ante" <> ROUND(w_adultos / w_habitaciones, 1)) THEN
+            ok_suplemento := FALSE
+          ELSE BEGIN
+            IF rPreV."N§ Personas acompa¤ante" > w_adultos THEN
+              ok_suplemento := FALSE;
+          END;
+        END;
+      END;
+
+      // Comprobacion Tipo de Habitacion
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreV."Tipo Habitacion" <> '') AND (rPreV."Tipo Habitacion" <> w_habitacion) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreV."Tipo Regimen" <> '') AND (rPreV."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_suplemento := FALSE;
+      END;
+
+      // AJS 09.12.2003
+      // Comprobacion por Hotel Oferta especial contra el codigo de hotel del touroperador
+      //
+      IF ok_suplemento THEN BEGIN
+        IF (rPreV."Hotel oferta especial" <> '') AND (rPreV."Hotel oferta especial" <> reserva."Hotel TO") THEN
+          ok_suplemento := FALSE;
+      END;
+    END;
+
+    PROCEDURE buscar_num_persona_ingreso@19(reserva@1103355000 : Record 7009743);
+    VAR
+      rRsv2@1103355001 : Record 7009743;
+    BEGIN
+      // buscar_num_persona_ingreso
+      //
+      w_salir_bucle := FALSE;
+      w_numero_persona_edad := 0;
+      rRsv2.SETCURRENTKEY(Delegacion,
+                          "N§ Responsable",
+                          Edad);
+      rRsv2.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv2.SETRANGE("N§ Responsable", reserva."N§ Responsable");
+      rRsv2.ASCENDING(FALSE);
+      IF rRsv2.FIND('-') THEN BEGIN
+        REPEAT
+          IF STRSUBSTNO('%1', rRsv2."Tipo Persona Facturacion") = rPreV.Codigo THEN BEGIN
+            IF (rRsv2.Edad >= rPreV."Edad desde") AND (rRsv2.Edad <= w_edad_hasta) THEN
+              w_numero_persona_edad := w_numero_persona_edad + 1;
+          END;
+          IF rRsv2."N§ Reserva" = rRsv."N§ Reserva" THEN
+            w_salir_bucle := TRUE;
+        UNTIL (rRsv2.NEXT = 0) OR (w_salir_bucle);
+
+        IF w_cantidad <> 0 THEN
+          w_numero_persona_edad := ROUND(w_numero_persona_edad / w_cantidad, 1);
+
+        IF w_numero_persona_edad = 0 THEN
+          w_numero_persona_edad := 1;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

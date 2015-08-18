@@ -1,0 +1,743 @@
+OBJECT Codeunit 99008502 Sales Order-Accept
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    TableNo=99008500;
+    OnRun=VAR
+            InboundSalesDocumentHeader@1000 : Record 99008500;
+          BEGIN
+            InboundSalesDocumentHeader := Rec;
+            SalesHeaderNo := '';
+            IF NOT Validation(InboundSalesDocumentHeader) THEN
+              EXIT;
+            IF ReferencedFound THEN BEGIN
+              IF UpdateSalesDocument(InboundSalesDocumentHeader) AND NOT HideDialogBox THEN
+                MESSAGE(Text000);
+            END ELSE BEGIN
+              CreateSalesDocument(InboundSalesDocumentHeader);
+              IF NOT HideDialogBox THEN
+                MESSAGE(Text001+
+                      Text002,InboundSalesDocumentHeader."Corresp. Accepted Document No.");
+            END;
+            Rec := InboundSalesDocumentHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1002 : TextConst 'ENU=The referenced sales quote has been updated based on the BizTalk sales order and made into a sales order.;ESP=Se ha actualizado la oferta de venta referida con el pedido de venta BizTalk y se ha convertido en un pedido de venta.';
+      Text001@1003 : TextConst 'ENU="A sales order number %1 that is based on the ";ESP="Se ha creado un pedido de venta, con n£mero %1, "';
+      Text002@1004 : TextConst 'ENU=BizTalk sales order has been created.;ESP=basado en el pedido de venta BizTalk.';
+      Text003@1005 : TextConst 'ENU=A BizTalk partner with the number %1 does not exist.;ESP=No existe un socio BizTalk con el n£mero %1.';
+      Text004@1006 : TextConst 'ENU=A sales order has already been created from a similar BizTalk document.;ESP=Ya se ha creado un pedido de venta a partir de un documento BizTalk similar.';
+      Text005@1007 : TextConst 'ENU=The sales quote no. %1 referenced by inbound sales document %2 is due. Do you want to continue?;ESP=La oferta de venta n£m. %1 a la que hace referencia el doc. venta entrada %2 ha vencido. ¨Desea continuar?';
+      Text006@1008 : TextConst 'ENU=The currency code on the inbound purchase document header does not map to any currency specified for the Partner.;ESP=El c¢digo de divisa en la cabecera del documento de compra saliente no tiene equivalencia con ninguna divisa especificada para el socio.';
+      Text007@1009 : TextConst 'ENU=The referenced sales quote no. %1 on inbound sales document %2 does not exist. Do you want to continue?;ESP=La oferta de venta n£m. %1 a la que hace referencia el doc. venta entrada %2 no existe. ¨Desea continuar?';
+      Text008@1010 : TextConst 'ENU=Commerce Gateway does not support the acceptance of a %1 whose %2 is %3;ESP=Commerce Gateway no permite aceptar un documento %1 en el que %2 es %3';
+      Text010@1012 : TextConst 'ENU=Discrepancies have occured between Referenced Quote %1 and BizTalk Order Lines belonging to Inbound Sales Document %2.;ESP=Existen discrepancias entre las l¡neas de la oferta referida %1 y las l¡neas del pedido BizTalk que pertenecen al doc. venta entrada %2.';
+      Text011@1013 : TextConst 'ENU=Do you want to continue?;ESP=¨Confirma que desea continuar?';
+      BizTalkPartnerSetup@1000 : Record 99008513;
+      Item@1014 : Record 27;
+      FromDocDim@1017 : Record 357;
+      ToDocDim@1016 : Record 357;
+      DocDim@1011 : Codeunit 408;
+      ReferencedFound@1001 : Boolean;
+      Text012@1015 : TextConst 'ENU="You must specify %1 for %2 %3 = ''''%4'''' in order to accept a %5 with a %6";ESP="Debe especificar %1 para %2 %3 = ''''%4'''' para aceptar un(a) %5 con %6"';
+      HideDialogBox@1018 : Boolean;
+      AcceptDueDate@1019 : Boolean;
+      Text013@1020 : TextConst 'ENU=The document is due.;ESP=El documento a£n est  pendiente.';
+      Text014@1021 : TextConst 'ENU=The reference document does not exist.;ESP=El documento al que se hace referencia no existe.';
+      SalesHeaderNo@1022 : Code[20];
+
+    PROCEDURE Validation@1(VAR InboundSalesDocumentHeader@1000 : Record 99008500) : Boolean;
+    VAR
+      SalesHeader@1001 : Record 36;
+      BizTalkPartnerCurrencyMap@1003 : Record 99008532;
+    BEGIN
+      BizTalkPartnerSetup.SETCURRENTKEY("Partner Type","Partner No.");
+      BizTalkPartnerSetup.SETRANGE("Partner Type", BizTalkPartnerSetup."Partner Type"::Customer);
+      BizTalkPartnerSetup.SETRANGE("Partner No.", InboundSalesDocumentHeader."Sell-to Customer No.");
+      IF NOT BizTalkPartnerSetup.FIND('-') THEN
+        ERROR(Text003,InboundSalesDocumentHeader."Sell-to Customer No.");
+
+      IF InboundSalesDocumentHeader."Customer Order No." <> '' THEN BEGIN
+        SalesHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.");
+        SalesHeader.SETRANGE("Document Type",InboundSalesDocumentHeader."Document Type"::Order);
+        SalesHeader.SETRANGE("Sell-to Customer No.",InboundSalesDocumentHeader."Sell-to Customer No.");
+        SalesHeader.SETRANGE("Customer Order No.",InboundSalesDocumentHeader."Customer Order No.");
+        IF SalesHeader.FIND('-') THEN
+          ERROR(Text004);
+      END;
+
+      IF InboundSalesDocumentHeader."Currency Code" <> '' THEN BEGIN
+        IF BizTalkPartnerCurrencyMap.GET(
+          BizTalkPartnerSetup."BizTalk Partner No.",InboundSalesDocumentHeader."Currency Code") THEN
+            InboundSalesDocumentHeader."Currency Code" := BizTalkPartnerCurrencyMap."Currency Code"
+        ELSE
+          ERROR(Text006);
+      END;
+
+      ReferencedFound := FALSE;
+      IF (InboundSalesDocumentHeader."Reference Quote No." <> '') THEN BEGIN
+        SalesHeader.RESET;
+        SalesHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.");
+        SalesHeader.SETRANGE("Document Type",InboundSalesDocumentHeader."Document Type"::Quote);
+        SalesHeader.SETRANGE("Sell-to Customer No.",InboundSalesDocumentHeader."Sell-to Customer No.");
+        SalesHeader.SETRANGE("No.",InboundSalesDocumentHeader."Reference Quote No.");
+        IF SalesHeader.FIND('-') THEN BEGIN
+          ReferencedFound := TRUE;
+          IF (SalesHeader."Due Date" <> 0D) AND (SalesHeader."Due Date" < TODAY) THEN
+            IF NOT HideDialogBox THEN BEGIN
+              IF NOT CONFIRM(Text005,FALSE,SalesHeader."No.",InboundSalesDocumentHeader."Inbound Document No.") THEN
+                EXIT(FALSE);
+            END ELSE BEGIN
+              IF NOT AcceptDueDate THEN
+                ERROR(Text013);
+            END;
+        END ELSE
+          IF NOT HideDialogBox THEN BEGIN
+            IF NOT CONFIRM(Text007,FALSE,SalesHeader."No.",InboundSalesDocumentHeader."Inbound Document No.") THEN
+              EXIT(FALSE);
+          END ELSE BEGIN
+            ERROR(Text014);
+          END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateSalesDocument@2(VAR InboundSalesDocumentHeader@1000 : Record 99008500);
+    VAR
+      SalesHeader@1001 : Record 36;
+      InboundSalesDocumentLine@1002 : Record 99008501;
+      SalesLine@1003 : Record 37;
+      BizTalkPartnerCurrencyMap@1009 : Record 99008532;
+      BizTalkReservEntry@1004 : Record 99008533;
+      BizTalkManagement@1005 : Codeunit 99008508;
+      CreateReservEntry@1010 : Codeunit 99000830;
+      ItemNo@1006 : Code[20];
+      NextLineNo@1007 : Integer;
+      DeleteReferencedQuote@1008 : Boolean;
+    BEGIN
+      SalesLine.LOCKTABLE;
+      SalesHeader.LOCKTABLE;
+      SalesHeader.INIT;
+      SalesHeader.VALIDATE("Document Type",SalesHeader."Document Type"::Order);
+      SalesHeader.INSERT(TRUE);
+
+      SalesHeaderNo := SalesHeader."No.";
+
+      IF (InboundSalesDocumentHeader."Payment Terms Code" <> '')  THEN
+        SalesHeader.VALIDATE("Payment Terms Code",InboundSalesDocumentHeader."Payment Terms Code");
+      IF (InboundSalesDocumentHeader."Payment Method Code" <> '') THEN
+        SalesHeader.VALIDATE("Payment Method Code",InboundSalesDocumentHeader."Payment Method Code");
+      IF (InboundSalesDocumentHeader."Payment Discount %" <> 0) THEN
+        SalesHeader.VALIDATE("Payment Discount %",InboundSalesDocumentHeader."Payment Discount %");
+      IF (InboundSalesDocumentHeader."Bill-to Customer No." <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Customer No.", InboundSalesDocumentHeader."Bill-to Customer No.");
+      IF (InboundSalesDocumentHeader."Ship-to Code" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Code",InboundSalesDocumentHeader."Ship-to Code");
+      IF (InboundSalesDocumentHeader."Sell-to Customer No." <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Customer No.",InboundSalesDocumentHeader."Sell-to Customer No.");
+
+      IF (InboundSalesDocumentHeader."Sell-to Customer Name" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Customer Name",InboundSalesDocumentHeader."Sell-to Customer Name");
+      IF (InboundSalesDocumentHeader."Sell-to Customer Name 2" <> '')THEN
+        SalesHeader.VALIDATE("Sell-to Customer Name 2",InboundSalesDocumentHeader."Sell-to Customer Name 2");
+      IF (InboundSalesDocumentHeader."Sell-to Address" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Address",InboundSalesDocumentHeader."Sell-to Address");
+      IF (InboundSalesDocumentHeader."Sell-to Address 2" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Address 2",InboundSalesDocumentHeader."Sell-to Address 2");
+      IF (InboundSalesDocumentHeader."Sell-to Contact" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Contact",InboundSalesDocumentHeader."Sell-to Contact");
+      IF  (InboundSalesDocumentHeader."Sell-to County" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to County",InboundSalesDocumentHeader."Sell-to County");
+      IF  (InboundSalesDocumentHeader."Sell-to Country/Region Code" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Country/Region Code",InboundSalesDocumentHeader."Sell-to Country/Region Code");
+
+      IF (InboundSalesDocumentHeader."Bill-to Name" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Name",InboundSalesDocumentHeader."Bill-to Name");
+      IF (InboundSalesDocumentHeader."Bill-to Name 2" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Name 2",InboundSalesDocumentHeader."Bill-to Name 2");
+      IF (InboundSalesDocumentHeader."Bill-to Address" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Address",InboundSalesDocumentHeader."Bill-to Address");
+      IF (InboundSalesDocumentHeader."Bill-to Address 2" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Address 2",InboundSalesDocumentHeader."Bill-to Address 2");
+      IF (InboundSalesDocumentHeader."Bill-to Contact" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Contact",InboundSalesDocumentHeader."Bill-to Contact");
+      IF (InboundSalesDocumentHeader."Bill-to County" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to County",InboundSalesDocumentHeader."Bill-to County");
+      IF (InboundSalesDocumentHeader."Bill-to Country/Region Code" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Country/Region Code",InboundSalesDocumentHeader."Bill-to Country/Region Code");
+      IF (InboundSalesDocumentHeader."Your Reference" <> '') THEN
+        SalesHeader.VALIDATE("Your Reference",InboundSalesDocumentHeader."Your Reference");
+
+      IF (InboundSalesDocumentHeader."Ship-to Name" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Name",InboundSalesDocumentHeader."Ship-to Name");
+      IF (InboundSalesDocumentHeader."Ship-to Name 2" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Name 2",InboundSalesDocumentHeader."Ship-to Name 2");
+      IF (InboundSalesDocumentHeader."Ship-to Address" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Address",InboundSalesDocumentHeader."Ship-to Address");
+      IF (InboundSalesDocumentHeader."Ship-to Address 2" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Address 2",InboundSalesDocumentHeader."Ship-to Address 2");
+      IF (InboundSalesDocumentHeader."Ship-to Contact" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Contact",InboundSalesDocumentHeader."Ship-to Contact");
+      IF (InboundSalesDocumentHeader."Ship-to County" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to County",InboundSalesDocumentHeader."Ship-to County");
+      IF (InboundSalesDocumentHeader."Ship-to Country/Region Code" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Country/Region Code",InboundSalesDocumentHeader."Ship-to Country/Region Code");
+
+      IF (InboundSalesDocumentHeader."Order Date" <> 0D)  THEN
+        SalesHeader.VALIDATE("Order Date",InboundSalesDocumentHeader."Order Date");
+      IF (InboundSalesDocumentHeader."Shipment Date" <> 0D)  THEN
+        SalesHeader.VALIDATE("Shipment Date",InboundSalesDocumentHeader."Shipment Date");
+      IF (InboundSalesDocumentHeader."Shortcut Dimension 1 Code" <> '') THEN
+        SalesHeader.VALIDATE("Shortcut Dimension 1 Code",InboundSalesDocumentHeader."Shortcut Dimension 1 Code");
+      IF (InboundSalesDocumentHeader."Shortcut Dimension 2 Code" <> '') THEN
+        SalesHeader.VALIDATE("Shortcut Dimension 2 Code",InboundSalesDocumentHeader."Shortcut Dimension 2 Code");
+      IF (InboundSalesDocumentHeader."Transaction Type" <> '') THEN
+        SalesHeader.VALIDATE("Transaction Type",InboundSalesDocumentHeader."Transaction Type");
+      IF (InboundSalesDocumentHeader."Transport Method" <> '') THEN
+        SalesHeader.VALIDATE("Transport Method",InboundSalesDocumentHeader."Transport Method");
+      IF (InboundSalesDocumentHeader."Document Date" <> 0D) THEN
+        SalesHeader.VALIDATE("Document Date",InboundSalesDocumentHeader."Document Date");
+
+      IF (InboundSalesDocumentHeader."Due Date" <> 0D) THEN
+        SalesHeader.VALIDATE("Due Date",InboundSalesDocumentHeader."Due Date");
+      IF (InboundSalesDocumentHeader."Pmt. Discount Date" <> 0D) THEN
+        SalesHeader.VALIDATE("Pmt. Discount Date",InboundSalesDocumentHeader."Pmt. Discount Date");
+      IF (InboundSalesDocumentHeader."Shipment Method Code" <> '') THEN
+        SalesHeader.VALIDATE("Shipment Method Code",InboundSalesDocumentHeader."Shipment Method Code");
+      IF (InboundSalesDocumentHeader."Salesperson Code" <> '') THEN
+        SalesHeader.VALIDATE("Salesperson Code",InboundSalesDocumentHeader."Salesperson Code");
+      IF (InboundSalesDocumentHeader."VAT Registration No." <> '') THEN
+        SalesHeader.VALIDATE("VAT Registration No.",InboundSalesDocumentHeader."VAT Registration No.");
+       IF (InboundSalesDocumentHeader."External Document No." <> '') THEN
+        SalesHeader.VALIDATE("External Document No.",InboundSalesDocumentHeader."External Document No.");
+      IF (InboundSalesDocumentHeader."Shipping Agent Code" <> '') THEN
+        SalesHeader.VALIDATE("Shipping Agent Code",InboundSalesDocumentHeader."Shipping Agent Code");
+      IF (InboundSalesDocumentHeader."Customer Order No." <> '') THEN
+        SalesHeader.VALIDATE("Customer Order No.",InboundSalesDocumentHeader."Customer Order No.");
+
+      SalesHeader.VALIDATE("Currency Code",InboundSalesDocumentHeader."Currency Code");
+
+      SalesHeader.VALIDATE("Date Received",InboundSalesDocumentHeader."Date Received");
+      SalesHeader.VALIDATE("Time Received",InboundSalesDocumentHeader."Time Received");
+      SalesHeader.VALIDATE("BizTalk Sales Order",TRUE);
+      IF (InboundSalesDocumentHeader."Ship-to Post Code" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to Post Code",InboundSalesDocumentHeader."Ship-to Post Code");
+      IF (InboundSalesDocumentHeader."Sell-to Post Code" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to Post Code",InboundSalesDocumentHeader."Sell-to Post Code");
+      IF (InboundSalesDocumentHeader."Sell-to City" <> '') THEN
+        SalesHeader.VALIDATE("Sell-to City",InboundSalesDocumentHeader."Sell-to City");
+      IF (InboundSalesDocumentHeader."Bill-to Post Code" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to Post Code",InboundSalesDocumentHeader."Bill-to Post Code");
+      IF (InboundSalesDocumentHeader."Bill-to City" <> '') THEN
+        SalesHeader.VALIDATE("Bill-to City",InboundSalesDocumentHeader."Bill-to City");
+      IF (InboundSalesDocumentHeader."Ship-to City" <> '') THEN
+        SalesHeader.VALIDATE("Ship-to City",InboundSalesDocumentHeader."Ship-to City");
+      SalesHeader.MODIFY;
+
+      NextLineNo := 10000;
+      InboundSalesDocumentLine.SETCURRENTKEY("Inbound Document No.");
+      InboundSalesDocumentLine.SETRANGE("Inbound Document No.", InboundSalesDocumentHeader."Inbound Document No.");
+      IF InboundSalesDocumentLine.FIND('-') THEN
+        REPEAT
+          SalesLine.INIT;
+
+          SalesLine."Document Type" := SalesHeader."Document Type";
+          SalesLine."Document No." := SalesHeader."No.";
+          SalesLine."Line No." := NextLineNo;
+          NextLineNo := NextLineNo + 10000;
+          SalesLine.VALIDATE(Type,InboundSalesDocumentLine.Type);
+          SalesLine.INSERT(TRUE);
+          CASE InboundSalesDocumentLine.Type OF
+            InboundSalesDocumentLine.Type::" ":
+              SalesLine.Description := InboundSalesDocumentLine.Description;
+            InboundSalesDocumentLine.Type::Item:
+              BEGIN
+                CASE BizTalkPartnerSetup."Sales Item Number Type" OF
+                  BizTalkPartnerSetup."Sales Item Number Type"::"Internal Item No.":
+                    BEGIN
+                      InboundSalesDocumentLine.TESTFIELD("No.");
+                      ItemNo := InboundSalesDocumentLine."No.";
+                    END;
+                  BizTalkPartnerSetup."Sales Item Number Type"::"Common Item No.":
+                    BEGIN
+                      InboundSalesDocumentLine.TESTFIELD("Common Item No.");
+                      ItemNo := BizTalkManagement.ConvertCommonItemNo(InboundSalesDocumentLine."Common Item No.");
+                    END;
+                END;
+                SalesLine.VALIDATE("No.",ItemNo);
+
+                IF (InboundSalesDocumentLine."Line Discount %" <> 0) THEN
+                  SalesLine.VALIDATE("Line Discount %",InboundSalesDocumentLine."Line Discount %");
+                IF (InboundSalesDocumentLine.Quantity <> 0) THEN
+                  SalesLine.VALIDATE(Quantity,InboundSalesDocumentLine.Quantity);
+
+                IF (InboundSalesDocumentLine."Gross Weight" <> 0) THEN
+                  SalesLine.VALIDATE("Gross Weight",InboundSalesDocumentLine."Gross Weight");
+                IF (InboundSalesDocumentLine."Net Weight" <> 0) THEN
+                  SalesLine.VALIDATE("Net Weight",InboundSalesDocumentLine."Net Weight");
+                IF (InboundSalesDocumentLine."Unit Volume" <> 0) THEN
+                  SalesLine.VALIDATE("Unit Volume",InboundSalesDocumentLine."Unit Volume");
+                IF (InboundSalesDocumentLine."Unit of Measure" <> '') THEN
+                  SalesLine.VALIDATE("Unit of Measure",InboundSalesDocumentLine."Unit of Measure");
+                IF (InboundSalesDocumentLine."Unit of Measure Code" <> '') THEN
+                  SalesLine.VALIDATE("Unit of Measure Code",InboundSalesDocumentLine."Unit of Measure Code");
+                IF (InboundSalesDocumentLine."Inv. Discount Amount" <> 0) THEN
+                  SalesLine.VALIDATE("Inv. Discount Amount",InboundSalesDocumentLine."Inv. Discount Amount");
+                IF (InboundSalesDocumentLine."Units per Parcel" <> 0) THEN
+                  SalesLine.VALIDATE("Units per Parcel",InboundSalesDocumentLine."Units per Parcel");
+
+                IF (InboundSalesDocumentLine.Description <> '') THEN
+                  SalesLine.VALIDATE(Description,InboundSalesDocumentLine.Description);
+                IF (InboundSalesDocumentLine."Description 2" <> '') THEN
+                  SalesLine.VALIDATE("Description 2",InboundSalesDocumentLine."Description 2");
+                IF (InboundSalesDocumentLine."Shortcut Dimension 1 Code" <> '') THEN
+                  SalesLine.VALIDATE("Shortcut Dimension 1 Code",InboundSalesDocumentLine."Shortcut Dimension 1 Code");
+                IF (InboundSalesDocumentLine."Shortcut Dimension 2 Code" <> '') THEN
+                  SalesLine.VALIDATE("Shortcut Dimension 2 Code",InboundSalesDocumentLine."Shortcut Dimension 2 Code");
+                IF (InboundSalesDocumentLine."Job No." <> '') THEN
+                  SalesLine.VALIDATE("Job No.",InboundSalesDocumentLine."Job No.");
+
+                IF (InboundSalesDocumentLine."Variant Code" <> '') THEN
+                  SalesLine.VALIDATE("Variant Code",InboundSalesDocumentLine."Variant Code");
+                IF (InboundSalesDocumentLine."Bin Code" <> '') THEN
+                  SalesLine.VALIDATE("Bin Code",InboundSalesDocumentLine."Bin Code");
+                IF (InboundSalesDocumentLine."Qty. per Unit of Measure" <> 0) THEN
+                  SalesLine.VALIDATE("Qty. per Unit of Measure",InboundSalesDocumentLine."Qty. per Unit of Measure");
+                SalesLine.VALIDATE(Quantity);
+                SalesLine.VALIDATE("Planned Delivery Date",InboundSalesDocumentLine."Planned Delivery Date");
+              END;
+            ELSE
+              ERROR(Text008,SalesLine.TABLECAPTION,SalesLine.FIELDCAPTION(Type),FORMAT(SalesLine.Type));
+          END;
+          SalesLine.MODIFY;
+
+          BizTalkReservEntry.SETRANGE("BizTalk Document No.",
+            InboundSalesDocumentHeader."Inbound Document No.");
+          BizTalkReservEntry.SETRANGE("Biztalk Document Direction",
+            BizTalkReservEntry."Biztalk Document Direction"::Inbound);
+          BizTalkReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+          BizTalkReservEntry.SETRANGE("BizTalk Document Line No.",
+            InboundSalesDocumentLine."Line No.");
+          IF BizTalkReservEntry.FIND('-') THEN
+            REPEAT
+              Item.GET(ItemNo);
+              IF Item."Item Tracking Code" = '' THEN
+                ERROR(Text012,Item.FIELDCAPTION("Item Tracking Code"),Item.TABLECAPTION,Item.FIELDCAPTION("No."),
+                  Item."No.",FORMAT(SalesHeader."Document Type"),BizTalkReservEntry.TABLECAPTION);
+              CreateReservEntry.CreateReservEntryFor(
+                DATABASE::"Sales Line",SalesLine."Document Type",
+                SalesLine."Document No.",'',0,SalesLine."Line No.",SalesLine."Qty. per Unit of Measure",
+                BizTalkReservEntry.Quantity,BizTalkReservEntry."Serial No.",BizTalkReservEntry."Lot No.");
+              CreateReservEntry.CreateEntry(ItemNo,
+                SalesLine."Variant Code",SalesLine."Location Code",
+                BizTalkReservEntry.Description,
+                BizTalkReservEntry."Expected Receipt Date",
+                BizTalkReservEntry."Shipment Date",0,BizTalkReservEntry."Reservation Status");
+            UNTIL BizTalkReservEntry.NEXT = 0;
+
+        UNTIL InboundSalesDocumentLine.NEXT = 0;
+      InboundSalesDocumentHeader.Status := InboundSalesDocumentHeader.Status::Accepted;
+      InboundSalesDocumentHeader."Date Processed" := TODAY;
+      InboundSalesDocumentHeader."Time Processed" := TIME;
+      InboundSalesDocumentHeader."Corresp. Accepted Document No." := SalesHeader."No.";
+      InboundSalesDocumentHeader.MODIFY;
+    END;
+
+    PROCEDURE UpdateSalesDocument@6(VAR InboundSalesDocumentHeader@1000 : Record 99008500) : Boolean;
+    VAR
+      SalesOrderHeader@1001 : Record 36;
+      SalesQuoteHeader@1002 : Record 36;
+      SalesOrderLine@1003 : Record 37;
+      SalesQuoteLine@1004 : Record 37;
+      SalesCommentLine@1005 : Record 44;
+      InboundSalesDocumentLine@1006 : Record 99008501;
+      Currency@1007 : Record 4;
+      ReservEntry@1017 : Record 337;
+      BizTalkReservEntry@1015 : Record 99008533;
+      BizTalkManagement@1008 : Codeunit 99008508;
+      CreateReservEntry@1016 : Codeunit 99000830;
+      ItemNo@1009 : Code[20];
+      NextLineNo@1010 : Integer;
+      PreviousItemNo@1014 : Code[20];
+      PreviousLineNo@1013 : Integer;
+      Discrepancies@1011 : Boolean;
+    BEGIN
+      SalesQuoteHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.");
+      SalesQuoteHeader.SETRANGE("Document Type",InboundSalesDocumentHeader."Document Type"::Quote);
+      SalesQuoteHeader.SETRANGE("Sell-to Customer No.",InboundSalesDocumentHeader."Sell-to Customer No.");
+      SalesQuoteHeader.SETRANGE("No.",InboundSalesDocumentHeader."Reference Quote No.");
+      SalesQuoteHeader.FIND('-');
+
+      SalesOrderHeader := SalesQuoteHeader;
+      SalesOrderHeader."Document Type" := SalesQuoteHeader."Document Type"::Order;
+      SalesOrderHeader."No. Printed" := 0;
+      SalesOrderHeader."No." := '';
+      SalesOrderHeader.LOCKTABLE;
+      SalesOrderLine.LOCKTABLE;
+      SalesOrderHeader.INSERT(TRUE);
+
+      SalesHeaderNo := SalesOrderHeader."No.";
+
+      IF SalesQuoteHeader."Order Date" <> 0D THEN
+        SalesOrderHeader."Order Date" := SalesQuoteHeader."Order Date";
+      IF SalesQuoteHeader."Document Date" <> 0D THEN
+        SalesOrderHeader."Document Date" := SalesQuoteHeader."Document Date";
+      IF SalesQuoteHeader."Shipment Date" <> 0D THEN
+        SalesOrderHeader."Shipment Date" := SalesQuoteHeader."Shipment Date";
+      SalesOrderHeader."Customer Order No." := InboundSalesDocumentHeader."Customer Order No.";
+      SalesOrderHeader."Date Received" := InboundSalesDocumentHeader."Date Received";
+      SalesOrderHeader."Time Received" := InboundSalesDocumentHeader."Time Received";
+      SalesOrderHeader."Date Sent" := 0D;
+      SalesOrderHeader."Time Sent" := 0T;
+      SalesOrderHeader."BizTalk Sales Order" := TRUE;
+      SalesOrderHeader.VALIDATE("Currency Code",InboundSalesDocumentHeader."Currency Code");
+      SalesOrderHeader.MODIFY;
+
+      NextLineNo := 10000;
+      Discrepancies := FALSE;
+      SalesQuoteLine.SETRANGE("Document Type",SalesQuoteHeader."Document Type");
+      SalesQuoteLine.SETRANGE("Document No.",SalesQuoteHeader."No.");
+
+      CASE BizTalkPartnerSetup."Sales Item Number Type" OF
+        BizTalkPartnerSetup."Sales Item Number Type"::"Internal Item No.":
+          InboundSalesDocumentLine.SETCURRENTKEY("Inbound Document No.","No.");
+        BizTalkPartnerSetup."Sales Item Number Type"::"Common Item No.":
+          InboundSalesDocumentLine.SETCURRENTKEY("Inbound Document No.","Common Item No.");
+      END;
+      InboundSalesDocumentLine.SETRANGE("Inbound Document No.", InboundSalesDocumentHeader."Inbound Document No.");
+
+      IF InboundSalesDocumentLine.FIND('-') THEN
+        REPEAT
+          CASE InboundSalesDocumentLine.Type OF
+            InboundSalesDocumentLine.Type::" ":
+              BEGIN
+                SalesOrderLine.INIT;
+                SalesOrderLine."Document Type" := SalesOrderHeader."Document Type";
+                SalesOrderLine."Document No." := SalesOrderHeader."No.";
+                SalesOrderLine."Line No." := NextLineNo;
+                NextLineNo := NextLineNo + 10000;
+                SalesOrderLine.INSERT(TRUE);
+                SalesOrderLine.Description := InboundSalesDocumentLine.Description;
+                SalesOrderLine.MODIFY;
+              END;
+            InboundSalesDocumentLine.Type::Item:
+              BEGIN
+                CASE BizTalkPartnerSetup."Sales Item Number Type" OF
+                  BizTalkPartnerSetup."Sales Item Number Type"::"Internal Item No.":
+                    BEGIN
+                      InboundSalesDocumentLine.TESTFIELD("No.");
+                      ItemNo := InboundSalesDocumentLine."No.";
+                    END;
+                  BizTalkPartnerSetup."Sales Item Number Type"::"Common Item No.":
+                    BEGIN
+                      InboundSalesDocumentLine.TESTFIELD("Common Item No.");
+                      ItemNo := BizTalkManagement.ConvertCommonItemNo(InboundSalesDocumentLine."Common Item No.");
+                    END;
+                END;
+
+                IF PreviousItemNo <> ItemNo THEN
+                  PreviousLineNo := 0;
+                PreviousItemNo := ItemNo;
+
+                SalesQuoteLine.SETRANGE("No.",ItemNo);
+                SalesQuoteLine.SETFILTER("Line No.",'>%1',PreviousLineNo);
+
+                SalesQuoteLine.SETRANGE(Quantity,InboundSalesDocumentLine.Quantity);
+                IF SalesOrderHeader."Currency Code" = '' THEN
+                  Currency.InitRoundingPrecision
+                ELSE
+                  Currency.GET(SalesOrderHeader."Currency Code");
+                Currency.TESTFIELD("Amount Rounding Precision");
+                IF SalesQuoteLine.FIND('-') THEN BEGIN
+                  SalesOrderLine.INIT;
+                  SalesOrderLine := SalesQuoteLine;
+                  SalesOrderLine."Document Type" := SalesOrderHeader."Document Type";
+                  SalesOrderLine."Document No." := SalesOrderHeader."No.";
+                  SalesOrderLine."Line No." := NextLineNo;
+                  NextLineNo := NextLineNo + 10000;
+                  IF NOT BizTalkPartnerSetup."Delete Referenced Sales Quote" THEN
+                    CopyFromSalesDocDimToLine(SalesOrderLine,SalesQuoteLine);
+                  SalesOrderLine.INSERT(TRUE);
+
+                  BizTalkReservEntry.SETRANGE("BizTalk Document No.",
+                    InboundSalesDocumentHeader."Inbound Document No.");
+                  BizTalkReservEntry.SETRANGE("Biztalk Document Direction",
+                  BizTalkReservEntry."Biztalk Document Direction"::Inbound);
+                  BizTalkReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+                  BizTalkReservEntry.SETRANGE("BizTalk Document Line No.",
+                    InboundSalesDocumentLine."Line No.");
+                  IF BizTalkReservEntry.FIND('-') THEN BEGIN
+                    REPEAT
+                      Item.GET(ItemNo);
+                      IF Item."Item Tracking Code" = '' THEN
+                        ERROR(Text012,Item.FIELDCAPTION("Item Tracking Code"),Item.TABLECAPTION,Item.FIELDCAPTION("No."),
+                          Item."No.",FORMAT(SalesOrderHeader."Document Type"),BizTalkReservEntry.TABLECAPTION);
+                      CreateReservEntry.CreateReservEntryFor(
+                        DATABASE::"Sales Line",SalesOrderLine."Document Type",
+                        SalesOrderLine."Document No.",'',0,SalesOrderLine."Line No.",SalesOrderLine."Qty. per Unit of Measure",
+                        BizTalkReservEntry.Quantity,BizTalkReservEntry."Serial No.",BizTalkReservEntry."Lot No.");
+                      CreateReservEntry.CreateEntry(ItemNo,
+                        SalesOrderLine."Variant Code",SalesOrderLine."Location Code",
+                        BizTalkReservEntry.Description,
+                        BizTalkReservEntry."Expected Receipt Date",
+                        BizTalkReservEntry."Shipment Date",0,BizTalkReservEntry."Reservation Status");
+                    UNTIL BizTalkReservEntry.NEXT = 0;
+                  END;
+                END ELSE BEGIN
+                  IF Discrepancies = FALSE THEN
+                    IF NOT HideDialogBox THEN BEGIN
+                      IF NOT CONFIRM(STRSUBSTNO(Text010,SalesQuoteLine."Document No.",InboundSalesDocumentLine."Inbound Document No.")+
+                        Text011)
+                      THEN BEGIN
+                        SalesOrderHeader.DELETE(TRUE);
+                        EXIT(FALSE);
+                      END ELSE
+                        Discrepancies := TRUE;
+                    END ELSE
+                      ERROR(Text010);
+                  SalesOrderLine.INIT;
+                  SalesOrderLine."Document Type" := SalesOrderHeader."Document Type";
+                  SalesOrderLine."Document No." := SalesOrderHeader."No.";
+                  SalesOrderLine."Line No." := NextLineNo;
+                  NextLineNo := NextLineNo + 10000;
+                  SalesOrderLine.INSERT(TRUE);
+                  SalesOrderLine.VALIDATE(Type,InboundSalesDocumentLine.Type);
+                  CASE BizTalkPartnerSetup."Sales Item Number Type" OF
+                    BizTalkPartnerSetup."Sales Item Number Type"::"Internal Item No.":
+                      BEGIN
+                        InboundSalesDocumentLine.TESTFIELD("No.");
+                        ItemNo := InboundSalesDocumentLine."No.";
+                      END;
+                    BizTalkPartnerSetup."Sales Item Number Type"::"Common Item No.":
+                      BEGIN
+                        InboundSalesDocumentLine.TESTFIELD("Common Item No.");
+                        ItemNo := BizTalkManagement.ConvertCommonItemNo(InboundSalesDocumentLine."Common Item No.");
+                      END;
+                  END;
+                  SalesOrderLine.VALIDATE("No.",ItemNo);
+                  IF (InboundSalesDocumentLine.Quantity <> 0) THEN
+                    SalesOrderLine.VALIDATE(Quantity,InboundSalesDocumentLine.Quantity);
+                  IF (InboundSalesDocumentLine."Gross Weight" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Gross Weight",InboundSalesDocumentLine."Gross Weight");
+                  IF (InboundSalesDocumentLine."Net Weight" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Net Weight",InboundSalesDocumentLine."Net Weight");
+                  IF (InboundSalesDocumentLine."Unit Volume" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Unit Volume",InboundSalesDocumentLine."Unit Volume");
+                  IF (InboundSalesDocumentLine."Unit of Measure" <> '') THEN
+                    SalesOrderLine.VALIDATE("Unit of Measure",InboundSalesDocumentLine."Unit of Measure");
+                  IF (InboundSalesDocumentLine."Unit of Measure Code" <> '') THEN
+                    SalesOrderLine.VALIDATE("Unit of Measure Code",InboundSalesDocumentLine."Unit of Measure Code");
+                  IF (InboundSalesDocumentLine."Line Discount %" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Line Discount %",InboundSalesDocumentLine."Line Discount %");
+                  IF (InboundSalesDocumentLine."Inv. Discount Amount" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Inv. Discount Amount",InboundSalesDocumentLine."Inv. Discount Amount");
+                  IF (InboundSalesDocumentLine."Units per Parcel" <> 0) THEN
+                    SalesOrderLine.VALIDATE("Units per Parcel",InboundSalesDocumentLine."Units per Parcel");
+
+                  IF (InboundSalesDocumentLine.Description <> '') THEN
+                    SalesOrderLine.VALIDATE(Description,InboundSalesDocumentLine.Description);
+                  IF (InboundSalesDocumentLine."Description 2" <> '') THEN
+                    SalesOrderLine.VALIDATE("Description 2",InboundSalesDocumentLine."Description 2");
+                  IF (InboundSalesDocumentLine."Shortcut Dimension 1 Code" <> '') THEN
+                    SalesOrderLine.VALIDATE("Shortcut Dimension 1 Code",InboundSalesDocumentLine."Shortcut Dimension 2 Code");
+                  IF (InboundSalesDocumentLine."Shortcut Dimension 2 Code" <> '') THEN
+                    SalesOrderLine.VALIDATE("Shortcut Dimension 2 Code",InboundSalesDocumentLine."Shortcut Dimension 2 Code");
+                  IF (InboundSalesDocumentLine."Job No." <> '') THEN
+                    SalesOrderLine.VALIDATE("Job No.",InboundSalesDocumentLine."Job No.");
+
+                  IF (InboundSalesDocumentLine."Variant Code" <> '') THEN
+                    SalesOrderLine.VALIDATE("Variant Code",InboundSalesDocumentLine."Variant Code");
+                  SalesOrderLine.VALIDATE(Quantity);
+                  SalesOrderLine.VALIDATE("Planned Delivery Date",InboundSalesDocumentLine."Planned Delivery Date");
+
+                  SalesOrderLine.MODIFY;
+
+                  BizTalkReservEntry.SETRANGE("BizTalk Document No.",
+                    InboundSalesDocumentHeader."Inbound Document No.");
+                  BizTalkReservEntry.SETRANGE("Biztalk Document Direction",
+                  BizTalkReservEntry."Biztalk Document Direction"::Inbound);
+                  BizTalkReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+                  BizTalkReservEntry.SETRANGE("BizTalk Document Line No.",
+                    InboundSalesDocumentLine."Line No.");
+                  IF BizTalkReservEntry.FIND('-') THEN
+                    BEGIN
+                      ReservEntry.SETCURRENTKEY(
+                        "Source ID","Source Ref. No.","Source Type","Source Subtype",
+                        "Source Batch Name","Source Prod. Order Line","Reservation Status");
+                      ReservEntry.SETRANGE("Source ID",SalesQuoteHeader."No.");
+                      ReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+                      ReservEntry.SETRANGE("Source Subtype",SalesQuoteLine."Document Type");
+                      ReservEntry.DELETEALL(TRUE);
+                    REPEAT
+                      Item.GET(ItemNo);
+                      IF Item."Item Tracking Code" = '' THEN
+                        ERROR(Text012,Item.FIELDCAPTION("Item Tracking Code"),Item.TABLECAPTION,Item.FIELDCAPTION("No."),
+                          Item."No.",FORMAT(SalesOrderHeader."Document Type"),BizTalkReservEntry.TABLECAPTION);
+                      CreateReservEntry.CreateReservEntryFor(
+                        DATABASE::"Sales Line",SalesOrderLine."Document Type",
+                        SalesOrderLine."Document No.",'',0,SalesOrderLine."Line No.",SalesOrderLine."Qty. per Unit of Measure",
+                        BizTalkReservEntry.Quantity,BizTalkReservEntry."Serial No.",BizTalkReservEntry."Lot No.");
+                      CreateReservEntry.CreateEntry(ItemNo,
+                        SalesOrderLine."Variant Code",SalesOrderLine."Location Code",
+                        BizTalkReservEntry.Description,
+                        BizTalkReservEntry."Expected Receipt Date",
+                        BizTalkReservEntry."Shipment Date",0,BizTalkReservEntry."Reservation Status");
+                    UNTIL BizTalkReservEntry.NEXT = 0;
+                  END;
+                END;
+                PreviousLineNo := SalesQuoteLine."Line No.";
+              END;
+            ELSE
+              ERROR(Text008,SalesQuoteLine.TABLECAPTION,SalesQuoteLine.FIELDCAPTION(Type),FORMAT(SalesQuoteLine.Type));
+          END;
+        UNTIL InboundSalesDocumentLine.NEXT = 0;
+
+      SalesCommentLine.SETRANGE("Document Type",SalesQuoteHeader."Document Type");
+      SalesCommentLine.SETRANGE("No.",SalesQuoteHeader."No.");
+      WHILE SalesCommentLine.FIND('-') DO BEGIN
+        SalesCommentLine.DELETE;
+        SalesCommentLine."Document Type" := SalesOrderHeader."Document Type";
+        SalesCommentLine."No." := SalesOrderHeader."No.";
+        SalesCommentLine.INSERT;
+      END;
+
+      IF BizTalkPartnerSetup."Delete Referenced Sales Quote" THEN BEGIN
+        MoveFromSalesDocDimTo(SalesQuoteHeader,SalesOrderHeader,SalesQuoteLine,SalesOrderLine);
+        SalesQuoteHeader.DELETE(TRUE);
+      END ELSE
+        CopyFromSalesDocDimToHeader(SalesOrderHeader,SalesQuoteHeader);
+
+      InboundSalesDocumentHeader.Status := InboundSalesDocumentHeader.Status::Accepted;
+      InboundSalesDocumentHeader."Date Processed" := TODAY;
+      InboundSalesDocumentHeader."Time Processed" := TIME;
+      InboundSalesDocumentHeader.MODIFY;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveFromSalesDocDimTo@5(SalesQuoteHeader@1001 : Record 36;SalesOrderHeader@1002 : Record 36;SalesQuoteLine@1003 : Record 37;SalesOrderLine@1004 : Record 37);
+    VAR
+      ReserveSalesLine@1000 : Codeunit 99000832;
+    BEGIN
+      FromDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+      FromDocDim.SETRANGE("Document Type",SalesQuoteHeader."Document Type");
+      FromDocDim.SETRANGE("Document No.",SalesQuoteHeader."No.");
+
+      ToDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+      ToDocDim.SETRANGE("Document Type",SalesOrderHeader."Document Type");
+      ToDocDim.SETRANGE("Document No.",SalesOrderHeader."No.");
+      ToDocDim.DELETEALL;
+
+      DocDim.MoveDocDimToDocDim(
+        FromDocDim,
+        DATABASE::"Sales Header",
+        SalesOrderHeader."No.",
+        SalesOrderHeader."Document Type",
+        0);
+
+      FromDocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+      ToDocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+
+      IF SalesQuoteLine.FIND('-') THEN
+        REPEAT
+          FromDocDim.SETRANGE("Line No.",SalesQuoteLine."Line No.");
+
+          ToDocDim.SETRANGE("Line No.",SalesOrderLine."Line No.");
+          ToDocDim.DELETEALL;
+          DocDim.MoveDocDimToDocDim(
+            FromDocDim,
+            DATABASE::"Sales Line",
+            SalesOrderHeader."No.",
+            SalesOrderHeader."Document Type",
+            SalesOrderLine."Line No.");
+        UNTIL SalesQuoteLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CopyFromSalesDocDimToHeader@9(VAR ToSalesHeader@1002 : Record 36;VAR FromSalesHeader@1003 : Record 36);
+    VAR
+      DocDim@1001 : Record 357;
+      FromDocDim@1000 : Record 357;
+    BEGIN
+      DocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+      DocDim.SETRANGE("Document Type",ToSalesHeader."Document Type");
+      DocDim.SETRANGE("Document No.",ToSalesHeader."No.");
+      DocDim.SETRANGE("Line No.",0);
+      DocDim.DELETEALL;
+      ToSalesHeader."Shortcut Dimension 1 Code" := FromSalesHeader."Shortcut Dimension 1 Code";
+      ToSalesHeader."Shortcut Dimension 2 Code" := FromSalesHeader."Shortcut Dimension 2 Code";
+      FromDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+      FromDocDim.SETRANGE("Document Type",FromSalesHeader."Document Type");
+      FromDocDim.SETRANGE("Document No.",FromSalesHeader."No.");
+      IF FromDocDim.FIND('-') THEN BEGIN
+        REPEAT
+          DocDim.INIT;
+          DocDim."Table ID" := DATABASE::"Sales Header";
+          DocDim."Document Type" := ToSalesHeader."Document Type";
+          DocDim."Document No." := ToSalesHeader."No.";
+          DocDim."Line No." := 0;
+          DocDim."Dimension Code" := FromDocDim."Dimension Code";
+          DocDim."Dimension Value Code" := FromDocDim."Dimension Value Code";
+          DocDim.INSERT;
+        UNTIL FromDocDim.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyFromSalesDocDimToLine@3(VAR ToSalesLine@1002 : Record 37;VAR FromSalesLine@1003 : Record 37);
+    VAR
+      DocDim@1001 : Record 357;
+      FromDocDim@1000 : Record 357;
+    BEGIN
+      DocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+      DocDim.SETRANGE("Document Type",ToSalesLine."Document Type");
+      DocDim.SETRANGE("Document No.",ToSalesLine."Document No.");
+      DocDim.SETRANGE("Line No.",ToSalesLine."Line No.");
+      DocDim.DELETEALL;
+      ToSalesLine."Shortcut Dimension 1 Code" := FromSalesLine."Shortcut Dimension 1 Code";
+      ToSalesLine."Shortcut Dimension 2 Code" := FromSalesLine."Shortcut Dimension 2 Code";
+      FromDocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+      FromDocDim.SETRANGE("Document Type",FromSalesLine."Document Type");
+      FromDocDim.SETRANGE("Document No.",FromSalesLine."Document No.");
+      FromDocDim.SETRANGE("Line No.",FromSalesLine."Line No.");
+      IF FromDocDim.FIND('-') THEN BEGIN
+        REPEAT
+          DocDim.INIT;
+          DocDim."Table ID" := DATABASE::"Sales Line";
+          DocDim."Document Type" := ToSalesLine."Document Type";
+          DocDim."Document No." := ToSalesLine."Document No.";
+          DocDim."Line No." := ToSalesLine."Line No.";
+          DocDim."Dimension Code" := FromDocDim."Dimension Code";
+          DocDim."Dimension Value Code" := FromDocDim."Dimension Value Code";
+          DocDim.INSERT;
+        UNTIL FromDocDim.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE SetHideDialogBox@4(NewHideDialogBox@1000 : Boolean);
+    BEGIN
+      HideDialogBox := NewHideDialogBox;
+    END;
+
+    PROCEDURE SetAcceptDueDate@7(NewAcceptDueDate@1000 : Boolean);
+    BEGIN
+      AcceptDueDate := NewAcceptDueDate;
+    END;
+
+    PROCEDURE GetSalesHeaderNo@8() : Code[20];
+    BEGIN
+      EXIT(SalesHeaderNo);
+    END;
+
+    BEGIN
+    END.
+  }
+}

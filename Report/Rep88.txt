@@ -1,0 +1,289 @@
+OBJECT Report 88 VAT- VIES Declaration Disk
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/02/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.01,PS47880;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 254=imd;
+    CaptionML=[ENU=VAT- VIES Declaration Disk;
+               ESP=IVA- Declar. intracom. disco];
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  RBMgt@1000 : Codeunit 419;
+                BEGIN
+                  IF ISSERVICETIER THEN
+                    FileName := RBMgt.EnvironFileName('','');
+                END;
+
+    OnPostReport=VAR
+                   ToFile@1000 : Text[1024];
+                 BEGIN
+                   IF ISSERVICETIER THEN BEGIN
+                     ToFile := Text007;
+                     DOWNLOAD(FileName,Text005,'',Text006,ToFile);
+                   END;
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table254;
+        DataItemTableView=SORTING(Type,Country/Region Code,VAT Registration No.,VAT Bus. Posting Group,VAT Prod. Posting Group,Posting Date)
+                          WHERE(Type=CONST(Sale));
+        OnPreDataItem=BEGIN
+                        IF FileName = '' THEN
+                          ERROR(Text000);
+                        CLEAR(VATFile);
+                        VATFile.TEXTMODE := TRUE;
+                        VATFile.WRITEMODE := TRUE;
+                        IF NOT ISSERVICETIER THEN VATFile.QUERYREPLACE := TRUE;
+                        VATFile.CREATE(FileName);
+
+                        CompanyInfo.GET;
+                        VATRegNo := CONVERTSTR(CompanyInfo."VAT Registration No.",Text001,'    ');
+                        VATFile.WRITE(FORMAT('00' + FORMAT(VATRegNo,8) + Text002,80));
+                        VATFile.WRITE(FORMAT('0100001',80));
+
+                        NoOfGrTotal := 0;
+                        Period := GETRANGEMAX("Posting Date");
+                        InternalReferenceNo := FORMAT(Period,4,2) + '000000';
+                      END;
+
+        OnAfterGetRecord=VAR
+                           VATEntry@1001 : Record 254;
+                           TotalValueOfItemSupplies@1003 : Decimal;
+                           TotalValueOfServiceSupplies@1002 : Decimal;
+                           GroupTotal@1000 : Boolean;
+                         BEGIN
+                           IF "EU Service" THEN BEGIN
+                             IF UseAmtsInAddCurr THEN
+                               TotalValueOfServiceSupplies := "Additional-Currency Base"
+                             ELSE
+                               TotalValueOfServiceSupplies := Base
+                           END ELSE
+                             IF UseAmtsInAddCurr THEN
+                               TotalValueOfItemSupplies := "Additional-Currency Base"
+                             ELSE
+                               TotalValueOfItemSupplies := Base;
+
+                           IF "EU 3-Party Trade" THEN BEGIN
+                             EU3PartyItemTradeAmt := EU3PartyItemTradeAmt + TotalValueOfItemSupplies;
+                             EU3PartyServiceTradeAmt := EU3PartyServiceTradeAmt + TotalValueOfServiceSupplies;
+                           END;
+                           TotalValueofItemSuppliesTotal += TotalValueOfItemSupplies;
+                           TotalValueofServiceSuppliesTot += TotalValueOfServiceSupplies;
+
+                           VATEntry.COPY("VAT Entry");
+                           IF VATEntry.NEXT = 1 THEN BEGIN
+                             IF (VATEntry."Country/Region Code" <> "Country/Region Code") OR
+                                (VATEntry."VAT Registration No." <> "VAT Registration No.")
+                             THEN
+                               GroupTotal := TRUE;
+                           END ELSE
+                             GroupTotal := TRUE;
+
+                           IF GroupTotal THEN BEGIN
+                             WriteGrTotalsToFile(TotalValueofServiceSuppliesTot,TotalValueofItemSuppliesTotal,
+                                                 EU3PartyServiceTradeAmt,EU3PartyItemTradeAmt);
+                             EU3PartyItemTradeTotalAmt += EU3PartyItemTradeAmt;
+                             EU3PartyServiceTradeTotalAmt += EU3PartyServiceTradeAmt;
+
+                             TotalValueofItemSuppliesTotal := 0;
+                             TotalValueofServiceSuppliesTot := 0;
+
+                             EU3PartyItemTradeAmt := 0;
+                             EU3PartyServiceTradeAmt := 0;
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         VATFile.WRITE(
+                           FORMAT(
+                             '10' + DecimalNumeralZeroFormat(NoOfGrTotal,9) +
+                             DecimalNumeralZeroFormat(EU3PartyItemTradeTotalAmt,15) +
+                             DecimalNumeralSign(-(EU3PartyItemTradeTotalAmt)) +
+                             DecimalNumeralZeroFormat(EU3PartyServiceTradeTotalAmt,15) +
+                             DecimalNumeralSign(-(EU3PartyServiceTradeTotalAmt)),
+                             80));
+                         VATFile.CLOSE;
+                       END;
+
+        ReqFilterFields=VAT Bus. Posting Group,VAT Prod. Posting Group,Posting Date;
+        GroupTotalFields=VAT Registration No.;
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8910;
+      Height=1540;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF ISSERVICETIER THEN
+                     RequestOptionsForm.FileName.VISIBLE := FALSE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;5500 ;440  ;Name=FileName;
+                                                   CaptionML=[ENU=File Name;
+                                                              ESP=Nombre archivo];
+                                                   SourceExpr=FileName }
+      { 21  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 2   ;CheckBox     ;3410 ;1100 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Show Amounts in Add. Reporting Currency;
+                                                              ESP=Muestra importes en div.-adic.];
+                                                   SourceExpr=UseAmtsInAddCurr }
+      { 3   ;Label        ;0    ;660  ;3300 ;880  ;ParentControl=2;
+                                                   MultiLine=Yes }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=BEGIN
+               FileNameVisible := TRUE;
+             END;
+
+      OnOpenPage=BEGIN
+                   IF ISSERVICETIER THEN
+                     FileNameVisible := FALSE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  Name=FileName;
+                  CaptionML=ENU=File Name;
+                  SourceExpr=FileName;
+                  Visible=FileNameVisible }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=ENU=Show Amounts in Add. Reporting Currency;
+                  SourceExpr=UseAmtsInAddCurr;
+                  MultiLine=Yes }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Please enter the file name.;ESP=Introduzca el nombre del archivo.';
+      Text001@1001 : TextConst 'ENU=WwWw;ESP=WwWw';
+      Text002@1002 : TextConst 'ENU=LIST;ESP=LISTA';
+      Text003@1003 : TextConst 'ENU="%1 was not filled in for all VAT entries in which %2 = %3.";ESP="No exist¡a un valor para %1 para todos los movimientos de IVA donde %2 = %3."';
+      Text004@1004 : TextConst 'ENU=It is not possible to display %1 in a field with a length of %2.;ESP=No es posible mostrar %1 en un campo con una longitud de %2.';
+      CompanyInfo@1005 : Record 79;
+      Country@1006 : Record 9;
+      Cust@1007 : Record 18;
+      VATFile@1008 : File;
+      TotalValueofServiceSuppliesTot@1021 : Decimal;
+      TotalValueofItemSuppliesTotal@1013 : Decimal;
+      EU3PartyServiceTradeAmt@1022 : Decimal;
+      EU3PartyItemTradeAmt@1014 : Decimal;
+      EU3PartyItemTradeTotalAmt@1016 : Decimal;
+      EU3PartyServiceTradeTotalAmt@1023 : Decimal;
+      NoOfGrTotal@1020 : Integer;
+      FileName@1009 : Text[250];
+      VATRegNo@1010 : Code[20];
+      InternalReferenceNo@1011 : Text[10];
+      Period@1012 : Date;
+      UseAmtsInAddCurr@1015 : Boolean;
+      Text005@1017 : TextConst 'ENU=Export;ESP=Exportar';
+      Text006@1019 : TextConst 'ENU=All Files (*.*)|*.*;ESP=Todos los archivos (*.*)|*.*';
+      Text007@1018 : TextConst 'ENU=Default.txt;ESP=Default.txt';
+      FileNameVisible@19066691 : Boolean INDATASET;
+
+    LOCAL PROCEDURE DecimalNumeralSign@1(DecimalNumeral@1000 : Decimal) : Text[1];
+    BEGIN
+      IF DecimalNumeral >= 0 THEN
+        EXIT('+');
+      EXIT('-');
+    END;
+
+    LOCAL PROCEDURE DecimalNumeralZeroFormat@2(DecimalNumeral@1000 : Decimal;Length@1001 : Integer) : Text[250];
+    BEGIN
+      EXIT(TextZeroFormat(DELCHR(FORMAT(ROUND(ABS(DecimalNumeral),1,'<'),0,1)),Length));
+    END;
+
+    LOCAL PROCEDURE TextZeroFormat@3(Text@1000 : Text[250];Length@1001 : Integer) : Text[250];
+    BEGIN
+      IF STRLEN(Text) > Length THEN
+        ERROR(
+          Text004,
+          Text,Length);
+      EXIT(PADSTR('',Length - STRLEN(Text),'0') + Text);
+    END;
+
+    LOCAL PROCEDURE WriteGrTotalsToFile@4(TotalValueofServiceSupplies@1102601000 : Decimal;TotalValueofItemSupplies@1002 : Decimal;EU3PartyServiceTradeAmt@1001 : Decimal;EU3PartyItemTradeAmt@1102601001 : Decimal);
+    BEGIN
+      IF (ROUND(ABS(TotalValueofItemSupplies),1,'<') <> 0) OR (ROUND(ABS(TotalValueofServiceSupplies),1,'<') <> 0) OR
+         (ROUND(ABS(EU3PartyItemTradeAmt),1,'<') <> 0) OR (ROUND(ABS(EU3PartyServiceTradeAmt),1,'<') <> 0)
+      THEN
+        WITH "VAT Entry" DO BEGIN
+          IF "VAT Registration No." = '' THEN BEGIN
+            Type := Type::Sale;
+            ERROR(
+              Text003,
+              FIELDCAPTION("VAT Registration No."),FIELDCAPTION(Type),Type);
+          END;
+
+          Cust.GET("Bill-to/Pay-to No.");
+          Cust.TESTFIELD("Country/Region Code");
+          Country.GET(Cust."Country/Region Code");
+          Cust.TESTFIELD("VAT Registration No.");
+          Country.GET("Country/Region Code");
+          Country.TESTFIELD("EU Country/Region Code");
+          NoOfGrTotal := NoOfGrTotal + 1;
+
+          InternalReferenceNo := INCSTR(InternalReferenceNo);
+          SETRANGE("Country/Region Code","Country/Region Code");
+          SETRANGE("Bill-to/Pay-to No.","Bill-to/Pay-to No.");
+          MODIFYALL("Internal Ref. No.",InternalReferenceNo);
+          SETRANGE("Country/Region Code");
+          SETRANGE("Bill-to/Pay-to No.");
+
+          VATFile.WRITE(
+            FORMAT(
+              '02' + FORMAT(InternalReferenceNo,10) +
+              DecimalNumeralZeroFormat(DATE2DMY(Period,3) MOD 100,2) +
+              DecimalNumeralZeroFormat(DATE2DMY(Period,2),2) +
+              DecimalNumeralZeroFormat(DATE2DMY(Period,1),2) +
+              FORMAT(VATRegNo,8) + FORMAT(Country."EU Country/Region Code",2) + FORMAT("VAT Registration No.",12) +
+              DecimalNumeralZeroFormat(TotalValueofItemSupplies,15) + DecimalNumeralSign(-TotalValueofItemSupplies) + '0' +
+              DecimalNumeralZeroFormat(TotalValueofServiceSupplies,15) + DecimalNumeralSign(-TotalValueofServiceSupplies) + '0' +
+              DecimalNumeralZeroFormat(EU3PartyItemTradeAmt,15) + DecimalNumeralSign(-EU3PartyItemTradeAmt) +'0' +
+              DecimalNumeralZeroFormat(EU3PartyServiceTradeAmt,15) + DecimalNumeralSign(-EU3PartyServiceTradeAmt),
+              120));
+
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

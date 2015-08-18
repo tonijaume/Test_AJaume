@@ -1,0 +1,425 @@
+OBJECT Codeunit 7010070 Cotizacion suplementos ingreso
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cVarias@1103355000 : Codeunit 7009720;
+      cCotCom@1103355001 : Codeunit 7009913;
+      Text001@1103355002 : TextConst 'ENU=SUPLEMENTV;ESP=SUPLEMENTV';
+      cCalRes@1103355003 : Codeunit 7009707;
+
+    PROCEDURE CalcularSuplementos@1103355010(VAR prCabCot@1103355005 : Record 7009871;VAR prCabCal@1103355000 : Record 7009735;VAR prHoteles@1103355001 : TEMPORARY Record 7009873;VAR prContratos@1103355003 : TEMPORARY Record 7009873;VAR prHabitaciones@1103355002 : TEMPORARY Record 7009873;VAR prPersonas@1103355004 : TEMPORARY Record 7009873);
+    VAR
+      lrPreVTMP@1103355007 : TEMPORARY Record 7009732;
+      lrPersHab@1103355009 : TEMPORARY Record 2000000007;
+      lrPersHabAnt@1103355010 : TEMPORARY Record 2000000007;
+      lrPersRes@1103355011 : TEMPORARY Record 2000000007;
+      lwAdultos@1103355006 : Integer;
+      lwFechaVenta@1103355008 : Date;
+      lrPersAux@1103355012 : TEMPORARY Record 7009873;
+    BEGIN
+      // CalcularSuplementos
+
+
+      lwFechaVenta := DT2DATE(prCabCot."Fecha creacion");
+      cCotCom.CopiarListaPersonas(prPersonas,lrPersAux);
+
+      prHabitaciones.RESET;
+
+      IF prHabitaciones.FINDSET THEN BEGIN
+        REPEAT
+
+          IF prHabitaciones."Aplicacion ingreso manual" IN [0,3] THEN BEGIN
+
+            lwAdultos    := ContarAdultos(prHabitaciones, prPersonas);
+            BuscarPreciosSuplementos(prHabitaciones, lrPreVTMP, lwFechaVenta, prHabitaciones."Fecha fin");
+
+            prPersonas.RESET;
+            prPersonas.SETRANGE(Habitacion, prHabitaciones.Habitacion);
+            prPersonas.SETRANGE(Contrato  , prHabitaciones.Contrato);
+            IF prPersonas.FINDSET THEN BEGIN
+              REPEAT
+
+                cVarias.IniciarPeriodo(lrPersHab,prHabitaciones."Fecha inicio", prHabitaciones."Fecha fin");
+                cVarias.PeriodoVacio(lrPersHabAnt);
+
+                WHILE NOT(cVarias.EstaVacio(lrPersHab) OR cVarias.CompararPeriodos(lrPersHab,lrPersHabAnt)) DO BEGIN
+                  cVarias.CopiaPeriodos (lrPersHab,lrPersHabAnt);
+                  cVarias.PeriodoVacio(lrPersRes);
+                  IF ExisteSuplemento(prPersonas, lrPreVTMP, lrPersHab, lrPersRes, lrPersAux, lwAdultos, lwFechaVenta) THEN BEGIN
+
+                    AplicarSuplemento(prCabCal, prPersonas, lrPreVTMP, lrPersHab, lrPersRes);
+
+                    // Quito los periodos calculados de los periodos de la reserva.
+                    lrPersRes.RESET;
+                    IF lrPersRes.FINDSET THEN BEGIN
+                      REPEAT
+                        cVarias.DiferPerDirecto(lrPersHab, lrPersRes);
+                      UNTIL lrPersRes.NEXT = 0;
+                    END;
+
+                  END;
+                END;
+              UNTIL prPersonas.NEXT = 0;
+            END;
+
+          END;
+
+        UNTIL prHabitaciones.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE BuscarPreciosSuplementos@1103355011(VAR prHabitacion@1103355004 : Record 7009873;VAR prPreV@1103355000 : TEMPORARY Record 7009732;lwFechaIni@1103355002 : Date;lwFechaFin@1103355003 : Date);
+    VAR
+      lrPreV@1103355001 : Record 7009732;
+    BEGIN
+      // BuscarPreciosSuplementos
+
+      prPreV.RESET;
+      prPreV.DELETEALL;
+
+      lrPreV.RESET;
+      lrPreV.SETCURRENTKEY(Delegacion   , "N§ Contrato", "Codigo Precio", Codigo,
+                           "Fecha desde", "Fecha hasta", "Edad desde"   , "Edad hasta");
+
+      lrPreV.SETRANGE ("N§ Contrato"    , prHabitacion.Contrato);
+      lrPreV.SETRANGE ("Codigo Precio"  , lrPreV."Codigo Precio"::Suplementos);
+      lrPreV.SETFILTER("Fecha desde"    , '<=%1', lwFechaFin);
+      lrPreV.SETFILTER("Fecha hasta"    , '>=%1', lwFechaIni);
+      lrPreV.SETRANGE (Activo           , TRUE);
+      IF lrPreV.FINDSET THEN BEGIN
+        REPEAT
+          prPreV := lrPreV;
+          prPreV.INSERT;
+        UNTIL lrPreV.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExisteSuplemento@1103355019(VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPreV@1103355001 : TEMPORARY Record 7009732;VAR prPeriodos@1103355002 : TEMPORARY Record 2000000007;VAR prPerRes@1103355007 : TEMPORARY Record 2000000007;VAR prPersAux@1103355003 : TEMPORARY Record 7009873;pwAdultos@1103355004 : Integer;pwFechaVenta@1103355005 : Date) : Boolean;
+    VAR
+      lwCodPersona@1103355006 : Code[10];
+    BEGIN
+      // ExisteSuplemento
+
+      // Buscamos suplementos restringidos por Tipo de habitacion
+
+      lwCodPersona := cCotCom.GetTipoPersona(prPersona."N§ Persona");
+
+      prPreV.RESET;
+      prPreV.SETRANGE (Codigo           , lwCodPersona);
+      prPreV.SETFILTER("Tipo Habitacion", '<>%1', '');
+
+      IF prPreV.FINDSET THEN BEGIN
+        REPEAT
+          IF ComprobarCriteriosAplicacion(prPersona, prPersAux, pwAdultos, prPreV, prPeriodos, prPerRes, pwFechaVenta) THEN
+            EXIT(TRUE);
+        UNTIL prPreV.NEXT = 0;
+      END;
+      // Buscamos suplementos restringidos por Tipo de Regimen
+
+      prPreV.RESET;
+      prPreV.SETRANGE (Codigo         , lwCodPersona);
+      prPreV.SETFILTER("Tipo Regimen" , '<>%1', '');
+
+      IF prPreV.FINDSET THEN BEGIN
+        REPEAT
+          IF ComprobarCriteriosAplicacion(prPersona, prPersAux, pwAdultos, prPreV, prPeriodos, prPerRes, pwFechaVenta) THEN
+            EXIT(TRUE);
+        UNTIL prPreV.NEXT = 0;
+      END;
+
+      // Buscamos suplementos sin restricci¢n
+
+      prPreV.RESET;
+      prPreV.SETRANGE(Codigo, lwCodPersona);
+
+      IF prPreV.FINDSET THEN BEGIN
+        REPEAT
+          IF ComprobarCriteriosAplicacion(prPersona, prPersAux, pwAdultos, prPreV, prPeriodos, prPerRes, pwFechaVenta) THEN
+            EXIT(TRUE);
+        UNTIL prPreV.NEXT = 0;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE AplicarSuplemento@1103355028(VAR prCabCal@1103355004 : TEMPORARY Record 7009735;VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPreVTMP@1103355001 : TEMPORARY Record 7009732;VAR prPersHab@1103355002 : TEMPORARY Record 2000000007;VAR prPersRes@1103355003 : TEMPORARY Record 2000000007);
+    VAR
+      lwDia@1103355005 : Date;
+      lwImporte@1103355006 : Decimal;
+      lrLinCal@1103355007 : Record 7009736;
+    BEGIN
+      // AplicarSuplemento
+
+      prPersRes.RESET;
+
+      IF prPersRes.FINDSET THEN BEGIN
+        REPEAT
+          FOR lwDia := prPersRes."Period Start" TO prPersRes."Period End" DO BEGIN
+
+            IF prPreVTMP.Porcentaje THEN
+              lwImporte := cCotCom.CalcularPorcentajeIngreso(prCabCal, prPreVTMP, prPersona, FORMAT(lwDia))
+            ELSE
+              lwImporte := prPreVTMP.Importe;
+
+            cCalRes.inserta_linea_calculo(lrLinCal, prCabCal.Usuario, Text001, prPersona.Contrato,
+                                          lwImporte, prPersona."N§ Persona", lwDia,
+                                          cCotCom.GetTipoPersona(prPersona."N§ Persona"), 1,
+                                          lwImporte, prPreVTMP.Garantizable, prPreVTMP."Importe HP");
+            cCalRes.fijos_linea_calculo  (lrLinCal, lrLinCal."Coste/Ingreso"::Ingreso, '',
+                                          prPreVTMP."N§ Persona", prPersona.Hotel,
+                                          2, prPersona.Hotel, prPreVTMP.Delegacion, FALSE);
+
+            IF NOT prPreVTMP."Acumular al total" THEN
+              cCotCom.EliminarOtrosIngresos(prCabCal, prPreVTMP, prPersona, lwDia);
+
+          END;
+        UNTIL prPersRes.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ContarAdultos@1103355007(VAR prHabitaciones@1103355000 : TEMPORARY Record 7009873;VAR prPersonas@1103355001 : TEMPORARY Record 7009873) : Integer;
+    BEGIN
+      // ContarAdultos
+
+      prPersonas.RESET;
+      prPersonas.SETRANGE (Contrato    , prHabitaciones.Contrato);
+      prPersonas.SETFILTER("N§ Persona", cCotCom.GetFiltroAdulto);
+      EXIT(prPersonas.COUNT);
+    END;
+
+    LOCAL PROCEDURE ComprobarCriteriosAplicacion@1103355061(VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPersonas@1103355001 : TEMPORARY Record 7009873;pwAdultos@1103355002 : Integer;VAR prPreV@1103355003 : TEMPORARY Record 7009732;VAR prPeriodos@1103355006 : TEMPORARY Record 2000000007;VAR prResPeriodo@1103355007 : TEMPORARY Record 2000000007;pwFechaVenta@1103355008 : Date) rvAplic : Boolean;
+    VAR
+      lwAcaba@1103355004 : Boolean;
+      lwNumCrit@1103355005 : Integer;
+    BEGIN
+      // ComprobarCriteriosAplicacion
+
+      rvAplic   := TRUE;
+      lwAcaba   := FALSE;
+      lwNumCrit := 0;
+
+      WHILE rvAplic AND NOT lwAcaba DO BEGIN
+        lwNumCrit += 1;
+        CASE lwNumCrit OF
+
+          1: rvAplic := ComprobarEdades             (prPersona, prPreV);
+          2: rvAplic := ComprobarNumPersona         (prPersona, prPreV, prPersonas);
+          3: rvAplic := ComprobarFechas             (prPreV, prPersona, pwFechaVenta, prPeriodos, prResPeriodo);
+          4: rvAplic := ComprobarAcompa¤antes       (prPersona, prPreV, pwAdultos);
+          5: rvAplic := ComprobarTipoHabitacion     (prPersona, prPreV);
+          6: rvAplic := ComprobarTipoRegimen        (prPersona, prPreV);
+          7: rvAplic := ComprobarHotelOFertaEspecial(prPersona, prPreV);
+          ELSE
+            lwAcaba := TRUE;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ComprobarEdades@1103355000(VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPreV@1103355001 : TEMPORARY Record 7009732) : Boolean;
+    VAR
+      lwEdadHasta@1103355002 : Integer;
+    BEGIN
+      // ComprobarEdades
+      // comprobamos si el pax entra dentro del rango de edades.
+
+      IF prPreV."Edad hasta" = 0 THEN
+        lwEdadHasta := 999
+      ELSE
+        lwEdadHasta := prPreV."Edad hasta";
+
+      EXIT((prPersona.Edad >= prPreV."Edad desde") AND (prPersona.Edad <= lwEdadHasta));
+    END;
+
+    LOCAL PROCEDURE ComprobarNumPersona@1103355001(VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPreV@1103355001 : TEMPORARY Record 7009732;VAR prPersonas@1103355002 : TEMPORARY Record 7009873) : Boolean;
+    BEGIN
+      // ComprobarNumPersona
+      //: Comprobamos que la posicion en la habitacion coincida con la indicada en el suplemento.
+      //: En caso de que el precio tenga un rango de edades, la posicion es dentro de ese rango de edades.
+
+      IF prPreV."Edad hasta" = 0 THEN
+        EXIT((prPreV."N§ Persona" = 0) OR (prPersona.Posicion = prPreV."N§ Persona"))
+      ELSE
+        EXIT((prPreV."N§ Persona" = 0) OR
+             (GetNumPersonaxEdad(prPersona, prPersonas, prPreV."Edad desde", prPreV."Edad hasta") = prPreV."N§ Persona"));
+    END;
+
+    LOCAL PROCEDURE GetNumPersonaxEdad@1103355025(VAR prPersona@1103355000 : TEMPORARY Record 7009873;VAR prPersonas@1103355001 : TEMPORARY Record 7009873;pwEdadDesde@1103355003 : Integer;pwEdadHasta@1103355004 : Integer) rvNum : Integer;
+    VAR
+      lwAcaba@1103355002 : Boolean;
+    BEGIN
+      // GetNumPersonaxEdad
+
+      prPersonas.RESET;
+      prPersonas.SETCURRENTKEY("Id cotizacion", Edad);
+
+      lwAcaba := FALSE;
+      rvNum   := 0;
+
+      IF prPersonas.FINDLAST THEN BEGIN
+        REPEAT
+          IF (prPersonas.Edad >= pwEdadDesde) AND (prPersonas.Edad <= pwEdadHasta) THEN
+            rvNum += 1;
+          lwAcaba :=  (prPersona."N§ Persona" = prPersonas."N§ Persona") OR (prPersonas.NEXT(-1) = 0);
+        UNTIL lwAcaba;
+      END;
+
+      IF prPersona."N§ Habitaciones" <> 0 THEN
+        rvNum := ROUND(rvNum / prPersona."N§ Habitaciones", 1);
+
+      IF rvNum = 0 THEN
+        rvNum := 1;
+    END;
+
+    LOCAL PROCEDURE ComprobarFechas@1103355002(VAR prPreV@1103355001 : TEMPORARY Record 7009732;VAR prPersona@1103355000 : TEMPORARY Record 7009873;pwFechaVenta@1103355002 : Date;VAR prPeriodos@1103355003 : TEMPORARY Record 2000000007;VAR prResPeriodo@1103355004 : TEMPORARY Record 2000000007) rvRes : Boolean;
+    VAR
+      lrPerPrecio@1103355005 : TEMPORARY Record 2000000007;
+    BEGIN
+      // ComprobarFechas
+
+      CASE prPreV."Tipo Fechas" OF
+
+        prPreV."Tipo Fechas"::"Fecha venta"          : BEGIN
+          rvRes := ((pwFechaVenta >= prPreV."Fecha desde") AND (pwFechaVenta <= prPreV."Fecha hasta"));
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+          EXIT(rvRes);
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha entrada"        : BEGIN
+          rvRes := ((prPersona."Fecha inicio" >= prPreV."Fecha desde") AND (prPersona."Fecha inicio" <= prPreV."Fecha hasta"));
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+          EXIT(rvRes);
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha estancia"       : BEGIN
+          cVarias.IniciarPeriodo(lrPerPrecio, prPreV."Fecha desde", prPreV."Fecha hasta");
+          cVarias.InterPer(prPeriodos, lrPerPrecio, prResPeriodo);
+          EXIT(NOT cVarias.EstaVacio(prResPeriodo));
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha venta+entrada"  : BEGIN
+
+          rvRes := ((pwFechaVenta >= prPreV."Fecha desde") AND (pwFechaVenta <= prPreV."Fecha hasta")) AND
+                   ((prPersona."Fecha inicio" >= prPreV."2¦ Fecha desde") AND (prPersona."Fecha inicio" <= prPreV."2¦ Fecha hasta"));
+
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+
+          EXIT(rvRes);
+
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha venta+estancia" : BEGIN
+
+          rvRes := ((pwFechaVenta >= prPreV."Fecha desde") AND (pwFechaVenta <= prPreV."Fecha hasta"));
+
+          IF rvRes THEN BEGIN
+            cVarias.IniciarPeriodo(lrPerPrecio, prPreV."2¦ Fecha desde", prPreV."2¦ Fecha hasta");
+            cVarias.InterPer(prPeriodos, lrPerPrecio, prResPeriodo);
+            EXIT(NOT cVarias.EstaVacio(prResPeriodo));
+          END;
+
+          EXIT(rvRes);
+
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha salida"         : BEGIN
+
+          rvRes := ((prPersona."Fecha fin" >= prPreV."Fecha desde") AND (prPersona."Fecha fin" <= prPreV."Fecha hasta"));
+
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+
+          EXIT(rvRes);
+
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha venta+salida"   : BEGIN
+
+          rvRes := ((pwFechaVenta >= prPreV."Fecha desde") AND (pwFechaVenta <= prPreV."Fecha hasta")) AND
+                   ((prPersona."Fecha fin" >= prPreV."2¦ Fecha desde") AND (prPersona."Fecha fin" <= prPreV."2¦ Fecha hasta"));
+
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+
+          EXIT(rvRes);
+
+        END;
+
+        prPreV."Tipo Fechas"::"Fecha entrada+salida" : BEGIN
+
+          rvRes := ((prPersona."Fecha inicio" >= prPreV."Fecha desde") AND (prPersona."Fecha inicio" <= prPreV."Fecha hasta")) AND
+                    ((prPersona."Fecha fin" >= prPreV."2¦ Fecha desde") AND (prPersona."Fecha fin" <= prPreV."2¦ Fecha hasta"));
+
+          IF rvRes THEN
+            cVarias.CopiaPeriodos(prPeriodos, prResPeriodo);
+
+          EXIT(rvRes);
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ComprobarAcompa¤antes@1103355003(VAR prPersona@1103355001 : TEMPORARY Record 7009873;VAR prPreV@1103355000 : TEMPORARY Record 7009732;pwAdultos@1103355002 : Integer) : Boolean;
+    BEGIN
+      // ComprobarAcompa¤antes
+
+      IF prPreV."N§ Personas acompa¤ante" = 0 THEN
+        EXIT(TRUE);
+
+      IF prPreV."N§ Acompa¤antes exacto" THEN
+        EXIT(prPreV."N§ Personas acompa¤ante" = ROUND(pwAdultos / prPersona."N§ Habitaciones", 1))
+      ELSE
+        EXIT(prPreV."N§ Personas acompa¤ante" <= pwAdultos);
+    END;
+
+    LOCAL PROCEDURE ComprobarTipoHabitacion@1103355004(VAR prPersona@1103355001 : TEMPORARY Record 7009873;VAR prPreV@1103355000 : TEMPORARY Record 7009732) : Boolean;
+    BEGIN
+      // ComprobarTipoHabitacion
+
+      IF prPreV."Tipo Habitacion" = '' THEN
+        EXIT(TRUE);
+
+      EXIT(prPreV."Tipo Habitacion" = prPersona.Habitacion);
+    END;
+
+    LOCAL PROCEDURE ComprobarTipoRegimen@1103355005(VAR prPersona@1103355001 : TEMPORARY Record 7009873;VAR prPreV@1103355000 : TEMPORARY Record 7009732) : Boolean;
+    BEGIN
+      // ComprobarTipoRegimen
+
+      IF prPreV."Tipo Regimen" = '' THEN
+        EXIT(TRUE);
+
+      EXIT(prPreV."Tipo Regimen" = prPersona.Regimen);
+    END;
+
+    LOCAL PROCEDURE ComprobarHotelOFertaEspecial@1103355006(VAR prPersona@1103355001 : TEMPORARY Record 7009873;VAR prPreV@1103355000 : TEMPORARY Record 7009732) : Boolean;
+    BEGIN
+      // ComprobarHotelOFertaEspecial
+
+      IF prPreV."Hotel oferta especial" = '' THEN
+        EXIT(TRUE);
+
+      EXIT(prPreV."Hotel oferta especial" = prPersona.Hotel);
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,212 @@
+OBJECT Codeunit 7010074 Cotizacion transfer ingreso
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/03/15;
+    Time=10:46:07;
+    Modified=Yes;
+    Version List=AIC2009,COM;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cCotCom@1103355000 : Codeunit 7009913;
+
+    PROCEDURE CalcularTransfer@1103355006(VAR prCabCot@1103355004 : Record 7009871;VAR prTransfer@1103355011 : Record 7009881;pwAdultos@1103355000 : Integer;pwNi¤os@1103355012 : Integer) : Decimal;
+    VAR
+      lwImporte@1103355001 : Decimal;
+    BEGIN
+      // CalcularTransfer
+
+      lwImporte := 0;
+
+      // Calculamos entrada
+      IF prTransfer."Tipo transfer" IN [prTransfer."Tipo transfer"::Entrada, prTransfer."Tipo transfer"::Ambos] THEN BEGIN
+        lwImporte := CalcularImporte(prCabCot, prTransfer, TRUE, pwAdultos, pwNi¤os);
+      END;
+
+      // Calculamos salida
+      IF prTransfer."Tipo transfer" IN [prTransfer."Tipo transfer"::Salida, prTransfer."Tipo transfer"::Ambos] THEN BEGIN
+        lwImporte += CalcularImporte(prCabCot, prTransfer, FALSE, pwAdultos, pwNi¤os);
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    LOCAL PROCEDURE BuscarContrato@1103355002(VAR prCabCot@1103355000 : Record 7009871;VAR prTransfer@1103355001 : TEMPORARY Record 7009881;pwEntrada@1103355007 : Boolean;VAR prContV@1103355003 : Record 7009788;VAR pwProd@1103355006 : Decimal) : Boolean;
+    VAR
+      lwOrden@1103355002 : ARRAY [2] OF Integer;
+      lwIndex@1103355004 : Integer;
+      lwProd@1103355005 : ARRAY [2] OF Decimal;
+    BEGIN
+      // BuscarContrato
+
+      lwOrden[1] := prContV."Tipo Precio"::"Una via";
+      lwOrden[2] := prContV."Tipo Precio"::"Ida y Vuelta";
+
+      lwProd [1] := 1;
+      lwProd [2] := 0.5;
+
+      FOR lwIndex := 1 TO 2 DO
+      BEGIN
+
+        prContV.RESET;
+        prContV.SETCURRENTKEY(TourOperador, "Fecha inicio contrato", "Fecha final contrato");
+        prContV.SETRANGE (Delegacion             , prCabCot.Delegacion);
+        prContV.SETRANGE (TourOperador           , prCabCot."Touroperador Venta");
+
+        IF pwEntrada THEN
+        BEGIN
+          prContV.SETFILTER("Fecha inicio contrato", '<=%1', prTransfer."Fecha inicio");
+          prContV.SETFILTER("Fecha final contrato" , '>=%1', prTransfer."Fecha inicio");
+          //-$001prContV.SETRANGE ("OLD_Punto Origen/Destino", prTransfer.Origen);
+        END
+        ELSE
+        BEGIN
+          prContV.SETFILTER("Fecha inicio contrato", '<=%1', prTransfer."Fecha fin");
+          prContV.SETFILTER("Fecha final contrato" , '>=%1', prTransfer."Fecha fin");
+          //-$001prContV.SETRANGE ("OLD_Punto Origen/Destino", prTransfer.Destino);
+        END;
+
+        prContV.SETRANGE (Comercializadora, FALSE); //+$002
+        prContV.SETRANGE (Confirmado      , TRUE);
+        prContV.SETRANGE ("Tipo Precio"   , lwOrden[lwIndex]);
+
+        IF prContV.FINDFIRST THEN
+        BEGIN
+          pwProd := lwProd[lwIndex];
+          EXIT(TRUE);
+        END
+        ELSE
+        BEGIN
+          //-$001prContV.SETRANGE ("OLD_Punto Origen/Destino");
+          //-$001IF prContV.FINDFIRST THEN BEGIN
+          //-$001  pwProd := lwProd[lwIndex];
+          //-$001  EXIT(TRUE);
+          //-$001END;
+        END;
+
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CalcularImporte@1103355005(VAR prCabCot@1103355000 : Record 7009871;VAR prTransfer@1103355001 : Record 7009881;pwEntrada@1103355002 : Boolean;pwAdultos@1103355013 : Integer;pwNi¤os@1103355014 : Integer) : Decimal;
+    VAR
+      lrContV@1103355012 : Record 7009788;
+      lrZonaPre@1103355011 : Record 7009791;
+      lrPreV@1103355010 : Record 7009790;
+      lwImporte@1103355009 : Decimal;
+      lrParPer@1103355008 : Record 7009701;
+      lwProd@1103355007 : Decimal;
+      lrCli@1103355006 : Record 18;
+      lrConfCont@1103355005 : Record 98;
+      lrCurrExc@1103355004 : Record 330;
+      lrHotel@1103355003 : Record 7009724;
+      lrParAg@1103355015 : Record 7009700;
+      lrAeropuerto@1100217000 : Record 7009704;
+      lwZonaDesde@1100217001 : Code[10];
+      lwZonaHasta@1100217002 : Code[10];
+    BEGIN
+      // CalcularImporte
+
+      lrParPer.FINDFIRST;
+
+      lwImporte := 0;
+
+      IF BuscarContrato(prCabCot, prTransfer, pwEntrada, lrContV, lwProd) THEN
+      BEGIN
+
+        IF pwEntrada THEN
+        BEGIN
+          lrAeropuerto.GET(prTransfer."IATA destino entrada");
+          lrHotel.GET(prTransfer."Hotel entrada");
+        END
+        ELSE
+        BEGIN
+          lrAeropuerto.GET(prTransfer."IATA origen salida");
+          lrHotel.GET(prTransfer."Hotel salida");
+        END;
+
+        // Traducimos la zona del aeropuerto en zona precio
+        lrZonaPre.RESET;
+        lrZonaPre.SETRANGE(Contrato       , lrContV."N§ Contrato Venta");
+        lrZonaPre.SETRANGE("Tipo contrato", lrZonaPre."Tipo contrato"::Venta);
+        lrZonaPre.SETRANGE("Zona fisica"  , lrAeropuerto."Zona fisica");
+        IF NOT lrZonaPre.FINDFIRST THEN
+          EXIT(0);
+        lwZonaDesde := lrZonaPre.Zona;
+
+        // Traducimos la zona del hotel en zona precio
+        lrZonaPre.RESET;
+        lrZonaPre.SETRANGE(Contrato       , lrContV."N§ Contrato Venta");
+        lrZonaPre.SETRANGE("Tipo contrato", lrZonaPre."Tipo contrato"::Venta);
+        lrZonaPre.SETRANGE("Zona fisica"  , lrHotel."Zona Fisica");
+        IF NOT lrZonaPre.FINDFIRST THEN
+          EXIT(0);
+        lwZonaHasta := lrZonaPre.Zona;
+
+        // Buscamos el precio por pax en la zona
+        lrPreV.RESET;
+        lrPreV.SETRANGE (Delegacion     , lrContV.Delegacion);
+        lrPreV.SETRANGE ("N§ Contrato"  , lrContV."N§ Contrato Venta");
+        lrPreV.SETRANGE ("Codigo precio", lrPreV."Codigo precio"::"Precio Base");
+        lrPreV.SETRANGE (Origen   , lwZonaDesde);
+        lrPreV.SETRANGE (Destino   , lwZonaHasta);
+
+        IF pwEntrada THEN
+        BEGIN
+          lrPreV.SETFILTER("Fecha desde"  , '<=%1', prTransfer."Fecha inicio");
+          lrPreV.SETFILTER("Fecha hasta"  , '>=%1', prTransfer."Fecha inicio");
+        END
+        ELSE
+        BEGIN
+          lrPreV.SETFILTER("Fecha desde"  , '<=%1', prTransfer."Fecha fin");
+          lrPreV.SETFILTER("Fecha hasta"  , '>=%1', prTransfer."Fecha fin");
+        END;
+
+        lrPreV.SETRANGE ("Tipo Aplicacion"  , lrPreV."Tipo Aplicacion"::Pax);
+
+        IF NOT lrPreV.FINDFIRST THEN
+          EXIT(0);
+
+        // aplicamos el precio del adulto
+        lwImporte := pwAdultos * lrPreV."Precio Adulto" * lwProd;
+
+        // aplicamos el precio del ni¤o
+        lwImporte += pwNi¤os * lrPreV."Precio Ni¤o" * lwProd;
+
+        // Convertimos de la divisa del contrato a la divisa parametrizada.
+        lrCli.GET(lrContV.Cliente);
+        lrParAg.FINDFIRST;
+
+        IF lrCli."Currency Code" <> lrParAg."Divisa TOs cotizacion" THEN BEGIN
+          lwImporte := lrCurrExc.ExchangeAmtFCYToFCY(DT2DATE(prCabCot."Fecha creacion"),
+                                                     lrCli."Currency Code", lrParAg."Divisa TOs cotizacion", lwImporte);
+        END;
+
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    BEGIN
+    {
+      ## AJF 02/06/09
+
+        .- El cambio de parametro se hace a la divisa parametrizada en parametros agencia en lugar
+           de la de cabecera cotizaci¢n.
+
+      $001 AJS 10062014 CNT-OC-14046, Los contratos de venta transfer dejan de ir por Aeropuerto
+
+      $002 AJS 13032015 CNT-CAR-14096, Esta funcion no trabaja con los contratos de comercializadora
+    }
+    END.
+  }
+}

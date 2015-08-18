@@ -1,0 +1,998 @@
+OBJECT Codeunit 7010177 WS - Excursions interface v3
+{
+  OBJECT-PROPERTIES
+  {
+    Date=23/07/15;
+    Time=14:25:51;
+    Modified=Yes;
+    Version List=AIC2009,APP 3.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            _TestIn;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100217000 : TextConst 'ENU=The amount of the payments is not enough to pay the reservation.;ESP=El importe de los cobros no coincide con el total de la reserva.';
+      Text002@1100217001 : TextConst 'ENU=The ticket %1 is cancelled, the operation cannot be completed.;ESP=El ticket %1 esta cancelado, no se puede continuar con la operacion.';
+      Text003@1000000000 : TextConst 'ENU=The ticket %1 not found.;ESP=Ticket %1 no encontrado.';
+      Text004@1000000001 : TextConst 'ENU=This excursion cannot be sold for this period.;ESP=Esta excursion no se puede vender en este periodo.';
+      rPar@1000000002 : Record 7009700;
+      Text005@1000000003 : TextConst 'ENU=There is no sale rate for this excursion.;ESP=No hay tarifa de venta para esta excursion.';
+      Text006@1000000004 : TextConst 'ENU=There is no price for the supplement %1.;ESP=No hay precio para el suplemento %1.';
+      Text007@1000000005 : TextConst 'ENU=Wrong excursion code;ESP=Codigo de excursion erroneo';
+      Text008@1000000006 : TextConst 'ENU=Wrong hotel code;ESP=Codigo de hotel erroneo';
+      Text009@1000000007 : TextConst 'ENU=Wrong language code;ESP=Idioma no encontrado.';
+      Text010@1000000008 : TextConst 'ENU=User not registered.;ESP=Usuario no registrado.';
+      Text011@1000000010 : TextConst 'ENU=The ticket% 1 is confirmed, you can not update.;ESP=El ticket %1 est  confirmado, no se puede actualizar.';
+      Text012@1000000009 : TextConst 'ENU=Customer name is mandatory.;ESP=El nombre del cliente es obligatorio.';
+
+    PROCEDURE GetExcursionMasterData@1100217001(pwCodExcursion@1100217003 : Code[10];pwCodTTOO@1000000000 : Code[10];pAllDestinations@1100217002 : Boolean;pDate@1100217001 : DateTime;pUserType@1000000001 : Code[10];pRegion@1000000002 : Code[20];VAR xmlExcursionData@1100217000 : XMLport 7010143) : Boolean;
+    VAR
+      lwDate@1100217004 : Date;
+    BEGIN
+      // GetExcursionMasterData
+
+      lwDate := DT2DATE(pDate);
+
+      CLEAR(xmlExcursionData);
+      xmlExcursionData.PassParameters(pwCodExcursion, pwCodTTOO, pAllDestinations, lwDate, pUserType, pRegion);
+      xmlExcursionData.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE RequestExcursionReservation@1100217002(VAR xmlReserva@1100217000 : XMLport 7009703;VAR xmlTurnos@1000000002 : XMLport 7009706) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7010257;
+      lrWSSupTMP@1100217002 : TEMPORARY Record 7010258;
+      lrWSRsv@1100217005 : Record 7010257;
+      lrWSSup@1100217007 : Record 7010258;
+      lrRsvExc@1100217004 : Record 7010162;
+      lrSupRsv@1100217009 : Record 7010165;
+      lrDetEco@1100217006 : Record 7010245;
+      lrTMPTurno@1000000000 : TEMPORARY Record 7010254;
+      lrTurno@1000000001 : Record 7010254;
+      lrExcPublicada@1000000003 : Record 7010268;
+      lrTO@1000000006 : Record 7009717;
+      lwExcursion@1000000004 : Code[10];
+      lwHotel@1000000005 : Code[20];
+    BEGIN
+      // RequestExcursionReservation
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP, lrWSSupTMP);
+
+      //+$012 Comprobamos que los codigos de excursion y hotel existan
+      lwExcursion := _GetConversion(0, lrWSRsvTMP.Touroperador, lrWSRsvTMP.Excursion);
+      lwHotel     := _GetConversion(1, lrWSRsvTMP.Touroperador, lrWSRsvTMP.Hotel);
+
+
+      IF lrWSRsvTMP."User Type" <> 'REP' THEN BEGIN  // +$016 Solo se debe hacer este control si no es representante
+        //. Comprobar que la excursion este publicada para la fecha y touroperador
+        //+$009 <
+        lrExcPublicada.RESET;
+        lrExcPublicada.SETFILTER(TourOperador, '%1|%2', lrWSRsvTMP.Touroperador, '');
+        lrExcPublicada.SETRANGE (Excursion   , lwExcursion); //+$012
+        IF lrWSRsvTMP.Turn <> 0 THEN
+          lrExcPublicada.SETRANGE("Turno Excursion", lrWSRsvTMP.Turn);
+        lrExcPublicada.SETFILTER("Fecha desde", '<=%1', TODAY);
+        lrExcPublicada.SETFILTER("Fecha hasta", '>=%1', TODAY);
+        IF NOT lrExcPublicada.FINDFIRST THEN
+          ERROR(Text004);
+        //+$009 >
+      END;
+
+      //. Recogemos el registro temporal de la reserva
+      //lrWSRsvTMP.FINDFIRST;
+
+      //. Busca el numero de ticket
+      lrWSRsvTMP."Ticket Number" := _GetTicketNumber(lrWSRsvTMP.Touroperador, lrWSRsvTMP.Agent);
+
+      // $005 Vamos a comprobar si hay cupo para el turno en caso contrario devolveremos los turnos con cupo
+      lrTurno.RESET;
+      IF lrTurno.GetNumTurnos(lwExcursion, lrWSRsvTMP."Service Date") > 1 THEN //+$012
+      BEGIN
+        IF TestFueraCupo(lrWSRsvTMP, lrTMPTurno) THEN BEGIN
+          xmlTurnos.SetTables(lrTMPTurno);
+          xmlTurnos.EXPORT;
+          EXIT(FALSE);
+        END;
+      END;
+
+      //. Creamos la reserva de excursiones
+      CLEAR(lrRsvExc);
+      IF UPPERCASE(lrRsvExc."User Type") = 'REP' THEN
+        lrRsvExc."Reserva a credito" := FALSE
+      ELSE
+        lrRsvExc."Reserva a credito" := TRUE;
+      lrRsvExc."Reserva online" := TRUE;
+      lrRsvExc."N§ Ticket" := lrWSRsvTMP."Ticket Number"; //+$025
+      lrRsvExc.INSERT(TRUE);
+
+      lrRsvExc.VALIDATE(TourOperador, lrWSRsvTMP.Touroperador);
+
+
+      lrRsvExc."Guia Venta"     := lrWSRsvTMP.Agent;
+
+      lrRsvExc.VALIDATE(Producto         , lwExcursion); //+$012
+      lrRsvExc.VALIDATE("Fecha Excursion", lrWSRsvTMP."Service Date");
+      lrRsvExc.VALIDATE("Turno Excursion", lrWSRsvTMP.Turn);   // $003
+      lrRsvExc.VALIDATE("Nombre Cliente" , lrWSRsvTMP."Customer Name");
+      lrRsvExc.VALIDATE(Adultos          , lrWSRsvTMP.Adults);
+      lrRsvExc.VALIDATE(Ni¤os            , lrWSRsvTMP.Children);
+      //+$002 <
+      IF lrWSRsvTMP.Vehicles <> 0 THEN
+        lrRsvExc.VALIDATE("Num. Vehiculos", lrWSRsvTMP.Vehicles);
+      //+$002 >
+
+      // CNT-CAR-14082 Si no se especifica el turno marcamos la reserva como pendiente turno
+      //+$026 <
+      lrTurno.RESET;
+      IF (lrWSRsvTMP.Turn = 0) AND
+         (lrTurno.GetNumTurnos(lwExcursion, lrWSRsvTMP."Service Date") > 1) THEN //+$012
+         BEGIN
+           lrRsvExc."Pendiente asignar turno" := TRUE;
+         END;
+      //+$026 >
+
+      lrRsvExc.VALIDATE("Hotel Cliente"  , lwHotel); //+$012
+      lrRsvExc.VALIDATE("N§ Habitacion"  , lrWSRsvTMP."Room Number");
+
+      lrRsvExc."User Type"           := lrWSRsvTMP."User Type"; // $003
+      lrRsvExc."User Id"             := lrWSRsvTMP."User Id";     // $003
+      lrRsvExc."Voucher Discount No" := lrWSRsvTMP."Voucher Discount No"; // $003
+      lrRsvExc."Canal venta"         := lrWSRsvTMP."Sale channel"; // $006
+      lrRsvExc.VALIDATE(Idioma       , _GetIdioma(lrWSRsvTMP.Language)); // +$013
+      lrRsvExc."Booking Touroperador" := lrRsvExc."N§ Ticket"; //+$025
+
+
+      // +$016 Se es un representante guardamos el Guia Venta
+      IF UPPERCASE(lrRsvExc."User Type") = 'REP' THEN
+        lrRsvExc."Guia Venta" := lrRsvExc."User Id";
+
+      //+$026 <
+      lrTO.GET(lrWSRsvTMP.Touroperador);
+      IF lrTO."Canal venta x defecto" <> '' THEN
+        lrRsvExc."Canal venta" := lrTO."Canal venta x defecto";
+      //+$026 >
+
+      lrRsvExc."Email contacto" := lrWSRsvTMP."Contact email"; //+$027
+      lrRsvExc.MODIFY(TRUE);
+
+      //. Vamos a agregar los suplementos seleccionados por el usuario
+
+      IF lrWSSupTMP.FINDFIRST THEN
+      BEGIN
+        REPEAT
+          lrWSSup.TESTFIELD("Supplement code");
+
+          CLEAR(lrSupRsv);
+          lrSupRsv.VALIDATE(Delegacion  , lrRsvExc.Delegacion);
+          lrSupRsv.VALIDATE("N§ Reserva", lrRsvExc."N§ Reserva");
+          lrSupRsv.INSERT(TRUE);
+
+          lrSupRsv.VALIDATE("Codigo Suplemento", lrWSSup."Supplement code");
+          lrSupRsv.VALIDATE(Adultos            , lrWSSup.Adults);
+          lrSupRsv.VALIDATE(Ni¤os              , lrWSSup.Childs);
+          lrSupRsv.MODIFY(TRUE);
+        UNTIL lrWSSupTMP.NEXT = 0;
+      END;
+
+      //. Buscamos el detalle economico de la reserva
+
+      lrDetEco.GET(lrRsvExc.Delegacion, lrRsvExc."N§ Reserva");
+
+      //. Pasamos los registros de la tabla temporal a un apuntador real
+
+      lrWSRsv := lrWSRsvTMP;
+      lrWSRsv."Adults price"       := lrDetEco."Precio adulto";
+      lrWSRsv."Children price"     := lrDetEco."Precio ni¤o";
+      lrWSRsv."Adults income"      := lrDetEco."Ingreso adultos";
+      lrWSRsv."Children income"    := lrDetEco."Ingreso ni¤os";
+      lrWSRsv."Reservation income" := lrDetEco."Ingreso reserva";
+      lrWSRsv.Pickup               := lrRsvExc."Hora Recogida"; //+$010
+      //+$014 <
+      lrWSRsv."Currency code"      := lrRsvExc.Divisa;
+      //. Buscamos el turno para devolver la hora de inicio
+      lrTurno.RESET;
+      lrTurno.SETRANGE (Excursion     , lrRsvExc.Producto);
+      lrTurno.SETRANGE (Turno         , lrRsvExc."Turno Excursion");
+      lrTurno.SETFILTER("Fecha inicio", '<=%1', lrRsvExc."Fecha Excursion");
+      lrTurno.SETFILTER("Fecha final" , '>=%1', lrRsvExc."Fecha Excursion");
+      IF lrTurno.FINDFIRST THEN
+        lrWSRsv."Turn start time" := lrTurno."Hora inicio";
+      //+$014 >
+      lrWSRsv.INSERT(TRUE);
+
+      //. Devolvemos el registro al XMLPort
+
+      lrWSRsv.SETRECFILTER;
+
+      xmlReserva.SetTables(lrWSRsv, lrWSSup, TRUE);
+      xmlReserva.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _GetTicketNumber@1100217003(pwTTOO@1100217000 : Code[10];VAR pwRepresentante@1100217003 : Code[20]) : Code[10];
+    VAR
+      lrTTOO@1100217002 : Record 7009717;
+      lrRep@1100217001 : Record 7010241;
+      NoSeriesMgt@1100217004 : Codeunit 396;
+    BEGIN
+      // _GetTicketNumber
+
+      //. Comprobaremos que el touroperador existe y tengo el representante web configurado
+      lrTTOO.GET(pwTTOO);
+      lrTTOO.TESTFIELD("Representante credito");
+      pwRepresentante := lrTTOO."Representante credito";
+
+      //. Comprobamos que el representante existe y tiene configurada la serie
+      lrRep.GET(pwRepresentante);
+      lrRep.TESTFIELD("Serie tickets externos");
+
+      //. Buscamos el siguiente numero de ticket
+      EXIT( NoSeriesMgt.GetNextNo(lrRep."Serie tickets externos", TODAY, TRUE) );
+    END;
+
+    PROCEDURE ExcursionPayments@1100217000(VAR xmlPagos@1100217000 : XMLport 7010140) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217003 : TEMPORARY Record 7010257;
+      lrWSPayTMP@1100217001 : TEMPORARY Record 7010259;
+      lrCobro@1100217004 : Record 7010240;
+      lrRsv@1100217005 : Record 7010162;
+      lrDetEco@1000000002 : Record 7010245;
+      lrWSRsv@1000000001 : Record 7010257;
+      lrWSPay@1000000000 : Record 7010259;
+    BEGIN
+      // ExcursionPayments
+
+      xmlPagos.IMPORT;
+      xmlPagos.GetTables(lrWSRsvTMP, lrWSPayTMP);
+
+      //. Buscamos la reserva
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("N§ Ticket");
+      lrRsv.SETRANGE("N§ Ticket", lrWSRsvTMP."Ticket Number");
+      lrRsv.FINDFIRST;
+
+      //. Vamos a ver si los pagos tienen la informacion correcta
+
+      IF lrWSPayTMP.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrCobro);
+          lrCobro.VALIDATE(Delegacion   , lrRsv.Delegacion);
+          lrCobro.VALIDATE("Num Reserva", lrRsv."N§ Reserva");
+          lrCobro.INSERT(TRUE);
+
+          lrCobro.VALIDATE("Forma de Pago"   , lrWSPayTMP."Payment Method");
+          lrCobro.VALIDATE("Cod. Divisa"     , lrWSPayTMP."Currency code");
+          lrCobro.VALIDATE("Importe Recibido", lrWSPayTMP.Amount);
+          lrCobro."Autorizacion operacion" := lrWSPayTMP."Creditcard operation";    // +$008
+          lrCobro.MODIFY(TRUE);
+
+          lrWSPay := lrWSPayTMP;
+          lrWSPay.INSERT;
+        UNTIL lrWSPayTMP.NEXT = 0;
+      END;
+
+      lrDetEco.GET(lrRsv.Delegacion, lrRsv."N§ Reserva");
+
+      lrRsv.CALCFIELDS("Importe cobros");
+      IF lrRsv."Importe cobros" < lrDetEco."Ingreso reserva" THEN
+        ERROR(Text001);
+
+      //. Marcamos el registro de WS - reserva como Confirmada
+      ConfirmExcursionReservation(lrWSRsvTMP."Ticket Number");
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ConfirmExcursionReservation@1100217010(pwNumTicket@1100217000 : Code[10]) : Boolean;
+    VAR
+      lrWSRsv@1100217001 : Record 7010257;
+    BEGIN
+      // ConfirmExcursionReservation
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY("Ticket Number");
+      lrWSRsv.SETRANGE("Ticket Number", pwNumTicket);
+      lrWSRsv.FINDFIRST;
+
+      //+$024 <
+      IF lrWSRsv."Customer Name" = '' THEN
+        ERROR(Text012);
+      //+$024 >
+
+      //+$001 <
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, pwNumTicket);
+      //+$001 >
+
+      lrWSRsv.Confirmed := TRUE;
+      lrWSRsv.MODIFY;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CancelExcursionReservation@1100217009(pwNumTicket@1100217000 : Code[10]) : Boolean;
+    VAR
+      lrWSRsv@1100217001 : Record 7010257;
+      lrRsv@1100217002 : Record 7010162;
+      lcFunExc@1100217003 : Codeunit 7010141;
+    BEGIN
+      // CancelExcursionReservation
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY("Ticket Number");
+      lrWSRsv.SETRANGE("Ticket Number", pwNumTicket);
+      lrWSRsv.FINDFIRST;
+
+      //+$021 <
+      IF lrWSRsv.Confirmed THEN
+        ERROR(Text011, pwNumTicket);
+      //+$021 >
+
+      //+$001 <
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, pwNumTicket);
+      //+$001 >
+
+      lrWSRsv.Cancelled := TRUE;
+      lrWSRsv.MODIFY;
+
+      lrRsv.RESET;
+      lrRsv.SETRANGE("N§ Ticket", pwNumTicket);
+      IF lrRsv.FINDFIRST THEN
+        lcFunExc.AnularTicket(lrRsv, TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExcursionApplyPromotion@1000000003(TicketNumber@1000000000 : Code[10];SupplementCode@1000000004 : Code[10];VoucherNumber@1000000008 : Code[10];VAR NewAmount@1000000001 : Decimal) : Boolean;
+    VAR
+      lrWSRsv@1000000003 : Record 7010257;
+      lrRsv@1000000002 : Record 7010162;
+      lrDetEco@1000000009 : Record 7010245;
+      lrTar@1000000005 : Record 7010147;
+      lrPrecio@1000000006 : Record 7010148;
+      lrSup@1000000007 : Record 7010165;
+    BEGIN
+      // ExcursionApplyPromotion
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY("Ticket Number");
+      lrWSRsv.SETRANGE("Ticket Number", TicketNumber);
+      lrWSRsv.FINDFIRST;
+
+      //+$001 <
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, TicketNumber);
+      //+$001 >
+
+      //+$021 <
+      IF lrWSRsv.Confirmed THEN
+        ERROR(Text011, TicketNumber);
+      //+$021 >
+
+      lrRsv.RESET;
+      lrRsv.SETRANGE("N§ Ticket", TicketNumber);
+      IF lrRsv.FINDFIRST THEN
+      BEGIN
+        rPar.FINDFIRST;
+
+        //. Vamos a contemplar el caso de que esten modificado el codigo de promocion
+        //+$035 <
+        IF lrWSRsv."Voucher Discount No" <> '' THEN
+        BEGIN
+          lrSup.RESET;
+          lrSup.SETRANGE(Delegacion         , lrRsv.Delegacion);
+          lrSup.SETRANGE("N§ Reserva"       , lrRsv."N§ Reserva");
+          lrSup.SETRANGE("Codigo Suplemento", SupplementCode);
+          IF lrSup.FINDFIRST THEN
+            lrSup.DELETE;
+        END;
+        //+$035 >
+
+        //. Buscamos si el suplemento tiene precio en la tarifa de la excursion
+        IF NOT lrRsv.busca_tarifa(lrTar) THEN
+          ERROR(Text005);
+
+        lrPrecio.RESET;
+        lrPrecio.SETRANGE ("Tipo precio", lrPrecio."Tipo precio"::"Suplemento Varios");
+        lrPrecio.SETRANGE ("ID Tarifa"  , lrTar."ID Tarifa");
+        lrPrecio.SETRANGE (Codigo       , SupplementCode);
+        IF rPar."Busca tarifa por fecha venta" THEN
+        BEGIN
+          lrPrecio.SETFILTER("Fecha Desde", '<=%1', lrRsv."Fecha Venta");
+          lrPrecio.SETFILTER("Fecha Hasta", '>=%1', lrRsv."Fecha Venta");
+        END
+        ELSE
+        BEGIN
+          lrPrecio.SETFILTER("Fecha Desde", '<=%1', lrRsv."Fecha Excursion");
+          lrPrecio.SETFILTER("Fecha Hasta", '>=%1', lrRsv."Fecha Excursion");
+        END;
+        IF NOT lrPrecio.FINDFIRST THEN
+          ERROR(Text006, SupplementCode);
+
+        //. Aplicamos el suplemento en la reserva
+        CLEAR(lrSup);
+        lrSup.VALIDATE(Delegacion         , lrRsv.Delegacion);
+        lrSup.VALIDATE("N§ Reserva"       , lrRsv."N§ Reserva");
+        lrSup.VALIDATE("Codigo Suplemento", SupplementCode);
+        lrSup.INSERT(TRUE);
+
+        //. Recogemos la reserva para retornar el nuevo importe de la reserva
+        //. Almacenar el numero de voucher aplicado
+        lrRsv.GET(lrRsv.Delegacion, lrRsv."N§ Reserva");
+        lrRsv.calcular_reserva(FALSE);
+        lrRsv."Voucher Discount No" := VoucherNumber;
+        lrRsv.MODIFY;
+
+        lrDetEco.GET(lrRsv.Delegacion, lrRsv."N§ Reserva");
+
+        NewAmount := lrDetEco."Ingreso reserva";
+
+        lrWSRsv."Adults price"       := lrDetEco."Precio adulto";
+        lrWSRsv."Children price"     := lrDetEco."Precio ni¤o";
+        lrWSRsv."Adults income"      := lrDetEco."Ingreso adultos";
+        lrWSRsv."Children income"    := lrDetEco."Ingreso ni¤os";
+        lrWSRsv."Reservation income" := lrDetEco."Ingreso reserva";
+      END
+      ELSE
+        ERROR(Text003, TicketNumber);
+
+      //. Almacenar el numero de voucher en la reserva WS
+      lrWSRsv."Voucher Discount No" := VoucherNumber;
+      lrWSRsv.MODIFY;
+    END;
+
+    PROCEDURE ViewMyBookings@1000000001(UserId@1000000000 : Text[30];VAR xmlReserva@1100217000 : XMLport 7009709) : Boolean;
+    VAR
+      cWSTranfer@1000000002 : Codeunit 7009784;
+    BEGIN
+      // ViewMyBookings   $004
+
+      // $007
+      // Llamamos a la nueva funci¢n que exporta excursiones y transfer a la vez
+      cWSTranfer.ViewMyBookings(UserId,xmlReserva);
+
+
+      {
+      //. Buscamos las reservas de excursiones
+      //. Filtrar fecha excursi¢n igual o posterior a hoy
+
+      lrWSRsv.RESET
+      lrWSRsv.SETRANGE ("User Id", UserId);
+      lrWSRsv.SETFILTER("Service Date", '>=%1', TODAY);
+      IF lrWSRsv.FINDFIRST THEN
+      BEGIN
+        vLimpiarTablas := TRUE;
+        REPEAT
+          lrWSRsv2.RESET;
+          lrWSRsv2.SETRANGE(lrWSRsv2.ID, lrWSRsv.ID);
+
+          //. Buscamos los suplementos de la reserva
+          lrWSSup.RESET;
+          lrWSSup.SETRANGE(lrWSSup."Reservation ID"  , lrWSRsv2.ID);
+          IF lrWSSup.FINDFIRST THEN
+          BEGIN
+          END;
+
+          //. Vamos a agregar los pagos
+          lrWSPay.RESET;
+          lrWSPay.SETRANGE(lrWSPay."Reservation ID"  , lrWSRsv2.ID);
+          IF lrWSPay.FINDFIRST THEN
+          BEGIN
+          END;
+
+          xmlReserva.SetTables(lrWSRsv2, lrWSSup, lrWSPay, vLimpiarTablas);
+          vLimpiarTablas := FALSE;
+        UNTIL lrWSRsv.NEXT = 0;
+      END;
+
+      xmlReserva.EXPORT;
+      }
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExcursionUpdateBooking@1000000000(VAR xmlReserva@1100217000 : XMLport 7009703) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7010257;
+      lrWSSupTMP@1100217002 : TEMPORARY Record 7010258;
+      lrWSRsv@1100217005 : Record 7010257;
+      lrWSSup@1100217007 : Record 7010258;
+      lrRsvExc@1100217004 : Record 7010162;
+      lrSupRsv@1100217009 : Record 7010165;
+      lrDetEco@1100217006 : Record 7010245;
+      lrTurno@1000000000 : Record 7010254;
+      lwExcursion@1000000003 : Code[10];
+      lwHotel@1000000004 : Code[20];
+    BEGIN
+      // ExcursionUpdateBooking  $004
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP, lrWSSupTMP);
+
+      // En primer lugar comprobamos si es modificaci¢n o hay que cancelar y crear nueva reserva
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY("Ticket Number");
+      lrWSRsv.SETRANGE("Ticket Number" , lrWSRsvTMP."Ticket Number");
+      IF NOT lrWSRsv.FINDFIRST THEN
+        ERROR(Text003, lrWSRsvTMP."Ticket Number");
+
+      //+$021 <
+      IF lrWSRsv.Confirmed THEN
+        ERROR(Text011, lrWSRsvTMP."Ticket Number");
+      //+$021 >
+
+      //+$012 Comprobamos que los codigos de excursion y hotel existan
+      lwExcursion := _GetConversion(0, lrWSRsvTMP.Touroperador, lrWSRsvTMP.Excursion);
+      lwHotel     := _GetConversion(1, lrWSRsvTMP.Touroperador, lrWSRsvTMP.Hotel);
+
+      lrWSRsv."Service Date"      := lrWSRsvTMP."Service Date";
+      lrWSRsv.Turn                := lrWSRsvTMP.Turn;
+      lrWSRsv."Customer Name"     := lrWSRsvTMP."Customer Name";
+      lrWSRsv.Hotel               := lrWSRsvTMP.Hotel;
+      lrWSRsv."Room Number"       := lrWSRsvTMP."Room Number";
+      lrWSRsv.Adults              := lrWSRsvTMP.Adults;
+      lrWSRsv.Children            := lrWSRsvTMP.Children;
+      lrWSRsv.Vehicles            := lrWSRsvTMP.Vehicles;
+      lrWSRsv.Language            := lrWSRsvTMP.Language;
+      lrWSRsv."Contact email"     := lrWSRsvTMP."Contact email"; //+$027
+      lrWSRsv."Modification Date" := TODAY;
+      lrWSRsv."Modification Time" := TIME;
+
+      // modificamos la reserva real
+      lrRsvExc.RESET;
+      lrRsvExc.SETCURRENTKEY("N§ Ticket");
+      lrRsvExc.SETRANGE("N§ Ticket", lrWSRsvTMP."Ticket Number");
+      lrRsvExc.FINDFIRST;
+
+      IF lrRsvExc."Fecha Excursion" <> lrWSRsvTMP."Service Date" THEN
+        lrRsvExc.VALIDATE("Fecha Excursion", lrWSRsvTMP."Service Date");
+      IF lrRsvExc."Turno Excursion" <> lrWSRsvTMP.Turn THEN
+        lrRsvExc.VALIDATE("Turno Excursion", lrWSRsvTMP.Turn);
+      IF lrRsvExc."Nombre Cliente" <> lrWSRsvTMP."Customer Name" THEN
+        lrRsvExc.VALIDATE("Nombre Cliente" , lrWSRsvTMP."Customer Name");
+      IF lrRsvExc."Hotel Cliente" <> lwHotel THEN
+        lrRsvExc.VALIDATE("Hotel Cliente"  , lwHotel); //+$012
+      IF lrRsvExc."N§ Habitacion" <> lrWSRsvTMP."Room Number" THEN
+        lrRsvExc.VALIDATE("N§ Habitacion"  , lrWSRsvTMP."Room Number");
+      IF lrRsvExc.Adultos <> lrWSRsvTMP.Adults THEN
+        lrRsvExc.VALIDATE(Adultos          , lrWSRsvTMP.Adults);
+      IF lrRsvExc.Ni¤os <> lrWSRsvTMP.Children THEN
+        lrRsvExc.VALIDATE(Ni¤os            , lrWSRsvTMP.Children);
+      IF lrRsvExc.Idioma <> _GetIdioma(lrWSRsvTMP.Language) THEN
+        lrRsvExc.VALIDATE(Idioma           , _GetIdioma(lrWSRsvTMP.Language)); // +$013
+      IF lrRsvExc."Email contacto" <> lrWSRsvTMP."Contact email" THEN
+        lrRsvExc.VALIDATE("Email contacto" , lrWSRsvTMP."Contact email"); //+$027
+      lrRsvExc.MODIFY;
+
+      //. Devolvemos el registro al web service
+
+      lrDetEco.GET(lrRsvExc.Delegacion, lrRsvExc."N§ Reserva");
+
+      lrWSRsv."Adults price"       := lrDetEco."Precio adulto";
+      lrWSRsv."Children price"     := lrDetEco."Precio ni¤o";
+      lrWSRsv."Adults income"      := lrDetEco."Ingreso adultos";
+      lrWSRsv."Children income"    := lrDetEco."Ingreso ni¤os";
+      lrWSRsv."Reservation income" := lrDetEco."Ingreso reserva";
+      lrWSRsv.Pickup               := lrRsvExc."Hora Recogida";
+      //+$031 <
+      //. Buscamos el turno para devolver la hora de inicio
+      lrTurno.RESET;
+      lrTurno.SETRANGE (Excursion     , lrRsvExc.Producto);
+      lrTurno.SETRANGE (Turno         , lrRsvExc."Turno Excursion");
+      lrTurno.SETFILTER("Fecha inicio", '<=%1', lrRsvExc."Fecha Excursion");
+      lrTurno.SETFILTER("Fecha final" , '>=%1', lrRsvExc."Fecha Excursion");
+      IF lrTurno.FINDFIRST THEN
+        lrWSRsv."Turn start time" := lrTurno."Hora inicio";
+      //+$031 >
+      lrWSRsv.MODIFY;
+
+      lrWSRsv.SETRECFILTER;
+
+      xmlReserva.SetTables(lrWSRsv, lrWSSup, TRUE);
+      xmlReserva.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _GetConversion@1000000004(pwTipoConversion@1000000000 : Integer;pwTouroperador@1000000001 : Code[10];pwCodigo@1000000002 : Code[20]) : Code[20];
+    VAR
+      lrExcursion@1000000003 : Record 7009710;
+      lrHotel@1000000004 : Record 7009724;
+      lrConversion@1000000005 : Record 7010271;
+    BEGIN
+      // _GetConversion
+
+      //. @TipoConversion, 0: Excursion, 1: Hotel
+
+      //. Filtramos sobre la tabla de conversion especial para la API
+      lrConversion.RESET;
+      lrConversion.SETRANGE("Tipo conversion", pwTipoConversion);
+      lrConversion.SETRANGE(Touroperador     , pwTouroperador);
+      lrConversion.SETRANGE("Codigo externo" , pwCodigo);
+
+      CASE pwTipoConversion OF
+        0:
+        BEGIN
+          //. Si no lo encontramos en la tabla de conversi¢n vamos a ver si estan utilizando nuestros propios codigos
+          IF NOT lrConversion.FINDFIRST THEN
+          BEGIN
+            IF NOT lrExcursion.GET(pwCodigo) THEN
+              ERROR(Text007)
+            ELSE
+              EXIT(lrExcursion.Codigo);
+          END
+          ELSE
+            EXIT(lrConversion."Codigo Atennea");
+        END;
+        1:
+        BEGIN
+          //. Si no lo encontramos en la tabla de conversion, buscaremos en nuestra tabla de hoteles
+          IF NOT lrConversion.FINDFIRST THEN
+          BEGIN
+            IF NOT lrHotel.GET(pwCodigo) THEN
+              ERROR(Text008)
+            ELSE
+              EXIT(lrHotel.Hotel);
+          END
+          ELSE
+            EXIT(lrConversion."Codigo Atennea");
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE TestFueraCupo@1000000002(VAR prWSRsvTMP@1000000000 : TEMPORARY Record 7010257;VAR prTMPTurno@1000000001 : TEMPORARY Record 7010254) vFueraCupo : Boolean;
+    VAR
+      lrRsvExc@1100217004 : Record 7010162;
+      lrTurno@1000000002 : Record 7010254;
+      lwExcursion@1000000003 : Code[10];
+      lwHotel@1000000004 : Code[20];
+    BEGIN
+      // TestCupo
+
+      vFueraCupo := FALSE;
+
+      //+$012 Comprobamos que los codigos de excursion y hotel existan
+      lwExcursion := _GetConversion(0, prWSRsvTMP.Touroperador, prWSRsvTMP.Excursion);
+      lwHotel     := _GetConversion(1, prWSRsvTMP.Touroperador, prWSRsvTMP.Hotel);
+
+      CLEAR(prTMPTurno);
+      prTMPTurno.DELETEALL;
+
+      //. Comprobamos cupo
+      lrRsvExc.INIT;
+      lrRsvExc."Fecha Venta"     := WORKDATE;
+      lrRsvExc.TourOperador      := prWSRsvTMP.Touroperador;
+      lrRsvExc.Producto          := lwExcursion; //+$012
+      lrRsvExc."Fecha Excursion" := prWSRsvTMP."Service Date";
+      lrRsvExc."Turno Excursion" := prWSRsvTMP.Turn;   // $003
+      lrRsvExc.Adultos           := prWSRsvTMP.Adults;
+      lrRsvExc.Ni¤os             := prWSRsvTMP.Children;
+      IF prWSRsvTMP.Vehicles <> 0 THEN
+        lrRsvExc."Num. Vehiculos" := prWSRsvTMP.Vehicles;
+
+      lrRsvExc.Idioma            := _GetIdioma(prWSRsvTMP.Language); // +$013
+
+      IF lrRsvExc.CheckFueraCupo(FALSE,FALSE) THEN
+      BEGIN
+        vFueraCupo := TRUE;
+        // Buscamos el cupo para el resto de turnos
+        lrTurno.RESET;
+        lrTurno.SETRANGE (Excursion     , prWSRsvTMP.Excursion);
+        lrTurno.SETFILTER("Fecha inicio", '<=%1', prWSRsvTMP."Service Date");
+        lrTurno.SETFILTER("Fecha final" , '>=%1', prWSRsvTMP."Service Date");
+        CASE DATE2DWY(prWSRsvTMP."Service Date",1) OF
+          1: lrTurno.SETRANGE(Lunes, TRUE);
+          2: lrTurno.SETRANGE(Martes, TRUE);
+          3: lrTurno.SETRANGE(Miercoles, TRUE);
+          4: lrTurno.SETRANGE(Jueves, TRUE);
+          5: lrTurno.SETRANGE(Viernes, TRUE);
+          6: lrTurno.SETRANGE(Sabado, TRUE);
+          7: lrTurno.SETRANGE(Domingo, TRUE);
+        END;
+        IF lrTurno.FINDFIRST THEN
+        BEGIN
+          REPEAT
+            lrRsvExc."Turno Excursion":= lrTurno.Turno;
+            IF NOT lrRsvExc.CheckFueraCupo(FALSE, FALSE) THEN
+            BEGIN
+              prTMPTurno.RESET;
+              prTMPTurno.INIT;
+              prTMPTurno.Turno := lrTurno.Turno;
+              prTMPTurno.INSERT;
+            END;
+          UNTIL lrTurno.NEXT = 0;
+        END;
+      END;
+      CLEAR(lrRsvExc);
+    END;
+
+    LOCAL PROCEDURE _TestOut@1100217004();
+    VAR
+      lrWSRsv@1100217003 : Record 7010257;
+      lrWSSup@1100217002 : Record 7010258;
+      lrWSPay@1100217001 : Record 7010259;
+      xmlExcursionRsv@1100217000 : XMLport 7009703;
+      lwOutStream@1100217004 : OutStream;
+      lwFile@1100217005 : File;
+    BEGIN
+      lrWSRsv.FINDFIRST;
+      lrWSRsv.SETRECFILTER;
+
+      CLEAR(lwOutStream);
+      lwFile.CREATE('C:\Respuesta.XML');
+      lwFile.CREATEOUTSTREAM(lwOutStream);
+
+      CLEAR(xmlExcursionRsv);
+      xmlExcursionRsv.SETDESTINATION(lwOutStream);
+      xmlExcursionRsv.SetTables(lrWSRsv, lrWSSup, TRUE);
+      xmlExcursionRsv.EXPORT;
+    END;
+
+    LOCAL PROCEDURE _GetIdioma@1000000005(pIdiEnt@1000000000 : Code[10]) vIdiSal : Code[10];
+    VAR
+      rIdioma@1000000001 : Record 8;
+    BEGIN
+      // $013
+
+      CLEAR(vIdiSal);
+      IF pIdiEnt <> '' THEN BEGIN
+        rIdioma.RESET;
+        rIdioma.SETRANGE(rIdioma."Codigo ISO", pIdiEnt);
+        IF NOT rIdioma.FINDFIRST THEN
+          ERROR(Text009);
+        vIdiSal := rIdioma.Code;
+      END;
+    END;
+
+    LOCAL PROCEDURE _TestIn@1000000006();
+    VAR
+      lwInStrm@1000000000 : InStream;
+      lwFile@1000000001 : File;
+      xPort@1000000002 : XMLport 7009703;
+      lcCod@1000000003 : Codeunit 7010177;
+    BEGIN
+      CLEAR(lwInStrm);
+      lwFile.OPEN('C:\XMLTRANSFER.XML');
+      lwFile.CREATEINSTREAM(lwInStrm);
+
+      xPort.SETSOURCE(lwInStrm);
+
+      lcCod.ExcursionUpdateBooking(xPort);
+      lwFile.CLOSE;
+    END;
+
+    PROCEDURE RepRegister@1000000007(RepCode@1100217000 : Code[20];LastName@1000000000 : Text[50];VAR Company@1000000006 : Text[30]) : Code[10];
+    VAR
+      lrRep@1000000001 : Record 7010241;
+      TxtLoc001@1000000002 : TextConst 'ENU=OK;ESP=OK';
+      TxtLoc002@1000000003 : TextConst 'ENU=FAIL;ESP=FAIL';
+      TxtLoc003@1000000004 : TextConst 'ENU=REGISTERED;ESP=REGISTERED';
+      lrCompany@1000000005 : Record 2000000006;
+      lwFound@1000000007 : Boolean;
+    BEGIN
+      // RepRegister
+      // $016
+
+      lwFound := FALSE;
+
+      lrCompany.RESET;
+      lrCompany.FINDSET;
+      REPEAT
+        //. Buscamos el representante
+        lrRep.RESET;
+        lrRep.CHANGECOMPANY(lrCompany.Name);
+        IF lrRep.GET(RepCode) THEN
+        BEGIN
+          Company := lrCompany.Name;
+
+          IF UPPERCASE(lrRep.Apellidos) <> UPPERCASE(LastName) THEN
+            EXIT(TxtLoc002);
+
+          IF lrRep."APP Registered" THEN
+            EXIT(TxtLoc003);
+
+          lrRep."APP Registered" := TRUE;
+          lrRep.MODIFY;
+
+          lwFound := TRUE;
+        END;
+      UNTIL (lrCompany.NEXT = 0) OR lwFound;
+
+      IF NOT lwFound THEN
+        EXIT(TxtLoc002);
+
+      EXIT(TxtLoc001);
+    END;
+
+    PROCEDURE GetHotels@1000000008(RepCode@1000000000 : Code[20];VAR xmlHotels@1000000001 : XMLport 7010141) : Boolean;
+    VAR
+      rHot@1000000002 : Record 7009724;
+      rRep@1000000003 : Record 7010241;
+    BEGIN
+      // GetHotels
+      // $016
+
+      //. Buscamos la £ltima fecha del representante
+      rRep.RESET;
+      rRep.GET(RepCode);
+
+      IF NOT rRep."APP Registered" THEN
+        ERROR(Text010);
+
+      // Buscamos los Hoteles a exportar
+      rHot.RESET;
+      rHot.SETRANGE(NoName  , FALSE);
+      rHot.SETRANGE(Catalogo, TRUE);
+      //. Filtramos los hoteles modificados despues de esa fecha
+      IF rRep."Last Login" <> 0DT THEN
+        rHot.SETFILTER("Fecha ultima modificacion", '%1..', rRep."Last Login");
+
+      IF rHot.FINDFIRST THEN
+        xmlHotels.SETTABLEVIEW(rHot);
+
+      xmlHotels.EXPORT;
+
+      rRep."Last Login" := CURRENTDATETIME;
+      rRep.MODIFY;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetRegion@1000000011(HotelCode@1100217000 : Code[20]) : Code[20];
+    VAR
+      lrHot@1000000000 : Record 7009724;
+      lrFisZon@1000000001 : Record 7009713;
+    BEGIN
+      // GetRegion
+      // $016
+
+      //. Buscamos el hotel
+      lrHot.RESET;
+      lrHot.GET(HotelCode);
+
+      lrFisZon.RESET;
+      IF lrFisZon.GET(lrHot."Zona Fisica") THEN
+        EXIT(lrFisZon.Region);
+    END;
+
+    PROCEDURE GetPaymentMethods@1000000009(RepCode@1000000000 : Code[20];VAR xmlPaymentMethods@1000000001 : XMLport 7010142) : Boolean;
+    VAR
+      rRep@1000000003 : Record 7010241;
+      rSetup@1000000002 : Record 7010242;
+    BEGIN
+      // GetPaymentMethods
+      // $016
+
+      //. Buscamos la £ltima fecha del representante
+      rRep.RESET;
+      rRep.GET(RepCode);
+
+      IF NOT rRep."APP Registered" THEN
+        ERROR(Text010);
+
+      // Buscamos los resgistros a exportar
+      rSetup.RESET;
+      rSetup.SETRANGE(rSetup.Representante, RepCode);
+      IF rSetup.FINDFIRST THEN BEGIN
+       xmlPaymentMethods.SETTABLEVIEW(rSetup);
+      END;
+
+      xmlPaymentMethods.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetReservation@1000000010(TicketNumber@1000000006 : Code[10];VAR Reservation@1100217000 : XMLport 7009703) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7010257;
+      lrWSSupTMP@1100217002 : TEMPORARY Record 7010258;
+      lrWSRsv@1100217005 : Record 7010257;
+      lrWSSup@1100217007 : Record 7010258;
+    BEGIN
+      // GetReservation
+
+      //. Buscamos el ticket
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY("Ticket Number");
+      lrWSRsv.SETRANGE("Ticket Number" , TicketNumber);
+      IF NOT lrWSRsv.FINDFIRST THEN
+        ERROR(Text003, TicketNumber);
+
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text011, lrWSRsvTMP."Ticket Number");
+
+      //. Devolvemos el registro al web service
+      lrWSRsv.SETRECFILTER;
+
+      Reservation.SetTables(lrWSRsv, lrWSSup, TRUE);
+      Reservation.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //: *************
+      //. ESTA ES UNA CODEUNIT PARA PROBAR APP 3.0
+      //: *************
+
+
+      $001 AJS 20112013 Mejoramos el mensaje cuando el ticket esta cancelado
+
+      $002 AJS 27062014 Incluir el numero de vehiculos que se reservan
+
+      $003 ARM 26082014 Nuevos campos Turno, User Type y User, Voucher Discount No ID CNT-CAR-14073
+
+      $004 ARM 01092014 Nuevas funciones ViewMyBookings y UpdateBooking CNT-CAR-14073
+
+      $005 ARM 12092014 En caso de no haber cupo se devueven los turnos con supo CNT-CAR-14082
+
+      $006 ARM 16092014 CNT-CAR-14082 Nuevo campo Canal venta
+
+      $007 ARM 23092014 CNT-CAR-14063 Modifico la funci¢n ViewMyBooking para que llame a la nueva que junta excursiones y transfer
+
+      $008 ARM 17102014 CNT-OC-14083 Traspasamos el campo Operaci¢n tarjeta credito a la tabla decobros
+
+      $009 AJS 21102014 Controlar que la excursion este publicada al hacer el REQUEST
+
+      $010 AJS 28102014 Recoger la hora de recogida para devolverla en el XMLPort
+
+      $011 AJS 28102014 Nueva funcion ExcursionApplyPromotion para aplicar una promocion de descuento sobre una reserva
+
+      $012 AJS 30102014 Nueva funcion _GetConversion para poder trabajar con codigos externos de hotel y excursiones
+
+      $013 ARM 20112014 CNT-OC-14105 Nuevo campo Idioma
+
+      $014 AJS 30012015 Modifico la funcion RequestExcursionReservation para agregar los nodos Divisa y
+                        hora de inicio del turno
+
+      $015 AJS 30012015 Se elimina la informacion de pagos en la funcion RequestExcursionReservation
+
+      $016 ARM 06022015 CNT-OC-14087 Varias modificaciones para la venta a trav‚s de la API de los representantes
+
+      $017 AJS 09022015 Agrego TRUE como retorno correcto de la funcion CancelExcursionReservation
+
+      $018 ARM 16012015 CNT-LP-14128 A¤adido parametrp Region en GetExcursionMasterData
+
+      $019 AJS 17022015 Modificaciones en la funcion ExcursionUpdateBooking para retornar la informacion correcta a la APP
+
+      $020 AJS 23022015 Modificacion en la funcion ExcursionUpdateBooking para que no cree un registro nuevo de WS - Excursion reservation
+                        sino que modifique el registro existente
+
+      $021 AJS 11032015 Modifico las funciones CancelExcursionReservation y ExcursionUpdateBooking para que no se puedan ejecutar si el
+                        ticket esta confirmado
+
+      $022 AJS 11032015 Modifico la funcion ExcursionUpdateBooking para que nunca cambie el numero de ticket, lanzamos los validates
+                        de reserva
+
+      $023 AJS 17032015 Nueva funcion GetReservation para devolver la informacion que tenemos de un numero de ticket
+
+      $024 AJS 29042015 Las reservas de REP se crean como contado, las otras como credito
+
+      $025 AJS 20072015 Relleno el numero de ticket antes del insert para evitar que salte dos numeros cada vez
+
+      $026 AJS 21072015 Ponemos la marca de pendiente asignar turno antes del hotel
+
+      $027 AJS 23072015 Modifico la funcion ExcursionUpdateBooking para que solo lance el validate de los campos que realmente cambian
+    }
+    END.
+  }
+}

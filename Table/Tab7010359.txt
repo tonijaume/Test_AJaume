@@ -1,0 +1,3484 @@
+OBJECT Table 7010359 Servicios - Partes
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/07/15;
+    Time=13:30:48;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               rServ@1100244000 : Record 7010358;
+               rSerPar@1100244001 : Record 7010359;
+               lrZonFis@1100244004 : Record 7010314;
+               lw_NumSer@1100244002 : Code[10];
+               lw_numLinea@1100244003 : Integer;
+             BEGIN
+
+               rPar.FINDFIRST;
+
+               // Comprueba que no se inserte una linea en un parte confirmado
+
+               CLEAR(rParte);
+
+               IF "N§ Parte" <>'' THEN BEGIN
+                 IF rParte.GET("N§ Parte") THEN BEGIN
+                   IF rParte.Confirmado THEN
+                     ERROR(err10);
+
+                   // AJF 01/02/2008 - DRF 07004
+                   // Traspasamos Origen creacion a la linea de parte.
+
+                   "Origen creacion" := rParte."Origen creacion";
+
+                   // AJF 03/04/08
+                   //  Actualizamos datos de vuelos.
+
+                   IF ("Origen creacion" = "Origen creacion"::Shuttle) AND ("Codigo Servicio" = rPar."Codigo Entradas") THEN BEGIN
+                     rParte.ActualizaDatosVuelos(Rec, FALSE);
+                     ActualizaFechaReservas(rParte."N§ Parte", rParte.Fecha);
+                   END;
+
+                   // AJS 27.03.2008
+                   // Traspasamos la fechahora de inicio del parte
+                   // JPT 02/02/10 Datetime a Biginteger. Validamos los campos BI
+                   // "FechaHora Parte" := rParte."Hora Inicio DT";
+                   VALIDATE("FechaHora Parte BI", rParte."Hora Inicio BI");
+
+                   // AJF 11/08/08
+                   // cambio a buscar el servicio directamente en lugar de a¤adir m s consultas a servicios - partes.
+                   //lw_NumSer := '';
+                   //BuscaServicio(rParte, lw_NumSer);
+                   //"N§ Servicio" := lw_NumSer;
+
+                 END;
+               END;
+
+               // Inserta n§ de servicio si no lo tiene
+               IF "N§ Servicio" = '' THEN BEGIN
+                 lw_NumSer := '';
+                 rSerPar.COPY(Rec);
+                 IF "N§ Servicio" <> '' THEN
+                   lw_NumSer := "N§ Servicio"
+                 ELSE
+                   IF rSerPar.FINDLAST THEN
+                     lw_NumSer := rSerPar."N§ Servicio"
+                   ELSE BEGIN
+                     // AJF 03/04/08
+                     // Insertamos un nuevo servicio en caso de que no exista.
+                     rParte.RESET;
+                     IF rParte.GET("N§ Parte") THEN BEGIN
+                       BuscaServicio(rParte, lw_NumSer);
+                     END;
+                   END;
+                 "N§ Servicio" := lw_NumSer;
+               END;
+
+               // -------------------- A¤ade un n£mero de linea, si no la tiene ----------------------------
+
+               IF "N§ Linea" = 0 THEN BEGIN
+
+                 rSerPar.RESET;
+                 rSerPar.SETRANGE("N§ Servicio" , "N§ Servicio");
+
+                 IF rSerPar.FINDLAST THEN
+                   lw_numLinea := rSerPar."N§ Linea" + 100000
+                 ELSE
+                   lw_numLinea := 100000;
+
+                   "N§ Linea" := lw_numLinea;
+               END;
+
+               // ---------------------------------------------------------------------------
+
+               // AJS 23.02.2004
+               // Si la linea ya pertenece a un parte tomamos la informacion del parte en lugar del servicio
+
+               ActualizaPaxesSoporte(rParte, FALSE);
+
+               IF "N§ Parte" <> '' THEN BEGIN
+
+                 Fecha             := rParte.Fecha;
+                 "Codigo Servicio" := rParte."Codigo Servicio";
+                 "Tipo Servicio"   := rParte."Tipo Servicio";
+                 IF Touroperador = '' THEN
+                   Touroperador      := rParte."Touroperador principal";
+
+                 // Mantenemos la version de impresi¢n de parte Y Num de exportacion
+                 MantenVersionParte(rParte,FALSE);
+                 MantenNoExp(rParte,FALSE);
+                 rParte.MODIFY;
+
+               END
+               ELSE BEGIN
+                 rServ.RESET; rServ.INIT;
+                 IF rServ.GET("N§ Servicio") THEN BEGIN
+                   Fecha             := rServ.Fecha;
+                   "Codigo Servicio" := rServ."Codigo Servicio";
+                   "Tipo Servicio"   := rServ."Tipo Servicio";
+                   IF Touroperador = '' THEN
+                     Touroperador      := rServ.Touroperador;
+
+                   // AJS 27.03.2008
+                   // Si no tiene parte actualizo la hora de inicio del parte con la hora del vuelo
+                   // JPT 02/02/10 Validamos este campo para rellenar "FechaHora Parte BI"
+                   // "FechaHora Parte" := "FechaHora Vuelo";
+                   VALIDATE("FechaHora Parte",  "FechaHora Vuelo");
+
+                 END;
+               END;
+
+               // AJS 12.07.2004
+               // Si la zona fisica no se ha rellenado es que no ha pasado por la validacion porque han filtrado por
+               // punto de recogida en la ventana de partes
+
+               IF "Zona fisica" = '' THEN BEGIN
+                 // ----  Rellenar la zona fisica a partir del punto de recogida  ----
+
+                 IF rPto.GET("Punto recogida") THEN BEGIN
+                   IF rPto."Zona fisica" = '' THEN
+                     ERROR(err1, "Punto recogida");
+                   "Zona fisica" := rPto."Zona fisica";
+
+                   // ----  AJS 15.10.2001  Rellenar el campo Orden Zona a partir del orden la zona fisica  ----
+
+                   lrZonFis.RESET;
+                   lrZonFis.GET("Zona fisica");
+                   "Orden zona" := lrZonFis.Orden;
+
+                   // ----  AJS 15.10.2001 Mantenimiento del campo Zona parte que debe tener el valor de  ----
+                   // ----  la zona fisica mas alejada                                                    ----
+
+
+                 END;
+               END;
+
+               // AJF 01/08/08
+               // movida funci¢n fuera de la condici¢n anterior, ya que el registro ya tiene zona fisica antes de la
+               // inserci¢n.
+               ultima_zona_fisica(rParte, FALSE, TRUE);
+
+
+
+               IF "N§ Parte" <> '' THEN BEGIN
+                MantenTipoIngreso(rParte);
+                mantener_touroperador_parte(rParte);
+               END;
+
+               // AJF 30/07/08
+               // Marcamos para que se sepa que es una linea introducida de manera manual.
+               // La Importaci¢n no usa el trigger de oninsert.
+
+               "Linea Manual" := TRUE;
+
+               ActualizarVuelos2(FALSE);
+
+               // JPT 23/07/08 Mantenemos el Historico
+               InsertaHist(Text007,'', STRSUBSTNO(Text002, "Punto recogida", "Adultos transportados", "Ni¤os transportados"));
+             END;
+
+    OnModify=VAR
+               lrZonFis@1100244000 : Record 7010314;
+             BEGIN
+
+               IF xRec."N§ Parte" <> "N§ Parte" THEN
+                 xRec.ActualizarVuelos2(TRUE);
+               ActualizarVuelos2(FALSE);
+
+               CLEAR(rParte);
+
+               IF rParte.GET("N§ Parte") THEN
+               BEGIN
+                 rPar.FINDFIRST;
+
+                 // AJF 01/02/2008 - DRF 07004
+                 // Traspasamos Origen creacion a la linea de parte.
+                 "Origen creacion" := rParte."Origen creacion";
+
+                 IF rParte.Confirmado THEN
+                   ERROR(err4);
+
+                 // ----  Si no se trata de un alta en el parte hay que tratar los adultos anteriores y  ----
+                 // ----  los actuales.                                                                  ----
+                 ActualizaPaxesSoporte(rParte, FALSE);
+
+                 // Mantenemos la version de impresi¢n de parte Y Num exportaci¢n
+                 MantenVersionParte(rParte,TRUE);
+                 MantenNoExp(rParte,TRUE);
+
+                 IF ("Origen creacion" = "Origen creacion"::Shuttle) AND ("Hora Vuelo" <> xRec."Hora Vuelo") THEN
+                   cFShuttle.MantenDTLineasParte(Rec, FALSE);
+
+                 IF ("Origen creacion" = "Origen creacion"::Shuttle) AND ("Codigo Servicio" = rPar."Codigo Entradas") THEN BEGIN
+
+                   rParte.ActualizaDatosVuelos(Rec, FALSE);
+                   // AJF 04/06/08
+                   ActualizaFechaReservas(rParte."N§ Parte", rParte.Fecha);
+
+                 END;
+                 rParte.MODIFY;
+
+               END;
+
+               // AJS 12.07.2004
+               // Si la zona fisica no se ha rellenado es que no ha pasado por la validacion porque han filtrado por
+               // punto de recogida en la ventana de partes
+
+               IF "Zona fisica" = '' THEN BEGIN
+                 // ----  Rellenar la zona fisica a partir del punto de recogida  ----
+
+                 IF rPto.GET("Punto recogida") THEN BEGIN
+                   IF rPto."Zona fisica" = '' THEN
+                     ERROR(err1, "Punto recogida");
+                   "Zona fisica" := rPto."Zona fisica";
+
+                   // ----  AJS 15.10.2001  Rellenar el campo Orden Zona a partir del orden la zona fisica  ----
+
+                   lrZonFis.RESET;
+                   lrZonFis.GET("Zona fisica");
+                   "Orden zona" := lrZonFis.Orden;
+
+                   // ----  AJS 15.10.2001 Mantenimiento del campo Zona parte que debe tener el valor de  ----
+                   // ----  la zona fisica mas alejada                                                    ----
+
+                   ultima_zona_fisica(rParte, FALSE, TRUE);
+                 END;
+               END;
+
+               // AJF 04/11/08
+               // Si tiene un parte de recogida generado modificamos la l¡nea de recogida correspondiente.
+               ModificarLineaRecogida;
+
+               IF (Touroperador <> xRec.Touroperador) AND ("N§ Parte" = rParte."N§ Parte")THEN
+                 MantenTipoIngreso(rParte);
+
+               // AJS 06.04.2005
+               // La rutina mantener_touroperador la lanzamos desde aqui porque desde el OnValidate de los campos daba error
+               // si se cambiaba 2 veces de valor el campo sin pasar por el OnModify
+
+               IF (Touroperador <> xRec.Touroperador) OR
+                  ("Adultos transportados" <> xRec."Adultos transportados") OR
+                  ("Ni¤os transportados" <> xRec."Ni¤os transportados") OR
+                  ("Adultos invitados ingreso" <> xRec."Adultos invitados ingreso") OR
+                  ("Ni¤os invitados ingreso" <> xRec."Ni¤os invitados ingreso") OR
+                  ("Adultos invitados coste" <> xRec."Adultos invitados coste") OR
+                  ("Ni¤os invitados coste" <> xRec."Ni¤os invitados coste") THEN BEGIN
+                 IF "N§ Parte" <> '' THEN BEGIN
+                   IF rParte.GET("N§ Parte") THEN
+                     mantener_touroperador_parte(rParte);
+                     rParte.ProratearViajes; // AJF 22/10/10
+                 END;
+               END;
+
+               // Mantiene las modificaciones en el historico
+
+               RepasaCambios;
+             END;
+
+    OnDelete=BEGIN
+               rPar.FINDFIRST;
+
+               CLEAR(rParte);
+
+               IF rParte.GET("N§ Parte") THEN BEGIN
+                 IF rParte.Confirmado THEN
+                   ERROR(err5);
+
+                 MiraSiEsUltimaLineaParte;
+
+                 // Testeamos si al borrar conviene reimprimir.
+                 // Hipotesis: Si el punto de recogida esta en blanco es porque hemos hecho igual el juego
+                 // INSERT-DELETE, sin haber modificado nada, por tanto NO cambiaremos valor del campo impreso.
+                 // Si es de una fecha pasada entonces no desmarcamos.
+                 ActualizaPaxesSoporte(rParte, TRUE);
+
+                 // Mantenemos la version de impresi¢n de parte y Num de exportacion
+                 MantenVersionParte(rParte,FALSE);
+                 MantenNoExp(rParte,FALSE);
+
+                 IF ("Origen creacion" = "Origen creacion"::Shuttle) THEN
+                   cFShuttle.MantenDTLineasParte(Rec, TRUE);
+
+                 IF ("Origen creacion" = "Origen creacion"::Shuttle) AND ("Codigo Servicio" = rPar."Codigo Entradas") THEN BEGIN
+                   rParte.ActualizaDatosVuelos(Rec, TRUE);
+                   // AJF 04/06/08
+                   ActualizaFechaReservas(rParte."N§ Parte", rParte.Fecha);
+                 END;
+
+                 rParte.MODIFY;
+
+                 // AJS 24.06.2005
+                 // Registramos en el historico
+                 // JPT 28/07/06 Si el borado se produce en la importaci¢n no se registra en el historico
+                 IF NOT "Permite Borrar" THEN
+                   InsertaHist(Text001, STRSUBSTNO(Text002, "Punto recogida", "Adultos transportados", "Ni¤os transportados"),'');
+
+               END;
+               // Si estamos en una linea de servicio sin parte, mantenemos el campo Origen/Destino
+               // AJS 02.03.2004
+               // El campo de OrigenDestino y presentacion
+               //ELSE
+               //  MantieneOrigenDestino;
+
+               // ----  Borrar los elementos a transportar asociados a esta linea  ----
+
+               rElePto.RESET; rElePto.INIT;
+               rElePto.SETRANGE("N§ Servicio", "N§ Servicio");
+               rElePto.SETRANGE("N§ Linea"   , "N§ Linea");
+               IF rElePto.FINDSET(TRUE) THEN
+                 rElePto.DELETEALL;
+
+               // AJS --> Mantener los campos de adultos transportados etc... del fichero de
+               //         touroperador x parte.
+               w_baja := Rec."N§ Parte" <> '';
+               mantener_touroperador_parte(rParte);
+               rParte.ProratearViajes; // AJF 02/11/10
+
+               // ----  Actualiza el campo Hora 1er vuelo de la tabla Partes  ----
+
+               IF "N§ Parte" <> '' THEN
+                 IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN
+                   Actualiza_Hora1erVuelo_Partes("N§ Parte","N§ Servicio","N§ Linea");
+
+
+               // ----  AJS 15.10.2001 Mantenimiento del campo Zona parte que debe tener el valor de  ----
+               // ----  la zona fisica mas alejada                                                    ----
+
+               ultima_zona_fisica(rParte, TRUE, FALSE);
+
+               IF "N§ Parte" = rParte."N§ Parte" THEN
+                 MantenTipoIngreso(rParte);
+
+               // Se mantiene la hora de inicio en Parte
+               MantenHoraInicio(TRUE);
+
+               TraspasaVuelo; // Si es la linea de vuelos, los traspasa a otra
+
+               // Borra los vuelos x linea
+               CLEAR(rVuelLin);
+               rVuelLin.SETCURRENTKEY("N§ Servicio", "N§ Linea");
+               rVuelLin.SETRANGE(Tipo         , rVuelLin.Tipo::Servicio);
+               rVuelLin.SETRANGE("N§ Servicio", "N§ Servicio");
+               rVuelLin.SETRANGE("N§ Linea"   , "N§ Linea");
+               IF rVuelLin.FINDSET(TRUE) THEN
+                 rVuelLin.DELETEALL;
+
+               ActualizarVuelos2(TRUE);
+             END;
+
+    OnRename=BEGIN
+               MESSAGE(Text000);
+             END;
+
+    CaptionML=ESP=Servicios - Partes;
+    LookupFormID=Form7010398;
+    DrillDownFormID=Form7010398;
+  }
+  FIELDS
+  {
+    { 1   ;   ;N§ Linea            ;Integer       ;CaptionML=ESP=N§ Linea;
+                                                   Description=PK }
+    { 3   ;   ;N§ Servicio         ;Code10        ;TableRelation=Servicio."N§ Servicio";
+                                                   CaptionML=ESP=N§ Servicio;
+                                                   SQL Data Type=Varchar;
+                                                   Description=PK, FK Servicio;
+                                                   Editable=No }
+    { 5   ;   ;Punto recogida      ;Code10        ;TableRelation="Punto de recogida".Codigo;
+                                                   OnValidate=VAR
+                                                                lrZonFis@1100244000 : Record 7010314;
+                                                                lrPuntoRec@1100253000 : Record 7010315;
+                                                                lwZonTrab@1103355000 : Code[10];
+                                                                lrLinParte@1103355001 : Record 7010359;
+                                                                lrParte@1103355002 : Record 7010360;
+                                                                lwNumParte@1103355003 : Code[10];
+                                                                liNumLinea@1103355004 : Integer;
+                                                                lwPosition@1103355005 : Text[150];
+                                                              BEGIN
+                                                                rPar.FINDFIRST;
+
+
+                                                                // Rellena el campo "Descripcion Punto Recogida"
+
+                                                                VALIDATE("Descripcion Punto Recogida", lrPuntoRec.GetDescripcion("Punto recogida"));
+
+                                                                IF "Punto recogida" <> xRec."Punto recogida" THEN BEGIN
+
+                                                                  // ----  Rellenar la zona fisica a partir del punto de recogida  ----
+
+                                                                  rPto.GET("Punto recogida");
+                                                                  IF rPto."Zona fisica" = '' THEN
+                                                                    ERROR(err1, "Punto recogida");
+                                                                  "Zona fisica" := rPto."Zona fisica";
+
+                                                                  // ----  AJS 15.10.2001  Rellenar el campo Orden Zona a partir del orden la zona fisica  ----
+
+                                                                  lrZonFis.RESET;
+                                                                  lrZonFis.GET("Zona fisica");
+                                                                  "Orden zona" := lrZonFis.Orden;
+
+                                                                  // AJS 26.03.2008
+                                                                  // Almacenamos la zona de trabajo
+
+                                                                  "Zona Trabajo" := lrZonFis."Zona trabajo";
+
+                                                                  lwZonTrab    := lrZonFis."Zona trabajo";
+
+                                                                  // ----  Tomamos el orden en funcion del Codigo de servicio  ----
+
+                                                                  CLEAR(rParte);
+
+                                                                  IF rParte.GET("N§ Parte") THEN BEGIN
+                                                                    rCodSer.GET(rParte."Codigo Servicio");
+                                                                    IF rCodSer."Tipo orden" = rCodSer."Tipo orden"::Entrada THEN
+                                                                      "Orden Hotel en zona" := rPto."Orden entrada"
+                                                                    ELSE
+                                                                      "Orden Hotel en zona" := rPto."Orden salida";
+                                                                  END;
+
+                                                                  // ----  AJS 15.10.2001 Mantenimiento del campo Zona parte que debe tener el valor de  ----
+                                                                  // ----  la zona fisica mas alejada                                                    ----
+
+                                                                  ultima_zona_fisica(rParte, FALSE, TRUE);
+
+                                                                  // Si estamos en una linea de servicio sin parte, mantenemos el campo Origen/Destino
+                                                                  // AJS 02.03.2004
+                                                                  // El campo de OrigenDestino y presentacion
+                                                                  //ELSE
+                                                                  //  MantieneOrigenDestino;
+
+                                                                  // JPT 13/02/06 Marcar la impresi¢n del documento descriptivo
+
+                                                                  VALIDATE("Imprimir Documento Descriptivo", rPto."Marcar Doc.Descrpt por defecto");
+
+                                                                  // AJF 19/03/08
+                                                                  // Si el punto de recogida es de otra zona de trabajo hay que sacar la l¡nea de su parte.
+
+                                                                  IF (lwZonTrab <> rParte."Zona trabajo") AND
+                                                                     ("Origen creacion" = "Origen creacion"::Shuttle) AND
+                                                                     ("N§ Servicio" <> Text50000) AND
+                                                                     ("Codigo Servicio" = rPar."Codigo Entradas") THEN BEGIN
+
+                                                                    IF CONFIRM(Text011, FALSE, "Punto recogida", rParte."Zona trabajo", lwZonTrab) THEN BEGIN
+                                                                      // AJF 30/04/08
+                                                                      // Vamos a tener en cuenta el caso en que la l¡nea sea la £nica del parte, con lo que en lugar de
+                                                                      // desasignar la l¡nea del parte, modificaremos los datos del parte.
+
+                                                                      lrLinParte.RESET;
+                                                                      lrLinParte.SETCURRENTKEY("N§ Parte");
+                                                                      lrLinParte.SETRANGE("N§ Parte", "N§ Parte");
+                                                                      lrLinParte.FINDFIRST;
+                                                                      lwPosition := lrLinParte.GETPOSITION;
+                                                                      lrLinParte.FINDLAST;
+                                                                      IF NOT (lwPosition = lrLinParte.GETPOSITION) THEN BEGIN
+
+                                                                        lwNumParte := "N§ Parte";
+
+                                                                        cFShuttle.ActualizaTTOOxParte("N§ Parte", Rec, TRUE);
+
+                                                                        // AJF 28/07/08
+                                                                        // Insertamos en el historial la desasignaci¢n de la l¡nea.
+                                                                        InsertaHist(STRSUBSTNO(Text008),
+                                                                                  STRSUBSTNO(Text009, Reserva + ' ' + xRec."Punto recogida"),
+                                                                                  STRSUBSTNO(Text010, "Punto recogida"));
+
+                                                                        cFShuttle.TraspasarLinea(Rec, 0, '', Text50000);
+
+                                                                        lrParte.GET(lwNumParte);
+                                                                        IF ("Origen creacion" = "Origen creacion"::Shuttle) AND ("Codigo Servicio" = rPar."Codigo Entradas") THEN
+                                                                          lrParte.ActualizaDatosVuelos(Rec, TRUE);
+
+
+                                                                        lrLinParte.RESET;
+                                                                        lrLinParte := Rec;
+                                                                        lrLinParte.DELETE;
+                                                                      END;
+                                                                    END;
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Punto recogida;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Puntos recogida }
+    { 6   ;   ;Descripcion Punto Recogida;Text50  ;CaptionML=ESP=Descripci¢n;
+                                                   NotBlank=Yes }
+    { 7   ;   ;Zona fisica         ;Code10        ;TableRelation="Zona fisica transfer".Codigo;
+                                                   CaptionML=ESP=Zona fisica;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Zona fisica;
+                                                   Editable=No }
+    { 9   ;   ;Touroperador        ;Code10        ;TableRelation=Cliente/TTOO.TTOO;
+                                                   OnValidate=BEGIN
+                                                                IF Touroperador <> xRec.Touroperador THEN BEGIN
+
+                                                                  CLEAR(rParte);
+
+                                                                  // AJS 18.06.2004
+                                                                  // La comprobacion de que existe Cliente-Touroperador solo se hara si se esta cambiando el touroperador
+                                                                  // directamente en la ventana no desde partes o desde servicios
+
+                                                                  IF CurrFieldNo = FIELDNO(Touroperador) THEN BEGIN
+
+                                                                    // Si la linea pertenece a un parte de trabajo buscar el cliente del parte
+
+                                                                    IF "N§ Parte" <> '' THEN BEGIN
+                                                                      IF rParte.GET("N§ Parte") THEN BEGIN
+                                                                        IF NOT rCliTO.GET(rParte.Cliente, Touroperador) THEN
+                                                                          ERROR(err12, rSer.Cliente, Touroperador);
+                                                                      END;
+                                                                    END
+                                                                    ELSE BEGIN
+                                                                      IF rSer.GET("N§ Servicio") THEN BEGIN
+                                                                        IF NOT rCliTO.GET(rSer.Cliente, Touroperador) THEN
+                                                                          ERROR(err12, rSer.Cliente, Touroperador);
+                                                                      END;
+                                                                    END;
+
+                                                                    // AJS 03.07.2008
+                                                                    // Los usuarios de facturacion tienen que poder trabajar con todos los touroperadores
+
+                                                                    rUsr.GET(USERID);
+
+                                                                    rPar.FINDFIRST;
+
+                                                                    IF rUsr."Perfil Transfer" <> rPar."Perfil Facturacion" THEN
+                                                                      rCliTO.TESTFIELD("Operativa Deshabilitada", FALSE);
+
+                                                                    // AJS 06.04.2005
+                                                                    // Pasar la llamada a esta rutina al OnModify
+                                                                    // Mantenemos la tabla de Touroperadores por parte para posteriores estadisticas
+
+                                                                    //IF "N§ Parte" <> '' THEN
+                                                                    //  mantener_touroperador_parte(rParte);
+
+                                                                  END;
+
+                                                                  // Codigo obsoleto
+                                                                  // comprobar_contratos;
+
+                                                                  // Si ya tiene parte asignado actualiza el campo Touroperadores del parte
+                                                                  // AJS 06.02.2004
+                                                                  // Codigo eliminado pongo que el campo touroperadores se rellene en el calculo de parte
+                                                                  {*
+                                                                  IF "N§ Parte" <> '' THEN BEGIN
+                                                                    MODIFY(TRUE);
+                                                                    IF rParte.GET("N§ Parte") THEN
+                                                                      rParte.AsignaTouroperadores;
+                                                                  END;
+                                                                  *}
+
+                                                                  // Modifica los vuelos x linea
+                                                                  CLEAR(rVuelLin);
+                                                                  rVuelLin.SETCURRENTKEY("N§ Servicio", "N§ Linea");
+                                                                  rVuelLin.SETRANGE(Tipo         , rVuelLin.Tipo::Servicio);
+                                                                  rVuelLin.SETRANGE("N§ Servicio", "N§ Servicio");
+                                                                  rVuelLin.SETRANGE("N§ Linea"   , "N§ Linea");
+                                                                  IF rVuelLin.FINDSET(TRUE) THEN
+                                                                    rVuelLin.MODIFYALL(TTOO, Touroperador);
+
+                                                                  // JPT- 18/02/04 A partir de ahora la zona de trabajo puede ir por touroperador
+
+                                                                  ultima_zona_fisica(rParte, FALSE, TRUE);
+
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              rCliTO.RESET;
+
+                                                              // AJS 27.03.2008
+                                                              // Incluimos el filtro por Operativa Deshabilitada
+
+                                                              // AJS 03.07.2008
+                                                              // Los usuarios de facturacion tienen que poder trabajar con todos los touroperadores
+
+                                                              rUsr.GET(USERID);
+
+                                                              rPar.FINDFIRST;
+
+                                                              IF rUsr."Perfil Transfer" <> rPar."Perfil Facturacion" THEN
+                                                                rCliTO.SETRANGE("Operativa Deshabilitada", FALSE);
+
+                                                              IF "N§ Parte" <> '' THEN BEGIN
+                                                                IF rParte.GET("N§ Parte") THEN
+                                                                  rCliTO.SETRANGE(Cliente, rParte.Cliente);
+                                                              END
+                                                              ELSE BEGIN
+                                                                IF rSer.GET("N§ Servicio") THEN
+                                                                  rCliTO.SETRANGE(Cliente, rSer.Cliente);
+                                                              END;
+
+                                                              IF FORM.RUNMODAL(0, rCliTO) = ACTION::LookupOK THEN
+                                                                VALIDATE(Touroperador, rCliTO.TTOO);
+                                                            END;
+
+                                                   CaptionML=ESP=Touroperador;
+                                                   SQL Data Type=Varchar;
+                                                   Description=Cliente/TTOO.TTOO }
+    { 11  ;   ;Adultos transportados;Decimal      ;OnValidate=BEGIN
+                                                                IF "Adultos transportados" <> xRec."Adultos transportados" THEN BEGIN
+
+                                                                  // AJS 03.06.2004
+                                                                  // Obligo a indicar hotel, porque sino los campos en el parte no se actualizan bien
+
+                                                                  IF "Punto recogida" = '' THEN
+                                                                    ERROR(Text00002);
+
+                                                                  IF "Adultos transportados" < 0 THEN
+                                                                    ERROR(err2);
+                                                                  "Paxes transportados" := "Adultos transportados" + "Ni¤os transportados";
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Adultos transportados;
+                                                   DecimalPlaces=0:2 }
+    { 13  ;   ;Ni¤os transportados ;Decimal       ;OnValidate=BEGIN
+                                                                IF "Ni¤os transportados" <> xRec."Ni¤os transportados" THEN BEGIN
+
+                                                                  // AJS 03.06.2004
+                                                                  // Obligo a indicar hotel, porque sino los campos en el parte no se actualizan bien
+
+                                                                  IF "Punto recogida" = '' THEN
+                                                                    ERROR(Text00002);
+
+                                                                  IF "Ni¤os transportados" < 0 THEN
+                                                                    ERROR(err3);
+                                                                  "Paxes transportados" := "Adultos transportados" + "Ni¤os transportados";
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Ni¤os transportados;
+                                                   DecimalPlaces=0:2 }
+    { 15  ;   ;Paxes transportados ;Decimal       ;CaptionML=ESP=Paxes transportados;
+                                                   DecimalPlaces=0:2;
+                                                   Editable=No }
+    { 16  ;   ;Hora Vuelo          ;Time          ;OnValidate=VAR
+                                                                vHora@1100244000 : Text[8];
+                                                                lwfecha@1100244002 : Date;
+                                                                lwFechahora@1103355000 : DateTime;
+                                                              BEGIN
+                                                                rPar.FINDFIRST;
+
+                                                                IF "Hora Vuelo" <> xRec."Hora Vuelo" THEN
+                                                                BEGIN
+
+                                                                  // AJS 26.03.2008
+                                                                  // Actualizamos el campo de fecha/hora vuelo
+
+                                                                  // AJS 27.03.2008
+                                                                  // Solo actualizamos si la modificacion de la hora se hace directamente en el formulario
+
+                                                                  IF CurrFieldNo = FIELDNO("Hora Vuelo") THEN
+                                                                  BEGIN
+
+                                                                    rParte.RESET;
+                                                                    IF rParte.GET("N§ Parte") THEN
+                                                                    BEGIN
+                                                                      IF rParte."Origen creacion" = rParte."Origen creacion"::Shuttle THEN
+                                                                      BEGIN
+                                                                        IF Fecha = 0D THEN
+                                                                          Fecha := rParte.Fecha;
+                                                                        IF ComprobarDia(lwFechahora) THEN
+                                                                          IF NOT CONFIRM(Text005, FALSE) THEN
+                                                                            ERROR(Text006);
+                                                                        VALIDATE("FechaHora Vuelo", lwFechahora);
+                                                                      END
+                                                                      ELSE
+                                                                        IF Fecha <> 0D THEN
+                                                                          VALIDATE("FechaHora Vuelo", CREATEDATETIME(Fecha, "Hora Vuelo"))
+                                                                        ELSE
+                                                                        BEGIN
+                                                                          Fecha := rParte.Fecha;
+                                                                          VALIDATE("FechaHora Vuelo", CREATEDATETIME(rParte.Fecha, "Hora Vuelo"));
+                                                                        END;
+
+                                                                      // AJS 27.03.2008
+                                                                      // En los partes de shuttle mantenemos un registro en la tabla de vuelo x parte para la consulta
+                                                                      // diaria de vuelos
+
+                                                                      IF rParte."Origen creacion" = rParte."Origen creacion"::Shuttle THEN
+                                                                      BEGIN
+                                                                        //. Dejo de poner la hora de vuelo como hora de recogida en los servicios de shutle porque
+                                                                        //. a ibizatours le esta generando confusi¢n
+                                                                        //IF ("Codigo Servicio" = rPar."Codigo Entradas") THEN
+                                                                        //  "Hora recogida" := "Hora Vuelo";
+
+                                                                        MantenerVuelosShuttle;
+                                                                        // JPT 02/02/10 Validamos este campo para rellenar "FechaHora Parte BI"
+                                                                        // "FechaHora Parte" := "FechaHora Vuelo";
+                                                                        VALIDATE("FechaHora Parte", "FechaHora Vuelo");
+                                                                      END;
+                                                                    END;
+                                                                  END;
+
+                                                                  IF rSer.GET("N§ Servicio") THEN
+                                                                    lwfecha := rSer.Fecha;
+
+                                                                  IF Vuelo <> '' THEN
+                                                                    IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN
+                                                                      formatea_lista_vuelos(Vuelo, "Hora Vuelo", lwfecha);
+
+                                                                  // Actualiza el campo Hora 1er vuelo de la tabla Partes
+
+                                                                  IF "N§ Parte" <> '' THEN
+                                                                  BEGIN
+
+                                                                    IF "N§ Linea" <> 0 THEN
+                                                                      MODIFY(TRUE);
+
+                                                                    IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN BEGIN
+                                                                      Actualiza_Hora1erVuelo_Partes("N§ Parte", '', 0);
+                                                                    END;
+                                                                  END;
+
+                                                                  MantenHoraInicio(FALSE);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Hora Vuelo }
+    { 17  ;   ;Hora recogida       ;Time          ;OnValidate=VAR
+                                                                vHora@1100244000 : Text[8];
+                                                              BEGIN
+                                                                IF "Hora recogida" <> xRec."Hora recogida" THEN
+                                                                  MantenHoraInicio(FALSE);
+                                                              END;
+
+                                                   CaptionML=ESP=Hora recogida }
+    { 19  ;   ;Habitacion          ;Code30        ;OnValidate=BEGIN
+                                                                IF Habitacion <> xRec.Habitacion THEN BEGIN
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Habitacion }
+    { 21  ;   ;Idioma              ;Code10        ;TableRelation=Language;
+                                                   OnValidate=BEGIN
+                                                                IF Idioma <> xRec.Idioma THEN BEGIN
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Idioma;
+                                                   Description=FK Idioma }
+    { 25  ;   ;Observaciones       ;Text250       ;CaptionML=ESP=Observaciones }
+    { 27  ;   ;Vuelo               ;Text150       ;OnValidate=VAR
+                                                                rVuelos@1100244001 : Record 7010400;
+                                                                lwPrimerVuelo@1100244002 : Code[8];
+                                                                lwFecha@1100244003 : Date;
+                                                              BEGIN
+                                                                IF Vuelo <> xRec.Vuelo THEN BEGIN
+                                                                  Vuelo := UPPERCASE(Vuelo);
+
+                                                                  // AJS 27.03.2008
+                                                                  // En los partes de shuttle mantenemos un registro en la tabla de vuelo x parte para la consulta
+                                                                  // diaria de vuelos
+
+                                                                  IF (CurrFieldNo = FIELDNO("Hora Vuelo")) AND
+                                                                     ("Origen creacion" = "Origen creacion"::Shuttle) THEN BEGIN
+                                                                      MantenerVuelosShuttle;
+                                                                  END;
+
+                                                                  IF rSer.GET("N§ Servicio") THEN
+                                                                    lwFecha := rSer.Fecha;
+
+                                                                  IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN
+                                                                    lwPrimerVuelo := formatea_lista_vuelos(Vuelo, "Hora Vuelo", lwFecha);
+
+                                                                  IF lwPrimerVuelo <> '' THEN BEGIN
+                                                                    rVuelos.RESET;
+                                                                    rVuelos.SETRANGE(fecha,Fecha);
+                                                                    IF rVuelos.GET(lwPrimerVuelo,Fecha) THEN BEGIN
+                                                                      VALIDATE("Hora Vuelo", rVuelos.Hora);
+                                                                      // JPT 02/02/10 Datetime a Biginteger
+                                                                      "FechaHora Vuelo" := CREATEDATETIME(Fecha, "Hora Vuelo");
+                                                                      ConvDTBIV; // Rellena "FechaHora Vuelo BI"
+                                                                    END;
+                                                                  END;
+
+                                                                  IATA := insertar_iata (Fecha , Rec, FALSE);
+
+                                                                  IF "N§ Parte" <> '' THEN BEGIN
+                                                                    rParte.GET("N§ Parte");
+                                                                    // AJF 30.01.2008 - DRF 07004
+                                                                    // Los vuelos se actualizan de otra manera para shuttle.
+                                                                    IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN BEGIN
+                                                                      // JPT 01/08/11 Ahora se utiliza ActualizarVuelos2
+                                                                      // actualizar_vuelos(Rec, Vuelo, "Hora Vuelo", rParte);
+                                                                    END;
+                                                                    // AJF fin.
+                                                                  END;
+                                                                END;
+
+                                                                IF Vuelo <> '' THEN BEGIN
+                                                                  // Si no est  asignado a parte comprueba que el campo Vuelos del Servicio est‚ vacio
+                                                                  IF "N§ Parte" = '' THEN BEGIN
+                                                                    CLEAR(rSer);
+                                                                    IF rSer.GET("N§ Servicio") THEN
+                                                                      IF rSer.Vuelos <>'' THEN
+                                                                        ERROR(Text004, "N§ Servicio");
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Vuelo }
+    { 29  ;   ;N§ Parte            ;Code10        ;TableRelation=Parte."N§ Parte";
+                                                   OnValidate=VAR
+                                                                rSupl@1100244000 : Record 7010363;
+                                                              BEGIN
+                                                                IF "N§ Parte" <> xRec."N§ Parte" THEN
+                                                                BEGIN
+                                                                  // Pasamos el n§ de Parte al fichero de Elementos x Punto para facilitar el calculo
+
+                                                                  IF "N§ Linea" <> 0 THEN
+                                                                  BEGIN
+                                                                    rSupl.RESET; rSupl.INIT;
+                                                                    rSupl.SETRANGE("N§ Servicio", "N§ Servicio");
+                                                                    rSupl.SETRANGE("N§ Linea"   , "N§ Linea");
+                                                                    IF rSupl.FINDSET(TRUE) THEN
+                                                                    BEGIN
+                                                                      REPEAT
+                                                                        rSupl."N§ Parte" := "N§ Parte";
+                                                                        rSupl.MODIFY;
+                                                                      UNTIL rSupl.NEXT = 0;
+                                                                    END;
+                                                                  END;
+
+                                                                  IF (rParte.GET("N§ Parte")) AND ("N§ Linea" <> 0) THEN
+                                                                  BEGIN
+                                                                    "Origen creacion" := rParte."Origen creacion";
+                                                                    mantener_touroperador_parte(rParte);
+                                                                  END;
+
+                                                                  // Borra los vuelos x linea
+
+                                                                  IF "N§ Linea" <> 0 THEN
+                                                                  BEGIN
+                                                                    CLEAR(rVuelLin);
+                                                                    rVuelLin.SETCURRENTKEY("N§ Servicio", "N§ Linea");
+                                                                    rVuelLin.SETRANGE(Tipo         , rVuelLin.Tipo::Servicio);
+                                                                    rVuelLin.SETRANGE("N§ Servicio", "N§ Servicio");
+                                                                    rVuelLin.SETRANGE("N§ Linea"   , "N§ Linea");
+                                                                    IF rVuelLin.FINDSET(TRUE) THEN
+                                                                      rVuelLin.DELETEALL;
+                                                                  END;
+
+                                                                  // AJS 27.03.2008
+                                                                  // Hay que recoger la fecha/hora de inicio del parte, si no tiene parte hay que igualar la hora
+                                                                  // con la hora de vuelo
+                                                                  // JPT 02/02/10 Validamos este campo para rellenar "FechaHora Parte BI"
+                                                                  IF "N§ Linea" <> 0 THEN
+                                                                  BEGIN
+                                                                    IF rParte.GET("N§ Parte") THEN
+                                                                    BEGIN
+                                                                      IF Fecha <> 0D THEN
+                                                                        VALIDATE("FechaHora Vuelo", CREATEDATETIME(Fecha, "Hora Vuelo"))
+                                                                      ELSE
+                                                                      BEGIN
+                                                                        Fecha := rParte.Fecha;
+                                                                        VALIDATE("FechaHora Vuelo", CREATEDATETIME(rParte.Fecha, "Hora Vuelo"));
+                                                                      END;
+                                                                      // "FechaHora Parte" := rParte."Hora Inicio DT"
+                                                                      VALIDATE("FechaHora Parte BI" , rParte."Hora Inicio BI")
+                                                                    END
+                                                                    ELSE
+                                                                      // "FechaHora Parte" := "FechaHora Vuelo";
+                                                                      VALIDATE("FechaHora Parte BI" , "FechaHora Vuelo BI");
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=N§ Parte;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Parte;
+                                                   Editable=No }
+    { 31  ;   ;Adultos invitados ingreso;Integer  ;OnValidate=BEGIN
+                                                                IF "Adultos invitados ingreso" <> xRec."Adultos invitados ingreso" THEN BEGIN
+                                                                  IF "Adultos invitados ingreso" > "Adultos transportados" THEN
+                                                                    ERROR(err6);
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Adultos invitados ingreso }
+    { 33  ;   ;Ni¤os invitados ingreso;Integer    ;OnValidate=BEGIN
+                                                                IF "Ni¤os invitados ingreso" <> xRec."Ni¤os invitados ingreso" THEN BEGIN
+                                                                  IF "Ni¤os invitados ingreso" > "Ni¤os transportados" THEN
+                                                                    ERROR(err7);
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Ni¤os invitados ingreso }
+    { 35  ;   ;Adultos invitados coste;Integer    ;OnValidate=BEGIN
+                                                                IF "Adultos invitados coste" <> xRec."Adultos invitados coste" THEN BEGIN
+                                                                  IF "Adultos invitados coste" > "Adultos transportados" THEN
+                                                                    ERROR(err6);
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Adultos invitados coste }
+    { 37  ;   ;Ni¤os invitados coste;Integer      ;OnValidate=BEGIN
+                                                                IF "Ni¤os invitados coste" <> xRec."Ni¤os invitados coste" THEN BEGIN
+                                                                  IF "Ni¤os invitados coste" > "Ni¤os transportados" THEN
+                                                                    ERROR(err7);
+
+                                                                  // AJS 06.04.2005
+                                                                  // Pasar la llamada a esta rutina al OnModify
+                                                                  //IF "N§ Parte" <> '' THEN BEGIN
+                                                                  //  rParte.GET("N§ Parte");
+                                                                  //  mantener_touroperador_parte(rParte);
+                                                                  //END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Ni¤os invitados coste }
+    { 39  ;   ;Zona Venta          ;Code10        ;CaptionML=ESP=Zona Venta;
+                                                   Editable=No }
+    { 41  ;   ;Zona Compra         ;Code10        ;CaptionML=ESP=Zona Compra;
+                                                   Editable=No }
+    { 42  ;   ;Letra               ;Code10        ;CaptionML=ESP=Letra }
+    { 44  ;   ;Fecha               ;Date          ;OnValidate=VAR
+                                                                rParte@1100244000 : Record 7010360;
+                                                              BEGIN
+                                                                // Si se cambia la fecha, se actualizan los vuelos de la tabla TemporalVuelos
+                                                                IF (Vuelo <>'') AND ("Hora Vuelo"<>0T) THEN
+                                                                BEGIN
+                                                                  IF rParte.GET("N§ Parte") THEN;
+                                                                    IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN
+                                                                      formatea_lista_vuelos(Vuelo, "Hora Vuelo", Fecha);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha;
+                                                   Editable=No }
+    { 45  ;   ;Tipo Servicio       ;Code10        ;TableRelation="Tipo Servicio".Codigo;
+                                                   OnValidate=BEGIN
+                                                                // JPT- 25/02/04 A partir de ahora la zona de trabajo puede Tipo servicio fijo
+
+                                                                CLEAR(rParte);
+                                                                IF rParte.GET("N§ Parte") THEN;
+
+                                                                ultima_zona_fisica(rParte, FALSE, TRUE);
+                                                              END;
+
+                                                   CaptionML=ESP=Tipo Servicio;
+                                                   Description=FK Tipo servicio;
+                                                   Editable=No }
+    { 46  ;   ;Codigo Servicio     ;Code10        ;TableRelation="Codigo servicio".Codigo;
+                                                   CaptionML=ESP=Codigo Servicio;
+                                                   Description=FK Codigo servicio;
+                                                   Editable=No }
+    { 49  ;   ;Orden Hotel en zona ;Integer       ;CaptionML=ESP=Orden Hotel en zona;
+                                                   Editable=No }
+    { 50  ;   ;IATA                ;Code60        ;OnValidate=VAR
+                                                                lwIata2@1100244000 : Code[60];
+                                                                lw_posicion@1100244001 : Integer;
+                                                                lwCar@1100244002 : Char;
+                                                                lwFecha@1100244003 : Date;
+                                                              BEGIN
+                                                                // Es un campo que puede tener varios codigos concatenados, elimina los espacios en blanco
+
+
+                                                                {*-------- JPT 21/06/01. Comentamos esta rutina para que el usuario pueda introducir espacios en blanco
+                                                                FOR lw_posicion := 1 TO STRLEN (IATA) DO BEGIN
+                                                                  lwCar :=IATA[lw_posicion];
+                                                                  IF lwCar <>' '  THEN
+                                                                    lwIata2 := lwIata2 + FORMAT (lwCar,0);
+                                                                END;
+                                                                IATA := lwIata2;
+                                                                ---------------------- fin JPT*}
+
+
+
+                                                                IF "N§ Parte" <> '' THEN BEGIN
+                                                                  rParte.GET("N§ Parte");
+                                                                  // AJF 30.01.2008 - DRF 07004
+                                                                  // Los vuelos se actualizan de otra manera para shuttle.
+                                                                  IF (rParte."Origen creacion" <> rParte."Origen creacion"::Shuttle) THEN BEGIN
+                                                                    // JPT 01/08/11 Ahora se utiliza ActualizarVuelos2
+                                                                    // actualizar_vuelos(Rec, Vuelo, "Hora Vuelo", rParte);
+                                                                  END;
+                                                                  // AJF fin.
+                                                                END;
+
+                                                                  IF rSer.GET("N§ Servicio") THEN
+                                                                    lwFecha := rSer.Fecha;
+
+                                                                IATA := insertar_iata (Fecha , Rec, TRUE);
+                                                              END;
+
+                                                   CaptionML=ESP=IATA }
+    { 51  ;   ;Permite Borrar      ;Boolean       ;CaptionML=ESP=Permite Borrar;
+                                                   Description=UEX - Permite borrar sin borrar anotaciones en el historico ni mensajes al usuario }
+    { 52  ;   ;Lugar Recogida      ;Code10        ;CaptionML=ESP=Lugar Recogida }
+    { 53  ;   ;Orden zona          ;Integer       ;CaptionML=ESP=Orden zona;
+                                                   Editable=No }
+    { 56  ;   ;Linea Manual        ;Boolean       ;CaptionML=ESP=Linea Manual }
+    { 57  ;   ;Vehiculo            ;Code10        ;CaptionML=ESP=Vehiculo;
+                                                   Description=Referencia para grupos / Servicios Repetitivos }
+    { 60  ;   ;Imprimir Documento Descriptivo;Boolean;
+                                                   OnValidate=VAR
+                                                                lrPunto@1100253000 : Record 7010315;
+                                                              BEGIN
+                                                                IF "Imprimir Documento Descriptivo" THEN BEGIN
+                                                                  TESTFIELD("Punto recogida");
+                                                                  IF lrPunto.GET("Punto recogida") THEN
+                                                                    IF lrPunto."Documento Descriptivo"='' THEN
+                                                                      ERROR(Text003, lrPunto.Codigo);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Imprimir Documento Descriptivo }
+    { 80  ;   ;Suplemento Rapido 1 ;Decimal       ;OnValidate=BEGIN
+                                                                MantenSuplementoRapido(1, "Suplemento Rapido 1");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              LoocUpSuplementoRapido(1);
+                                                            END;
+
+                                                   CaptionML=ESP=Suplemento Rapido 1;
+                                                   DecimalPlaces=0:2;
+                                                   Description=Referencia rapida a suplementos;
+                                                   CaptionClass='50,1' }
+    { 81  ;   ;Suplemento Rapido 2 ;Decimal       ;OnValidate=BEGIN
+                                                                MantenSuplementoRapido(2, "Suplemento Rapido 2");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              LoocUpSuplementoRapido(2);
+                                                            END;
+
+                                                   CaptionML=ESP=Suplemento Rapido 2;
+                                                   DecimalPlaces=0:2;
+                                                   Description=Referencia rapida a suplementos;
+                                                   CaptionClass='50,2' }
+    { 90  ;   ;Nombre Cliente      ;Text150       ;CaptionML=ESP=Nombre Cliente;
+                                                   Description=TERRAMAR + SHUTTLE }
+    { 91  ;   ;Reserva             ;Code30        ;CaptionML=ESP=Reserva;
+                                                   Description=TERRAMAR + SHUTTLE }
+    { 189 ;   ;FechaHora Vuelo BI  ;BigInteger    ;OnValidate=BEGIN
+                                                                "FechaHora Vuelo" := cFunBas.BIGINTtoDT("FechaHora Vuelo BI");
+                                                              END;
+                                                               }
+    { 190 ;   ;Origen creacion     ;Option        ;CaptionML=ESP=Origen creacion;
+                                                   OptionCaptionML=ESP=Manual,Importacion,Grupos,Servicios Regulares,Shuttle;
+                                                   OptionString=Manual,Importacion,Grupos,Servicios Regulares,Shuttle;
+                                                   Description=Indica el Origen en la creacion del Parte;
+                                                   Editable=No }
+    { 191 ;   ;FechaHora Vuelo     ;DateTime      ;OnValidate=BEGIN
+                                                                // AJS 27.03.2008
+                                                                // Si la linea no esta asignada a un parte hay que pasar el valor de este campo al campo FechaHora Parte
+
+                                                                IF NOT rParte.GET("N§ Parte") THEN
+                                                                  VALIDATE("FechaHora Parte", "FechaHora Vuelo");
+
+                                                                ConvDTBIV;
+                                                              END;
+
+                                                   CaptionML=ESP=FechaHora Vuelo;
+                                                   Description=Fecha + Hora Vuelo }
+    { 192 ;   ;Zona Trabajo        ;Code10        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Zona fisica transfer"."Zona trabajo" WHERE (Codigo=FIELD(Zona fisica)));
+                                                   CaptionML=ESP=Zona Trabajo;
+                                                   Description=Lookup("Zona fisica"."Zona trabajo" WHERE (Codigo=FIELD(Zona fisica)));
+                                                   Editable=No }
+    { 193 ;   ;Num vehiculo        ;Code10        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Parte."N§ Vehiculo" WHERE (N§ Parte=FIELD(N§ Parte)));
+                                                   CaptionML=ESP=Num vehiculo;
+                                                   Description=Lookup(Parte."N§ Vehiculo" WHERE (N§ Parte=FIELD(N§ Parte)));
+                                                   Editable=No }
+    { 194 ;   ;Confirmada          ;Boolean       ;OnValidate=BEGIN
+                                                                InsertaHist(FIELDCAPTION(Confirmada), FORMAT(xRec.Confirmada), FORMAT(Confirmada));
+                                                              END;
+
+                                                   CaptionML=ESP=Confirmada;
+                                                   Description=SHUTTLE, Indica si la reserva esta confirmada }
+    { 195 ;   ;FechaHora Parte     ;DateTime      ;OnValidate=BEGIN
+                                                                "FechaHora Parte BI" := cFunBas.DTtoBIGINT("FechaHora Parte");
+                                                              END;
+
+                                                   CaptionML=ESP=FechaHora Parte;
+                                                   Description=Fecha + Hora inicio parte }
+    { 196 ;   ;Cobrado             ;Boolean       ;OnValidate=BEGIN
+                                                                InsertaHist(FIELDCAPTION(Cobrado), FORMAT(xRec.Cobrado), FORMAT(Cobrado));
+                                                              END;
+
+                                                   CaptionML=ESP=Cobrado;
+                                                   Description=SHUTTLE, Indica si se ha cobrado la reserva }
+    { 197 ;   ;Importe             ;Decimal       ;CaptionML=ESP=Importe;
+                                                   Description=SHUTTLE, indica la cantidad que se ha cobrado }
+    { 198 ;   ;Plaza Parking       ;Code10        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Parte."Plaza Parking" WHERE (N§ Parte=FIELD(N§ Parte)));
+                                                   CaptionML=ESP=Plaza Parking }
+    { 199 ;   ;Shuttle Time        ;Time          ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Parte."Shuttle Time" WHERE (N§ Parte=FIELD(N§ Parte)));
+                                                   CaptionML=ESP=Shuttle Time }
+    { 200 ;   ;Marca               ;Code20        ;CaptionML=ESP=Marca;
+                                                   Description=Marca para seleccionar lineas en SHUTTLE (Sobre nombre de usuario) }
+    { 205 ;   ;FechaHora Parte BI  ;BigInteger    ;OnValidate=BEGIN
+                                                                "FechaHora Parte" := cFunBas.BIGINTtoDT("FechaHora Parte BI");
+                                                              END;
+                                                               }
+  }
+  KEYS
+  {
+    {    ;N§ Servicio,N§ Linea                    ;SumIndexFields=Adultos transportados,Ni¤os transportados;
+                                                   Clustered=Yes }
+    {    ;N§ Parte,Punto recogida,Hora recogida   ;SumIndexFields=Adultos transportados,Ni¤os transportados;
+                                                   SIFTLevelsToMaintain=[{N§ Parte},
+                                                                         {N§ Parte,Punto recogida},
+                                                                         {N§ Parte,Punto recogida,Hora recogida}] }
+    {    ;N§ Parte,Touroperador,Hora recogida     ;SumIndexFields=Adultos transportados,Ni¤os transportados;
+                                                   SIFTLevelsToMaintain=[{N§ Parte},
+                                                                         {N§ Parte,Touroperador},
+                                                                         {N§ Parte,Touroperador,Hora recogida}] }
+    {    ;Fecha,Touroperador,Tipo Servicio,Codigo Servicio,N§ Parte;
+                                                   SumIndexFields=Adultos transportados,Ni¤os transportados;
+                                                   SIFTLevelsToMaintain=[{Fecha:Day},
+                                                                         {Fecha:Day,Touroperador},
+                                                                         {Fecha:Day,Touroperador,Tipo Servicio},
+                                                                         {Fecha:Day,Touroperador,Tipo Servicio,Codigo Servicio},
+                                                                         {Fecha:Day,Touroperador,Tipo Servicio,Codigo Servicio,N§ Parte}] }
+    {    ;N§ Parte,Orden Hotel en zona             }
+    {    ;N§ Parte,Hora Vuelo,Orden Hotel en zona  }
+    {    ;N§ Parte,Hora recogida,Letra             }
+    {    ;Hora Vuelo,Fecha                         }
+    { No ;N§ Parte,Touroperador,Hora Vuelo         }
+    {    ;N§ Parte,Orden zona                      }
+    {    ;N§ Parte,Hora recogida,Orden zona,Orden Hotel en zona }
+    {    ;N§ Parte,N§ Linea                        }
+    {    ;N§ Parte,Linea Manual                    }
+    { No ;N§ Servicio,Hora recogida,Orden zona,Orden Hotel en zona }
+    {    ;Vehiculo                                 }
+    { No ;FechaHora Parte,FechaHora Vuelo,N§ Parte,Origen creacion }
+    {    ;Reserva                                 ;MaintainSQLIndex=No;
+                                                   MaintainSIFTIndex=No }
+    {    ;Marca                                    }
+    {    ;FechaHora Parte BI,FechaHora Vuelo BI,N§ Parte,Origen creacion }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355013 : TextConst 'ESP=SHU_DES';
+      Text50003@1103355014 : TextConst 'ESP=SHU';
+      Text50004@1103355015 : TextConst 'ESP=<Year><Month,2><Day,2>';
+      Text50005@1103355016 : TextConst 'ESP=<-1D>';
+      Text50006@1103355017 : TextConst 'ESP=<+1D>';
+      Text000@1100244027 : TextConst 'ESP=1 - Servicios - Parte';
+      rUsr@1103355004 : Record 7010420;
+      rTipSer@1100244028 : Record 7010319;
+      rCodSer@1100244001 : Record 7010320;
+      rPto@1100244002 : Record 7010315;
+      err1@1100244003 : TextConst 'ESP=El punto de recogida %1 no puede tener la zona fisica en blanco.';
+      rSer@1100244004 : Record 7010358;
+      rCliTO@1100244005 : Record 7010313;
+      err2@1100244006 : TextConst 'ESP=No se pueden indicar adultos negativos.';
+      err3@1100244007 : TextConst 'ESP=No se pueden indicar ni¤os negativos.';
+      rParte@1100244008 : Record 7010360;
+      err4@1100244009 : TextConst 'ESP=No se puede modificar este punto de recogida porque el parte asociado esta confirmado.';
+      err5@1100244010 : TextConst 'ESP=No se puede borrar este punto de recogida porque el parte asociado esta confirmado.';
+      rHist@1100244011 : Record 7010361;
+      rElePto@1100244012 : Record 7010363;
+      rSerPar@1100244029 : Record 7010359;
+      rPar@1100244030 : Record 7010311;
+      rVuelLin@1103355000 : Record 7035397;
+      cCalcR@1100253000 : Codeunit 7010407;
+      cFunAd@1100253003 : Codeunit 7010410;
+      cFShuttle@1103355001 : Codeunit 7010412;
+      cFunP@1103355012 : Codeunit 7010318;
+      cFunBas@1103355018 : Codeunit 7010310;
+      w_alta@1100244013 : Boolean;
+      w_baja@1100244014 : Boolean;
+      err6@1100244015 : TextConst 'ESP="No se pueden indicar mas adultos invitados de los realmente transportados "';
+      err7@1100244016 : TextConst 'ESP="No se pueden indicar mas ni¤os invitados de los realmente transportados "';
+      confirma1@1100244017 : TextConst 'ESP=Desea que esta modificacion afecte a los paxes previstos del parte al que estaban asignados';
+      confirma2@1100244018 : TextConst 'ESP=Desea que esta modificacion afecte a los paxes previstos del parte';
+      w_a¤adir@1100244019 : Boolean;
+      err8@1100244020 : TextConst 'ESP=No puede haber m s codigos IATA que vuelos';
+      err9@1100244021 : TextConst 'ESP=No es posible borrar ni desasignar la £ltima l¡nea de un parte. Elimine previamente el Parte de Trabajo';
+      err10@1100244022 : TextConst 'ESP=No se pueden a¤adir l¡neas a un parte confirmado';
+      err12@1100244023 : TextConst 'ESP=No existe la composicion formada por el cliente %1 y touroperador %2.';
+      Text00001@1100244026 : TextConst 'ESP="Se han encontrado varias l¡neas con el mismo Punto de recogida %1, Se Marcaran todas con el mismo status Bloqueado %2 "';
+      Text00002@1100244031 : TextConst 'ESP=Indique punto de recogida en  la linea antes de indicar el pasaje.';
+      Text001@1103350000 : TextConst 'ESP=Linea borrada';
+      Text002@1103350001 : TextConst 'ESP=Hotel %1, Adultos %2, Ni¤os %3';
+      wHoraTemp@1103350002 : Time;
+      Text003@1100253001 : TextConst 'ESP=El Punto de Recogida %1 No tiene archivo Documento Descriptivo relacionado';
+      Text004@1100253002 : TextConst 'ESP=El Campo Vuelos del Servicio %1 est  rellenado';
+      Text005@1103355002 : TextConst 'ESP=Esto modificar  la fecha del parte ¨Desea Continuar?';
+      Text006@1103355003 : TextConst 'ESP=Operacion detenida.';
+      Text007@1103355005 : TextConst 'ESP=Linea Insertada';
+      Text008@1103355006 : TextConst 'ESP=DESASIGNACION';
+      Text009@1103355007 : TextConst 'ESP=HotelAnt: %1';
+      Text010@1103355008 : TextConst 'ESP=" HotelNuevo: %1"';
+      Text011@1103355009 : TextConst 'ESP=Al asignar el hotel %1 a la reserva esta va a cambiar de la zona de trabajo %2 a %3. ¨Desea Desasignar la reserva del parte?';
+      Text012@1103355010 : TextConst 'ESP=No existe una linea de recogida equivalente en el parte de recogida de este parte. ¨Desea crear la l¡nea?';
+      Text013@1103355011 : TextConst 'ESP=¨Desea modificar tambi‚n la l¡nea de recogida equivalente?';
+
+    PROCEDURE mantener_touroperador_parte@3(VAR prParte@1100244001 : Record 7010360);
+    VAR
+      rToPar@1100244000 : Record 7010365;
+      lrParte@1103355000 : Record 7010360;
+    BEGIN
+      // mantener_touroperador_parte
+      //
+      // AJS 18.06.2004
+      // Es necesario pasar el registro del parte porque sino los cambios de cliente del parte no se reflejan bien
+
+      IF w_alta THEN BEGIN
+        tratar_alta(FALSE, prParte);
+        actualizar_viajes(prParte);
+        EXIT;
+      END;
+      IF w_baja THEN BEGIN
+        tratar_baja(xRec."N§ Parte", prParte);
+        IF lrParte.GET(xRec."N§ Parte") THEN
+          actualizar_viajes(lrParte);
+        EXIT;
+      END;
+      IF w_a¤adir THEN BEGIN
+        tratar_a¤adir(prParte);
+        actualizar_viajes(prParte);
+        EXIT;
+      END;
+
+      tratar_cambio(prParte);
+
+      //Actualizar el campo n§ Viajes. Obtendremos la informaci¢n del parte.
+      actualizar_viajes(prParte);
+    END;
+
+    PROCEDURE es_alta@1(pw_alta@1100244000 : Boolean);
+    BEGIN
+      // es_alta
+      //
+      // AJS --> Pasamos un parametro al postproceso para saber en "mantener_touroperador_parte" si se
+      //         trata de una nueva linea en el parte o es la modificacion de una que ya existe.
+      //
+      w_alta := pw_alta;
+    END;
+
+    PROCEDURE es_baja@2(pw_baja@1100244000 : Boolean);
+    BEGIN
+      // es_baja
+      //
+      // AJS --> Pasamos un parametro al postproceso para saber en "mantener_touroperador_parte" si se
+      //         trata de sacar una linea del parte.
+      //
+      w_baja := pw_baja;
+    END;
+
+    PROCEDURE es_a¤adir@4(pw_a¤adir@1100244000 : Boolean);
+    BEGIN
+      // es_a¤adir
+      //
+      // AJS --> Pasamos un parametro al postproceso para saber en "mantener_touroperador_parte" si se
+      //         trata de a¤adir una linea del parte.
+      //
+      w_a¤adir := pw_a¤adir;
+    END;
+
+    PROCEDURE tratar_alta@9(pwes_a¤adir@1100244000 : Boolean;VAR prParte@1100244004 : Record 7010360);
+    VAR
+      rToPar@1100244001 : Record 7010365;
+      lr_Param@1100244002 : Record 7010311;
+      lw_ControlPaxes@1100244003 : Boolean;
+    BEGIN
+      // tratar_alta
+      //
+      // AJS --> Mantener los campos de paxes de los ficheros de partes y touroperadores en caso de
+      //         alta de un parte.
+      //
+
+      {* ----  ELIMINADO AJS 22.01.2002
+      rParte."Adultos trans. soporte" := rParte."Adultos trans. soporte" + "Adultos transportados";
+      rParte."Ni¤os trans. soporte"   := rParte."Ni¤os trans. soporte" + "Ni¤os transportados";
+      *}
+
+      IF pwes_a¤adir THEN BEGIN
+        lw_ControlPaxes:=TRUE;
+        //-$005IF lr_Param.FINDFIRST THEN
+        //-$005  IF lr_Param."Control Paxes Previstos" THEN
+        //-$005    lw_ControlPaxes := CONFIRM(confirma2);
+        IF lw_ControlPaxes THEN BEGIN
+          prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+          prParte.VALIDATE("Paxes Previstos", prParte."Adultos transportados" +
+                                              prParte."Ni¤os transportados" +
+                                              "Adultos transportados" + "Ni¤os transportados");
+        END;
+      END
+      ELSE BEGIN
+        prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+        prParte.VALIDATE("Paxes Previstos", prParte."Adultos transportados" +
+                                            prParte."Ni¤os transportados" +
+                                            "Adultos transportados" + "Ni¤os transportados");
+      END;
+      prParte.MODIFY;
+
+      IF (Touroperador <> '') AND ("N§ Parte" <> '') THEN BEGIN
+        IF NOT rToPar.GET("N§ Parte", Touroperador) THEN BEGIN
+          rToPar.RESET; rToPar.INIT;
+          rToPar."N§ Parte"   := "N§ Parte";
+          rToPar."Cliente operativo"   := prParte.Cliente;
+          rToPar."Cliente estadistico" := prParte.GetClienteEstadistico(Touroperador);
+          rToPar.VALIDATE(Touroperador, Touroperador);
+          rToPar.INSERT(TRUE);
+        END;
+        IF prParte."Origen creacion" = prParte."Origen creacion"::"Recogida Automatica" THEN BEGIN
+          rToPar."Adultos transportados"     := 0;
+          rToPar."Ni¤os transportados"       := 0;
+          rToPar."Adultos invitados ingreso" := 0;
+          rToPar."Ni¤os invitados ingreso"   := 0;
+          rToPar."Adultos invitados coste"   := 0;
+          rToPar."Ni¤os invitados coste"     := 0;
+          rToPar."Pax Transportados"         := 0;
+        END
+        ELSE BEGIN
+          rToPar.VALIDATE("Adultos transportados"    , rToPar."Adultos transportados" +
+                                                       "Adultos transportados");
+          rToPar.VALIDATE("Ni¤os transportados"      , rToPar."Ni¤os transportados" +
+                                                       "Ni¤os transportados");
+          rToPar.VALIDATE("Adultos invitados ingreso", rToPar."Adultos invitados ingreso" +
+                                                       "Adultos invitados ingreso");
+          rToPar.VALIDATE("Ni¤os invitados ingreso"  , rToPar."Ni¤os invitados ingreso" +
+                                                       "Ni¤os invitados ingreso");
+          rToPar.VALIDATE("Adultos invitados coste"  , rToPar."Adultos invitados coste" +
+                                                       "Adultos invitados coste");
+          rToPar.VALIDATE("Ni¤os invitados coste"    , rToPar."Ni¤os invitados coste" +
+                                                       "Ni¤os invitados coste");
+
+          rToPar.VALIDATE("Pax Transportados", rToPar."Adultos transportados" +
+                                             rToPar."Ni¤os transportados");
+        END;
+        rToPar.VALIDATE("Tipo Vehiculo"   ,  prParte."Tipo Vehiculo facturacion");
+        rToPar.VALIDATE(Bono              ,  rParte.Bono);
+        rToPar.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE tratar_baja@14(pw_parte@1100244000 : Code[10];VAR prParte@1100244004 : Record 7010360);
+    VAR
+      rToPar@1100244001 : Record 7010365;
+      lw_ControlPaxes@1100244002 : Boolean;
+      lr_Param@1100244003 : Record 7010311;
+    BEGIN
+      // tratar_baja
+      //
+      // AJS --> Mantener los campos de paxes de los ficheros de partes y touroperadores en caso de
+      //         baja de un parte.
+      //
+
+      {* ----  ELIMINADO AJS 22.01.2002
+      rParte."Adultos trans. soporte" := rParte."Adultos trans. soporte" - "Adultos transportados";
+      rParte."Ni¤os trans. soporte"   := rParte."Ni¤os trans. soporte" - "Ni¤os transportados";
+      *}
+
+      lw_ControlPaxes:=TRUE;
+      //-$005IF lr_Param.FINDFIRST THEN
+      //-$005  IF lr_Param."Control Paxes Previstos" THEN
+      //-$005    lw_ControlPaxes := CONFIRM(confirma1);
+      IF lw_ControlPaxes THEN BEGIN
+        prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+        prParte.VALIDATE("Paxes Previstos", prParte."Adultos transportados" +
+                                            prParte."Ni¤os transportados" -
+                                            "Adultos transportados" - "Ni¤os transportados");
+      END;
+      prParte.MODIFY;
+
+      IF (Touroperador <> '') AND ("N§ Parte" <> '') THEN BEGIN
+        IF NOT rToPar.GET("N§ Parte", Touroperador) THEN BEGIN
+          rToPar.RESET; rToPar.INIT;
+          rToPar."N§ Parte"   := "N§ Parte";
+          rToPar."Cliente operativo"   := prParte.Cliente;
+          rToPar."Cliente estadistico" := prParte.GetClienteEstadistico(Touroperador);
+          rToPar.VALIDATE(Touroperador, Touroperador);
+          rToPar.INSERT(TRUE);
+        END;
+        IF prParte."Origen creacion" = prParte."Origen creacion"::"Recogida Automatica" THEN BEGIN
+          rToPar."Adultos transportados"     := 0;
+          rToPar."Ni¤os transportados"       := 0;
+          rToPar."Adultos invitados ingreso" := 0;
+          rToPar."Ni¤os invitados ingreso"   := 0;
+          rToPar."Adultos invitados coste"   := 0;
+          rToPar."Ni¤os invitados coste"     := 0;
+          rToPar."Pax Transportados"         := 0;
+        END
+        ELSE BEGIN
+          rToPar.VALIDATE("Adultos transportados"    , rToPar."Adultos transportados" -
+                                                     "Adultos transportados");
+          rToPar.VALIDATE("Ni¤os transportados"      , rToPar."Ni¤os transportados" -
+                                                     "Ni¤os transportados");
+          rToPar.VALIDATE("Adultos invitados ingreso", rToPar."Adultos invitados ingreso" -
+                                                     "Adultos invitados ingreso");
+          rToPar.VALIDATE("Ni¤os invitados ingreso"  , rToPar."Ni¤os invitados ingreso" -
+                                                     "Ni¤os invitados ingreso");
+          rToPar.VALIDATE("Adultos invitados coste"  , rToPar."Adultos invitados coste" -
+                                                     "Adultos invitados coste");
+          rToPar.VALIDATE("Ni¤os invitados coste"    , rToPar."Ni¤os invitados coste" -
+                                                     "Ni¤os invitados coste");
+          rToPar.VALIDATE("Pax Transportados",  rToPar."Adultos transportados" +
+                                             rToPar."Ni¤os transportados");
+        END;
+        rToPar.MODIFY(TRUE);
+        BorrarVacios (rToPar);
+      END;
+    END;
+
+    PROCEDURE tratar_a¤adir@21(VAR prParte@1100244000 : Record 7010360);
+    BEGIN
+      // tratar_a¤adir
+      //
+      // AJS --> Mantener los campos de paxes de los ficheros de partes y touroperadores en caso de
+      //         a¤adir a un parte.
+      //
+      IF xRec."N§ Parte" <> '' THEN
+        tratar_baja(xRec."N§ Parte", prParte);
+      tratar_alta(TRUE, prParte);
+    END;
+
+    PROCEDURE tratar_cambio@6(VAR prParte@1100244004 : Record 7010360);
+    VAR
+      rToPar@1100244000 : Record 7010365;
+      w_condicion@1100244001 : Boolean;
+      lw_ControlPaxes@1100244002 : Boolean;
+      lr_Param@1100244003 : Record 7010311;
+    BEGIN
+      // tratar_cambio
+      //
+      // AJS --> Mantener los campos de paxes de los ficheros de partes y touroperadores en caso de
+      //         cambio en una linea del parte parte.
+      //
+
+      // AJS 06.02.2004
+
+      w_condicion := ( ("Adultos transportados" <> xRec."Adultos transportados") OR
+                       ("Ni¤os transportados" <> xRec."Ni¤os transportados") ) AND (xRec."N§ Servicio" <> '');
+
+      IF w_condicion THEN BEGIN
+        lw_ControlPaxes := TRUE;
+        //-$005IF lr_Param.FINDFIRST THEN
+        //-$005  // JPT 24/06/03 Utilizamos el campo permite borrar para No dar el mensaje en las importaciones TUI.Invisa
+        //-$005  IF lr_Param."Control Paxes Previstos" AND (NOT "Permite Borrar") THEN
+        //-$005    lw_ControlPaxes := CONFIRM(confirma2);
+        IF lw_ControlPaxes THEN BEGIN
+          prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+          prParte.VALIDATE("Paxes Previstos", prParte."Adultos transportados" +
+                                              prParte."Ni¤os transportados" +
+                                              ("Adultos transportados" -
+                                              xRec."Adultos transportados") +
+                                              ("Ni¤os transportados" -
+                                              xRec."Ni¤os transportados"));
+          prParte.MODIFY;
+        END;
+      END;
+
+      IF Touroperador <> xRec.Touroperador THEN BEGIN
+        IF (Touroperador <> '') AND ("N§ Parte" <> '') THEN BEGIN
+          IF NOT rToPar.GET("N§ Parte", Touroperador) THEN BEGIN
+            rToPar.RESET; rToPar.INIT;
+            rToPar."N§ Parte"   := "N§ Parte";
+            rToPar."Cliente operativo"      := prParte.Cliente;
+            rToPar."Cliente estadistico" := prParte.GetClienteEstadistico(Touroperador);
+            rToPar.VALIDATE(Touroperador, Touroperador);
+            rToPar.INSERT(TRUE);
+          END;
+          // Para las recogidas automÿticas dejamos los paxes a 0.
+          IF (prParte."Origen creacion" = prParte."Origen creacion"::"Recogida Automatica") THEN BEGIN
+            rToPar."Adultos transportados"     := 0;
+            rToPar."Ni¤os transportados"       := 0;
+            rToPar."Adultos invitados ingreso" := 0;
+            rToPar."Ni¤os invitados ingreso"   := 0;
+            rToPar."Adultos invitados coste"   := 0;
+            rToPar."Ni¤os invitados coste"     := 0;
+            rToPar."Pax Transportados"         := 0;
+          END
+          ELSE BEGIN
+
+            rToPar.VALIDATE("Adultos transportados"    , rToPar."Adultos transportados" +
+                                                       "Adultos transportados");
+            rToPar.VALIDATE("Ni¤os transportados"      , rToPar."Ni¤os transportados" +
+                                                       "Ni¤os transportados");
+            rToPar.VALIDATE("Adultos invitados ingreso", rToPar."Adultos invitados ingreso" +
+                                                       "Adultos invitados ingreso");
+            rToPar.VALIDATE("Ni¤os invitados ingreso"  , rToPar."Ni¤os invitados ingreso" +
+                                                       "Ni¤os invitados ingreso");
+            rToPar.VALIDATE("Adultos invitados coste"  , rToPar."Adultos invitados coste" +
+                                                       "Adultos invitados coste");
+            rToPar.VALIDATE("Ni¤os invitados coste"    , rToPar."Ni¤os invitados coste" +
+                                                       "Ni¤os invitados coste");
+
+            rToPar.VALIDATE("Pax Transportados", rToPar."Adultos transportados" +
+                                              rToPar."Ni¤os transportados");
+          END;
+          rToPar.Vehiculo    := prParte.Vehiculo;
+          rToPar.MODIFY(TRUE);
+        END;
+        {*************************************}
+        {* Sacamos del touroperador anterior *}
+        {*************************************}
+        IF xRec.Touroperador <> '' THEN BEGIN
+          IF NOT rToPar.GET("N§ Parte", xRec.Touroperador) THEN BEGIN
+            rToPar.RESET; rToPar.INIT;
+            rToPar."N§ Parte"   := "N§ Parte";
+            rToPar."Cliente operativo"      := prParte.Cliente;
+            rToPar."Cliente estadistico" := prParte.GetClienteEstadistico(Touroperador);
+            rToPar.VALIDATE(Touroperador, xRec.Touroperador);
+            rToPar.INSERT(TRUE);
+          END;
+          // Para las recogidas automÿticas dejamos los paxes a 0.
+          IF (prParte."Origen creacion" = prParte."Origen creacion"::"Recogida Automatica") THEN BEGIN
+            rToPar."Adultos transportados"     := 0;
+            rToPar."Ni¤os transportados"       := 0;
+            rToPar."Adultos invitados ingreso" := 0;
+            rToPar."Ni¤os invitados ingreso"   := 0;
+            rToPar."Adultos invitados coste"   := 0;
+            rToPar."Ni¤os invitados coste"     := 0;
+            rToPar."Pax Transportados"         := 0;
+          END
+          ELSE BEGIN
+
+            rToPar.VALIDATE("Adultos transportados"    , rToPar."Adultos transportados" -
+                                                       xRec."Adultos transportados");
+            rToPar.VALIDATE("Ni¤os transportados"      , rToPar."Ni¤os transportados" -
+                                                       xRec."Ni¤os transportados");
+            rToPar.VALIDATE("Adultos invitados ingreso", rToPar."Adultos invitados ingreso" -
+                                                       xRec."Adultos invitados ingreso");
+            rToPar.VALIDATE("Ni¤os invitados ingreso"  , rToPar."Ni¤os invitados ingreso" -
+                                                       xRec."Ni¤os invitados ingreso");
+            rToPar.VALIDATE("Adultos invitados coste"  , rToPar."Adultos invitados coste" -
+                                                       xRec."Adultos invitados coste");
+            rToPar.VALIDATE("Ni¤os invitados coste"    , rToPar."Ni¤os invitados coste" -
+                                                       xRec."Ni¤os invitados coste");
+            rToPar.VALIDATE("Pax Transportados", rToPar."Adultos transportados" +
+                                              rToPar."Ni¤os transportados");
+          END;
+          rToPar.MODIFY(TRUE);
+          BorrarVacios (rToPar);
+        END;
+      END
+      ELSE BEGIN
+        IF (Touroperador <> '') AND ("N§ Parte" <> '') THEN BEGIN
+          IF NOT rToPar.GET("N§ Parte", Touroperador) THEN BEGIN
+            rToPar.RESET; rToPar.INIT;
+            rToPar."N§ Parte"   := "N§ Parte";
+            rToPar."Cliente operativo"      := prParte.Cliente;
+            rToPar."Cliente estadistico" := prParte.GetClienteEstadistico(Touroperador);
+            rToPar.VALIDATE(Touroperador, Touroperador);
+            rToPar.INSERT(TRUE);
+          END;
+          // Para las recogidas automÿticas dejamos los paxes a 0.
+          IF (prParte."Origen creacion" = prParte."Origen creacion"::"Recogida Automatica") THEN BEGIN
+            rToPar."Adultos transportados"     := 0;
+            rToPar."Ni¤os transportados"       := 0;
+            rToPar."Adultos invitados ingreso" := 0;
+            rToPar."Ni¤os invitados ingreso"   := 0;
+            rToPar."Adultos invitados coste"   := 0;
+            rToPar."Ni¤os invitados coste"     := 0;
+            rToPar."Pax Transportados"         := 0;
+          END
+          ELSE BEGIN
+            rToPar.VALIDATE("Adultos transportados"    , rToPar."Adultos transportados" +
+                                                       ("Adultos transportados" -
+                                                        xRec."Adultos transportados"));
+            rToPar.VALIDATE("Ni¤os transportados"      , rToPar."Ni¤os transportados" +
+                                                       ("Ni¤os transportados" -
+                                                        xRec."Ni¤os transportados"));
+            rToPar.VALIDATE("Adultos invitados ingreso", rToPar."Adultos invitados ingreso" +
+                                                       ("Adultos invitados ingreso" -
+                                                        xRec."Adultos invitados ingreso"));
+            rToPar.VALIDATE("Ni¤os invitados ingreso"  , rToPar."Ni¤os invitados ingreso" +
+                                                       ("Ni¤os invitados ingreso" -
+                                                        xRec."Ni¤os invitados ingreso"));
+            rToPar.VALIDATE("Adultos invitados coste"  , rToPar."Adultos invitados coste" +
+                                                       ("Adultos invitados coste" -
+                                                        xRec."Adultos invitados coste"));
+            rToPar.VALIDATE("Ni¤os invitados coste"    , rToPar."Ni¤os invitados coste" +
+                                                       ("Ni¤os invitados coste" -
+                                                        xRec."Ni¤os invitados coste"));
+            rToPar.VALIDATE("Pax Transportados", rToPar."Adultos transportados" +
+                                              rToPar."Ni¤os transportados");
+          END;
+          rToPar.Vehiculo    := prParte.Vehiculo;
+          rToPar.MODIFY(TRUE);
+          BorrarVacios (rToPar);
+        END;
+      END;
+    END;
+
+    PROCEDURE actualizar_vuelos@7(rRegis@1100244000 : Record 7010359;pVuelo@1100244001 : Text[150];pHoraVuelo@1100244002 : Time;VAR prParte@1100244003 : Record 7010360);
+    VAR
+      rServParte@1100244004 : Record 7010359;
+      rParte@1100244005 : Record 7010360;
+      vVuelos@1100244006 : Text[250];
+      vAuxVuelo@1100244007 : Text[150];
+      tVuelos@1100244008 : ARRAY [15] OF Text[150];
+      lw_ind@1100244009 : Integer;
+      lwAuxIata@1100244010 : Code[60];
+      tIatas@1100244011 : ARRAY [15] OF Text[60];
+    BEGIN
+      // actualizar_vuelos
+      //
+      // Actualiza el campo vuelos de la tabla partes
+      IF rRegis."N§ Parte" <> '' THEN BEGIN
+
+        vVuelos   := '';
+
+        rServParte.RESET;
+        rServParte.SETCURRENTKEY("N§ Parte",
+                                 Touroperador,
+                                 "Hora recogida");
+        rServParte.SETRANGE("N§ Parte", rRegis."N§ Parte");
+        IF rServParte.FINDSET THEN BEGIN
+          REPEAT
+            vAuxVuelo := '';
+            IF rServParte."N§ Linea" = rRegis."N§ Linea" THEN BEGIN  // ----  si se trata de la linea actual
+              vAuxVuelo := pVuelo;                                  // ----  tomamos el parametro
+              lwAuxIata := IATA;
+            END
+            ELSE BEGIN
+              IF rServParte.Vuelo <> '' THEN
+               vAuxVuelo := rServParte.Vuelo;
+               lwAuxIata := rServParte.IATA;
+            END;
+
+            // Se adjuntan adem s de los vuelos, tambi‚n los campos IATA
+            CLEAR(tVuelos);
+            CLEAR(tIatas);
+            montar_tab_vuelos(tVuelos, vAuxVuelo);
+            montar_tab_vuelos(tIatas, lwAuxIata);
+
+            lw_ind := 1;
+            WHILE tVuelos[lw_ind] <> '' DO BEGIN
+              IF STRPOS(vVuelos, tVuelos[lw_ind]) = 0 THEN BEGIN
+                IF vVuelos = '' THEN
+                  vVuelos := tVuelos[lw_ind]
+                ELSE
+                  vVuelos := vVuelos + ', ' +  tVuelos[lw_ind] ;
+                IF tIatas[lw_ind] <>'' THEN BEGIN
+                  vVuelos := vVuelos + ', ' + tIatas[lw_ind];
+                END;
+              END;
+              lw_ind += 1;
+            END;
+
+
+          UNTIL rServParte.NEXT = 0;
+        END;
+
+        IF prParte.GET(rRegis."N§ Parte") THEN BEGIN
+          prParte.Vuelos := vVuelos;
+          prParte.MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE TempVuelos@1100253005(VAR prTmpV@1100253000 : TEMPORARY Record 7010400;prSerPar@1100253001 : Record 7010359;pwFecha@1100253002 : Date);
+    VAR
+      lwVuelos@1100253003 : Text[250];
+      lwVuelo@1100253004 : Code[10];
+      lwIATAs@1100253005 : Text[250];
+      lwIATA@1100253006 : Code[10];
+      lwPos@1100253007 : Integer;
+    BEGIN
+      // TempVuelos
+      // Subfuncion de la anterior ActualizarVuelos2
+
+      IF prSerPar.Vuelo='' THEN
+        EXIT;
+
+      lwVuelos := prSerPar.Vuelo;
+      lwIATAs  := prSerPar.IATA;
+      CLEAR(lwIATA);
+      WHILE lwVuelos <> '' DO BEGIN
+        CLEAR(lwVuelo);
+        lwPos := STRPOS(lwVuelos,',');
+        IF lwPos = 0 THEN BEGIN
+          lwVuelo := lwVuelos;
+          CLEAR(lwVuelos);
+        END
+        ELSE BEGIN
+          lwVuelo  := COPYSTR(lwVuelos, 1, lwPos-1);
+          lwVuelos := COPYSTR(lwVuelos, lwPos + 1);
+        END;
+
+        lwPos := STRPOS(lwIATAs,',');
+        IF lwPos = 0 THEN BEGIN
+          IF lwIATAs <> '' THEN
+            lwIATA := COPYSTR(lwIATAs, 1, 10);
+          CLEAR(lwIATAs);
+        END
+        ELSE BEGIN
+          lwIATA  := COPYSTR(lwIATAs, 1, lwPos - 1);
+          lwIATAs := COPYSTR(lwIATAs, lwPos+1);
+        END;
+
+        IF (lwVuelo <>'') THEN BEGIN
+          IF NOT prTmpV.GET(lwVuelo, pwFecha) THEN BEGIN
+            CLEAR(prTmpV);
+            prTmpV."Cod.Vuelo" := lwVuelo;
+            prTmpV.fecha       := pwFecha;
+            prTmpV.Hora        := prSerPar."Hora Vuelo";
+            prTmpV.IATA        := lwIATA;
+            prTmpV.INSERT;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE ActualizarVuelos2@1100253004(pwBorra@1100253000 : Boolean);
+    VAR
+      lrTmpV@1100253001 : TEMPORARY Record 7010400;
+      lrSerPar@1100253002 : Record 7010359;
+      lrParte@1100253003 : Record 7010360;
+      lwVuelos@1100253004 : Text[250];
+    BEGIN
+      // ActualizarVuelos2
+      // Actualiza el campo vuelos de la tabla partes
+      // JPT 01/08/11
+      // Funcion que viene a sustituir a la anterior
+      // Se utiliza en OnInsert, OnModify y OnDelete
+
+      IF "N§ Parte" = '' THEN
+        EXIT;
+
+      CLEAR(lrParte);
+      IF NOT lrParte.GET("N§ Parte") THEN
+        EXIT;
+
+      //. Vamos a rellenar el campo Vuelos de la tabla parte, aunque sea un servicio de Shuttle
+      //IF lrParte."Origen creacion" = rParte."Origen creacion"::Shuttle THEN
+      //  EXIT;
+
+      CLEAR(lwVuelos);
+      // Limpia el temporal
+      CLEAR(lrTmpV);
+      lrTmpV.DELETEALL;
+
+      CLEAR(lrSerPar);
+      lrSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+      lrSerPar.SETRANGE ("N§ Parte", "N§ Parte");
+      lrSerPar.SETFILTER("N§ Linea", '<>%1', "N§ Linea");
+      IF lrSerPar.FINDSET THEN
+      BEGIN
+        REPEAT
+          TempVuelos(lrTmpV, lrSerPar, lrParte.Fecha);
+        UNTIL lrSerPar.NEXT=0;
+      END;
+
+      IF NOT pwBorra THEN
+        TempVuelos(lrTmpV, Rec, lrParte.Fecha);
+
+      CLEAR(lrTmpV);
+      lrTmpV.SETCURRENTKEY(Hora);
+      IF lrTmpV.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lwVuelos <> '' THEN
+            lwVuelos += ', ';
+          lwVuelos += lrTmpV."Cod.Vuelo";
+          IF lrTmpV.IATA <> '' THEN
+          BEGIN
+            IF lwVuelos <> '' THEN
+              lwVuelos += ', ';
+            lwVuelos += lrTmpV.IATA;
+          END;
+        UNTIL lrTmpV.NEXT=0;
+      END;
+
+      IF lwVuelos <> lrParte.Vuelos THEN
+      BEGIN
+        lrParte.Vuelos := COPYSTR(lwVuelos, 1 , MAXSTRLEN(lrParte.Vuelos));
+        lrParte.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE actualizar_viajes@8(VAR prParte@1100244000 : Record 7010360);
+    VAR
+      rParte@1100244001 : Record 7010360;
+      rTxP@1100244002 : Record 7010365;
+      lrContVent@1100244003 : Record 7010403;
+      lrContComp@1100244004 : Record 7010408;
+      lrConfCalcIng@1103350001 : Record 7035379;
+      lcCalPar@1100244005 : Codeunit 7010407;
+      lwTTOO@1103350000 : ARRAY [2] OF Code[10];
+    BEGIN
+      // Actualizar_Viajes()
+
+      IF prParte."N§ Parte" <> '' THEN BEGIN
+
+        CLEAR(lwTTOO);
+        rTxP.RESET;
+        rTxP.SETCURRENTKEY("N§ Parte");
+        rTxP.SETRANGE("N§ Parte", prParte."N§ Parte");
+
+        lrContVent.RESET; lrContVent.INIT;
+        lrContComp.RESET; lrContComp.INIT;
+
+        IF rTxP.FINDSET(TRUE) THEN REPEAT
+
+          IF (rTxP."Pax Transportados" <> 0) AND (prParte."Origen creacion" <> prParte."Origen creacion"::"Recogida Automatica") THEN
+            rTxP."N§ Viajes" := prParte."N§ viajes"
+          ELSE
+            rTxP."N§ Viajes" := 0;
+
+      //    rTxP.Cliente             := prParte.Cliente;
+          rTxP."Tipo Servicio"     := prParte."Tipo Servicio";
+          rTxP."Codigo Servicio"   := prParte."Codigo Servicio";
+          rTxP.Garaje              := prParte.Garaje;
+          rTxP."Fecha Facturacion" := prParte."Fecha facturacion";
+          rTxP.Confirmado          := prParte.Confirmado;
+
+          IF rTxP."N§ Contrato venta"='' THEN BEGIN
+            // JPT 27/12/04 Cambio a la nueva codeunit
+            // lcCalPar.busca_contrato_venta(lrContVent , prParte.Cliente , rTxP.Touroperador,
+            //                              prParte."Fecha facturacion", prParte.Garaje);
+            cCalcR.BuscaContratoVentaReal(lrContVent , prParte.Cliente , rTxP.Touroperador, prParte."Fecha facturacion", prParte.Garaje)
+      ;
+
+            rTxP."N§ Contrato venta" := lrContVent."N§ Contrato";
+            rTxP."Cod. Divisa venta" := lrContVent."Cod. Divisa";
+
+          END;
+          IF (rTxP."N§ Contrato compra" = '') AND (prParte.Proveedor <> '')  THEN BEGIN
+            // JPT 27/12/04 Cambio a la nueva codeunit
+            // lcCalPar.busca_contrato_compra(lrContComp , prParte.Proveedor, rTxP.Touroperador,
+            //                               prParte.Cliente ,  prParte."Fecha facturacion", prParte.Garaje );
+            cCalcR.BuscaContratoCompraReal(lrContComp ,prParte.Proveedor, rTxP.Touroperador,
+                                             prParte.Cliente ,  prParte."Fecha facturacion", prParte.Garaje );
+            rTxP."N§ Contrato compra":= lrContComp."N§ Contrato";
+            rTxP."Cod. Divisa compra":= lrContComp."Cod. Divisa";
+          END;
+
+          // JPT 07/03/05 Para insertar el tipo de Calculo Ingreso en Parte a partir de la combinaci¢n de TTOOs
+          rTxP.MODIFY(TRUE);
+          IF lwTTOO[1] = '' THEN
+            lwTTOO[1] := rTxP.Touroperador
+          ELSE
+            IF lwTTOO[2] = '' THEN
+              lwTTOO[2] := rTxP.Touroperador
+
+        UNTIL rTxP.NEXT=0;
+      END;
+
+      {
+      CLEAR(rParte."Tipo Calculo Ingresos");
+      // JPT 07/03/05 Para insertar el tipo de Calculo Ingreso en Parte a partir de la combinaci¢n de TTOOs
+      IF w_a¤adir OR w_alta OR w_baja THEN BEGIN
+        IF (lwTTOO[1] <> '') AND (lwTTOO[2] <> '') THEN BEGIN
+          IF lrConfCalcIng.GET(lwTTOO[1],lwTTOO[2]) THEN BEGIN
+            rParte."Tipo Calculo Ingresos" := lrConfCalcIng."Tipo Calculo Ingreso";
+          END;
+        END;
+        rParte.MODIFY;
+      END;
+      }
+    END;
+
+    PROCEDURE nom_touroperador@10() : Text[30];
+    VAR
+      rTO@1100244000 : Record 7010312;
+    BEGIN
+      // nom_touroperador
+      //
+      IF NOT rTO.GET(Touroperador) THEN
+        EXIT('')
+      ELSE
+        EXIT(rTO.Nombre);
+    END;
+
+    PROCEDURE comprobar_contratos@11();
+    VAR
+      rConV@1100244000 : Record 7010403;
+      rConC@1100244001 : Record 7010408;
+      rToPar@1100244002 : Record 7010365;
+      cCalculo@1100244003 : Codeunit 7010407;
+      ok@1100244004 : Boolean;
+    BEGIN
+      // comprobar_contratos
+      //
+      // AJS --> Buscar el contrato de compra y de venta para el touroperador del registro.
+      //
+      {*
+      rParte.RESET; rParte.INIT;
+      ok := rParte.GET("N§ Parte");
+
+      rToPar.RESET; rToPar.INIT;
+      IF rToPar.GET("N§ Parte", Touroperador) THEN BEGIN
+        IF (rParte.Cliente <> '') AND (rParte."Fecha facturacion" <> 0D) AND (rParte.Garaje <> '') AND
+           (Touroperador <> '') THEN BEGIN
+          // JPT 27/12/05 Cambio por la nueva codeunit de calculo
+          // cCalculo.busca_contrato_venta(rConV, rParte.Cliente, rToPar.Touroperador,
+          //                              rParte."Fecha facturacion", rParte.Garaje);
+          cCalcR.BuscaContratoVentaReal(rConV, rParte.Cliente, rToPar.Touroperador,rParte."Fecha facturacion", rParte.Garaje);
+          IF rParte.Proveedor <> '' THEN
+            { JPT 27/12/05 Cambio por la nueva codeunit de calculo
+            cCalculo.busca_contrato_compra(rConC, rParte.Proveedor, rToPar.Touroperador,
+                                           rParte.Cliente, rParte."Fecha facturacion", rParte.Garaje);
+             }
+            cCalcR.BuscaContratoCompraReal(rConC, rParte.Proveedor, rToPar.Touroperador,
+                                           rParte.Cliente, rParte."Fecha facturacion", rParte.Garaje);
+
+          rToPar."N§ Contrato venta"  := rConV."N§ Contrato";
+          rToPar."N§ Contrato compra" := rConC."N§ Contrato";
+          rToPar.MODIFY(TRUE);
+        END;
+
+        // ---- Hay que comprobar si se ha indicado por contrato que no hay que considerar ----
+        // ---- las maletas                                                                ----
+
+        IF rToPar."N§ Contrato venta" <> '' THEN BEGIN
+          rParte.VALIDATE("Considerar maletas", rConV."Considerar maletas");
+          rParte.MODIFY(TRUE);
+        END;
+      END;
+      *}
+    END;
+
+    PROCEDURE nom_punto@12() : Text[50];
+    VAR
+      rPto@1100244000 : Record 7010315;
+    BEGIN
+      // nom_punto
+      //
+      IF rPto.GET("Punto recogida") THEN
+        EXIT(rPto.Descripci¢n)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE Registra_Lista_Vuelos@20(VAR pListaVuelos@1100244000 : Text[30];Phora@1100244001 : Time;PFecha@1100244002 : Date) PrimerVuelo : Code[7];
+    VAR
+      lrPar@1100244003 : Record 7010311;
+      lwCont@1100244004 : Integer;
+      lwCar@1100244005 : Char;
+      lwCodVuelo@1100244006 : Text[30];
+      lwListaVuelos2@1100244007 : Code[30];
+      lwNCodComp@1100244008 : Integer;
+      lwNNumVuel@1100244009 : Integer;
+      lErr1@1100244010 : TextConst 'ESP=El Codigo de Compa¤ia %1 tiene m s de 3 digitos';
+      lErr2@1100244011 : TextConst 'ESP=El Codigo de Vuelo %1 tiene m s de 4 cifras';
+      lwPrimerVuelo@1100244012 : Code[7];
+    BEGIN
+      // Registra_Lista_vuelos
+      //
+      // JPT Esta funcion descompone una cadena con varios vuelos en unidades y las
+      //     registra posteriormente en la tabla de vuelos.
+      //     La variable lwNCodComp indica el numero de caracteres del codigo de la compa¤ia
+      //     (3 como mucho), y la variable lwNNumVuel el n£mero de caracteres del c¢digo del vuelo
+      //     (4 maximo) Devuelve el codigo del primer Vuelo;
+      //     OJO: Esta funci¢n no vale para vuelos posicionales.
+      // AJS Se ha a¤adido un parametro segun el cual se insertara en el fichero de vuelos o no.
+
+      // ----  AJS 05.06.2001  ----
+
+      CLEAR(lrPar);
+      lrPar.FINDFIRST;
+
+      // ----  Fin AJS 05.06.2001  ----
+
+      lwListaVuelos2 := '';
+      lwNCodComp     := 0;
+      lwNNumVuel     := 0;
+      lwCodVuelo     := '';
+      lwPrimerVuelo  := '';
+      pListaVuelos   := UPPERCASE(pListaVuelos);
+
+      FOR lwCont := 1 TO STRLEN(pListaVuelos) DO BEGIN
+        lwCar := pListaVuelos[lwCont];
+        IF lwCar IN ['A'..'Z'] THEN BEGIN
+          IF lwNNumVuel > 0 THEN BEGIN
+            IF lwNNumVuel > 4 THEN
+              ERROR(err2 , lwCodVuelo);
+
+            // ----  AJS 05.06.2001  ----
+
+            IF lrPar."Control Horas vuelo" THEN
+              Inserta_Vuelo(lwCodVuelo, Phora, PFecha);
+
+            // ----  Fin AJS 05.06.2001  ----
+
+            IF lwListaVuelos2 = '' THEN
+              lwPrimerVuelo := lwCodVuelo
+            ELSE
+              lwListaVuelos2 := lwListaVuelos2 + ',' ;
+
+            lwListaVuelos2 := lwListaVuelos2 + lwCodVuelo;
+            lwCodVuelo := '';
+            lwNCodComp := 0;
+            lwNNumVuel := 0;
+          END;
+
+          IF lwNNumVuel = 0 THEN BEGIN
+            lwCodVuelo := lwCodVuelo + FORMAT(lwCar, 0);
+            lwNCodComp:=lwNCodComp + 1;
+          END;
+
+        END;
+        IF (lwCar IN ['0'..'9']) AND (lwNCodComp > 0 ) THEN BEGIN
+          IF NOT (lrPar."Empresa Real" IN [lrPar."Empresa Real"::TRN]) THEN BEGIN
+            IF lwNCodComp > 3 THEN
+              ERROR(lErr1 , lwCodVuelo);
+          END;
+          lwCodVuelo := lwCodVuelo + FORMAT(lwCar,0);
+          lwNNumVuel := lwNNumVuel + 1;
+        END;
+      END;
+
+      IF lwNNumVuel > 0 THEN BEGIN
+        IF NOT (lrPar."Empresa Real" IN[lrPar."Empresa Real"::TRN]) THEN BEGIN
+          IF lwNNumVuel > 4 THEN
+            ERROR(lErr2 , lwCodVuelo);
+        END;
+
+        // ----  AJS 05.06.2001  ----
+
+        IF lrPar."Control Horas vuelo" THEN
+          Inserta_Vuelo(lwCodVuelo, Phora, PFecha);
+
+        // ----  Fin AJS 05.06.2001  ----
+
+        IF lwListaVuelos2 = '' THEN
+          lwPrimerVuelo := lwCodVuelo
+        ELSE
+          lwListaVuelos2 := lwListaVuelos2 + ',';
+        lwListaVuelos2 := lwListaVuelos2 + lwCodVuelo;
+      END;
+
+      pListaVuelos := lwListaVuelos2;
+
+      // ----  AJS 05.06.2001  ----
+
+      IF NOT lrPar."Control Horas vuelo" THEN
+        EXIT('')
+      ELSE
+        EXIT(lwPrimerVuelo);
+
+      // ----  Fin AJS 05.06.2001  ----
+    END;
+
+    PROCEDURE Inserta_Vuelo@13(pCod_Vuelo@1100244000 : Code[7];pHora@1100244001 : Time;PFecha@1100244002 : Date);
+    VAR
+      rVuelos@1100244003 : Record 7010400;
+      Text1@1100244004 : TextConst 'ESP="El vuelo %1 ya estaba asignado a otra hora, ¨Quiere cambiarla por  la nueva %2 ? "';
+    BEGIN
+      // Inserta_vuelo
+      // JPT Inserta un vuelo nuevo en la tabla Vuelos, o modifica la fecha si ya existe
+      // Si el vuelo ya existe, pero con otra hora, se pide permiso para cambiar esa hora
+      IF pHora<>0T THEN BEGIN
+        rVuelos.RESET;
+        rVuelos.SETRANGE(fecha , PFecha);
+        IF rVuelos.GET(pCod_Vuelo,PFecha) THEN BEGIN
+          IF (rVuelos.Hora <> pHora) THEN
+            IF rVuelos.Hora= 0T THEN BEGIN
+              rVuelos.VALIDATE(Hora, pHora);
+              rVuelos.MODIFY;
+            END
+            ELSE
+            IF (CONFIRM(STRSUBSTNO(Text1, rVuelos."Cod.Vuelo", pHora),TRUE)) THEN BEGIN
+              Cambia_Hora_Vuelo(pCod_Vuelo, rVuelos.Hora, PFecha, pHora);
+              rVuelos.VALIDATE(Hora, pHora);
+              rVuelos.MODIFY;
+            END
+            ELSE
+              VALIDATE("Hora Vuelo" , rVuelos.Hora);
+        END
+        ELSE BEGIN
+          rVuelos.INIT;
+          rVuelos.VALIDATE("Cod.Vuelo",pCod_Vuelo);
+          rVuelos.VALIDATE(Hora,pHora);
+          rVuelos.VALIDATE(fecha, PFecha);
+          rVuelos.INSERT;
+        END;
+      END;
+    END;
+
+    PROCEDURE Cambia_Hora_Vuelo@22(pCod_Vuelo@1100244000 : Code[7];pHora@1100244001 : Time;PFecha@1100244002 : Date;pNuevaHora@1100244003 : Time);
+    VAR
+      lrSerPar@1100244004 : Record 7010359;
+      lrSerPar2@1100244005 : Record 7010359;
+    BEGIN
+      // Cambia_Hora_Vuelo
+      // JPT Esta funci¢n se encarga de cambiar todas las hora de vuelo de la tabla Servicios-Partes a
+      // a partir de una fecha, una hora y un vuelo dado.
+
+      lrSerPar.RESET;
+      lrSerPar2.RESET;
+      lrSerPar.SETCURRENTKEY("Hora Vuelo" , Fecha);
+      lrSerPar.SETRANGE ("Hora Vuelo" , pHora);
+      lrSerPar.SETRANGE (Fecha , PFecha);
+      IF lrSerPar.FINDSET THEN
+        REPEAT
+          IF (lrSerPar."N§ Servicio" = "N§ Servicio") AND (lrSerPar."N§ Linea" = "N§ Linea") THEN BEGIN
+            ;
+          END
+          ELSE BEGIN
+            // Si el vuelo est  en la cadena en la 1 posicion
+            IF STRPOS(lrSerPar.Vuelo , pCod_Vuelo) = 1 THEN BEGIN
+              lrSerPar2:=lrSerPar;
+              lrSerPar2."Hora Vuelo" := pNuevaHora;
+              lrSerPar2.MODIFY(TRUE);
+            END;
+          END;
+        UNTIL lrSerPar.NEXT=0;
+    END;
+
+    PROCEDURE formatea_lista_vuelos@15(VAR pw_listavuelos@1100244000 : Text[150];pw_hora@1100244001 : Time;pw_fecha@1100244002 : Date) : Code[10];
+    VAR
+      lrPar@1100244003 : Record 7010311;
+      lw_listavuelos@1100244004 : Text[150];
+      lw_caracter@1100244005 : Char;
+      lw_numvuelo@1100244006 : Code[10];
+      lw_compvuelo@1100244007 : Code[10];
+      lw_posicion@1100244008 : Integer;
+      lw_carsnum@1100244009 : Integer;
+      lw_carscomp@1100244010 : Integer;
+      lw_nuevovuelo@1100244011 : Boolean;
+      lErr1@1100244012 : TextConst 'ESP=El Codigo de Compa¤ia %1 tiene m s de 3 digitos';
+      lErr2@1100244013 : TextConst 'ESP=El Codigo de Vuelo %1 tiene m s de 5 cifras';
+      lw_primervuelo@1100244014 : Code[10];
+      lwVuelo@1000000001 : Code[10];
+    BEGIN
+      // formatea_lista_vuelos
+
+      // AJS - Tomamos el campo Vuelos y devolvemos una cadena eliminando todos los caracteres raros
+      //       que se hayan podido insertar en medio asi como los espacios en blanco.
+
+      CLEAR(lrPar);
+      lrPar.FINDFIRST;
+
+      lw_listavuelos := '';
+      lw_nuevovuelo  := TRUE;
+      lw_compvuelo   := '';
+      lw_numvuelo    := '';
+      lw_carsnum     := 0;
+      lw_carscomp    := 0;
+      pw_listavuelos := UPPERCASE(pw_listavuelos);
+
+      FOR lw_posicion := 1 TO STRLEN (pw_listavuelos) DO BEGIN
+        lw_caracter := pw_listavuelos[lw_posicion];
+
+        //-$001IF (lw_caracter IN ['A'..'Z']) OR (lw_compvuelo='') THEN BEGIN
+
+        IF (lw_carscomp < 2) AND ((lw_caracter IN ['A'..'Z']) OR (lw_caracter IN ['0'..'9'])) THEN BEGIN //+$001
+
+          // ----  si se trata de un nuevo vuelo supondremos que el caracter pertenece a la  ----
+          // ----  compa¤ia del vuelo                                                        ----
+
+          IF lw_nuevovuelo AND (lw_caracter <> ' ') THEN BEGIN
+            lw_compvuelo := lw_compvuelo + FORMAT(lw_caracter, 0);
+            lw_carscomp += 1;
+          END
+
+          // ----  sino supondremos que es un caracter que se pone detras del numero de vuelo  ----
+
+          ELSE BEGIN
+            lw_numvuelo := lw_numvuelo + FORMAT(lw_caracter, 0);
+            lw_carsnum += 1;
+          END;
+        END
+        ELSE
+        BEGIN
+          IF (lw_caracter IN ['0'..'9']) OR
+             ((NOT lw_nuevovuelo) AND (lw_caracter IN ['A'..'Z'])) THEN
+          BEGIN
+            lw_numvuelo   := lw_numvuelo + FORMAT(lw_caracter, 0);
+            lw_carsnum    += 1;
+            lw_nuevovuelo := FALSE;
+          END;
+          IF (lw_caracter IN ['A'..'Z']) AND
+             (lw_nuevovuelo) THEN
+          BEGIN
+            lw_compvuelo := lw_compvuelo + FORMAT(lw_caracter, 0);
+            lw_carscomp += 1;
+
+          END;
+          //+$001
+        END;
+
+        IF (lw_caracter = ',') OR (lw_posicion = STRLEN(pw_listavuelos)) THEN
+        BEGIN
+           // En algunas empresas no generamos errores
+          IF NOT (lrPar."Empresa Real" IN [lrPar."Empresa Real"::TRN]) THEN
+          BEGIN
+            IF lw_carscomp > 3 THEN
+              ERROR(lErr1);
+            IF lw_carsnum > 5 THEN
+              ERROR(lErr2);
+          END;
+          IF DELCHR(lw_compvuelo, '=', ',') <> '' THEN BEGIN
+            IF lrPar."Control Horas vuelo" THEN
+              Inserta_Vuelo(DELCHR(lw_compvuelo, '<>') + DELCHR(lw_numvuelo, '<>'), pw_hora, pw_fecha);
+
+            IF lw_listavuelos <> '' THEN
+              lw_listavuelos := lw_listavuelos + ', '
+            ELSE
+              lw_primervuelo := DELCHR(lw_compvuelo, '<>') + DELCHR(lw_numvuelo, '<>');
+
+            lw_listavuelos := lw_listavuelos + DELCHR(lw_compvuelo, '<>') + DELCHR(lw_numvuelo, '<>');
+          END;
+          lw_nuevovuelo := TRUE;
+          lw_compvuelo  := '';
+          lw_numvuelo   := '';
+          lw_carsnum    := 0;
+          lw_carscomp   := 0;
+        END;
+      END;
+
+      pw_listavuelos := lw_listavuelos;
+      EXIT(lw_primervuelo);
+    END;
+
+    PROCEDURE montar_tab_vuelos@19(VAR ptVuelos@1100244000 : ARRAY [15] OF Text[30];pw_vuelos@1100244001 : Text[150]) TotalVuelos : Integer;
+    VAR
+      lw_ind@1100244002 : Integer;
+      lw_pos@1100244003 : Integer;
+      lw_vuelos@1100244004 : Text[150];
+    BEGIN
+      // montar_tab_vuelos
+      //
+      // AJS --> Descomponer el campo vuelos en cada uno de los vuelos individuales en funcion de la
+      //         coma que separa los vuelos
+
+      lw_vuelos := pw_vuelos;
+      lw_ind    := 0;
+      WHILE DELCHR(lw_vuelos, '<>') <> '' DO BEGIN
+        IF STRPOS(lw_vuelos, ',') <> 0 THEN BEGIN
+          lw_ind += 1;
+          ptVuelos[lw_ind] := COPYSTR(lw_vuelos, 1, STRPOS(lw_vuelos, ',') - 1);
+
+          lw_vuelos := DELSTR(lw_vuelos, 1, STRPOS(lw_vuelos, ',') );
+        END
+        ELSE BEGIN
+          IF DELCHR(lw_vuelos, '<>') <> '' THEN BEGIN
+            lw_ind += 1;
+            ptVuelos[lw_ind] := COPYSTR(lw_vuelos, 1, STRLEN(lw_vuelos));
+
+            lw_vuelos := DELSTR(lw_vuelos, 1, STRLEN(lw_vuelos));
+          END;
+        END;
+      END;
+      EXIT(lw_ind);
+    END;
+
+    PROCEDURE MiraSiEsUltimaLineaParte@16();
+    VAR
+      lrSerPar@1100244000 : Record 7010359;
+    BEGIN
+      // MiraSiEsUltimaLineaParte
+      // Como su propio nombre indica, cuando se intenta borrar o desasignar la ultima l¡nea de
+      // de un parte aparece un error indicando que se tiene que eliminar el parte entero.
+      // Siempre y cuando la variable wPermiteBorrar est‚ en false;
+
+      IF ("N§ Parte" <> '') AND (NOT "Permite Borrar") THEN BEGIN
+        lrSerPar.RESET;
+        lrSerPar.SETCURRENTKEY("N§ Parte","Orden Hotel en zona");
+        lrSerPar.SETRANGE ("N§ Parte","N§ Parte");
+        IF lrSerPar.COUNT = 1 THEN
+          ERROR(err9)
+      END;
+    END;
+
+    PROCEDURE insertar_iata@17(pwfecha@1100244000 : Date;VAR prSerPar@1100244001 : Record 7010359;pConfirmar@1100244002 : Boolean) NUEVOIATA : Code[60];
+    VAR
+      tVuelos@1100244003 : ARRAY [15] OF Text[30];
+      lw_ind@1100244004 : Integer;
+      tIatas@1100244005 : ARRAY [15] OF Text[30];
+      lwNoVuelos@1100244006 : Integer;
+      lwNoIatas@1100244007 : Integer;
+      rlVuelos@1100244008 : Record 7010400;
+      lwAuxIata@1100244009 : Code[50];
+      Text1@1100244010 : TextConst 'ESP=El vuelo %1 ya tiene asignado el campo IATA %2, ¨Desea Cambiarlo por %3?';
+      lwConcatena@1100244011 : Boolean;
+      lrServ@1100244012 : Record 7010358;
+    BEGIN
+      // insertar_iata
+      // Gestiona la automatizaci¢n del campo IATA a partir de otros vuelos del mismo d¡a, para ello utiliza
+      // la tabla Temporal vuelos
+
+      // tVuelos: Matriz de concatenaci¢n de vuelos
+      // tIatas : Matriz de concatenaci¢n de campos IATA
+      // pConfirmar : Indica si el sistemas tiene que avisar cuando se cambia el campo Iata, para cambiarlo en todos
+      // los registros Temporal vuelos
+      // pwfecha : Fecha por la que filtrar
+      // prSerPar : Tabla servicios-partes afectada
+
+
+      IF prSerPar.Vuelo = '' THEN
+        EXIT('');
+
+
+      // Para el caso en que la l¡nea a£n no se ha creado es necesario encontrar la fecha
+      IF pwfecha = 0D THEN BEGIN
+        lrServ.RESET; lrServ.INIT;
+        IF lrServ.GET(prSerPar."N§ Servicio") THEN
+          pwfecha  := lrServ.Fecha;
+      END;
+
+      lwConcatena := TRUE;
+      CLEAR (tVuelos);
+      CLEAR (tIatas);
+      lwNoVuelos := montar_tab_vuelos(tVuelos, prSerPar.Vuelo);
+      lwNoIatas  := montar_tab_vuelos(tIatas, prSerPar.IATA);
+
+      IF (lwNoVuelos > 0) AND (lwNoIatas > lwNoVuelos) AND pConfirmar  THEN
+        ERROR (err8);
+
+
+      IF lwNoVuelos > 0 THEN
+        FOR lw_ind :=1 TO lwNoVuelos DO BEGIN
+          // Comprueba que cada codigo no tenga m s de 16 caracteres, sino lo recorta
+          IF STRLEN(tIatas[lw_ind])>16 THEN
+            tIatas[lw_ind] := COPYSTR (tIatas[lw_ind],1,16);
+
+          IF rlVuelos.GET(tVuelos[lw_ind] , pwfecha) THEN BEGIN
+            IF rlVuelos.IATA = '' THEN BEGIN
+              rlVuelos.VALIDATE(IATA, tIatas[lw_ind]);
+              rlVuelos.MODIFY(TRUE);
+            END
+            ELSE BEGIN
+              IF pConfirmar THEN BEGIN
+                IF (rlVuelos.IATA <> tIatas[lw_ind]) AND (tIatas[lw_ind] <> '') THEN BEGIN
+                  IF (CONFIRM(STRSUBSTNO(Text1, rlVuelos."Cod.Vuelo", rlVuelos.IATA, tIatas[lw_ind]),TRUE)) THEN BEGIN
+
+                    rlVuelos.VALIDATE (IATA,tIatas[lw_ind]);
+                    rlVuelos.MODIFY (TRUE);
+                    Cambia_Iatas(tVuelos[lw_ind], pwfecha, tIatas[lw_ind], prSerPar );
+
+                  END;
+                END;
+              END;
+            END;
+          END
+          ELSE BEGIN
+            // Si no est  el registro,  lo inserta
+            rlVuelos.INIT;
+            IF tIatas[lw_ind] <> '' THEN BEGIN
+              rlVuelos.VALIDATE ("Cod.Vuelo", tVuelos[lw_ind]);
+              rlVuelos.VALIDATE (fecha      , pwfecha);
+              rlVuelos.VALIDATE (IATA       , tIatas[lw_ind]);
+              IF (lw_ind=1) AND (prSerPar."Hora Vuelo" <> 0T) THEN
+                rlVuelos.VALIDATE (rlVuelos.Hora , prSerPar."Hora Vuelo");
+              rlVuelos.INSERT;
+            END;
+          END;
+          // Desde el primer momento en que aparece un codigo IATA vacio, no se sigue concatenando
+          IF rlVuelos.IATA = '' THEN
+              lwConcatena:= FALSE;
+
+          IF lwConcatena THEN BEGIN
+            IF lwAuxIata <> '' THEN
+              lwAuxIata := lwAuxIata + ', ';
+            IF (tIatas[lw_ind]<>'') OR (pConfirmar=FALSE) THEN
+              lwAuxIata := lwAuxIata + rlVuelos.IATA;
+          END;
+        END; // Final del FOR-NEXT
+      EXIT (lwAuxIata);
+    END;
+
+    PROCEDURE Cambia_Iatas@24(pCod_Vuelo@1100244000 : Code[7];PFecha@1100244001 : Date;pIATA@1100244002 : Code[20];VAR prSerPar@1100244003 : Record 7010359);
+    VAR
+      lrSerPar@1100244004 : Record 7010359;
+    BEGIN
+      // Cambia_Iatas
+      // JPT Esta funci¢n se encarga de cambiar todas los campos Iata de la tabla Servicios-Partes a
+      // a partir de una fecha, un campo Iata y un vuelo dado.
+
+      lrSerPar.RESET;
+      lrSerPar.SETCURRENTKEY("Hora Vuelo" , Fecha);
+      lrSerPar.SETRANGE (Fecha , PFecha);
+      IF lrSerPar.FINDSET(TRUE) THEN
+        REPEAT
+              // Si el vuelo est  en la cadena
+            IF (prSerPar."N§ Servicio" <> lrSerPar."N§ Servicio") OR (prSerPar."N§ Linea" <> lrSerPar."N§ Linea")  THEN
+              IF STRPOS(lrSerPar.Vuelo , pCod_Vuelo) <>0  THEN BEGIN
+                lrSerPar.IATA := insertar_iata(PFecha, lrSerPar, FALSE);
+                lrSerPar.MODIFY (TRUE);
+              END;
+        UNTIL lrSerPar.NEXT=0;
+    END;
+
+    PROCEDURE Actualiza_Hora1erVuelo_Partes@18(pwNoParte@1100244000 : Code[10];pwNoServicio@1100244001 : Code[10];pwNoLinea@1100244002 : Integer);
+    VAR
+      lw1Hora@1100244003 : Time;
+      lrSerPar@1100244004 : Record 7010359;
+      lrParte@1100244005 : Record 7010360;
+      lwHoraLinea@1100244006 : Time;
+    BEGIN
+      // Actualiza_Hora1erVuelo_Partes
+
+      // Esta funcion actualiza el campo Hora 1er Vuelo de la tabla Partes cada vez que se modifiquen las
+      // lineas de dicho parte. Para evitar confundirse si se a¤aden horas de 1hora de la madrugada
+      // del dia siguiente, no se considerar  cuando la diferencia con la hora anterior > 12 horas
+      // pwNoServicio y pwNoLinea sirven para lo siguiente: esta funci¢n puede ser llamada desde un OnDelete
+      // pero entonces la l¡nea a£n no se ha borrado por lo que el calculo ser  falso, por eso se les pasa
+      // estos dos parametros para no incluir la l¡nea la cual definen y que es la que se tiene que borrar
+      // en el c lculo.
+
+
+      IF pwNoParte <> '' THEN BEGIN
+        lrSerPar.SETCURRENTKEY("N§ Parte","Hora Vuelo");
+        lrSerPar.SETRANGE ("N§ Parte",pwNoParte);
+        lrSerPar.ASCENDING := FALSE;
+        IF lrSerPar.FINDFIRST THEN BEGIN
+          lw1Hora :=0T ;
+          REPEAT
+            // 43200000 milisegundos = 12 horas
+            IF lrSerPar."Hora Vuelo" <> 0T THEN BEGIN
+              IF lw1Hora = 0T THEN
+                lw1Hora := lrSerPar."Hora Vuelo"
+              ELSE
+                IF (lw1Hora - lrSerPar."Hora Vuelo") < 43200000 THEN
+                  IF (lrSerPar."N§ Servicio" <> pwNoServicio) OR (lrSerPar."N§ Linea" <> pwNoLinea) THEN
+                    lw1Hora := lrSerPar."Hora Vuelo";
+            END;
+          UNTIL lrSerPar.NEXT=0;
+        END;
+        IF lw1Hora <> 0T THEN BEGIN
+          IF lrParte.GET(pwNoParte) THEN BEGIN
+            lrParte.VALIDATE ("Hora 1er Vuelo" , lw1Hora);
+            lrParte.MODIFY (TRUE);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE BuscaNoLinea@26(pwNoServicio@1100244000 : Code[10]) NoLinea : Integer;
+    VAR
+      lrSerPar@1100244001 : Record 7010359;
+      lwNL1@1100244002 : Integer;
+      lwNL2@1100244003 : Integer;
+      lwNoLinea@1100244004 : Integer;
+    BEGIN
+      // BuscaNoLinea
+      // Esta funci¢n devuelve el n£mero de linea cuando se inserte entre otras dos, en caso
+      // de que no sea posible devuelve 0
+
+      lwNoLinea := 0;
+      IF (xRec."N§ Servicio" = pwNoServicio) AND (xRec."N§ Linea" <>0) THEN BEGIN
+        lwNL1 := xRec."N§ Linea";
+        lrSerPar.SETRANGE("N§ Servicio" , pwNoServicio);
+        IF lrSerPar.FINDLAST THEN
+          lwNL2 := lrSerPar."N§ Linea";
+        IF lwNL1 <> lwNL2 THEN BEGIN
+          IF lrSerPar.GET(pwNoServicio , lwNL1) THEN BEGIN
+            IF lrSerPar.NEXT(-1) <> 0 THEN
+              lwNL2 := lrSerPar."N§ Linea"
+            ELSE
+              lwNL2 := 0;
+
+            lwNoLinea :=lwNL2 + ((lwNL1 - lwNL2) DIV 2);
+            IF lwNoLinea - lwNL2 =0 THEN lwNoLinea :=0;
+          END;
+        END;
+      END;
+      EXIT (lwNoLinea);
+    END;
+
+    PROCEDURE BorrarVacios@23(VAR prToPar@1100244000 : Record 7010365);
+    BEGIN
+      // BorrarVacios
+      //
+      // Esta funci¢n borra las lineas de Touroperadores x Parte que est‚n vacias
+
+      IF (prToPar."Ni¤os transportados" = 0) AND (prToPar."Adultos transportados" = 0) THEN
+        prToPar.DELETE(TRUE);
+    END;
+
+    PROCEDURE ultima_zona_fisica@27(VAR prParte@1100244000 : Record 7010360;pw_borra_desasigna@1100244001 : Boolean;pw_cambiodirecto@1100244002 : Boolean);
+    VAR
+      lrSerPar@1100244003 : Record 7010359;
+      lrTmpSerPar@1103355000 : TEMPORARY Record 7010359;
+      lrZonFisPar@1100244005 : Record 7010366;
+      lrZonFis@1100244006 : Record 7010314;
+    BEGIN
+      // ultima_zona_fisica
+      //
+
+      // AJS 14.06.2006
+      // Si el numero de parte no esta rellenado, salimos de la funcion
+
+      IF prParte."N§ Parte" = '' THEN
+        EXIT;
+
+      // ----  AJS 15.10.2001  El parametro pw_cambiodirecto sirve para indicar si el cambio se  ----
+      // ----  realiza directamente sobre la tabla en cuyo caso hay que tratar como un caso      ----
+      // ----  especial el rec                                                                   ----
+
+      // ----  AJS 15.10.2001  Para buscar la ultima zona utilizaremos el campo Orden zona que   ----
+      // ----  nos ordena geograficamente las zonas fisicas                                      ----
+
+      // ---- JPT 17/07/07 Dado que de otro modo es imposible mantener un orden teniendo en cuenta
+      //      las modificaciones del registro actual creo un temporal al efecto
+
+      lrSerPar.RESET;
+      rPar.FINDFIRST;
+
+      lrSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+      lrSerPar.SETRANGE ("N§ Parte", prParte."N§ Parte");
+      IF lrSerPar.FINDSET THEN BEGIN
+        REPEAT
+          lrTmpSerPar := lrSerPar;
+          IF lrSerPar.GETPOSITION <> GETPOSITION THEN
+            lrTmpSerPar.INSERT;
+        UNTIL lrSerPar.NEXT=0;
+      END;
+
+      lrTmpSerPar := Rec;
+      lrTmpSerPar.INSERT;
+
+      // ----  Buscamos la ultima para asignarla al parte de trabajo  ----
+
+      // AJS 29.06.2004
+      // Solo se tratan las lineas que tienen punto de recogida
+
+      lrTmpSerPar.SETFILTER("Punto recogida", '<>%1', '');
+
+      IF pw_borra_desasigna THEN
+        lrTmpSerPar.SETFILTER("N§ Linea", '<>%1', "N§ Linea");
+
+      // JPT 19/05/06 Las salidas y excursiones tiene que asignar la zona fisica del primer hotel. Las entradas a la zona m s alejada
+
+      IF prParte."Codigo Servicio" = rPar."Codigo Entradas" THEN // JPT 17/07/07 TC de TRN
+        lrTmpSerPar.SETCURRENTKEY("N§ Parte", "Orden zona")
+      ELSE
+        lrTmpSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+
+      lrTmpSerPar.ASCENDING(prParte."Codigo Servicio" <> rPar."Codigo Entradas");
+
+      IF NOT lrTmpSerPar.FINDFIRST THEN
+        CLEAR(lrTmpSerPar);
+      prParte.VALIDATE("Zona parte", lrTmpSerPar."Zona fisica");
+      // Rellenamos el campo Zona trabajo con la zona de trabajo de la zona fisica
+      prParte.VALIDATE("Zona trabajo", lrZonFis.GetZonaTrabajo(lrTmpSerPar."Zona fisica", lrTmpSerPar.Touroperador, "Tipo Servicio"));
+      prParte.MODIFY(TRUE);
+
+      // ----  FIN AJS 08-05-2002  ----
+
+      // ----  AJS 14.12.2001  ----
+      // ----  Mantenimiento del fichero de zonas fisicas parte a partir de las lineas de servicios - partes  ----
+
+      CLEAR(lrZonFisPar);
+      IF NOT pw_borra_desasigna THEN BEGIN
+
+        // ----  AJS 19.12.2001  ----
+        // ----  Trabajar con la zona actual  ----
+
+        IF NOT lrZonFisPar.GET(prParte."N§ Parte", "Zona fisica") THEN BEGIN
+          lrZonFisPar."N§ Parte"    := prParte."N§ Parte";
+          lrZonFisPar."Zona fisica" := "Zona fisica";
+          IF lrZonFis.GET("Zona fisica") THEN
+            lrZonFisPar.Orden := lrZonFis.Orden;
+          lrZonFisPar.INSERT;
+        END;
+        lrZonFisPar.Adultos             := lrZonFisPar.Adultos + "Adultos transportados";
+        lrZonFisPar."Adultos invitados" := lrZonFisPar."Adultos invitados" + "Adultos invitados ingreso";
+        lrZonFisPar.Ni¤os               := lrZonFisPar.Ni¤os + "Ni¤os transportados";
+        lrZonFisPar."Ni¤os invitados"   := lrZonFisPar."Ni¤os invitados" + "Ni¤os invitados ingreso";
+        lrZonFisPar.MODIFY;
+
+        // ----  AJS 19.12.2001  ----
+        // ----  Trabajar con la zona de xRec solo en los cambios directos sobre la tabla  ----
+
+        IF (xRec."Zona fisica" <> "Zona fisica") AND (pw_cambiodirecto) THEN BEGIN
+          lrTmpSerPar.RESET;
+
+          // AJS 13.06.2006
+          // Establezco este orden para aumentar rendimiento
+
+          lrTmpSerPar.SETCURRENTKEY("N§ Parte",
+                                 "N§ Linea");
+          lrTmpSerPar.SETRANGE ("N§ Parte"   , prParte."N§ Parte");
+          lrTmpSerPar.SETRANGE ("Zona fisica", xRec."Zona fisica");
+          lrTmpSerPar.SETFILTER("N§ Linea"   , '<>%1', "N§ Linea");
+          IF NOT lrTmpSerPar.FINDFIRST THEN BEGIN
+            IF lrZonFisPar.GET(prParte."N§ Parte", xRec."Zona fisica") THEN
+              lrZonFisPar.DELETE;
+          END;
+        END;
+      END
+      ELSE BEGIN
+        lrTmpSerPar.RESET;
+
+        // AJS 13.06.2006
+        // Establezco este orden para aumentar rendimiento
+
+        lrTmpSerPar.SETCURRENTKEY("N§ Parte",
+                               "N§ Linea");
+        lrTmpSerPar.SETRANGE ("N§ Parte"   , prParte."N§ Parte");
+        lrTmpSerPar.SETRANGE ("Zona fisica", "Zona fisica");
+        lrTmpSerPar.SETFILTER("N§ Linea"   , '<>%1', "N§ Linea");
+        IF NOT lrTmpSerPar.FINDFIRST THEN BEGIN
+          IF lrZonFisPar.GET(prParte."N§ Parte", "Zona fisica") THEN
+            lrZonFisPar.DELETE;
+        END;
+      END;
+    END;
+
+    PROCEDURE ultima_zona_fisicaOld@1103355001(pw_parte@1100244000 : Code[20];pw_borra_desasigna@1100244001 : Boolean;pw_cambiodirecto@1100244002 : Boolean);
+    VAR
+      lrSerPar@1100244003 : Record 7010359;
+      lrParte@1100244004 : Record 7010360;
+      lrZonFisPar@1100244005 : Record 7010366;
+      lrZonFis@1100244006 : Record 7010314;
+    BEGIN
+      // ultima_zona_fisicaOLd
+      // **** NO SE UTILIZA *** se guardo por seguridad JPT 17/07/07
+
+      // AJS 14.06.2006
+      // Si el numero de parte no esta rellenado, salimos de la funcion
+
+      IF pw_parte = '' THEN
+        EXIT;
+
+      // ----  AJS 15.10.2001  El parametro pw_cambiodirecto sirve para indicar si el cambio se  ----
+      // ----  realiza directamente sobre la tabla en cuyo caso hay que tratar como un caso      ----
+      // ----  especial el rec                                                                   ----
+
+      // ----  AJS 15.10.2001  Para buscar la ultima zona utilizaremos el campo Orden zona que   ----
+      // ----  nos ordena geograficamente las zonas fisicas                                      ----
+
+      lrSerPar.RESET;
+      lrSerPar.COPY(Rec);
+      rPar.FINDFIRST;
+
+      // AJS 18.03.2004
+      // Para buscar la ultima zona, confiaremos en el orden de introduccion mas las posibles alteraciones
+      // que hayan podido realizar los usuarios (tema de los hoteles VIP) desestimando el tema del orden de zona
+      // lrSerPar.SETCURRENTKEY("N§ Parte", "Orden zona");
+
+      lrSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+
+      // ----  Buscamos la ultima para asignarla al parte de trabajo  ----
+
+      lrSerPar.SETRANGE ("N§ Parte", pw_parte);
+
+      // AJS 29.06.2004
+      // Solo se tratan las lineas que tienen punto de recogida
+
+      lrSerPar.SETFILTER("Punto recogida", '<>%1', '');
+
+      IF pw_borra_desasigna THEN
+        lrSerPar.SETFILTER("N§ Linea", '<>%1', "N§ Linea");
+
+      // JPT 19/05/06 Las salidas y excursiones tiene que asignar la zona fisica del primer hotel. Las entradas a la zona m s alejada
+      IF lrParte.GET(pw_parte) THEN BEGIN
+
+        IF lrParte."Codigo Servicio" = rPar."Codigo Entradas" THEN // JPT 17/07/07 TC de TRN
+          lrSerPar.SETCURRENTKEY("N§ Parte", "Orden zona")
+        ELSE
+          lrSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+
+        // lrSerPar.ASCENDING(lrParte."Codigo Servicio" <> rPar."Codigo Entradas");
+        IF lrSerPar.FINDFIRST THEN BEGIN
+          // ----  Tratamiento del rec para los cambios hechos sobre la tabla directamente  ----
+          IF pw_cambiodirecto AND (lrSerPar.GETPOSITION = GETPOSITION) AND ("Zona fisica" <> '') THEN
+            lrSerPar := Rec;
+        END
+        ELSE
+          CLEAR(lrSerPar);
+
+        lrParte.VALIDATE("Zona parte", lrSerPar."Zona fisica");
+
+        // Rellenamos el campo Zona trabajo con la zona de trabajo de la zona fisica
+
+        lrParte.VALIDATE("Zona trabajo", lrZonFis.GetZonaTrabajo(lrSerPar."Zona fisica", lrSerPar.Touroperador, "Tipo Servicio"));
+        lrParte.MODIFY(TRUE);
+      END;
+
+      // ----  FIN AJS 08-05-2002  ----
+
+      // ----  AJS 14.12.2001  ----
+      // ----  Mantenimiento del fichero de zonas fisicas parte a partir de las lineas de servicios - partes  ----
+
+      CLEAR(lrZonFisPar);
+      IF NOT pw_borra_desasigna THEN BEGIN
+
+        // ----  AJS 19.12.2001  ----
+        // ----  Trabajar con la zona actual  ----
+
+        IF NOT lrZonFisPar.GET(pw_parte, "Zona fisica") THEN BEGIN
+          lrZonFisPar."N§ Parte"    := pw_parte;
+          lrZonFisPar."Zona fisica" := "Zona fisica";
+          IF lrZonFis.GET("Zona fisica") THEN
+            lrZonFisPar.Orden := lrZonFis.Orden;
+          lrZonFisPar.INSERT;
+        END;
+        lrZonFisPar.Adultos             := lrZonFisPar.Adultos + "Adultos transportados";
+        lrZonFisPar."Adultos invitados" := lrZonFisPar."Adultos invitados" + "Adultos invitados ingreso";
+        lrZonFisPar.Ni¤os               := lrZonFisPar.Ni¤os + "Ni¤os transportados";
+        lrZonFisPar."Ni¤os invitados"   := lrZonFisPar."Ni¤os invitados" + "Ni¤os invitados ingreso";
+        lrZonFisPar.MODIFY;
+
+        // ----  AJS 19.12.2001  ----
+        // ----  Trabajar con la zona de xRec solo en los cambios directos sobre la tabla  ----
+
+        IF (xRec."Zona fisica" <> "Zona fisica") AND (pw_cambiodirecto) THEN BEGIN
+          lrSerPar.RESET;
+
+          // AJS 13.06.2006
+          // Establezco este orden para aumentar rendimiento
+
+          lrSerPar.SETCURRENTKEY("N§ Parte",
+                                 "N§ Linea");
+          lrSerPar.SETRANGE ("N§ Parte"   , pw_parte);
+          lrSerPar.SETRANGE ("Zona fisica", xRec."Zona fisica");
+          lrSerPar.SETFILTER("N§ Linea"   , '<>%1', "N§ Linea");
+          IF NOT lrSerPar.FINDFIRST THEN BEGIN
+            IF lrZonFisPar.GET(pw_parte, xRec."Zona fisica") THEN
+              lrZonFisPar.DELETE;
+          END;
+        END;
+      END
+      ELSE BEGIN
+        lrSerPar.RESET;
+
+        // AJS 13.06.2006
+        // Establezco este orden para aumentar rendimiento
+
+        lrSerPar.SETCURRENTKEY("N§ Parte",
+                               "N§ Linea");
+        lrSerPar.SETRANGE ("N§ Parte"   , pw_parte);
+        lrSerPar.SETRANGE ("Zona fisica", "Zona fisica");
+        lrSerPar.SETFILTER("N§ Linea"   , '<>%1', "N§ Linea");
+        IF NOT lrSerPar.FINDFIRST THEN BEGIN
+          IF lrZonFisPar.GET(pw_parte, "Zona fisica") THEN
+            lrZonFisPar.DELETE;
+        END;
+      END;
+    END;
+
+    PROCEDURE CompruebaBloqueados@28(VAR prSerPar@1100244000 : Record 7010359);
+    VAR
+      lrSerPar2@1100244001 : Record 7010359;
+    BEGIN
+      // CompruebaBloqueados
+
+      // Comprueba que en todas las lineas Serv-Partes pasadas como parametro
+      // No existen m s lineas en el mismo parte y con el mismo Punto de Recogida
+      // En ese caso da un mensaje de advertencia y las marca por igual
+      // Esto en teoria no deberia de pasar, es solo por precaucion
+
+      lrSerPar2.COPY(prSerPar);
+      lrSerPar2.RESET;
+      lrSerPar2.SETCURRENTKEY("N§ Parte","Punto recogida","Hora recogida");
+
+      IF prSerPar.FINDSET THEN
+        REPEAT
+          lrSerPar2.SETRANGE("N§ Parte",prSerPar."N§ Parte");
+          lrSerPar2.SETRANGE("Punto recogida",prSerPar."Punto recogida");
+          lrSerPar2.SETFILTER("Linea Manual",'<>%1',prSerPar."Linea Manual");
+          IF lrSerPar2.FINDSET(TRUE) THEN BEGIN
+            MESSAGE(Text00001,prSerPar."Punto recogida",prSerPar."Linea Manual");
+            lrSerPar2.MODIFYALL("Linea Manual", prSerPar."Linea Manual");
+          END;
+        UNTIL prSerPar.NEXT = 0;
+    END;
+
+    PROCEDURE MantenTipoIngreso@1103350000(VAR prParte@1103355000 : Record 7010360);
+    BEGIN
+      // MantenTipoIngreso
+
+      IF "N§ Parte" <> '' THEN BEGIN
+        prParte.MantenTipoIngreso;
+        prParte.MODIFY;
+      END;
+    END;
+
+    PROCEDURE ManteTTOOParte2@1103350001(VAR lrSerPar@1103350000 : Record 7010359);
+    BEGIN
+      // ManteTTOOParte2
+      // Llamamos a la funcion de Mantener Touroperador x Parte pasandole el registro xRec y as¡ controlarlo
+
+
+      xRec:= lrSerPar;
+      IF rParte.GET("N§ Parte") THEN
+        mantener_touroperador_parte(rParte);
+    END;
+
+    PROCEDURE MantenHoraInicio@1103350002(pwBorra@1103350001 : Boolean);
+    VAR
+      lrSerPar@1103350000 : Record 7010359;
+      lwPresentacion@1100217000 : Text[250];
+    BEGIN
+      // MantenHoraInicio
+      // Mantiene automaticamente la hora de inicio del parte en funci¢n de la hora de recogida o la hora de vuelo
+
+      IF "N§ Parte" = '' THEN
+        EXIT;
+
+      rPar.FINDFIRST;
+
+      CLEAR(rParte);
+      IF rParte.GET("N§ Parte") THEN
+      BEGIN
+        lrSerPar := Rec;
+        lrSerPar.SETRANGE("N§ Parte", "N§ Parte");
+        IF pwBorra THEN
+        BEGIN
+          CLEAR(lrSerPar."Hora Vuelo");
+          CLEAR(lrSerPar."Hora recogida");
+        END;
+
+        // AJS 01.09.2005
+        // Para evitar dejar la hora de inicio en blanco utilizamos una variable temporal
+
+        wHoraTemp := rSer.BuscarPrimeraHoraParte(lrSerPar, rParte."Codigo Servicio", lwPresentacion); //+$004
+        IF wHoraTemp <> 0T THEN
+        BEGIN
+          rParte.VALIDATE("Hora inicio", wHoraTemp);
+          rParte.VALIDATE(Presentacion , lwPresentacion); //+$003 //+$004
+        END;
+        rParte.MODIFY(TRUE);
+
+        //+$006 <
+        rParte.GET("N§ Parte");
+
+        lrSerPar.RESET;
+        lrSerPar.SETRANGE ("N§ Parte", "N§ Parte");
+        lrSerPar.SETFILTER("N§ Linea", '<>%1', "N§ Linea");
+        IF lrSerPar.FINDSET(TRUE) THEN
+        BEGIN
+          lrSerPar.MODIFYALL("FechaHora Parte"   , rParte."Hora Inicio DT");
+          lrSerPar.MODIFYALL("FechaHora Parte BI", rParte."Hora Inicio BI");
+        END;
+
+        "FechaHora Parte"    := rParte."Hora Inicio DT";
+        "FechaHora Parte BI" := rParte."Hora Inicio BI";
+        //+$006 >
+      END;
+    END;
+
+    PROCEDURE ActualizaPaxesSoporte@1103350003(VAR prParte@1103355000 : Record 7010360;pwBorra@1103350001 : Boolean);
+    VAR
+      lrSerPar@1103350000 : Record 7010359;
+    BEGIN
+      // ActualizaPaxesSoporte
+      // Actuliza los campos "Adultos trans. soporte" Y "Ni¤os transportados" del Parte
+
+
+      IF "N§ Parte" <> '' THEN BEGIN
+        prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+        CLEAR(lrSerPar);
+        lrSerPar:= Rec;
+        IF lrSerPar.FIND AND (lrSerPar."N§ Parte" = "N§ Parte") THEN BEGIN // Le quitamos los paxes de la linea actual guardada
+          prParte."Adultos transportados" -= lrSerPar."Adultos transportados";
+          prParte."Ni¤os transportados"   -= lrSerPar."Ni¤os transportados";
+        END;
+        IF NOT pwBorra THEN BEGIN // Le a¤adimos los de la linea actual
+          prParte."Adultos transportados" += "Adultos transportados";
+          prParte."Ni¤os transportados"   += "Ni¤os transportados";
+        END;
+        // JPT 09/03/10 No ejecutamos el Modify si no ha habido cambios
+        IF (prParte."Adultos trans. soporte" <> prParte."Adultos transportados") OR
+           (prParte."Ni¤os trans. soporte"   <> prParte."Ni¤os transportados") THEN BEGIN
+          prParte."Adultos trans. soporte" := prParte."Adultos transportados";
+          prParte."Ni¤os trans. soporte"   := prParte."Ni¤os transportados";
+          prParte.MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE MantenVersionParte@1100253000(VAR prParte@1100253009 : Record 7010360;pwModificacion@1100253000 : Boolean);
+    VAR
+      lwNoCamps@1100253001 : ARRAY [20] OF Integer;
+      lwRParte@1100253002 : RecordRef;
+      lwRXrecParte@1100253003 : RecordRef;
+      lwNo@1100253004 : Integer;
+      lwField@1100253005 : FieldRef;
+      lwXrecField@1100253006 : FieldRef;
+      lwOk@1100253007 : Boolean;
+      lwOk2@1100253008 : Boolean;
+    BEGIN
+      // MantenVersionParte
+      // JPT 20/07/05 Mantemeos el campo Version en el parte
+      // Si pwModificacion= False lo marcamos de todos modos
+
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TRN, rPar."Empresa Real"::CNT]) THEN
+        EXIT;
+
+      IF NOT prParte.Impreso THEN
+        EXIT;
+
+      // Si es una modificacion cambiamos el numero de versi¢n si dicha modificaci¢n afecta a alguno de los siguientes campos
+
+      lwOk:= TRUE;
+
+      IF pwModificacion THEN BEGIN
+        lwRParte.GETTABLE(Rec);
+        lwRXrecParte.GETTABLE(xRec);
+        lwOk2 := TRUE;
+        FOR lwNo:=1 TO lwRParte.FIELDCOUNT DO BEGIN
+          lwField     := lwRParte.FIELDINDEX(lwNo);
+          lwXrecField := lwRXrecParte.FIELDINDEX(lwNo);
+          // Campos que afectan a la impresion de  Parte
+          IF lwField.NUMBER IN [5,7,9,11,13,16,17,25,80,81] THEN
+            lwOk2 := lwOk2 AND (lwField.VALUE = lwXrecField.VALUE);
+          IF NOT lwOk2 THEN  // Si ya hay alguna diferencia se realiza una salida prematura del bucle
+            lwNo:= lwRParte.FIELDCOUNT;
+        END;
+        lwOk := NOT lwOk2;
+      END;
+
+      IF lwOk THEN BEGIN
+        prParte.MantenVersion(FALSE);
+      END;
+    END;
+
+    PROCEDURE MantenNoExp@1100253007(VAR prParte@1100253000 : Record 7010360;pwModificacion@1100253009 : Boolean);
+    VAR
+      lwNoCamps@1100253001 : ARRAY [20] OF Integer;
+      lwRParte@1100253002 : RecordRef;
+      lwRXrecParte@1100253003 : RecordRef;
+      lwNo@1100253004 : Integer;
+      lwField@1100253005 : FieldRef;
+      lwXrecField@1100253006 : FieldRef;
+      lwOk@1100253007 : Boolean;
+      lwOk2@1100253008 : Boolean;
+    BEGIN
+      // MantenNoExp
+      // JPT 29/03/06 Mantemeos el campo "Num Exportacion Prov" para volver a exportarlo si ha habido cambios
+
+      // Si pwModificacion= False lo marcamos de todos modos
+      // Si es una modificacion borramos el numero de exportacion si dicha modificaci¢n afecta a alguno de los siguientes campos
+
+      IF prParte."Num Exportacion Prov"=0 THEN // Si no se ha exportado a£n , salimos
+        EXIT;
+
+      lwOk:= TRUE;
+
+      IF pwModificacion THEN BEGIN
+        lwRParte.GETTABLE(Rec);
+        lwRXrecParte.GETTABLE(xRec);
+        lwOk2 := TRUE;
+        FOR lwNo:=1 TO lwRParte.FIELDCOUNT DO BEGIN
+          lwField     := lwRParte.FIELDINDEX(lwNo);
+          lwXrecField := lwRXrecParte.FIELDINDEX(lwNo);
+          // Campos que afectan al Parte
+          IF lwField.NUMBER IN [5,9,11,13,27,35,37] THEN
+            lwOk2 := lwOk2 AND (lwField.VALUE = lwXrecField.VALUE);
+          IF NOT lwOk2 THEN  // Si ya hay alguna diferencia se realiza una salida prematura del bucle
+            lwNo:= lwRParte.FIELDCOUNT;
+        END;
+        lwOk := NOT lwOk2;
+      END;
+
+      IF lwOk THEN
+        prParte.MantenNoExp(FALSE);
+    END;
+
+    PROCEDURE TraspasaVuelo@1100253001();
+    VAR
+      lrSerPar@1100253000 : Record 7010359;
+    BEGIN
+      // TraspasaVuelo
+      // JPT 05/04/06 Algunas empresas (TRN) controlan los vuelos desde cabecera y no desde las l¡neas
+      // Los vuelos se traspasan de la cabecera a la primera l¡nea
+      // El problema reside cuando se elimina o desasigna esa linea: hay que traspasar los vuelos a la siguiente
+
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TRN]) THEN
+        EXIT;
+
+      IF (Vuelo= '') OR ("N§ Parte"='') THEN
+        EXIT;
+
+
+      CLEAR(lrSerPar);
+      lrSerPar.SETCURRENTKEY("N§ Parte","N§ Linea");
+      lrSerPar.SETRANGE("N§ Parte", "N§ Parte");
+      IF lrSerPar.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+         IF lrSerPar.GETPOSITION <> GETPOSITION THEN BEGIN // Si no es el mismo registro
+           lrSerPar.Vuelo := Vuelo;
+           lrSerPar.MODIFY;
+           Vuelo:= '';
+           EXIT;
+         END;
+        UNTIL lrSerPar.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE MantenSuplementoRapido@1100253002(PwNo@1100253000 : Integer;pwCantidad@1100253001 : Decimal);
+    VAR
+      lwCod@1100253002 : Code[10];
+      lrSupl@1100253003 : Record 7010363;
+    BEGIN
+      // MantenSuplementoRapido
+
+      TESTFIELD("N§ Servicio"); // Comprobamos que realmente exita el registro
+      TESTFIELD("N§ Linea");
+
+      CLEAR(lwCod);
+      CLEAR(rPar);
+      rPar.FINDFIRST;
+      CASE PwNo OF
+        1: lwCod := rPar."Cod. Suplemento Rapido 1";
+        2: lwCod := rPar."Cod. Suplemento Rapido 2";
+      END;
+
+      IF lwCod='' THEN BEGIN
+        pwCantidad :=0;
+        EXIT;
+      END;
+
+      IF NOT lrSupl.GET("N§ Servicio","N§ Linea",lwCod) THEN BEGIN
+        CLEAR(lrSupl);
+        lrSupl."N§ Servicio"     := "N§ Servicio";
+        lrSupl."N§ Linea"        := "N§ Linea";
+        lrSupl."Cod. Suplemento" := lwCod;
+        lrSupl."N§ Parte"        := "N§ Parte";
+        lrSupl.INSERT;
+      END;
+
+      IF pwCantidad = 0 THEN
+        lrSupl.DELETE
+      ELSE BEGIN
+        lrSupl.VALIDATE(Cantidad, pwCantidad);
+        lrSupl.MODIFY;
+      END;
+    END;
+
+    PROCEDURE LoocUpSuplementoRapido@1100253003(PwNo@1100253001 : Integer);
+    VAR
+      lwCod@1100253002 : Code[10];
+      lrSupl@1100253000 : Record 7010363;
+    BEGIN
+      // LoocUpSuplementoRapido
+
+      CLEAR(lwCod);
+      CLEAR(rPar);
+      rPar.FINDFIRST;
+      CASE PwNo OF
+        1: lwCod := rPar."Cod. Suplemento Rapido 1";
+        2: lwCod := rPar."Cod. Suplemento Rapido 2";
+      END;
+
+      IF lwCod='' THEN
+        EXIT;
+
+      CLEAR(lrSupl);
+      lrSupl.FILTERGROUP(2);
+      lrSupl.SETRANGE("N§ Servicio", "N§ Servicio");
+      lrSupl.SETRANGE("N§ Linea"   , "N§ Linea");
+      lrSupl.SETRANGE("Cod. Suplemento", lwCod);
+      lrSupl.FILTERGROUP(0);
+      IF NOT lrSupl.GET("N§ Servicio","N§ Linea",lwCod) THEN;
+      FORM.RUNMODAL(0,lrSupl);
+    END;
+
+    PROCEDURE RepasaCambios@1103355000();
+    VAR
+      wrCampo1@1103355004 : FieldRef;
+      wrCampo2@1103355003 : FieldRef;
+      lwCont@1103355002 : Integer;
+      lrfRec@1103355006 : RecordRef;
+      lrfXRec@1103355005 : RecordRef;
+    BEGIN
+      // RepasaCambios
+      // Repasa los cambios entre las dos registros
+
+      lrfXRec.GETTABLE(xRec);
+      lrfRec.GETTABLE(Rec);
+
+      FOR lwCont:=1 TO lrfRec.FIELDCOUNT DO BEGIN
+        wrCampo1:= lrfRec.FIELDINDEX(lwCont);
+        wrCampo2:= lrfXRec.FIELDINDEX(lwCont);
+        IF wrCampo1.VALUE <> wrCampo2.VALUE THEN BEGIN
+          InsertaHist(wrCampo1.CAPTION, FORMAT(wrCampo2.VALUE), FORMAT(wrCampo1.VALUE));
+        END;
+      END;
+    END;
+
+    PROCEDURE InsertaHist@1103355004(pwCampo@1103355003 : Text[30];pwValorAnterior@1103355004 : Text[230];pwValorNuevo@1103355005 : Text[230]);
+    VAR
+      lrfRec@1103355000 : RecordRef;
+    BEGIN
+      // InsertaHist
+      // Inserta la Creacion o el borrado del registro
+
+      lrfRec.GETTABLE(Rec);
+      CLEAR(rHist);
+
+      // Registramos en el historico
+      rHist.inserta_registro2(rHist."Tipo Fichero"::Linea, "N§ Servicio", "N§ Linea", pwCampo, pwValorAnterior, pwValorNuevo, "N§ Parte"
+      );
+    END;
+
+    PROCEDURE PasaXRec@1103355002(VAR prxRec@1103355000 : Record 7010359);
+    BEGIN
+      // PasaXRec
+      // Le pasamos el valor anterior necesario para algunas funciones
+
+      xRec:= prxRec;
+    END;
+
+    PROCEDURE GetCodigoVuelosParte@1103355006() Codigo : Code[10];
+    BEGIN
+      // AJF 06/02/2008 - DRF 07004
+      // Si la l¡nea es de una reserva shuttle el vuelo se tiene que generar con un codigo especial en lugar
+      // de el n£mero de parte.
+
+      // JPT 02/02/10 Aseguramos el valor de "FechaHora Vuelo"
+      VALIDATE("FechaHora Vuelo BI"); //
+      IF ("Origen creacion" = "Origen creacion"::Shuttle) THEN BEGIN
+        Codigo := Text50003 + FORMAT(DT2DATE("FechaHora Vuelo"),0,Text50004);
+      END
+      ELSE BEGIN
+        Codigo := "N§ Parte";
+      END;
+    END;
+
+    PROCEDURE ConfirmarReserva@1103355003();
+    BEGIN
+      // ConfirmarReserva
+
+      IF NOT Confirmada THEN BEGIN
+        PasaXRec(Rec);
+        VALIDATE(Confirmada, TRUE);
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE DesconfirmarReserva@1103355005();
+    BEGIN
+      // DesconfirmarReserva
+
+      IF Confirmada THEN BEGIN
+        PasaXRec(Rec);
+        VALIDATE(Confirmada, FALSE);
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE MantenerVuelosShuttle@1103355007();
+    VAR
+      lrVuelo@1103355000 : Record 7035335;
+      lrPar@1103355002 : Record 7010311;
+      lwFecha@1103355001 : Text[30];
+    BEGIN
+      // Author        : AJS
+      // Date          : 27.03.2008
+      // Purpose       : En las lineas que se introducen manualmente para los servicios de shuttle hay que crear
+      //                 el registro en tabla de vuelos x parte para la consulta diaria
+      //
+      // Last modified : 27.03.2008
+
+      IF (Vuelo = '') OR ("Hora Vuelo" = 0T) THEN
+        EXIT;
+
+      lrPar.FINDFIRST;
+
+      // solo se deben insertar los vuelos para las reservas de entrada.
+      IF ("Codigo Servicio" <> lrPar."Codigo Entradas") THEN
+        EXIT;
+
+      // AJF 02/04/08
+      // Modifico para que coincida con las importadas desde shuttle.
+
+      //lwFecha := FORMAT(DATE2DMY(Fecha, 3)) + FORMAT(DATE2DMY(Fecha, 2)) + FORMAT(DATE2DMY(Fecha, 1));
+
+      // JPT 02/02/10 Aseguramos el valor de "FechaHora Vuelo"
+      VALIDATE("FechaHora Vuelo BI");
+      lwFecha := Text50003 + FORMAT(DT2DATE("FechaHora Vuelo"),0,Text50004);
+
+      lrVuelo.RESET;
+      lrVuelo.SETRANGE("N§Parte"            , lwFecha);
+      lrVuelo.SETRANGE("Codigo Touroperador", '');
+      lrVuelo.SETRANGE("Fecha Traslado"     , DT2DATE("FechaHora Vuelo"));
+      lrVuelo.SETRANGE("Referencia Vuelo"   , Vuelo);
+      IF NOT lrVuelo.FINDFIRST THEN BEGIN
+        lrVuelo.INIT;
+        lrVuelo."N§Parte"             := lwFecha;
+        lrVuelo."Referencia Vuelo"    := Vuelo;
+        lrVuelo."Codigo Touroperador" := '';
+        lrVuelo."Fecha Traslado"      := DT2DATE("FechaHora Vuelo");
+        lrVuelo."Fecha Llegada Vuelo" := DT2DATE("FechaHora Vuelo");
+        lrVuelo.Hora                  := "Hora Vuelo";
+        // JPT 02/02/10 Validamos el campo para definir "FechaHora Vuelo BI"
+        // lrVuelo."FechaHora Vuelo"     := CREATEDATETIME(DT2DATE("FechaHora Vuelo"), "Hora Vuelo");
+        lrVuelo.VALIDATE("FechaHora Vuelo", CREATEDATETIME(DT2DATE("FechaHora Vuelo"), "Hora Vuelo"));
+
+        IF "Codigo Servicio" = lrPar."Codigo Entradas" THEN
+          lrVuelo."E/S" := lrVuelo."E/S"::Entrada
+        ELSE
+          lrVuelo."E/S" := lrVuelo."E/S"::Salida;
+
+        lrVuelo.INSERT;
+      END;
+    END;
+
+    PROCEDURE BuscaServicio@1100244017(VAR prParte@1100244002 : Record 7010360;VAR pwNumServ@1100244001 : Code[10]);
+    VAR
+      lrServicio@1100244000 : Record 7010358;
+    BEGIN
+      // BuscaServicio
+      // Devuelve el servicio que le toque
+
+      lrServicio.RESET;
+      lrServicio.SETCURRENTKEY(Garaje,Fecha,Cliente,"Codigo Servicio",Referencia);
+      lrServicio.SETRANGE(Garaje           , prParte.Garaje);
+      lrServicio.SETRANGE(Fecha            , prParte.Fecha);
+      lrServicio.SETRANGE(Cliente          , prParte.Cliente);
+      lrServicio.SETRANGE("Codigo Servicio", prParte."Codigo Servicio");
+      //lrServicio.SETRANGE(Referencia       , prParte.Referencia);
+      IF NOT lrServicio.FINDFIRST THEN BEGIN
+        lrServicio.INIT;
+        lrServicio.INSERT  (TRUE);
+        lrServicio.VALIDATE(Garaje              , prParte.Garaje);
+        lrServicio.VALIDATE (Cliente            , prParte.Cliente);
+        lrServicio.VALIDATE ("Codigo Servicio"  , prParte."Codigo Servicio");
+        lrServicio.VALIDATE ("Tipo Servicio"    , prParte."Tipo Servicio");
+        lrServicio.VALIDATE(Fecha               , prParte.Fecha);
+        lrServicio.VALIDATE(Referencia          , prParte.Referencia);
+        lrServicio.VALIDATE(Touroperador        , prParte."Touroperador principal");
+        lrServicio.Guia                         := prParte.Guia;
+        lrServicio.MODIFY (TRUE);
+      END;
+
+      pwNumServ := lrServicio."N§ Servicio";
+    END;
+
+    PROCEDURE ComprobarDia@1103355008(VAR pwNuevaFecha@1103355008 : DateTime) Cambio : Boolean;
+    VAR
+      lrReservas@1103355000 : Record 7010359;
+      lwFecha@1103355005 : Date;
+      lwInicio@1103355001 : DateTime;
+      lwFinal@1103355002 : DateTime;
+      lwCandidatoIni@1103355003 : DateTime;
+      lwCandidatoFin@1103355004 : DateTime;
+      lrParte@1103355006 : Record 7010360;
+      lwPrimero@1103355007 : Boolean;
+    BEGIN
+      // ComprobarDia
+      // En los partes shuttle que est n entre dos dias, al cambiar de hora de vuelo hay que comprobar
+      // si la hora pertenece al primer dia o al siguiente.
+
+      // JPT 02/02/10
+      // lrReservas.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrReservas.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+
+      lrReservas.SETRANGE ("N§ Parte", "N§ Parte");
+
+      // JPT 02/02/10
+      // Filtramos las reservas que no tienen hora de vuelo (reservas recien insertadas).
+      // lrReservas.SETFILTER("FechaHora Vuelo", '<>%1', 0DT);
+      lrReservas.SETFILTER("FechaHora Vuelo BI", '<>%1', 0);
+
+      // Si es la primera reserva introducida usamos la fecha del parte.
+      IF NOT lrReservas.FINDFIRST THEN BEGIN
+        lrParte.GET("N§ Parte");
+        pwNuevaFecha := CREATEDATETIME(lrParte.Fecha, "Hora Vuelo");
+        EXIT(FALSE);
+      END;
+
+      // JPT 02/02/10 Esto asegura "FechaHora Vuelo"
+      lrReservas.VALIDATE("FechaHora Vuelo BI");
+      lwInicio := lrReservas."FechaHora Vuelo";
+
+      lwPrimero := (lrReservas.GETPOSITION = GETPOSITION);
+
+      //lrReservas.FINDLAST;
+
+      //lwFinal  := lrReservas."FechaHora Vuelo";
+
+      // Hay que tener en cuenta dos casos, los partes que empiezan al final del dia y los que empiezan al inicio del dia.
+      // los comparamos la fecha de inicio con el mediodia para para saber de cual se trata.
+
+      lwFecha := DT2DATE(lwInicio);
+
+      // Al inicio del dia.
+      IF DT2TIME(lwInicio) < 120000T THEN BEGIN
+        // para partes de inicio del dia hay que usar el dia anterior y el del parte.
+        lwCandidatoIni := CREATEDATETIME(CALCDATE(Text50005, lwFecha), "Hora Vuelo");
+        lwCandidatoFin := CREATEDATETIME(lwFecha, "Hora Vuelo");
+      END
+      // Al final del dia.
+      ELSE BEGIN
+        // para partes de final del dia hay que usar el dia del parte y el siguiente.
+        lwCandidatoIni := CREATEDATETIME(lwFecha, "Hora Vuelo");
+        lwCandidatoFin := CREATEDATETIME(CALCDATE(Text50006, lwFecha), "Hora Vuelo");
+      END;
+
+      // El que tenga menor diferencia con el inicio es el valor elegido.
+      IF ABS(lwCandidatoIni - lwInicio) < ABS(lwCandidatoFin - lwInicio) THEN
+        pwNuevaFecha := lwCandidatoIni
+      ELSE
+        pwNuevaFecha := lwCandidatoFin;
+
+      IF DT2DATE(pwNuevaFecha) < DT2DATE(lwInicio) THEN
+        EXIT(TRUE);
+
+      IF lwPrimero THEN BEGIN
+        Cambio := (DT2DATE(pwNuevaFecha) > DT2DATE(lwInicio));
+        IF lrReservas.NEXT <> 0 THEN BEGIN
+          // JPT 02/02/10 Esto asegura "FechaHora Vuelo"
+          lrReservas.VALIDATE("FechaHora Vuelo BI");
+          Cambio := Cambio AND (DT2DATE(lrReservas."FechaHora Vuelo") > DT2DATE(lwInicio));
+        END;
+        EXIT(Cambio);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ActualizaFechaReservas@1103355010(pwNumParte@1103355000 : Code[10];pwFecha@1103355001 : Date);
+    VAR
+      lrReservas@1103355002 : Record 7010359;
+    BEGIN
+      // ActualizaFechaReservas
+      // solo para shuttle.
+      // no actualizamos el registro actual, ya que se supone que est  en un trigger que llamar 
+      // a los triggers de insert/modify/delete
+
+      lrReservas.SETCURRENTKEY("N§ Parte", "N§ Linea");
+
+      lrReservas.SETRANGE("N§ Parte", pwNumParte);
+
+      IF lrReservas.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          lrReservas.Fecha := pwFecha;
+
+          IF lrReservas.GETPOSITION <> GETPOSITION THEN
+            lrReservas.MODIFY
+          ELSE
+            Fecha := pwFecha;
+
+        UNTIL lrReservas.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModificarLineaRecogida@1103355009();
+    VAR
+      lrParte@1103355000 : Record 7010360;
+      lrRecogida@1103355001 : Record 7010360;
+      lrLinRecogida@1103355002 : Record 7010359;
+      lrLinNueva@1103355003 : Record 7010359;
+    BEGIN
+      // ModificarLineaRecogida
+
+      IF "N§ Parte" = '' THEN
+        EXIT;
+
+      IF NOT lrParte.GET("N§ Parte") THEN
+        EXIT;
+
+      IF lrParte."Recogida Generada" = '' THEN
+        EXIT;
+
+      IF NOT lrRecogida.GET(lrParte."Recogida Generada") THEN
+        EXIT;
+
+      // Si no existe la l¡nea preguntamos si se quiere crear una nueva.
+
+      lrLinRecogida.SETCURRENTKEY("N§ Parte", "N§ Linea");
+      lrLinRecogida.SETRANGE("N§ Parte", lrParte."Recogida Generada");
+      lrLinRecogida.SETRANGE("N§ Linea", -("N§ Linea"));
+
+      IF NOT lrLinRecogida.FINDFIRST THEN BEGIN
+
+        lrLinRecogida.SETRANGE("N§ Linea");
+        lrLinRecogida.FINDFIRST;
+
+        IF NOT CONFIRM(Text012) THEN
+          EXIT;
+
+        lrLinNueva.INIT;
+        lrLinNueva := Rec;
+        lrLinNueva."N§ Servicio" := lrLinRecogida."N§ Servicio";
+        lrLinNueva."N§ Linea"    := -("N§ Linea");
+        lrLinNueva."N§ Parte"    := lrRecogida."N§ Parte";
+        lrLinNueva."Hora recogida" := 0T;
+        lrLinNueva.INSERT(TRUE);
+
+        EXIT;
+
+      END;
+
+      // Si existe confirmamos y modificamos.
+
+      IF NOT CONFIRM(Text013) THEN
+        EXIT;
+
+      lrLinRecogida.TRANSFERFIELDS(Rec, FALSE);
+      lrLinRecogida."N§ Parte" := lrRecogida."N§ Parte";
+      lrLinRecogida.MODIFY(TRUE);
+      // JPT 24/08/09 Es preciso llamar a la siguiente funci¢n ya que no se ajusta el TTOO x parte
+      cFunP.RecalculaTTOOParte(lrRecogida);
+    END;
+
+    PROCEDURE ConvDTBIV@1103355014();
+    BEGIN
+      // ConvDTBIV
+      // JPT 02/02/10 Convierte los campos DateTime a BigInteger
+
+      "FechaHora Vuelo BI" := cFunBas.DTtoBIGINT("FechaHora Vuelo");
+    END;
+
+    BEGIN
+    {
+      JPT 02/02/10 El campo "FechaHora vuelo BI" es un biginteger que sustituye a "FechaHora vuelo" para que no haya desfase en los
+      cambios horarios. Lo mismo ocurre con el campo "FechaHora Parte BI"
+
+      $001 AJS 27072011 Modifico la funcion formatea_lista_vuelos para cubrir aquellos casos en que la
+                        compa¤ia tenga un numero en el codigo
+      $002 AJS 27072011 Corrijo un problema que hacia que no trabajara ok con codigos de compa¤ia de 3 letras
+      $003 AJS 19092013 Para ibizatours cuando se modifica la hora de la primera linea o se borra hay que recalcular la hora de inicio y
+                        el lugar de presentacion
+
+      $004 AJS 23092013 Cuando se calcula la hora de inicio hay que traer correctamente el lugar de presentacion
+
+      $005 AJS 25092013 Eliminamos el CONFIRM de paxes previstos
+
+      $006 AJS 07052015 Cuando se actualice la hora de recogida actualizamos hora de inicio del parte, para la consulta de shuttle
+
+      $007 AJS 21072015 Modifico la funcion MantenHoraInicio porque ya no funciona por Empresa Real
+    }
+    END.
+  }
+}

@@ -1,0 +1,916 @@
+OBJECT Codeunit 825 DO Payment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1009 : TextConst 'ENU=There is nothing to authorize.;ESP=No hay nada que autorizar.';
+      Text002@1015 : TextConst 'ENU=%1 transaction with amount of %2 failed.\%3.;ESP=Error en transacci¢n de %1 con el importe %2.\%3.';
+      Text003@1016 : TextConst 'ENU=%1 transaction failed.\%2.;ESP=Error en transacci¢n de %1.\%2.';
+      Text004@1017 : TextConst 'ENU=%1 on %2 %3 must correspond to %1 of %4 %5 specified for the selected %6.;ESP=%1 del %2 %3 debe corresponder con %1 del %4 %5 que se especific¢ para %6 de la selecci¢n.';
+      Text005@1004 : TextConst 'ENU=There is no Capture transaction associated with the document specified in the %1 field on %2 %3.;ESP=No hay ninguna transacci¢n de captura asociada al documento especificado en el campo %1 de %2 %3.';
+      Text006@1019 : TextConst 'ENU=%2 %1 is already expired.;ESP=%2 %1 ya expir¢.';
+      Text007@1020 : TextConst 'ENU=Test mode is enabled for the MS Dynamics Online Payment Service.  No payment transaction has been performed.;ESP=Se habilit¢ el modo de prueba para el servicio de pago de MS Dynamics Online. No se realiz¢ ninguna transacci¢n de pago.';
+      Text008@1023 : TextConst 'ENU=Credit card %1 has already been performed for this %2, but posting failed. You must complete posting of %2 %3.;ESP=La tarjeta de cr‚dito %1 ya se us¢ para %2, pero se produjo un error de registro. Complete el registro de %2 %3.';
+      Text009@1000 : TextConst 'ENU=Credit card %1 has already been performed for this %2. %3 on the current %2 must be %4 according to the credit card transaction performed.;ESP=La tarjeta de cr‚dito %1 ya se us¢ para %2. El valor de %3 de %2 actual debe ser %4, de acuerdo con la transacci¢n de tarjeta de cr‚dito realizada.';
+      Text010@1005 : TextConst 'ENU=Amount to refund must not be greater than remaining amount of %1 on the %2 transaction.;ESP=El importe del reembolso no puede superar el importe restante de %1 de la transacci¢n de %2.';
+      Currency@1100 : Record 4;
+      GLSetup@1101 : Record 98;
+      CrCardIntegrationMgt@1201 : Codeunit 826;
+      TransactionLogMgt@1202 : Codeunit 829;
+      TestMessageShown@1300 : Boolean;
+      PaymentSetupLoaded@1003 : Boolean;
+      Text011@1011 : TextConst 'ENU=The Balancing Account No. "%1" cannot be used in Dynamics Online Payment.;ESP=No se puede usar la cuenta de saldo n.§ "%1" en los pagos de Dynamics Online.';
+
+    PROCEDURE AuthorizeGenJnlLine@12(GenJnlLine@1000 : Record 81) : Integer;
+    VAR
+      TransactionLogEntry@1003 : Record 829;
+      PaymentInfo@1004 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      AmountToAuthorize@1001 : Decimal;
+      TransactionLogEntryNo@1002 : Integer;
+    BEGIN
+      GenJnlLine.TESTFIELD("Credit Card No.");
+      IF NOT IsValidBalancingAccountNo(GenJnlLine) THEN
+        ERROR(Text011,GenJnlLine."Bal. Account No.");
+
+      AmountToAuthorize :=
+        ABS(GenJnlLine.Amount) +
+        CalcAmountToAuthorize(
+          ABS(GenJnlLine.Amount),
+          GenJnlLine."Currency Code",
+          GenJnlLine."Currency Factor",
+          GenJnlLine."Posting Date");
+
+      InitTransaction;
+      GetBasicPaymentInfoForGenJnlLn(GenJnlLine,AmountToAuthorize,PaymentInfo);
+
+      TransactionLogEntryNo :=
+        CrCardIntegrationMgt.AuthorizePayment(
+          TransactionLogEntry,
+          GenJnlLine."Credit Card No.",
+          PaymentInfo,
+          TransactionLogEntry."Document Type"::Payment,
+          GenJnlLine."Document No.");
+
+      IF TransactionLogEntry.GET(TransactionLogEntryNo) THEN
+        FinishTransaction(TransactionLogEntry);
+      EXIT(TransactionLogEntryNo);
+    END;
+
+    PROCEDURE AuthorizeSalesDoc@14(SalesHeader@1000 : Record 36;CustLedgerEntryNo@1008 : Integer;AuthorizationRequired@1006 : Boolean) : Integer;
+    VAR
+      AuthTransLogEntry@1004 : Record 829;
+      CustLedgEntry@1007 : Record 21;
+      PaymentInfo@1005 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      AuthTransLogEntryNo@1002 : Integer;
+      AmountToCapture@1001 : Decimal;
+    BEGIN
+      IF NOT IsValidPaymentMethod(SalesHeader."Payment Method Code") THEN
+        EXIT;
+
+      CheckSalesDoc(SalesHeader);
+
+      IF TransactionLogMgt.FindPostingNotFinishedEntry(
+           SalesHeader."Document Type",
+           SalesHeader."No.",
+           AuthTransLogEntry)
+      THEN
+        ERROR(Text008,AuthTransLogEntry."Transaction Type",SalesHeader."Document Type",SalesHeader."No.");
+
+      CheckAssociatedDoc(SalesHeader);
+
+      IF AuthorizationRequired THEN
+        AmountToCapture := CalcSalesDocAmount(SalesHeader,AuthorizationRequired)
+      ELSE BEGIN
+        CustLedgEntry.GET(CustLedgerEntryNo);
+        CustLedgEntry.CALCFIELDS(Amount);
+        AmountToCapture := CustLedgEntry.Amount;
+      END;
+
+      IF AmountToCapture = 0 THEN
+        ERROR(Text001);
+
+      AmountToCapture :=
+        AmountToCapture +
+        CalcAmountToAuthorize(
+          AmountToCapture,
+          SalesHeader."Currency Code",
+          SalesHeader."Currency Factor",
+          SalesHeader."Posting Date");
+
+      InitTransaction;
+      IF TransactionLogMgt.FindValidAuthorizationEntry(
+           SalesHeader."Document Type",
+           SalesHeader."No.",
+           AuthTransLogEntry)
+      THEN BEGIN
+        IF AmountToCapture > AuthTransLogEntry.Amount THEN BEGIN
+          VoidSalesDoc(SalesHeader,AuthTransLogEntry);
+          AuthTransLogEntryNo := AuthorizeSalesDoc(SalesHeader,CustLedgerEntryNo,AuthorizationRequired);
+        END ELSE
+          AuthTransLogEntryNo := AuthTransLogEntry."Entry No.";
+        EXIT(AuthTransLogEntryNo);
+      END;
+
+      CrCardIntegrationMgt.CreateBasicPaymentInfo(
+        PaymentInfo,
+        SalesHeader."Bill-to Customer No.",
+        FORMAT(SalesHeader."Document Type"),
+        SalesHeader."No.",
+        FindCurrencyCode(SalesHeader."Currency Code"),
+        AmountToCapture);
+
+      AuthTransLogEntryNo := CrCardIntegrationMgt.AuthorizePayment(
+          AuthTransLogEntry,
+          SalesHeader."Credit Card No.",
+          PaymentInfo,
+          SalesHeader."Document Type",
+          SalesHeader."No.");
+
+      IF AuthTransLogEntry.GET(AuthTransLogEntryNo) THEN
+        FinishTransaction(AuthTransLogEntry);
+      EXIT(AuthTransLogEntryNo);
+    END;
+
+    PROCEDURE CheckGenJnlLine@10(GenJournalLine@1000 : Record 81);
+    BEGIN
+      WITH GenJournalLine DO BEGIN
+        TESTFIELD(Amount);
+        TESTFIELD("Applies-to Doc. Type");
+        TESTFIELD("Applies-to Doc. No.");
+        IF (("Document Type" <> "Document Type"::Payment) AND ("Document Type" <> "Document Type"::Refund)) OR
+           ("Document Type" = "Applies-to Doc. Type")
+        THEN
+          FIELDERROR("Document Type");
+
+        TESTFIELD("Account Type","Account Type"::Customer);
+        TESTFIELD("Credit Card No.");
+        CheckCreditCardData("Credit Card No.");
+      END;
+    END;
+
+    PROCEDURE CaptureGenJnlLine@11(GenJnlLine@1000 : Record 81) : Integer;
+    VAR
+      TransLogEntry@1005 : Record 829;
+      PaymentInfo@1006 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      AmountToCapture@1003 : Decimal;
+      CaptureTransLogEntryNo@1002 : Integer;
+      AuthTransLogEntryNo@1001 : Integer;
+    BEGIN
+      GenJnlLine.TESTFIELD("Credit Card No.");
+      IF NOT IsValidBalancingAccountNo(GenJnlLine) THEN
+        ERROR(Text011,GenJnlLine."Bal. Account No.");
+
+      AmountToCapture := ABS(GenJnlLine.Amount);
+      IF TransactionLogMgt.FindCapturedButNotFinishedEntr(
+           GenJnlLine."Account No.",
+           GenJnlLine."Applies-to Doc. No.",
+           AmountToCapture,
+           GenJnlLine."Currency Code",
+           GenJnlLine."Credit Card No.",
+           TransLogEntry)
+      THEN
+        IF VerifDocAgainstAlreadPostdTran(
+             GenJnlLine."Document Type",
+             GenJnlLine."Currency Code",
+             AmountToCapture,
+             GenJnlLine."Credit Card No.",
+             TransLogEntry)
+        THEN
+          EXIT(TransLogEntry."Entry No.");
+
+      AuthTransLogEntryNo := AuthorizeGenJnlLine(GenJnlLine);
+      CLEAR(TransLogEntry);
+      TransLogEntry.GET(AuthTransLogEntryNo);
+
+      InitTransaction;
+      GetBasicPaymentInfoForGenJnlLn(GenJnlLine,AmountToCapture,PaymentInfo);
+      CaptureTransLogEntryNo :=
+        CrCardIntegrationMgt.CapturePayment(
+          TransLogEntry,
+          GenJnlLine."Credit Card No.",
+          PaymentInfo,
+          TransLogEntry."Document Type"::Payment,
+          GenJnlLine."Document No.");
+      FinalizeTransLogAfterCapt(CaptureTransLogEntryNo,AuthTransLogEntryNo,TransLogEntry,0);
+
+      FinishTransaction(TransLogEntry);
+      EXIT(CaptureTransLogEntryNo);
+    END;
+
+    PROCEDURE CaptureSalesDoc@15(SalesHeader@1003 : Record 36;CustLedgerEntryNo@1000 : Integer) : Integer;
+    VAR
+      TransLogEntry@1002 : Record 829;
+      PaymentInfo@1006 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      DocNo@1020 : Code[20];
+      AmountToCapture@1001 : Decimal;
+      AuthTransLogEntryNo@1005 : Integer;
+      CaptureTransLogEntryNo@1007 : Integer;
+    BEGIN
+      IF NOT IsValidPaymentMethod(SalesHeader."Payment Method Code") THEN
+        EXIT;
+
+      CheckSalesDoc(SalesHeader);
+
+      AmountToCapture := CalcPostedSalesDocAmount(CustLedgerEntryNo);
+
+      IF TransactionLogMgt.FindPostingNotFinishedEntry(
+           SalesHeader."Document Type",SalesHeader."No.",TransLogEntry)
+      THEN
+        IF VerifDocAgainstAlreadPostdTran(
+             SalesHeader."Document Type",
+             SalesHeader."Currency Code",
+             AmountToCapture,
+             SalesHeader."Credit Card No.",
+             TransLogEntry)
+        THEN
+          EXIT(TransLogEntry."Entry No.");
+
+      IF TransactionLogMgt.FindValidAuthorizationEntry(SalesHeader."Document Type",SalesHeader."No.",TransLogEntry) THEN BEGIN
+        AuthTransLogEntryNo := TransLogEntry."Entry No.";
+      END ELSE BEGIN
+        AuthTransLogEntryNo := AuthorizeSalesDoc(SalesHeader,CustLedgerEntryNo,FALSE);
+        TransLogEntry.GET(AuthTransLogEntryNo);
+      END;
+
+      DocNo := SalesHeader."Posting No.";
+      IF DocNo = '' THEN
+        DocNo := SalesHeader."Last Posting No.";
+
+      InitTransaction;
+      GetBasicPaymentInfoForSalesDoc(SalesHeader,AmountToCapture,PaymentInfo);
+      CaptureTransLogEntryNo :=
+        CrCardIntegrationMgt.CapturePayment(
+          TransLogEntry,
+          SalesHeader."Credit Card No.",
+          PaymentInfo,
+          TransLogEntry."Document Type"::Invoice,
+          DocNo);
+
+      FinalizeTransLogAfterCapt(CaptureTransLogEntryNo,AuthTransLogEntryNo,TransLogEntry,CustLedgerEntryNo);
+
+      FinishTransaction(TransLogEntry);
+
+      EXIT(CaptureTransLogEntryNo);
+    END;
+
+    PROCEDURE RefundGenJnlLine@8(GenJnlLine@1000 : Record 81) : Integer;
+    VAR
+      RefundTransLogEntry@1002 : Record 829;
+      CaptureTransLogEntry@1004 : Record 829;
+      CustLedgEntry@1003 : Record 21;
+      PaymentInfo@1006 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      AmountToRefund@1001 : Decimal;
+      RemainingCapturedAmount@1005 : Decimal;
+      RefundTransLogEntryNo@1007 : Integer;
+    BEGIN
+      GenJnlLine.TESTFIELD("Credit Card No.");
+      IF NOT IsValidBalancingAccountNo(GenJnlLine) THEN
+        ERROR(Text011,GenJnlLine."Bal. Account No.");
+
+      GenJnlLine.TESTFIELD(Amount);
+      AmountToRefund := ABS(GenJnlLine.Amount);
+
+      IF TransactionLogMgt.FindPostingNotFinishedEntry(
+           RefundTransLogEntry."Document Type"::Refund,
+           GenJnlLine."Document No.",
+           RefundTransLogEntry)
+      THEN
+        IF VerifDocAgainstAlreadPostdTran(
+             GenJnlLine."Document Type",
+             GenJnlLine."Currency Code",
+             AmountToRefund,
+             GenJnlLine."Credit Card No.",
+             RefundTransLogEntry)
+        THEN
+          EXIT(RefundTransLogEntry."Entry No.");
+
+      CustLedgEntry.RESET;
+      CustLedgEntry.SETCURRENTKEY("Document No.");
+      CustLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+      CustLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+      CustLedgEntry.SETRANGE("Customer No.",GenJnlLine."Account No.");
+      CustLedgEntry.SETRANGE(Open,TRUE);
+      IF NOT CustLedgEntry.FINDFIRST THEN
+        EXIT;
+
+      CaptureTransLogEntry.SETCURRENTKEY("Cust. Ledger Entry No.");
+      CaptureTransLogEntry.SETRANGE("Cust. Ledger Entry No.",CustLedgEntry."Entry No.");
+      CaptureTransLogEntry.SETRANGE("Transaction Type",CaptureTransLogEntry."Transaction Type"::Capture);
+      CaptureTransLogEntry.SETRANGE("Transaction Result",CaptureTransLogEntry."Transaction Result"::Success);
+      CaptureTransLogEntry.SETFILTER(
+        "Transaction Status",
+        '%1|%2',
+        CaptureTransLogEntry."Transaction Status"::" ",
+        CaptureTransLogEntry."Transaction Status"::Refunded);
+
+      IF GenJnlLine."Applies-to Doc. Type" <> GenJnlLine."Applies-to Doc. Type"::"Credit Memo" THEN BEGIN
+        IF NOT CaptureTransLogEntry.FINDFIRST THEN
+          ERROR(Text005,GenJnlLine.FIELDCAPTION("Applies-to Doc. No."),GenJnlLine.TABLECAPTION,GenJnlLine."Line No.");
+
+        IF FindCurrencyCode(GenJnlLine."Currency Code") <> CaptureTransLogEntry."Currency Code" THEN
+          GenJnlLine.TESTFIELD("Currency Code",RefundTransLogEntry."Currency Code");
+
+        RemainingCapturedAmount := CalcRemainingCapturedAmount(CaptureTransLogEntry);
+        IF AmountToRefund > RemainingCapturedAmount THEN
+          ERROR(Text010,RemainingCapturedAmount,CaptureTransLogEntry."Transaction Type");
+      END;
+
+      InitTransaction;
+      CLEAR(RefundTransLogEntry);
+      RefundTransLogEntry := CaptureTransLogEntry;
+
+      GetBasicPaymentInfoForGenJnlLn(GenJnlLine,AmountToRefund,PaymentInfo);
+      RefundTransLogEntryNo :=
+        CrCardIntegrationMgt.RefundPayment(
+          RefundTransLogEntry,
+          GenJnlLine."Credit Card No.",
+          PaymentInfo,
+          RefundTransLogEntry."Document Type"::Refund,
+          GenJnlLine."Document No.");
+
+      IF GenJnlLine."Applies-to Doc. Type" = GenJnlLine."Applies-to Doc. Type"::"Credit Memo" THEN
+        FinalizeTransLogAfterRefu(RefundTransLogEntryNo,-1,RefundTransLogEntry)
+      ELSE
+        FinalizeTransLogAfterRefu(RefundTransLogEntryNo,CaptureTransLogEntry."Entry No.",RefundTransLogEntry);
+
+      FinishTransaction(RefundTransLogEntry);
+      EXIT(RefundTransLogEntryNo);
+    END;
+
+    PROCEDURE RefundSalesDoc@2(SalesHeader@1001 : Record 36;CustLedgerEntryNo@1010 : Integer) : Integer;
+    VAR
+      RefundTransLogEntry@1000 : Record 829;
+      PaymentInfo@1003 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      AmountToRefund@1002 : Decimal;
+      RefundTransLogEntryNo@1004 : Integer;
+    BEGIN
+      IF NOT IsValidPaymentMethod(SalesHeader."Payment Method Code") THEN
+        EXIT;
+
+      CheckSalesDoc(SalesHeader);
+
+      AmountToRefund := -CalcPostedSalesDocAmount(CustLedgerEntryNo);
+
+      IF TransactionLogMgt.FindPostingNotFinishedEntry(
+           RefundTransLogEntry."Document Type"::Refund,
+           SalesHeader."No.",
+           RefundTransLogEntry)
+      THEN
+        IF VerifDocAgainstAlreadPostdTran(
+             SalesHeader."Document Type",
+             SalesHeader."Currency Code",
+             AmountToRefund,
+             SalesHeader."Credit Card No.",
+             RefundTransLogEntry)
+        THEN
+          EXIT(RefundTransLogEntry."Entry No.");
+
+      InitTransaction;
+      GetBasicPaymentInfoForSalesDoc(SalesHeader,AmountToRefund,PaymentInfo);
+      RefundTransLogEntryNo :=
+        CrCardIntegrationMgt.RefundPayment(
+          RefundTransLogEntry,
+          SalesHeader."Credit Card No.",
+          PaymentInfo,
+          RefundTransLogEntry."Document Type"::Refund,
+          SalesHeader."No.");
+
+      RefundTransLogEntry.GET(RefundTransLogEntryNo);
+      RefundTransLogEntry."Transaction Status" := RefundTransLogEntry."Transaction Status"::"Posting Not Finished";
+      RefundTransLogEntry.MODIFY;
+
+      FinishTransaction(RefundTransLogEntry);
+
+      EXIT(RefundTransLogEntryNo);
+    END;
+
+    PROCEDURE CheckSalesDoc@5(SalesHeader@1000 : Record 36);
+    VAR
+      PaymentMethod@1001 : Record 289;
+      BankAccount@1002 : Record 270;
+    BEGIN
+      SalesHeader.TESTFIELD("Payment Method Code");
+      PaymentMethod.GET(SalesHeader."Payment Method Code");
+      PaymentMethod.TESTFIELD("Payment Processor",PaymentMethod."Payment Processor"::"Dynamics Online");
+      PaymentMethod.TESTFIELD("Bal. Account Type",PaymentMethod."Bal. Account Type"::"Bank Account");
+      PaymentMethod.TESTFIELD("Bal. Account No.");
+      BankAccount.GET(PaymentMethod."Bal. Account No.");
+      IF BankAccount."Currency Code" <> SalesHeader."Currency Code" THEN
+        ERROR(
+          Text004,
+          SalesHeader.FIELDCAPTION("Currency Code"),
+          SalesHeader."Document Type",
+          SalesHeader."No.",
+          BankAccount.TABLECAPTION,
+          BankAccount."No.",
+          PaymentMethod.TABLECAPTION);
+
+      SalesHeader.TESTFIELD("Credit Card No.");
+      CheckCreditCardData(SalesHeader."Credit Card No.");
+    END;
+
+    PROCEDURE VoidSalesDoc@28(VAR SalesHeader@1001 : Record 36;VAR AuthTransLogEntry@1002 : Record 829);
+    VAR
+      VoidTransLogEntry@1003 : Record 829;
+      PaymentInfo@1004 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class";
+      TransEntryNo@1005 : Integer;
+    BEGIN
+      InitTransaction;
+
+      CrCardIntegrationMgt.CreateBasicPaymentInfo(
+        PaymentInfo,
+        AuthTransLogEntry."Customer No.",
+        FORMAT(AuthTransLogEntry."Document Type"),
+        AuthTransLogEntry."Customer No.",
+        AuthTransLogEntry."Currency Code",
+        AuthTransLogEntry.Amount);
+
+      TransEntryNo := CrCardIntegrationMgt.VoidPayment(
+          AuthTransLogEntry,
+          AuthTransLogEntry."Credit Card No.",
+          PaymentInfo,
+          SalesHeader."Document Type",
+          SalesHeader."No.");
+
+      IF VoidTransLogEntry.GET(TransEntryNo) THEN BEGIN
+        IF VoidTransLogEntry."Transaction Result" = VoidTransLogEntry."Transaction Result"::Success THEN BEGIN
+          AuthTransLogEntry."Transaction Status" := AuthTransLogEntry."Transaction Status"::Voided;
+          AuthTransLogEntry.MODIFY;
+        END ELSE BEGIN
+          AuthTransLogEntry."Transaction Status" := VoidTransLogEntry."Transaction Status"::" ";
+          AuthTransLogEntry.MODIFY;
+        END;
+      END;
+
+      FinishTransaction(VoidTransLogEntry);
+    END;
+
+    PROCEDURE UpdateTransactEntryAfterPost@17(TransactionLogEntryNo@1000 : Integer;RelatedCustLedgerEntryNo@1002 : Integer;DocumentType@1003 : 'Payment,Refund');
+    VAR
+      TransactionLogEntry@1001 : Record 829;
+      CustLedgEntry@1005 : Record 21;
+    BEGIN
+      TransactionLogEntry.GET(TransactionLogEntryNo);
+      CustLedgEntry.GET(RelatedCustLedgerEntryNo);
+      FindCustLedgEntryNoForPayment(CustLedgEntry,DocumentType);
+      TransactionLogEntry."Cust. Ledger Entry No." := CustLedgEntry."Entry No.";
+      CASE CustLedgEntry."Document Type" OF
+        CustLedgEntry."Document Type"::Payment:
+          TransactionLogEntry."Document Type" := TransactionLogEntry."Document Type"::Payment;
+        CustLedgEntry."Document Type"::Refund:
+          TransactionLogEntry."Document Type" := TransactionLogEntry."Document Type"::Refund;
+      END;
+      TransactionLogEntry."Document No." := CustLedgEntry."Document No.";
+      TransactionLogEntry."Transaction Status" := TransactionLogEntry."Transaction Status"::" ";
+      TransactionLogEntry.MODIFY;
+    END;
+
+    PROCEDURE IsAuthorizationRequired@18() : Boolean;
+    VAR
+      CrCardPaymentSetup@1000 : Record 826;
+    BEGIN
+      IF CrCardPaymentSetup.GET THEN
+        EXIT(CrCardPaymentSetup."Authorization Required");
+    END;
+
+    PROCEDURE IsValidPaymentMethod@22(PaymentMethodCode@1000 : Code[10]) : Boolean;
+    VAR
+      PaymentMethod@1001 : Record 289;
+    BEGIN
+      IF PaymentMethod.GET(PaymentMethodCode) THEN
+        EXIT(PaymentMethod."Payment Processor" = PaymentMethod."Payment Processor"::"Dynamics Online");
+    END;
+
+    LOCAL PROCEDURE IsValidBalancingAccountNo@71(GenJournalLine@1000 : Record 81) : Boolean;
+    VAR
+      PaymentMethod@1001 : Record 289;
+    BEGIN
+      IF GenJournalLine."Bal. Account Type" <> GenJournalLine."Bal. Account Type"::"Bank Account" THEN
+        EXIT(FALSE);
+
+      WITH PaymentMethod DO BEGIN
+        SETRANGE("Payment Processor","Payment Processor"::"Dynamics Online");
+        SETRANGE("Bal. Account Type","Bal. Account Type"::"Bank Account");
+        SETRANGE("Bal. Account No.",GenJournalLine."Bal. Account No.");
+        IF FINDFIRST THEN
+          EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCreditCardData@25(CreditCardNo@1000 : Code[20]);
+    VAR
+      CreditCard@1001 : Record 827;
+      IntValue1@1002 : Integer;
+      IntValue2@1003 : Integer;
+    BEGIN
+      CreditCard.GET(CreditCardNo);
+      CreditCard.TESTFIELD("Card Holder Name");
+      CreditCard.TESTFIELD("Expiry Date");
+
+      EVALUATE(IntValue1,FORMAT(TODAY,0,'<Year>'));
+      EVALUATE(IntValue2,COPYSTR(CreditCard."Expiry Date",3,2));
+
+      IF IntValue1 > IntValue2 THEN
+        ERROR(Text006,CreditCardNo,CreditCard.FIELDCAPTION("No."));
+
+      IF IntValue1 = IntValue2 THEN BEGIN
+        EVALUATE(IntValue1,FORMAT(TODAY,0,'<Month>'));
+        EVALUATE(IntValue2,COPYSTR(CreditCard."Expiry Date",1,2));
+        IF IntValue1 >= IntValue2 THEN
+          ERROR(Text006,CreditCardNo,CreditCard.FIELDCAPTION("No."));
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcAmountToAuthorize@23(AmountBase@1000 : Decimal;CurrencyCode@1003 : Code[10];CurrencyFactor@1004 : Decimal;PostingDate@1005 : Date) : Decimal;
+    VAR
+      CrCardPaymentSetup@1001 : Record 826;
+      ChargeAmount@1002 : Decimal;
+      MaxChargeAmount@1006 : Decimal;
+    BEGIN
+      IF AmountBase <> 0 THEN BEGIN
+        CrCardPaymentSetup.GET;
+        IF CrCardPaymentSetup."Charge Value" <> 0 THEN BEGIN
+          IF CurrencyCode = '' THEN BEGIN
+            Currency.InitRoundingPrecision;
+            MaxChargeAmount := CrCardPaymentSetup."Max. Charge Amount (LCY)";
+          END ELSE BEGIN
+            Currency.GET(CurrencyCode);
+            Currency.TESTFIELD("Amount Rounding Precision");
+            MaxChargeAmount := AmountToFCY(CrCardPaymentSetup."Max. Charge Amount (LCY)",PostingDate,CurrencyFactor)
+          END;
+
+          CASE CrCardPaymentSetup."Charge Type" OF
+            CrCardPaymentSetup."Charge Type"::Percent:
+              BEGIN
+                ChargeAmount := ROUND(AmountBase * CrCardPaymentSetup."Charge Value" / 100,Currency."Amount Rounding Precision");
+                IF (MaxChargeAmount > 0) AND (ChargeAmount > MaxChargeAmount) THEN
+                  ChargeAmount := MaxChargeAmount;
+              END;
+            CrCardPaymentSetup."Charge Type"::Fixed:
+              BEGIN
+                ChargeAmount := ROUND(CrCardPaymentSetup."Charge Value",Currency."Amount Rounding Precision");
+                IF CurrencyCode <> '' THEN
+                  ChargeAmount := AmountToFCY(ChargeAmount,PostingDate,CurrencyFactor);
+              END;
+          END;
+        END;
+        EXIT(ChargeAmount);
+      END;
+    END;
+
+    PROCEDURE CalcSalesDocAmountForPostedDoc@1(SalesHeader@1000 : Record 36) : Decimal;
+    VAR
+      SalesInvoiceHeader@1013 : Record 112;
+      Amt@1002 : Decimal;
+    BEGIN
+      CASE SalesHeader."Document Type" OF
+        SalesHeader."Document Type"::Order:
+          BEGIN
+            SalesInvoiceHeader.SETCURRENTKEY("Order No.");
+            SalesInvoiceHeader.SETRANGE("Order No.",SalesHeader."No.");
+          END;
+        SalesHeader."Document Type"::Invoice:
+          SalesInvoiceHeader.SETRANGE("Pre-Assigned No.",SalesHeader."No.");
+        ELSE
+          EXIT(0);
+      END;
+
+
+      IF SalesInvoiceHeader.FINDSET THEN
+        REPEAT
+          SalesInvoiceHeader.CALCFIELDS("Amount Including VAT");
+          Amt := Amt + SalesInvoiceHeader."Amount Including VAT";
+        UNTIL SalesInvoiceHeader.NEXT = 0;
+
+      EXIT(Amt);
+    END;
+
+    LOCAL PROCEDURE CalcSalesDocAmount@16(SalesHeader@1000 : Record 36;AuthorizationRequired@1014 : Boolean) : Decimal;
+    VAR
+      TempSalesLine@1011 : TEMPORARY Record 37;
+      TempTotalSalesLine@1012 : TEMPORARY Record 37;
+      TempTotalSalesLineLCY@1013 : TEMPORARY Record 37;
+      SalesPost@1007 : Codeunit 80;
+      TempAmount@1015 : ARRAY [5] OF Decimal;
+      TotalAmt@1003 : Decimal;
+      VAtText@1002 : Text[30];
+      QtyType@1001 : 'General,Invoicing,Shipping';
+    BEGIN
+      IF SalesHeader."Currency Code" = '' THEN
+        Currency.InitRoundingPrecision
+      ELSE BEGIN
+        Currency.GET(SalesHeader."Currency Code");
+        Currency.TESTFIELD("Amount Rounding Precision");
+      END;
+
+      SalesPost.GetSalesLines(SalesHeader,TempSalesLine,QtyType::General);
+      CLEAR(SalesPost);
+      SalesPost.SumSalesLinesTemp(
+        SalesHeader,TempSalesLine,0,TempTotalSalesLine,TempTotalSalesLineLCY,
+        TempAmount[1],VAtText,TempAmount[2],TempAmount[3],TempAmount[4]);
+
+      TotalAmt := TempTotalSalesLine."Amount Including VAT";
+      IF AuthorizationRequired THEN
+        TotalAmt := TempTotalSalesLine."Amount Including VAT" - CalcSalesDocAmountForPostedDoc(SalesHeader);
+
+      EXIT(TotalAmt);
+    END;
+
+    PROCEDURE CalcPreviouseAuthorizedAmounts@24(SalesHeader@1001 : Record 36) : Decimal;
+    VAR
+      AuthTransLogEntry@1002 : Record 829;
+      TransactionLogMgt@1000 : Codeunit 829;
+    BEGIN
+      IF NOT TransactionLogMgt.FindValidAuthorizationEntry(
+           SalesHeader."Document Type",
+           SalesHeader."No.",
+           AuthTransLogEntry)
+      THEN EXIT(0);
+
+      EXIT(CalcRemainingCapturedAmount(AuthTransLogEntry));
+    END;
+
+    LOCAL PROCEDURE CalcPostedSalesDocAmount@30(CustLedgerEntryNo@1001 : Integer) : Decimal;
+    VAR
+      CustLedgerEntry@1002 : Record 21;
+    BEGIN
+      CustLedgerEntry.GET(CustLedgerEntryNo);
+      CustLedgerEntry.CALCFIELDS(Amount);
+      EXIT(CustLedgerEntry.Amount - CustLedgerEntry."Remaining Pmt. Disc. Possible");
+    END;
+
+    LOCAL PROCEDURE CalcRemainingCapturedAmount@4(VAR CaptureTrLogEntry@1000 : Record 829) : Decimal;
+    VAR
+      TransactionLogEntry@1001 : Record 829;
+    BEGIN
+      WITH TransactionLogEntry DO BEGIN
+        SETCURRENTKEY("Parent Entry No.");
+        SETRANGE("Parent Entry No.",CaptureTrLogEntry."Entry No.");
+        SETRANGE("Transaction Type","Transaction Type"::Refund);
+        SETRANGE("Transaction Result","Transaction Result"::Success);
+        CALCSUMS(Amount);
+        EXIT(CaptureTrLogEntry.Amount - Amount);
+      END;
+    END;
+
+    LOCAL PROCEDURE AmountToFCY@35(AmountLCY@1000 : Decimal;PostingDate@1001 : Date;CurrencyFactor@1003 : Decimal) : Decimal;
+    VAR
+      CurrExchRate@1002 : Record 330;
+    BEGIN
+      Currency.TESTFIELD("Amount Rounding Precision");
+      EXIT(
+        ROUND(
+          CurrExchRate.ExchangeAmtLCYToFCY(PostingDate,Currency.Code,AmountLCY,CurrencyFactor),
+          Currency."Amount Rounding Precision"));
+    END;
+
+    LOCAL PROCEDURE CheckAssociatedDoc@27(SalesHeader@1000 : Record 36);
+    VAR
+      SalesLine@1001 : Record 37;
+      SalesLine2@1005 : Record 37;
+      SalesShptLine@1002 : Record 111;
+      SalesHeader2@1003 : Record 36;
+      TransactionLogEntry@1004 : Record 829;
+    BEGIN
+      IF NOT IsValidPaymentMethod(SalesHeader."Payment Method Code") THEN
+        EXIT;
+
+      CASE SalesHeader."Document Type" OF
+        SalesHeader."Document Type"::Invoice:
+          BEGIN
+            SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+            SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+            SalesLine.SETFILTER("Shipment No.",'<>%1','');
+            SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+            IF SalesLine.FINDSET THEN
+              REPEAT
+                SalesShptLine.GET(SalesLine."Shipment No.",SalesLine."Shipment Line No.");
+                IF SalesHeader2.GET(SalesHeader2."Document Type"::Order,SalesShptLine."Order No.") THEN BEGIN
+                  IF TransactionLogMgt.FindPostingNotFinishedEntry(
+                       SalesHeader."Document Type",SalesHeader."No.",
+                       TransactionLogEntry)
+                  THEN
+                    ERROR(
+                      Text008,
+                      TransactionLogEntry."Transaction Type",
+                      SalesHeader."Document Type",
+                      SalesHeader."No.");
+
+                  IF TransactionLogMgt.FindValidAuthorizationEntry(
+                       SalesHeader."Document Type",
+                       SalesHeader2."No.",
+                       TransactionLogEntry)
+                  THEN
+                    VoidSalesDoc(SalesHeader2,TransactionLogEntry);
+                END;
+              UNTIL SalesLine.NEXT = 0;
+          END;
+        SalesHeader."Document Type"::Order:
+          BEGIN
+            SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+            SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+            SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+            IF SalesLine.FINDSET THEN
+              REPEAT
+                SalesShptLine.SETRANGE("Order No.",SalesHeader."No.");
+                SalesShptLine.SETRANGE("Order Line No.",SalesLine."Line No.");
+                IF SalesShptLine.FINDSET THEN
+                  REPEAT
+                    SalesLine2.SETRANGE("Document Type",SalesLine2."Document Type"::Invoice);
+                    SalesLine2.SETRANGE("Shipment No.",SalesShptLine."Document No.");
+                    IF SalesLine2.FINDFIRST THEN
+                      IF SalesHeader2.GET(SalesHeader2."Document Type"::Invoice,SalesLine2."Document No.") THEN BEGIN
+                        IF TransactionLogMgt.FindPostingNotFinishedEntry(
+                             SalesHeader."Document Type",
+                             SalesHeader."No.",
+                             TransactionLogEntry)
+                        THEN
+                          ERROR(
+                            Text008,
+                            TransactionLogEntry."Transaction Type",
+                            SalesHeader."Document Type",
+                            SalesHeader."No.");
+
+                        IF TransactionLogMgt.FindValidAuthorizationEntry(
+                             SalesHeader2."Document Type",
+                             SalesHeader2."No.",
+                             TransactionLogEntry)
+                        THEN
+                          VoidSalesDoc(SalesHeader2,TransactionLogEntry);
+                      END;
+                  UNTIL SalesShptLine.NEXT = 0;
+              UNTIL SalesLine.NEXT = 0;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE VerifDocAgainstAlreadPostdTran@3(DocumentType@1000 : Integer;DocumentCurrencyCode@1002 : Code[10];AmountToVerify@1004 : Decimal;CreditCardNo@1005 : Code[20];VAR TransLogEntry@1003 : Record 829) : Boolean;
+    BEGIN
+      IF TransLogEntry."Currency Code" <> FindCurrencyCode(DocumentCurrencyCode) THEN
+        ERROR(
+          Text009,
+          TransLogEntry."Transaction Type",
+          DocumentType,
+          TransLogEntry.FIELDCAPTION("Currency Code"),
+          TransLogEntry."Currency Code");
+
+      IF TransLogEntry.Amount <> AmountToVerify THEN
+        ERROR(
+          Text009,
+          TransLogEntry."Transaction Type",
+          DocumentType,
+          TransLogEntry.FIELDCAPTION(Amount),
+          TransLogEntry.Amount);
+
+      IF TransLogEntry."Credit Card No." <> CreditCardNo THEN
+        ERROR(
+          Text009,
+          TransLogEntry."Transaction Type",
+          DocumentType,
+          TransLogEntry.FIELDCAPTION("Credit Card No."),
+          TransLogEntry."Credit Card No.");
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetBasicPaymentInfoForGenJnlLn@6(VAR GenJnlLine@1000 : Record 81;Amount@1002 : Decimal;VAR PaymentInfo@1001 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class");
+    BEGIN
+      CrCardIntegrationMgt.CreateBasicPaymentInfo(
+        PaymentInfo,
+        GenJnlLine."Account No.",
+        FORMAT(GenJnlLine."Document Type"),
+        GenJnlLine."Account No.",
+        FindCurrencyCode(GenJnlLine."Currency Code"),
+        Amount);
+    END;
+
+    LOCAL PROCEDURE GetBasicPaymentInfoForSalesDoc@19(SalesHeader@1002 : Record 36;Amount@1001 : Decimal;VAR PaymentInfo@1000 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{D3CEEAA0-3496-4C12-AE06-BA2A778987B7}:Unknown Automation Server.Unknown Class");
+    BEGIN
+      CrCardIntegrationMgt.CreateBasicPaymentInfo(
+        PaymentInfo,
+        SalesHeader."Bill-to Customer No.",
+        FORMAT(SalesHeader."Document Type"),
+        SalesHeader."No.",
+        FindCurrencyCode(SalesHeader."Currency Code"),
+        Amount);
+    END;
+
+    LOCAL PROCEDURE InitTransaction@26();
+    VAR
+      paymentSetup@1000 : Record 825;
+    BEGIN
+      IF PaymentSetupLoaded THEN EXIT;
+
+      paymentSetup.GET;
+      paymentSetup.TESTFIELD(Active);
+
+      IF NOT TestMessageShown AND paymentSetup."Run in Test Mode" THEN BEGIN
+        MESSAGE(Text007);
+        TestMessageShown := TRUE;
+      END;
+
+      PaymentSetupLoaded := TRUE;
+    END;
+
+    LOCAL PROCEDURE FinishTransaction@9(VAR TransactionLogEntry@1000 : Record 829);
+    BEGIN
+      COMMIT;
+      IF TransactionLogEntry."Transaction Result" = TransactionLogEntry."Transaction Result"::Failed THEN BEGIN
+        IF TransactionLogEntry.Amount <> 0 THEN
+          ERROR(
+            Text002,
+            TransactionLogEntry."Transaction Type",
+            TransactionLogEntry.Amount,
+            TransactionLogEntry."Transaction Description");
+
+        ERROR(Text003,TransactionLogEntry."Transaction Type",TransactionLogEntry."Transaction Description");
+      END;
+    END;
+
+    PROCEDURE FindCurrencyCode@21(CurrencyCode@1000 : Code[10]) : Code[10];
+    BEGIN
+      IF CurrencyCode = '' THEN BEGIN
+        GLSetup.GET;
+        GLSetup.TESTFIELD("LCY Code");
+        CurrencyCode := GLSetup."LCY Code";
+      END;
+      EXIT(CurrencyCode);
+    END;
+
+    LOCAL PROCEDURE FindCustLedgEntryNoForPayment@20(VAR CustLedgerEntry@1000 : Record 21;DocumentType@1003 : 'Payment,Refund');
+    VAR
+      CustLedgerEntry2@1002 : Record 21;
+    BEGIN
+      IF DocumentType = DocumentType::Payment THEN
+        IF CustLedgerEntry."Document Type" = CustLedgerEntry."Document Type"::Payment THEN
+          EXIT;
+
+      IF DocumentType = DocumentType::Refund THEN
+        IF CustLedgerEntry."Document Type" = CustLedgerEntry."Document Type"::Refund THEN
+          EXIT;
+
+      CustLedgerEntry2.SETRANGE("Document No.",CustLedgerEntry."Document No.");
+      IF DocumentType = DocumentType::Payment THEN
+        CustLedgerEntry2.SETRANGE("Document Type",CustLedgerEntry."Document Type"::Payment)
+      ELSE
+        CustLedgerEntry2.SETRANGE("Document Type",CustLedgerEntry."Document Type"::Refund);
+      CustLedgerEntry2.SETRANGE("Posting Date",CustLedgerEntry."Posting Date");
+      CustLedgerEntry2.FINDLAST;
+
+      CustLedgerEntry := CustLedgerEntry2;
+    END;
+
+    LOCAL PROCEDURE FinalizeTransLogAfterCapt@7(TransLogEntryNo@1003 : Integer;AuthTransLogEntryNo@1002 : Integer;VAR TransLogEntry@1001 : Record 829;CustomerLedgerEntryNo@1004 : Integer);
+    VAR
+      AuthTransLogEntry@1000 : Record 829;
+    BEGIN
+      IF TransLogEntry."Transaction Result" = TransLogEntry."Transaction Result"::Success THEN BEGIN
+        TransLogEntry.GET(TransLogEntryNo);
+        TransLogEntry."Transaction Status" := TransLogEntry."Transaction Status"::"Posting Not Finished";
+        TransLogEntry."Cust. Ledger Entry No." := CustomerLedgerEntryNo;
+        TransLogEntry.MODIFY;
+
+        IF TransLogEntry."Transaction Result" <> TransLogEntry."Transaction Result"::Failed THEN
+          IF AuthTransLogEntry.GET(AuthTransLogEntryNo) THEN BEGIN
+            AuthTransLogEntry."Transaction Status" := AuthTransLogEntry."Transaction Status"::Captured;
+            AuthTransLogEntry.MODIFY;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FinalizeTransLogAfterRefu@39(TransLogEntryNo@1000 : Integer;AuthTransLogEntryNo@1003 : Integer;VAR TransLogEntry@1001 : Record 829);
+    VAR
+      AuthTransLogEntry@1002 : Record 829;
+    BEGIN
+      IF TransLogEntry."Transaction Result" = TransLogEntry."Transaction Result"::Success THEN BEGIN
+        TransLogEntry.GET(TransLogEntryNo);
+        TransLogEntry."Transaction Status" := TransLogEntry."Transaction Status"::"Posting Not Finished";
+        TransLogEntry.MODIFY;
+
+        IF TransLogEntry."Transaction Result" <> TransLogEntry."Transaction Result"::Failed THEN
+          IF AuthTransLogEntryNo > 0 THEN BEGIN
+            AuthTransLogEntry.GET(AuthTransLogEntryNo);
+            AuthTransLogEntry."Transaction Status" := AuthTransLogEntry."Transaction Status"::Refunded;
+            AuthTransLogEntry.MODIFY;
+          END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

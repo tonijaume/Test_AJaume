@@ -1,0 +1,422 @@
+OBJECT Codeunit 7009714 Calculo Handling fee
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355017 : TextConst 'ENU=Person parameters do not exist;ESP=No existe el fichero de Parametros Personas.';
+      Text001@1103355018 : TextConst 'ENU=HANDFEECOM;ESP=HANDFEECOM';
+      Text002@1103355019 : TextConst 'ENU=Room;ESP=Habitacion';
+      Text003@1103355020 : TextConst 'ENU=REG HABITA;ESP=REG HABITA';
+      Text004@1103355021 : TextConst 'ENU=Board;ESP=Regimen';
+      Text005@1103355022 : TextConst 'ENU=REG REGIME;ESP=REG REGIME';
+      Text006@1103355023 : TextConst 'ENU=Supplement;ESP=Suplemento';
+      Text007@1103355024 : TextConst 'ENU=REG SUPLEM;ESP=REG SUPLEM';
+      Text008@1103355025 : TextConst 'ENU=Person parameters folder does not exist;ESP=NO existe el fichero de Parametros de personas.';
+      Text009@1103355026 : TextConst 'ENU=HANDFEEVEN;ESP=HANDFEEVEN';
+      Text010@1103355027 : TextConst 'ENU=HABITACIOV;ESP=HABITACIOV';
+      Text011@1103355028 : TextConst 'ENU=REG HABITV;ESP=REG HABITV';
+      Text012@1103355029 : TextConst 'ENU=REGIMENV;ESP=REGIMENV';
+      Text013@1103355030 : TextConst 'ENU=REG REGIMV;ESP=REG REGIMV';
+      Text014@1103355031 : TextConst 'ENU=SUPLEMENTV;ESP=SUPLEMENTV';
+      Text015@1103355032 : TextConst 'ENU=REG SUPLEV;ESP=REG SUPLEV';
+      cCalRes@1103355000 : Codeunit 7009707;
+      rRsv@1103355001 : Record 7009743;
+      rRsvDiaV@1103355003 : Record 7009756;
+      rLin@1103355004 : Record 7009736;
+      rHandling@1103355005 : Record 7009733;
+      rConV@1103355007 : Record 7009727;
+      rParPer@1103355008 : Record 7009701;
+      w_precio@1103355009 : Decimal;
+      w_cantidad@1103355010 : Integer;
+      w_suma_habitacion@1103355011 : Decimal;
+      w_suma_regimen@1103355012 : Decimal;
+      w_suma_suplemento@1103355013 : Decimal;
+      w_suma_oferta@1103355014 : Decimal;
+      w_habitacion@1103355015 : Code[10];
+      ok_handling@1103355016 : Boolean;
+      Text016@1100253000 : TextConst 'ENU=Must set %1 child''s age;ESP=Debe de indicar la edad del ni¤o %1';
+
+    PROCEDURE calcular_handling_ingreso@2(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calcular_handling_ingreso
+
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text008);
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE (Delegacion                , reserva.Delegacion);
+      rRsv.SETRANGE ("N§ Responsable"          , reserva."N§ Responsable");
+      //-$004rRsv.SETFILTER("Tipo Persona Facturacion", '<>%1', rParPer."Codigo Infant");
+      rRsv.SETFILTER("Tipo Persona", '<>%1', rParPer."Codigo Infant"); //+$004
+      IF rRsv.FINDSET THEN BEGIN
+        REPEAT
+          IF rRsv.Responsable THEN BEGIN
+            w_habitacion := rRsv.Habitacion;
+            // JPT 21/11/11 GOC-CAR-10003 (3) Modificaciones Handling Fee. Reservas que no aplican Handling Fee
+            // Si no debe de aplicar el Handling, sale de la funcion.
+            IF rRsv."No Aplica Handling Fee" THEN
+              EXIT;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+
+      IF rRsv.FINDSET THEN BEGIN
+        REPEAT
+          rRsvDiaV.RESET;
+          rRsvDiaV.SETRANGE(Delegacion  , reserva.Delegacion);
+          rRsvDiaV.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+          rRsvDiaV.SETRANGE(Dia         , reserva."Fecha entrada"); //+$001
+          IF rRsvDiaV.FINDSET THEN BEGIN
+            REPEAT
+              rHandling.RESET;
+              rHandling.SETRANGE (Delegacion     , reserva.Delegacion);
+              rHandling.SETRANGE ("N§ Contrato"  , rRsvDiaV."Contrato venta");
+              rHandling.SETRANGE ("Tipo contrato", rHandling."Tipo contrato"::Venta);
+              rHandling.SETFILTER("Fecha Desde"  , '<=%1', rRsvDiaV.Dia);
+              rHandling.SETFILTER("Fecha Hasta"  , '>=%1', rRsvDiaV.Dia);
+              rHandling.SETRANGE (Activo         , TRUE);
+              IF rHandling.FIND('-') THEN BEGIN
+                REPEAT
+                  comp_aplicacion_handling_ing(rRsv);
+                  IF ok_handling THEN BEGIN
+                    CASE rHandling."Tipo Precio" OF
+                      rHandling."Tipo Precio"::Pax       : handling_pax_ingreso(rRsv);
+                      rHandling."Tipo Precio"::Habitacion: handling_habitacion_ingreso(rRsv);
+                      rHandling."Tipo Precio"::Bono      : handling_bono_ingreso(rRsv);
+                    END;
+                  END;
+                UNTIL rHandling.NEXT = 0;
+              END;
+              rHandling.RESET;
+            UNTIL rRsvDiaV.NEXT = 0;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+      rRsv.RESET;
+    END;
+
+    PROCEDURE handling_pax_ingreso@7(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // handling_pax_ingreso
+
+      //-$004IF reserva."Tipo Persona Facturacion" = rParPer."Codigo Adulto" THEN
+      { $006
+      IF reserva."Tipo Persona" = rParPer."Codigo Adulto" THEN //+$004
+        w_precio := rHandling."Precio Adulto"
+      ELSE
+        w_precio := rHandling."Precio Ni¤o";
+      }
+      w_precio := GetPrice(reserva); // $006
+
+      IF rHandling.Porcentaje THEN
+        w_precio := busca_porcentaje_handling_vent(rHandling, 0D, reserva);
+      IF rConV.GET(reserva.Delegacion, rRsvDiaV."Contrato venta") THEN
+        rLin.INIT;
+      cCalRes.inserta_linea_calculo(rLin, USERID(), Text009, rRsvDiaV."Contrato venta", w_precio,
+                                    rRsv."N§ Reserva", rRsvDiaV.Dia, rHandling."Codigo Handling Fee", 1, w_precio,
+                                    FALSE, rHandling."Importe HP");
+      cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono, rRsv."N§ Responsable",
+                                  rRsv."Hotel reservado", 3, reserva."Hotel Factura",
+                                  reserva.Delegacion, FALSE);
+    END;
+
+    PROCEDURE handling_habitacion_ingreso@8(reserva@1103355000 : Record 7009743);
+    BEGIN
+      IF NOT reserva.Responsable THEN
+        EXIT;
+      w_precio := rHandling."Precio Adulto" * reserva."N§ Habitaciones";
+      w_cantidad := reserva."N§ Habitaciones";
+      IF rHandling.Porcentaje THEN
+        w_precio := busca_porcentaje_handling_vent(rHandling, 0D, reserva);
+      IF rConV.GET(reserva.Delegacion, rRsvDiaV."Contrato venta") THEN
+        rLin.INIT;
+      cCalRes.inserta_linea_calculo(rLin, USERID(), Text009, rRsvDiaV."Contrato venta", w_precio,
+                                    rRsv."N§ Reserva", rRsv."Fecha entrada", rHandling."Codigo Handling Fee", w_cantidad,
+                                    rHandling."Precio Adulto", FALSE, rHandling."Importe HP");
+      cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono, rRsv."N§ Responsable",
+                                  rRsv."Hotel reservado", 3, reserva."Hotel Factura", reserva.Delegacion, FALSE)
+    END;
+
+    PROCEDURE handling_dias_ingreso@9(reserva@1103355000 : Record 7009743);
+    VAR
+      w_dia@1103355001 : Date;
+    BEGIN
+      w_precio := rHandling."Precio Adulto";
+      IF (rRsv."Fecha entrada" <> 0D) AND (rRsv."Fin estancia" <> 0D) THEN BEGIN
+        FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+          IF rConV.GET(reserva.Delegacion, rRsvDiaV."Contrato venta") THEN
+            rLin.INIT;
+          IF rHandling.Porcentaje THEN
+            w_precio := busca_porcentaje_handling_vent(rHandling, w_dia, reserva);
+          cCalRes.inserta_linea_calculo(rLin, USERID(), Text009, rRsvDiaV."Contrato venta", w_precio,
+                                        rRsv."N§ Reserva", w_dia, rHandling."Codigo Handling Fee", 1, w_precio,
+                                        FALSE, rHandling."Importe HP");
+          cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono, rRsv."N§ Responsable",
+                                      rRsv."Hotel reservado", 3, reserva."Hotel Factura", reserva.Delegacion, FALSE)
+        END;
+      END;
+    END;
+
+    PROCEDURE handling_bono_ingreso@10(reserva@1103355000 : Record 7009743);
+    BEGIN
+      IF NOT reserva.Responsable THEN
+        EXIT;
+      //-$004IF reserva."Tipo Persona Facturacion" = rParPer."Codigo Adulto" THEN
+      { $006
+      IF reserva."Tipo Persona" = rParPer."Codigo Adulto" THEN //+$004
+        w_precio := rHandling."Precio Adulto"
+      ELSE
+        w_precio := rHandling."Precio Ni¤o";
+      }
+      w_precio := GetPrice(reserva); // $006
+
+      IF rHandling.Porcentaje THEN
+        w_precio := busca_porcentaje_handling_vent(rHandling, 0D, reserva);
+      IF rConV.GET(reserva.Delegacion, rRsvDiaV."Contrato venta") THEN
+        rLin.INIT;
+      cCalRes.inserta_linea_calculo(rLin, USERID(), Text009, rRsvDiaV."Contrato venta", w_precio,
+                                    rRsv."N§ Reserva", rRsv."Fecha entrada", rHandling."Codigo Handling Fee", 1, w_precio,
+                                    FALSE, rHandling."Importe HP");
+      cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Coste, rRsv.Bono, rRsv."N§ Responsable",
+                                  rRsv."Hotel reservado", 3, reserva."Hotel Factura", reserva.Delegacion, FALSE)
+    END;
+
+    PROCEDURE busca_porcentaje_handling_vent@27(rHandling@1103355000 : Record 7009733;dia_aplicado@1103355001 : Date;reserva@1103355002 : Record 7009743) : Decimal;
+    VAR
+      rLin@1103355003 : Record 7009736;
+      w_total@1103355004 : Decimal;
+    BEGIN
+      // busca_porcentaje_handling_vent
+
+      w_total := 0;
+      rLin.RESET;
+      rLin.SETCURRENTKEY(Usuario,
+                         "Concepto Coste",
+                         Fecha,
+                         "Coste/Ingreso",
+                         Delegacion,
+                         "N§ Reserva");
+      IF rHandling."Aplica a Habitacion" THEN BEGIN
+        rLin.SETRANGE(Usuario         , USERID());
+        rLin.SETRANGE("Concepto Coste", Text010);
+        IF dia_aplicado <> 0D THEN
+          rLin.SETRANGE(Fecha           , dia_aplicado);
+        rLin.SETRANGE("Coste/Ingreso" , 1);
+        rLin.SETRANGE(Delegacion      , reserva.Delegacion);
+        rLin.SETRANGE("N§ Reserva"    , reserva."N§ Reserva");
+        IF rLin.FIND('-') THEN BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+        rLin.SETRANGE("Concepto Coste", Text011);
+        IF rLin.FIND('-') THEN BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+      END;
+      IF rHandling."Aplica a Regimen" THEN BEGIN
+        rLin.SETRANGE(Usuario         , USERID());
+        rLin.SETRANGE("Concepto Coste", Text012);
+        IF dia_aplicado <> 0D THEN
+          rLin.SETRANGE(Fecha           , dia_aplicado);
+        rLin.SETRANGE("Coste/Ingreso" , 1);
+        rLin.SETRANGE(Delegacion      , reserva.Delegacion);
+        rLin.SETRANGE("N§ Reserva"    , reserva."N§ Reserva");
+        IF rLin.FIND('-') THEN  BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+        rLin.SETRANGE("Concepto Coste", Text013);
+        IF rLin.FIND('-') THEN BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+      END;
+      IF rHandling."Aplica a Suplemento" THEN BEGIN
+        rLin.SETRANGE(Usuario         , USERID());
+        rLin.SETRANGE("Concepto Coste", Text014);
+        IF dia_aplicado <> 0D THEN
+          rLin.SETRANGE(Fecha           , dia_aplicado);
+        rLin.SETRANGE("Coste/Ingreso" , 1);
+        rLin.SETRANGE(Delegacion      , reserva.Delegacion);
+        rLin.SETRANGE("N§ Reserva"    , reserva."N§ Reserva");
+        IF rLin.FIND('-') THEN  BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+        rLin.SETRANGE("Concepto Coste", Text015);
+        IF rLin.FIND('-') THEN BEGIN
+          REPEAT
+            w_total := w_total + rLin.Importe;
+          UNTIL rLin.NEXT = 0;
+        END;
+      END;
+      w_total := ROUND((w_total * rHandling."Precio Adulto") / 100, 1);
+      EXIT(w_total);
+    END;
+
+    PROCEDURE comp_aplicacion_handling_ing@17(par_reserva@1103355000 : Record 7009743);
+    VAR
+      lrReserva@1100253000 : Record 7009743;
+      lrHandling@1100253001 : Record 7009733;
+      lrRsvTra@1100253002 : Record 7009744;
+    BEGIN
+      // comp_aplicacion_handling_ing
+      ok_handling := TRUE;
+      IF ok_handling THEN BEGIN
+        IF (rHandling."Tipo Habitacion" <> '') AND
+           (rHandling."Tipo Habitacion" <> w_habitacion) THEN
+          ok_handling := FALSE;
+      END;
+      IF ok_handling THEN BEGIN
+        IF (rHandling."Tipo Regimen" <> '') AND
+           (rHandling."Tipo Regimen" <> par_reserva.Regimen) THEN
+          ok_handling := FALSE;
+      END;
+      IF ok_handling THEN BEGIN
+        IF rHandling."Tipo Fechas" = rHandling."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (par_reserva."Fecha venta" < rHandling."Fecha Desde") OR
+             (par_reserva."Fecha venta" > rHandling."Fecha Hasta") THEN
+            ok_handling := FALSE;
+        END;
+        IF rHandling."Tipo Fechas" = rHandling."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (par_reserva."Fecha entrada" < rHandling."Fecha Desde") OR
+             (par_reserva."Fecha entrada" > rHandling."Fecha Hasta") THEN
+            ok_handling := FALSE;
+        END;
+        IF rHandling."Tipo Fechas" = rHandling."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF ((par_reserva."Fin estancia" - 1) < rHandling."Fecha Desde") OR
+             (par_reserva."Fecha entrada" > rHandling."Fecha Hasta") THEN
+            ok_handling := FALSE;
+        END;
+        // JPT 21/11/11 GOC-CAR-10003 Modificaciones Handling Fee. Precios de handling fee por hotel TO
+        IF rHandling."Hotel TO" <> '' THEN BEGIN
+          IF rHandling."Hotel TO" <> par_reserva."Hotel TO" THEN
+            ok_handling := FALSE;
+        END
+
+        //. Cuando estamos calculando el handling que se aplica sin condicion de Hotel TO hay que comprobar
+        //. si a esa reserva no se le aplica el handling especifico porque de otra manera estariamos duplicando
+
+        ELSE BEGIN
+          IF par_reserva."Hotel TO" <> '' THEN //+$005
+          BEGIN
+            lrHandling.RESET;
+            lrHandling.SETRANGE(Delegacion     , rHandling.Delegacion);
+            lrHandling.SETRANGE("N§ Contrato"  , rHandling."N§ Contrato");
+            lrHandling.SETRANGE("Tipo contrato", rHandling."Tipo contrato");
+            lrHandling.SETRANGE("Hotel TO"     , par_reserva."Hotel TO");
+            lrHandling.SETFILTER("Num Orden"    , '<>%1', rHandling."Num Orden");
+            IF lrHandling.FINDFIRST THEN
+              ok_handling := FALSE;
+          END;
+        END;
+      END;
+
+      //+$002
+      IF ok_handling THEN BEGIN
+        lrReserva.RESET;
+        lrReserva.SETCURRENTKEY(TourOperador, Bono, Nombre);
+        lrReserva.SETRANGE (Delegacion     , par_reserva.Delegacion);
+        lrReserva.SETRANGE (Bono           , par_reserva.Bono);
+        lrReserva.SETRANGE (Nombre         , par_reserva.Nombre);
+        lrReserva.SETFILTER("Fecha entrada", '<%1', par_reserva."Fecha entrada");
+        IF NOT lrReserva.ISEMPTY THEN
+          ok_handling := FALSE;
+      END;
+      //+$002
+
+      //+$005
+      IF ok_handling THEN
+      BEGIN
+        lrRsvTra.RESET;
+        lrRsvTra.SETCURRENTKEY(Delegacion, lrRsvTra."N§ Interno");
+        lrRsvTra.SETRANGE (Delegacion        , par_reserva.Delegacion);
+        lrRsvTra.SETRANGE ("N§ Interno"      , par_reserva."N§ Interno");
+        lrRsvTra.SETFILTER(Direccion         , '%1|%2', lrRsvTra.Direccion::Ambos, lrRsvTra.Direccion::Entrada);
+        lrRsvTra.SETFILTER("Compa¤ia entrada", '<>%1', ''); //+$007
+        IF rHandling."Sin transfer" THEN
+          ok_handling := lrRsvTra.ISEMPTY
+        ELSE
+          ok_handling := NOT lrRsvTra.ISEMPTY;
+      END;
+      //+$005
+    END;
+
+    PROCEDURE GetPrice@1100253002(prRes@1100253000 : Record 7009743) : Decimal;
+    VAR
+      lwTipoPer@1100253001 : 'Adulto,Ni¤o';
+      lwPrec@1100253002 : Decimal;
+    BEGIN
+      // GetPrice
+      // $006 JPT 20/04/12 CNT-CAR-12004-04 Definimos un maximo de edad para ni¤os
+
+      CLEAR(lwPrec);
+      CLEAR(lwTipoPer);
+      IF prRes."Tipo Persona" = rParPer."Codigo Adulto" THEN //+$004
+        lwTipoPer := lwTipoPer::Adulto
+      ELSE
+        lwTipoPer := lwTipoPer::Ni¤o;
+
+      // Comprobamos que no sobrepase la edad maxima para considerarlo ni¤o
+      IF lwTipoPer = lwTipoPer::Ni¤o THEN BEGIN
+        IF rHandling."Edad Max Ni¤o" <> 0 THEN BEGIN
+          IF prRes.Edad=0 THEN
+            ERROR(Text016, prRes.Nombre);
+          IF prRes.Edad > rHandling."Edad Max Ni¤o" THEN
+            lwTipoPer := lwTipoPer::Adulto
+        END;
+      END;
+
+      CASE lwTipoPer OF
+        lwTipoPer::Adulto: lwPrec := rHandling."Precio Adulto";
+        lwTipoPer::Ni¤o  : lwPrec := rHandling."Precio Ni¤o";
+      END;
+
+      EXIT(lwPrec);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 20102011 El calculo del handling de ingreso debe ser unicamente para el dia de entrada
+
+      $002 AJS 20102011 Solo se tiene que calcular el handling en la primera estancia de la reserva, nunca en los
+                        cambios de hotel
+
+      $003 AJS 20102011 Elimino las funciones de coste de handling porque no tienen sentido
+
+      JPT 21/11/11 GOC-CAR-10003 (1) Modificaciones Handling Fee. Precios de handling fee por hotel TO
+                                 (3) Modificaciones Handling Fee. Reservas que no aplican Handling Fee
+
+      $004 AJS 19012012 Los calculos de handling fee se hacen en funcion del tipo de persona, sin atender a los posibles
+                        cambios producidos en Tipo persona facturacion
+
+      $005 AJS 14032012 Precios especificos para reservas sin transfer
+
+      $006 JPT 20/04/12 CNT-CAR-12004-04 Definimos un maximo de edad para ni¤os. A¤ado funci¢n GetPrice.
+
+      $007 AJS 03052012 La comprobacion de que la reserva tiene transfer debe incluir la columna de Compa¤ia entrada.
+    }
+    END.
+  }
+}

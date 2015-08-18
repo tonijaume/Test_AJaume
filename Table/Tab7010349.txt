@@ -1,0 +1,390 @@
+OBJECT Table 7010349 Accidente
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:30:41;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               rPar.FINDFIRST;
+               rPar.TESTFIELD("Serie accidentes");
+
+               GestNoSerie.InitSeries(rPar."Serie accidentes", rPar."Serie accidentes", TODAY, "Parte accidente",
+                                     rPar."Serie accidentes");
+
+               // Insertamos un comentario para conservar la fecha en que se entro la multa
+
+               rCom.INIT;
+               rCom."Tipo comentario"      := rCom."Tipo comentario"::Accidente;
+               rCom."Id Enlace"            := "Parte accidente";
+               rCom."Id comentario"        := 10000;
+               rCom.Dia                    := TODAY;
+               rCom."Texto comentario"     := STRSUBSTNO(Text005, TODAY, USERID);
+               rCom."Fecha introduccion"   := TODAY;
+               rCom."Hora introduccion"    := TIME;
+               rCom."Usuario introduccion" := USERID;
+               rCom.INSERT;
+             END;
+
+    OnModify=BEGIN
+               // AJS 02.03.2004
+               // No se puede borrar ni modificar informacion de un parte liquidado
+
+               // AJS 11.08.2004
+               // Ahora da error al marca un accidente como liquidado, corregir comprobando xRec
+
+               IF (Liquidado) AND (xRec.Liquidado) THEN
+                 ERROR(Text001);
+             END;
+
+    OnDelete=VAR
+               rAve@1100244000 : Record 7010348;
+             BEGIN
+               // AJS 02.03.2004
+               // No se puede borrar ni modificar informacion de un parte liquidado
+
+               IF Liquidado THEN
+                 ERROR(Text001);
+
+               rAve.RESET; rAve.INIT;
+               rAve.SETCURRENTKEY("Parte accidente asociado");
+               rAve.SETRANGE("Parte accidente asociado", "Parte accidente");
+               IF rAve.FINDFIRST THEN
+                 ERROR(err1);
+
+               // AJS 02.03.2004
+               // Borramos los implicados en el accidente
+
+               rImpxAcc.RESET;
+               rImpxAcc.SETRANGE("Parte accidente", "Parte accidente");
+               IF rImpxAcc.FINDFIRST THEN
+                 rImpxAcc.DELETEALL;
+
+               // AJS 21.12.2004
+               // Borramos los comentarios
+
+               rCom.RESET;
+               rCom.SETRANGE("Tipo comentario", rCom."Tipo comentario"::Accidente);
+               rCom.SETRANGE("Id Enlace"      , "Parte accidente");
+               IF rCom.FINDFIRST THEN
+                 rCom.DELETEALL;
+             END;
+
+    CaptionML=ESP=Accidente;
+    LookupFormID=Form7010380;
+    DrillDownFormID=Form7010380;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Parte accidente     ;Code10        ;CaptionML=ESP=Parte accidente;
+                                                   Description=PK }
+    { 3   ;   ;Matricula           ;Code10        ;TableRelation=Vehiculo.Matricula WHERE (Vehiculo propio=CONST(Yes));
+                                                   OnValidate=VAR
+                                                                rVeh@1100244000 : Record 7010346;
+                                                              BEGIN
+                                                                IF rVeh.GET(Matricula) THEN
+                                                                  Garaje := rVeh.Garaje;
+
+                                                                rParte.RESET;
+                                                                rParte.SETCURRENTKEY(Fecha,
+                                                                                     Vehiculo,
+                                                                                     "Hora inicio");
+                                                                rParte.SETRANGE(Fecha   , Fecha);
+                                                                rParte.SETRANGE(Vehiculo, Matricula);
+                                                                IF "Hora aproximada" <> 0T THEN BEGIN
+                                                                  rParte.SETFILTER("Hora inicio", '<=%1', "Hora aproximada");
+                                                                  rParte.SETFILTER("Hora final" , '>=%1|%2', "Hora aproximada", 0T);
+                                                                END;
+
+                                                                IF rParte.FINDFIRST THEN
+                                                                  Conductor := rParte."Cod Conductor";
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              rPar@1100244000 : Record 7010311;
+                                                              rUsu@1100244001 : Record 7010420;
+                                                              rVeh@1100244002 : Record 7010346;
+                                                            BEGIN
+                                                              rPar.FINDFIRST;
+                                                              rUsu.GET(USERID);
+
+                                                              rVeh.RESET; rVeh.INIT;
+                                                              rVeh.SETCURRENTKEY(Garaje);
+                                                              IF (rUsu."Garaje de trabajo" <> '') AND (rUsu."Garaje de trabajo" <> rPar."Todos los garajes") THEN BEGIN
+                                                                rVeh.FILTERGROUP(2);
+                                                                rVeh.SETRANGE(Garaje, rUsu."Garaje de trabajo");
+                                                                rVeh.FILTERGROUP(0);
+                                                              END;
+                                                              rVeh.SETRANGE("Vehiculo propio", TRUE);
+                                                              IF FORM.RUNMODAL(0, rVeh) = ACTION::LookupOK THEN
+                                                                VALIDATE(Matricula, rVeh.Matricula);
+                                                            END;
+
+                                                   CaptionML=ESP=Matricula;
+                                                   Description=FK Vehiculo }
+    { 5   ;   ;Fecha               ;Date          ;CaptionML=ESP=Fecha }
+    { 7   ;   ;Conductor           ;Code10        ;TableRelation=Conductor.Conductor WHERE (Externo=CONST(No));
+                                                   OnValidate=BEGIN
+                                                                IF rCond.GET(Conductor) THEN BEGIN
+                                                                  IF rCond."Vehiculo habitual" <> '' THEN
+                                                                    VALIDATE(Matricula, rCond."Vehiculo habitual");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Conductor;
+                                                   Description=FK Chofer }
+    { 9   ;   ;Descripcion         ;Text250       ;CaptionML=ESP=Descripcion }
+    { 11  ;   ;Resultado           ;Option        ;CaptionML=ESP=Resultado;
+                                                   OptionCaptionML=ESP=Averia leve,Averia grave,Siniestro,Sin Da¤o;
+                                                   OptionString=Averia leve,Averia grave,Siniestro,Sin Da¤o }
+    { 13  ;   ;Culpa propia        ;Boolean       ;CaptionML=ESP=Culpa propia }
+    { 15  ;   ;Garaje              ;Code10        ;TableRelation=Garaje.Garaje;
+                                                   CaptionML=ESP=Garaje;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Garaje;
+                                                   Editable=No }
+    { 17  ;   ;Incidencias         ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count(Incidencia WHERE (Parte accidente asociado=FIELD(Parte accidente)));
+                                                   CaptionML=ESP=Incidencias;
+                                                   Editable=No }
+    { 19  ;   ;Nombre implicado    ;Text80        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Nombre implicado }
+    { 21  ;   ;Matricula vehiculo  ;Code10        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Matricula vehiculo }
+    { 23  ;   ;Compa¤ia seguros    ;Text80        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Compa¤ia seguros }
+    { 24  ;   ;Telefono            ;Text15        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Telefono }
+    { 25  ;   ;Marca y Modelo      ;Text30        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Marca y Modelo }
+    { 26  ;   ;Liquidado           ;Boolean       ;OnValidate=BEGIN
+                                                                IF Liquidado THEN BEGIN
+                                                                  IF NOT CONFIRM(mssg1) THEN
+                                                                    Liquidado := FALSE;
+                                                                END
+                                                                ELSE
+                                                                  ERROR(err2);
+                                                              END;
+
+                                                   CaptionML=ESP=Liquidado }
+    { 27  ;   ;Num expediente      ;Code20        ;OnValidate=BEGIN
+                                                                rAcc.RESET;
+                                                                rAcc.SETCURRENTKEY("Num expediente");
+                                                                rAcc.SETRANGE ("Num expediente" , "Num expediente");
+                                                                rAcc.SETFILTER("Parte accidente", '<>%1', "Parte accidente");
+                                                                IF rAcc.FINDFIRST THEN
+                                                                  ERROR(Text002);
+                                                              END;
+
+                                                   CaptionML=ESP=Num expediente }
+    { 28  ;   ;Peritado            ;Boolean       ;OnValidate=BEGIN
+                                                                // AJS 05.03.04
+                                                                // En principio quieren peritar en cualquier momento
+                                                                //IF ("Fecha peritaje" = 0D) OR ("Importe peritaje" = 0) THEN
+                                                                //  ERROR(Text003);
+                                                              END;
+
+                                                   CaptionML=ESP=Peritado }
+    { 31  ;   ;Fecha peritaje      ;Date          ;OnValidate=BEGIN
+                                                                IF Fecha > "Fecha peritaje" THEN
+                                                                  ERROR(Text004);
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha peritaje }
+    { 33  ;   ;Importe peritaje    ;Decimal       ;CaptionML=ESP=Importe peritaje;
+                                                   AutoFormatType=1 }
+    { 35  ;   ;Perito encargado    ;Text60        ;CaptionML=ESP=Perito encargado }
+    { 37  ;   ;Importe Factura     ;Decimal       ;CaptionML=ESP=Importe Factura;
+                                                   AutoFormatType=1 }
+    { 39  ;   ;Num poliza implicado;Code20        ;OnValidate=BEGIN
+                                                                ActualizaImplicadoPrincipal;
+                                                              END;
+
+                                                   CaptionML=ESP=Num poliza implicado }
+    { 41  ;   ;Hora aproximada     ;Time          ;CaptionML=ESP=Hora aproximada }
+  }
+  KEYS
+  {
+    {    ;Parte accidente                         ;Clustered=Yes }
+    {    ;Matricula,Fecha,Garaje                   }
+    {    ;Conductor                                }
+    {    ;Garaje                                   }
+    {    ;Num expediente                           }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      GestNoSerie@1100244000 : Codeunit 396;
+      rPar@1100244001 : Record 7010311;
+      err1@1100244002 : TextConst 'ESP=No se puede borrar este accidente porque tiene Incidencias asociadas.';
+      rCond@1100244003 : Record 7010327;
+      err2@1100244004 : TextConst 'ESP=La marca Liquidado no puede deshacerse';
+      mssg1@1100244005 : TextConst 'ESP=¨Quiere realmente marcar este accidente como liquidado?';
+      rImpxAcc@1100244006 : Record 7010440;
+      Text001@1100244007 : TextConst 'ESP=No se puede modificar la informacion de un parte de accidente liquidado.';
+      rAcc@1100244008 : Record 7010349;
+      Text002@1100244009 : TextConst 'ESP=El mismo numero de expediente no puede corresponderse con 2 accidentes.';
+      Text003@1100244010 : TextConst 'ESP=No se puede indicar que un accidente esta peritado sin antes indicar la fecha y el importe del peritaje.';
+      Text004@1100244011 : TextConst 'ESP=No se puede indicar una fecha de peritaje anterior a la fecha del accidente.';
+      rCom@1100244012 : Record 7010441;
+      Text005@1100244013 : TextConst 'ESP=Accidente registrado el dia %1 por el usuario %2.';
+      rParte@1100244014 : Record 7010360;
+      Text006@1103355000 : TextConst 'ESP=No existe el usuario %1.';
+
+    PROCEDURE crear_incidencia@1();
+    VAR
+      rAve@1100244000 : Record 7010348;
+      fFicAve@1100244001 : Form 7010377;
+    BEGIN
+      // crear_incidencia
+      //
+      {*
+      rAve.INIT; rAve.RESET;
+      rAve.INSERT(TRUE);
+      rAve.VALIDATE(Matricula                 , Matricula);
+      rAve.VALIDATE("Fecha Incidencia"        , Fecha);
+      rAve.VALIDATE("Parte accidente asociado", "Parte accidente");
+      rAve.MODIFY(TRUE);
+      COMMIT;
+      *}
+
+      rAve.SETCURRENTKEY(Matricula);
+      rAve.FILTERGROUP(2);
+      rAve.SETRANGE(Matricula                 , Matricula);
+      rAve.SETRANGE("Parte accidente asociado", "Parte accidente");
+      rAve.FILTERGROUP(0);
+
+      CLEAR(fFicAve);
+      fFicAve.SETTABLEVIEW(rAve);
+      fFicAve.SETRECORD(rAve);
+      fFicAve.RUNMODAL;
+    END;
+
+    PROCEDURE numero_vehiculo@2() : Text[30];
+    VAR
+      rVeh@1100244000 : Record 7010346;
+    BEGIN
+      // numero_vehiculo
+      //
+      IF rVeh.GET(Matricula) THEN
+        EXIT(rVeh.Numero)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE tipo_vehiculo@3() : Code[10];
+    VAR
+      rVeh@1100244000 : Record 7010346;
+    BEGIN
+      // tipo_vehiculo
+      //
+      IF rVeh.GET(Matricula) THEN
+        EXIT(rVeh."Tipo vehiculo")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE nombre_conductor@4() : Code[30];
+    VAR
+      rCond@1100244000 : Record 7010327;
+    BEGIN
+      // nombre_conductor
+      //
+      IF rCond.GET(Conductor) THEN
+        EXIT(rCond."Nombre Abreviado")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE ActualizaImplicadoPrincipal@1100244001();
+    BEGIN
+      // ActualizaImplicadoPrincipal
+      //
+
+      // AJS 02.03.2004
+      // Actualizamos los datos del implicado principal en el accidente
+
+      rImpxAcc.RESET;
+      rImpxAcc.SETRANGE("Parte accidente"    , "Parte accidente");
+      rImpxAcc.SETRANGE("Implicado principal", TRUE);
+      IF NOT rImpxAcc.FINDFIRST THEN BEGIN
+        rImpxAcc."Parte accidente"     := "Parte accidente";
+        rImpxAcc."Id implicado"        := 10000;
+        rImpxAcc."Implicado principal" := TRUE;
+        rImpxAcc.INSERT;
+      END;
+
+      rImpxAcc."Nombre implicado"   := "Nombre implicado";
+      rImpxAcc."Matricula vehiculo" := "Matricula vehiculo";
+      rImpxAcc."Compa¤ia seguros"   := "Compa¤ia seguros";
+      rImpxAcc."Num Poliza"         := "Num poliza implicado";
+      rImpxAcc.Telefono             := Telefono;
+      rImpxAcc."Marca y Modelo"     := "Marca y Modelo";
+      rImpxAcc.MODIFY;
+    END;
+
+    PROCEDURE FechaFinIncidencia@1100253000() : Date;
+    VAR
+      rIncid@1100253000 : Record 7010348;
+    BEGIN
+      // FechaFinIncidencia
+      //
+      rIncid.RESET;
+      rIncid.SETCURRENTKEY("Parte accidente asociado");
+      rIncid.SETRANGE("Parte accidente asociado", "Parte accidente");
+      rIncid.SETRANGE("Fecha final reparacion"  , 0D);
+      IF rIncid.FINDFIRST THEN
+        EXIT(0D);
+
+      rIncid.SETRANGE("Fecha final reparacion");
+      IF rIncid.FINDLAST THEN
+        EXIT(rIncid."Fecha final reparacion");
+    END;
+
+    PROCEDURE FiltrarGarajeUsuario@1103355000();
+    VAR
+      lrParGenerales@1103355000 : Record 7010311;
+      lrUsuario@1103355001 : Record 7010420;
+    BEGIN
+      // FiltrarGarajeUsuario.
+      // Filtramos los partes por garaje dependiendo de la configuraci¢n del usuario.
+
+      lrParGenerales.FINDFIRST;
+
+      IF NOT lrUsuario.GET(USERID) THEN
+        ERROR(Text006, USERID);
+
+      SETCURRENTKEY(Garaje);
+
+      IF (lrUsuario."Garaje de trabajo" <> '') AND (lrUsuario."Garaje de trabajo" <> lrParGenerales."Todos los garajes") THEN BEGIN
+        FILTERGROUP(2);
+        SETRANGE(Garaje, lrUsuario."Garaje de trabajo");
+        FILTERGROUP(0);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,2155 @@
+OBJECT Report 1102 Resource Journal - Test
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Resource Journal - Test;
+               ESP=Diario recurso - Test];
+    OnPreReport=BEGIN
+                  ResJnlLineFilter := "Res. Journal Line".GETFILTERS;
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table236;
+        DataItemTableView=SORTING(Journal Template Name,Name);
+        NewPagePerRecord=Yes;
+        OnAfterGetRecord=BEGIN
+                           CurrReport.PAGENO := 1;
+
+                           IF ISSERVICETIER THEN BEGIN
+                             GetTotalCost := 0;
+                             GetTotalPrice := 0;
+                           END;
+                         END;
+
+        ReqFilterFields=Journal Template Name,Name;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table207;
+        DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.);
+        OnPreDataItem=BEGIN
+                        ResJnlTemplate.GET("Res. Journal Batch"."Journal Template Name");
+                        IF ResJnlTemplate.Recurring THEN BEGIN
+                          IF GETFILTER("Posting Date") <> '' THEN
+                            AddError(
+                              STRSUBSTNO(
+                              Text000,FIELDCAPTION("Posting Date")));
+                          SETRANGE("Posting Date",0D,WORKDATE);
+                          IF GETFILTER("Expiration Date") <> '' THEN
+                            AddError(
+                              STRSUBSTNO(
+                                Text000,
+                                FIELDCAPTION("Expiration Date")));
+                          SETFILTER("Expiration Date",'%1 | %2..',0D,WORKDATE);
+                        END;
+                        IF "Res. Journal Batch"."No. Series" <> '' THEN
+                          NoSeries.GET("Res. Journal Batch"."No. Series");
+                        LastPostingDate := 0D;
+                        LastDocNo := '';
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF EmptyLine THEN
+                             EXIT;
+
+                           MakeRecurringTexts("Res. Journal Line");
+
+                           IF "Resource No." = '' THEN
+                             AddError(STRSUBSTNO(Text001,FIELDCAPTION("Resource No.")))
+                           ELSE
+                             IF NOT Res.GET("Resource No.") THEN
+                               AddError(
+                                 STRSUBSTNO(
+                                   Text002,
+                                   Res.TABLECAPTION,"Resource No."))
+                             ELSE
+                               IF Res.Blocked THEN
+                                 AddError(
+                                   STRSUBSTNO(
+                                     Text003,
+                                     Res.FIELDCAPTION(Blocked),FALSE,Res.TABLECAPTION,"Resource No."));
+
+                           IF "Gen. Prod. Posting Group" = '' THEN
+                             AddError(STRSUBSTNO(Text001,FIELDCAPTION("Gen. Prod. Posting Group")))
+                           ELSE
+                             IF NOT GenPostingSetup.GET("Gen. Bus. Posting Group","Gen. Prod. Posting Group") THEN
+                               AddError(
+                                 STRSUBSTNO(
+                                   Text004,GenPostingSetup.TABLECAPTION,
+                                   "Gen. Bus. Posting Group","Gen. Prod. Posting Group"));
+
+                           CheckRecurringLine("Res. Journal Line");
+
+                           IF "Posting Date" = 0D THEN
+                             AddError(STRSUBSTNO(Text001,FIELDCAPTION("Posting Date")))
+                           ELSE BEGIN
+                             IF "Posting Date" <> NORMALDATE("Posting Date") THEN
+                               AddError(STRSUBSTNO(Text005,FIELDCAPTION("Posting Date")));
+
+                             IF "Res. Journal Batch"."No. Series" <> '' THEN
+                               IF NoSeries."Date Order" AND ("Posting Date" < LastPostingDate) THEN
+                                 AddError(Text006);
+                               LastPostingDate := "Posting Date";
+
+                             IF (AllowPostingFrom = 0D) AND (AllowPostingTo = 0D) THEN BEGIN
+                               IF USERID <> '' THEN
+                                 IF UserSetup.GET(USERID) THEN BEGIN
+                                   AllowPostingFrom := UserSetup."Allow Posting From";
+                                   AllowPostingTo := UserSetup."Allow Posting To";
+                                 END;
+                               IF (AllowPostingFrom = 0D) AND (AllowPostingTo = 0D) THEN BEGIN
+                                 GLSetup.GET;
+                                 AllowPostingFrom := GLSetup."Allow Posting From";
+                                 AllowPostingTo := GLSetup."Allow Posting To";
+                               END;
+                               IF AllowPostingTo = 0D THEN
+                                 AllowPostingTo := 31129999D;
+                             END;
+
+                             IF ("Posting Date" < AllowPostingFrom) OR ("Posting Date" > AllowPostingTo) THEN
+                               AddError(
+                                 STRSUBSTNO(
+                                   Text007,FORMAT("Posting Date")));
+                           END;
+
+                           IF ("Document Date" <> 0D) THEN
+                             IF ("Document Date" <> NORMALDATE("Document Date")) THEN
+                               AddError(STRSUBSTNO(Text005,FIELDCAPTION("Document Date")));
+
+                           IF "Res. Journal Batch"."No. Series" <> '' THEN BEGIN
+                             IF LastDocNo <> '' THEN
+                               IF ("Document No." <> LastDocNo) AND ("Document No." <> INCSTR(LastDocNo)) THEN
+                                 AddError(Text008);
+                             LastDocNo := "Document No.";
+                           END;
+
+                           JnlLineDim.SETRANGE("Table ID",DATABASE::"Res. Journal Line");
+                           JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+                           JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+                           JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+                           IF NOT DimMgt.CheckJnlLineDimComb(JnlLineDim) THEN
+                             AddError(DimMgt.GetDimCombErr);
+
+                           TableID[1] := DATABASE::Resource;
+                           No[1] := "Resource No.";
+                           TableID[2] := DATABASE::"Resource Group";
+                           No[2] := "Resource Group No.";
+                           TableID[3] := DATABASE::Job;
+                           No[3] := "Job No.";
+                           IF NOT DimMgt.CheckJnlLineDimValuePosting(JnlLineDim,TableID,No) THEN
+                             AddError(DimMgt.GetDimValuePostingErr);
+
+                           IF ISSERVICETIER THEN BEGIN
+                             GetTotalCost += "Total Cost";
+                             GetTotalPrice += "Total Price";
+                           END;
+                         END;
+
+        ReqFilterFields=Posting Date;
+        TotalFields=Total Cost,Total Price;
+        DataItemLink=Journal Template Name=FIELD(Journal Template Name),
+                     Journal Batch Name=FIELD(Name);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=18300;
+            SectionHeight=2538;
+          }
+          CONTROLS
+          {
+            { 30  ;TextBox      ;15900;846  ;2250 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=USERID;
+                                                         DataSetFieldName=USERID }
+            { 31  ;TextBox      ;15000;0    ;3150 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=FORMAT(TODAY,0,4);
+                                                         DataSetFieldName=FORMAT_TODAY_0_4_ }
+            { 32  ;TextBox      ;17700;423  ;450  ;423  ;CaptionML=[ENU=Page;
+                                                                    ESP=P g.];
+                                                         SourceExpr=CurrReport.PAGENO;
+                                                         DataSetFieldName=CurrReport_PAGENO }
+            { 33  ;Label        ;16950;423  ;750  ;423  ;ParentControl=32;
+                                                         DataSetFieldName=CurrReport_PAGENOCaption }
+            { 34  ;Label        ;0    ;0    ;7500 ;423  ;FontSize=8;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Resource Journal - Test;
+                                                                    ESP=Diario recurso - Test];
+                                                         DataSetFieldName=Resource_Journal___TestCaption }
+            { 35  ;TextBox      ;0    ;423  ;7500 ;423  ;SourceExpr=COMPANYNAME;
+                                                         DataSetFieldName=COMPANYNAME }
+            { 36  ;TextBox      ;2400 ;1269 ;1500 ;423  ;SourceExpr="Journal Template Name";
+                                                         DataSetFieldName=Res__Journal_Line__Journal_Template_Name_ }
+            { 37  ;TextBox      ;2400 ;1692 ;1500 ;423  ;SourceExpr="Journal Batch Name";
+                                                         DataSetFieldName=Res__Journal_Line__Journal_Batch_Name_ }
+            { 38  ;Label        ;0    ;1269 ;2250 ;423  ;ParentControl=36;
+                                                         DataSetFieldName=Res__Journal_Line__Journal_Template_Name_Caption }
+            { 39  ;Label        ;0    ;1692 ;2250 ;423  ;ParentControl=37;
+                                                         DataSetFieldName=Res__Journal_Line__Journal_Batch_Name_Caption }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=18300;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((CurrReport.PAGENO = 1) AND (ResJnlLineFilter <> ''));
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 40  ;TextBox      ;0    ;0    ;18150;423  ;SourceExpr="Res. Journal Line".TABLECAPTION + ': ' + ResJnlLineFilter;
+                                                         DataSetFieldName=Res__Journal_Line__TABLECAPTION__________ResJnlLineFilter }
+            { 44  ;TextBox      ;18150;0    ;150  ;423  ;Name=ResJnlLineFilter;
+                                                         Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=ResJnlLineFilter;
+                                                         DataSetFieldName=ResJnlLineFilter }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=18300;
+            SectionHeight=1269;
+          }
+          CONTROLS
+          {
+            { 24  ;Label        ;17400;0    ;750  ;846  ;ParentControl=23;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line_ChargeableCaption }
+            { 20  ;Label        ;13650;0    ;1800 ;846  ;ParentControl=19;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Unit_Price_Caption }
+            { 22  ;Label        ;15450;0    ;1800 ;846  ;ParentControl=21;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Total_Price_Caption }
+            { 16  ;Label        ;10050;0    ;1800 ;846  ;ParentControl=15;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Unit_Cost_Caption }
+            { 18  ;Label        ;11850;0    ;1800 ;846  ;ParentControl=17;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Total_Cost_Caption }
+            { 14  ;Label        ;8100 ;0    ;1800 ;846  ;ParentControl=13;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line_QuantityCaption }
+            { 12  ;Label        ;7350 ;0    ;750  ;846  ;ParentControl=11;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Unit_of_Measure_Code_Caption }
+            { 10  ;Label        ;5700 ;0    ;1500 ;846  ;ParentControl=9;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Work_Type_Code_Caption }
+            { 8   ;Label        ;4050 ;0    ;1500 ;846  ;ParentControl=7;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Resource_No__Caption }
+            { 4   ;Label        ;2400 ;0    ;1500 ;846  ;ParentControl=3;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Document_No__Caption }
+            { 2   ;Label        ;1350 ;0    ;900  ;846  ;ParentControl=1;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Entry_Type_Caption }
+            { 6   ;Label        ;0    ;0    ;1200 ;846  ;ParentControl=5;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Posting_Date_Caption }
+            { 46  ;TextBox      ;18150;0    ;150  ;423  ;Name="Res. Journal Line"."Line No.";
+                                                         Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr="Res. Journal Line"."Line No.";
+                                                         DataSetFieldName=Res__Journal_Line___Line_No__ }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18300;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1   ;TextBox      ;1350 ;0    ;900  ;423  ;SourceExpr="Entry Type";
+                                                         DataSetFieldName=Res__Journal_Line__Entry_Type_ }
+            { 3   ;TextBox      ;2400 ;0    ;1500 ;423  ;SourceExpr="Document No.";
+                                                         DataSetFieldName=Res__Journal_Line__Document_No__ }
+            { 7   ;TextBox      ;4050 ;0    ;1500 ;423  ;SourceExpr="Resource No.";
+                                                         DataSetFieldName=Res__Journal_Line__Resource_No__ }
+            { 9   ;TextBox      ;5700 ;0    ;1500 ;423  ;SourceExpr="Work Type Code";
+                                                         DataSetFieldName=Res__Journal_Line__Work_Type_Code_ }
+            { 11  ;TextBox      ;7350 ;0    ;750  ;423  ;SourceExpr="Unit of Measure Code";
+                                                         DataSetFieldName=Res__Journal_Line__Unit_of_Measure_Code_ }
+            { 13  ;TextBox      ;8100 ;0    ;1800 ;423  ;SourceExpr=Quantity;
+                                                         DataSetFieldName=Res__Journal_Line_Quantity }
+            { 15  ;TextBox      ;10050;0    ;1800 ;423  ;SourceExpr="Unit Cost";
+                                                         DataSetFieldName=Res__Journal_Line__Unit_Cost_ }
+            { 17  ;TextBox      ;11850;0    ;1800 ;423  ;SourceExpr="Total Cost";
+                                                         DataSetFieldName=Res__Journal_Line__Total_Cost_ }
+            { 19  ;TextBox      ;13650;0    ;1800 ;423  ;SourceExpr="Unit Price";
+                                                         DataSetFieldName=Res__Journal_Line__Unit_Price_ }
+            { 21  ;TextBox      ;15450;0    ;1800 ;423  ;SourceExpr="Total Price";
+                                                         DataSetFieldName=Res__Journal_Line__Total_Price_ }
+            { 23  ;TextBox      ;17400;0    ;750  ;423  ;SourceExpr=FORMAT(Chargeable);
+                                                         CaptionClass=FIELDCAPTION(Chargeable);
+                                                         DataSetFieldName=Res__Journal_Line_Chargeable }
+            { 5   ;TextBox      ;0    ;0    ;1200 ;423  ;HorzAlign=Right;
+                                                         CaptionML=[ENU=Posting Date;
+                                                                    ESP=Fecha registro];
+                                                         SourceExpr=FORMAT("Posting Date");
+                                                         DataSetFieldName=Res__Journal_Line__Posting_Date_ }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=18300;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 25  ;TextBox      ;11850;0    ;1800 ;423  ;FontBold=Yes;
+                                                         CaptionML=[ENU=Total;
+                                                                    ESP=Total];
+                                                         SourceExpr="Total Cost";
+                                                         DataSetFieldName=Res__Journal_Line__Total_Cost__Control25 }
+            { 26  ;TextBox      ;15450;0    ;1800 ;423  ;FontBold=Yes;
+                                                         SourceExpr="Total Price";
+                                                         DataSetFieldName=Res__Journal_Line__Total_Price__Control26 }
+            { 27  ;Label        ;9450 ;0    ;2250 ;423  ;ParentControl=25;
+                                                         FontBold=Yes;
+                                                         DataSetFieldName=Res__Journal_Line__Total_Cost__Control25Caption }
+            { 48  ;TextBox      ;17250;0    ;150  ;423  ;Name=GetTotalPrice;
+                                                         Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=GetTotalPrice;
+                                                         DataSetFieldName=GetTotalPrice }
+            { 47  ;TextBox      ;13650;0    ;150  ;423  ;Name=GetTotalCost;
+                                                         Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=GetTotalCost;
+                                                         DataSetFieldName=GetTotalCost }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(1..));
+        DataItemVarName=DimensionLoop;
+        OnPreDataItem=BEGIN
+                        IF NOT ShowDim THEN
+                          CurrReport.BREAK;
+                        JnlLineDim.SETRANGE("Table ID",DATABASE::"Res. Journal Line");
+                        JnlLineDim.SETRANGE("Journal Template Name","Res. Journal Line"."Journal Template Name");
+                        JnlLineDim.SETRANGE("Journal Batch Name","Res. Journal Line"."Journal Batch Name");
+                        JnlLineDim.SETRANGE("Journal Line No.","Res. Journal Line"."Line No.");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Number = 1 THEN BEGIN
+                             IF NOT JnlLineDim.FIND('-') THEN
+                               CurrReport.BREAK;
+                           END ELSE
+                             IF NOT Continue THEN
+                               CurrReport.BREAK;
+
+                           CLEAR(DimText);
+                           Continue := FALSE;
+                           REPEAT
+                             OldDimText := DimText;
+                             IF DimText = '' THEN
+                               DimText := STRSUBSTNO('%1 - %2',JnlLineDim."Dimension Code",JnlLineDim."Dimension Value Code")
+                             ELSE
+                               DimText :=
+                                 STRSUBSTNO(
+                                   '%1; %2 - %3',DimText,JnlLineDim."Dimension Code",JnlLineDim."Dimension Value Code");
+                             IF STRLEN(DimText) > MAXSTRLEN(OldDimText) THEN BEGIN
+                               DimText := OldDimText;
+                               Continue := TRUE;
+                               EXIT;
+                             END;
+                           UNTIL (JnlLineDim.NEXT = 0);
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18300;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Number = 1);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 41  ;TextBox      ;3150 ;0    ;15000;423  ;SourceExpr=DimText;
+                                                         DataSetFieldName=DimText }
+            { 42  ;Label        ;0    ;0    ;3000 ;423  ;CaptionML=[ENU=Dimensions;
+                                                                    ESP=Dimensiones];
+                                                         DataSetFieldName=DimensionsCaption }
+            { 45  ;TextBox      ;18150;0    ;150  ;423  ;Name=DimensionLoop.Number;
+                                                         Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=DimensionLoop.Number;
+                                                         DataSetFieldName=DimensionLoop_Number }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18300;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(Number > 1);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 43  ;TextBox      ;3150 ;0    ;15000;423  ;SourceExpr=DimText;
+                                                         DataSetFieldName=DimText_Control43 }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=ErrorLoop;
+        OnPreDataItem=BEGIN
+                        SETRANGE(Number,1,ErrorCounter);
+                      END;
+
+        OnPostDataItem=BEGIN
+                         ErrorCounter := 0;
+                       END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18300;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 28  ;TextBox      ;1650 ;0    ;16500;423  ;CaptionML=[ENU=Warning!;
+                                                                    ESP=­Advertencia!];
+                                                         SourceExpr=ErrorText[Number];
+                                                         DataSetFieldName=ErrorText_Number_ }
+            { 29  ;Label        ;0    ;0    ;1500 ;423  ;ParentControl=28;
+                                                         FontBold=Yes;
+                                                         DataSetFieldName=ErrorText_Number_Caption }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=3850;
+      Height=440;
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1   ;CheckBox     ;3410 ;0    ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Show Dimensions;
+                                                              ESP=Mostrar dimensiones];
+                                                   SourceExpr=ShowDim }
+      { 2   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Show Dimensions;
+                             ESP=Mostrar dimensiones];
+                  SourceExpr=ShowDim }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=%1 cannot be filtered when you post recurring journals.;ESP=No se puede filtrar %1 cuando registran diarios peri¢dicos.';
+      Text001@1001 : TextConst 'ENU=%1 must be specified.;ESP=Se debe indicar %1.';
+      Text002@1002 : TextConst 'ENU=%1 %2 does not exist.;ESP=No existe %1 %2.';
+      Text003@1003 : TextConst 'ENU=%1 must be %2 for %3 %4.;ESP=%1 debe ser %2 para %3 %4.';
+      Text004@1004 : TextConst 'ENU=%1 %2 %3 does not exist.;ESP=No existe %1 %2 %3.';
+      Text005@1005 : TextConst 'ENU=%1 must not be a closing date.;ESP=%1 no debe ser una fecha de cierre.';
+      Text006@1006 : TextConst 'ENU=The lines are not listed according to Posting Date because they were not entered in that order.;ESP=Las l¡neas no se listan ordenadas por fecha de registro ya que no fueron introducidas en esa secuencia.';
+      Text007@1007 : TextConst 'ENU=%1 is not within your allowed range of posting dates.;ESP=%1 no se encuentra en su rango permitido de fechas de registro.';
+      Text008@1008 : TextConst 'ENU=There is a gap in the number series.;ESP=Hay un salto en el N§ de serie.';
+      Text009@1009 : TextConst 'ENU=%1 cannot be specified.;ESP=No se puede indicar %1.';
+      Text010@1010 : TextConst 'ENU=<Month Text>;ESP=<Month Text>';
+      UserSetup@1011 : Record 91;
+      GLSetup@1012 : Record 98;
+      AccountingPeriod@1013 : Record 50;
+      Res@1014 : Record 156;
+      ResJnlTemplate@1015 : Record 206;
+      GenPostingSetup@1016 : Record 252;
+      NoSeries@1017 : Record 308;
+      JnlLineDim@1018 : Record 356;
+      DimMgt@1019 : Codeunit 408;
+      ResJnlLineFilter@1020 : Text[250];
+      AllowPostingFrom@1021 : Date;
+      AllowPostingTo@1022 : Date;
+      Day@1023 : Integer;
+      Week@1024 : Integer;
+      Month@1025 : Integer;
+      MonthText@1026 : Text[30];
+      ErrorCounter@1027 : Integer;
+      ErrorText@1028 : ARRAY [30] OF Text[250];
+      LastPostingDate@1029 : Date;
+      LastDocNo@1030 : Code[20];
+      TableID@1031 : ARRAY [10] OF Integer;
+      No@1032 : ARRAY [10] OF Code[20];
+      DimText@1033 : Text[120];
+      OldDimText@1034 : Text[75];
+      ShowDim@1035 : Boolean;
+      Continue@1036 : Boolean;
+      GetTotalCost@1037 : Decimal;
+      GetTotalPrice@1038 : Decimal;
+
+    LOCAL PROCEDURE CheckRecurringLine@2(ResJnlLine2@1000 : Record 207);
+    BEGIN
+      WITH ResJnlLine2 DO BEGIN
+        IF ResJnlTemplate.Recurring THEN BEGIN
+          IF "Recurring Method" = 0 THEN
+            AddError(STRSUBSTNO(Text001,FIELDCAPTION("Recurring Method")));
+          IF FORMAT("Recurring Frequency") = '' THEN
+            AddError(STRSUBSTNO(Text001,FIELDCAPTION("Recurring Frequency")));
+          IF "Recurring Method" = "Recurring Method"::Variable THEN
+            IF Quantity = 0 THEN
+              AddError(STRSUBSTNO(Text001,FIELDCAPTION(Quantity)));
+        END ELSE BEGIN
+          IF "Recurring Method" <> 0 THEN
+            AddError(STRSUBSTNO(Text009,FIELDCAPTION("Recurring Method")));
+          IF FORMAT("Recurring Frequency") <> '' THEN
+            AddError(STRSUBSTNO(Text009,FIELDCAPTION("Recurring Frequency")));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MakeRecurringTexts@3(VAR ResJnlLine2@1000 : Record 207);
+    BEGIN
+      WITH ResJnlLine2 DO BEGIN
+        IF ("Posting Date" <> 0D) AND ("Resource No." <> '') AND ("Recurring Method" <> 0) THEN BEGIN
+          Day := DATE2DMY("Posting Date",1);
+          Week := DATE2DWY("Posting Date",2);
+          Month := DATE2DMY("Posting Date",2);
+          MonthText := FORMAT("Posting Date",0,Text010);
+          AccountingPeriod.SETRANGE("Starting Date",0D,"Posting Date");
+          IF NOT AccountingPeriod.FIND('+') THEN
+            AccountingPeriod.Name := '';
+          "Document No." :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO("Document No.",Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN("Document No.")),
+              '>');
+          Description :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO(Description,Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN(Description)),
+              '>');
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddError@1(Text@1000 : Text[250]);
+    BEGIN
+      ErrorCounter := ErrorCounter + 1;
+      ErrorText[ErrorCounter] := Text;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+  <Body>
+    <Height>4.12698cm</Height>
+    <ReportItems>
+      <List Name="list1">
+        <Grouping Name="list1_Details_Group">
+          <GroupExpressions>
+            <GroupExpression>=Fields!Res__Journal_Batch_Journal_Template_Name.Value</GroupExpression>
+            <GroupExpression>=Fields!Res__Journal_Batch_Name.Value</GroupExpression>
+          </GroupExpressions>
+          <PageBreakAtEnd>true</PageBreakAtEnd>
+        </Grouping>
+        <ReportItems>
+          <Textbox Name="NewPage">
+            <Height>0.31746cm</Height>
+            <Left>1.26984cm</Left>
+            <Style>
+              <PaddingBottom>2pt</PaddingBottom>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+            </Style>
+            <Value>=IIF(Code.ResetPageNumber(),True,False)</Value>
+            <Visibility>
+              <Hidden>true</Hidden>
+            </Visibility>
+            <Width>0.31746cm</Width>
+            <ZIndex>2</ZIndex>
+          </Textbox>
+          <Table Name="Table1">
+            <DataSetName>DataSet_Result</DataSetName>
+            <Details>
+              <TableRows>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox2">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value>=Fields!DimensionsCaption.Value</Value>
+                          <ZIndex>15</ZIndex>
+                          <rd:DefaultName>textbox2</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>10</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox4">
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value>=Fields!DimText.Value</Value>
+                          <ZIndex>14</ZIndex>
+                          <rd:DefaultName>textbox4</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                  <Visibility>
+                    <Hidden>=IIF(Fields!DimensionLoop_Number.Value&gt;0,False,True)</Hidden>
+                  </Visibility>
+                </TableRow>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox3">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value>=Fields!ErrorText_Number_Caption.Value</Value>
+                          <ZIndex>1</ZIndex>
+                          <rd:DefaultName>textbox3</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>11</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox5">
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value>=Fields!ErrorText_Number_.Value</Value>
+                          <rd:DefaultName>textbox5</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                  <Visibility>
+                    <Hidden>=IIF(Fields!ErrorText_Number_Caption.Value="",True,False)</Hidden>
+                  </Visibility>
+                </TableRow>
+              </TableRows>
+            </Details>
+            <Header>
+              <RepeatOnNewPage>true</RepeatOnNewPage>
+              <TableRows>
+                <TableRow>
+                  <Height>0.9cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Posting_Date_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Posting_Date_Caption.Value)</Value>
+                          <ZIndex>51</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Entry_Type_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Entry_Type_Caption.Value)</Value>
+                          <ZIndex>50</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Document_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Document_No__Caption.Value)</Value>
+                          <ZIndex>49</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Resource_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Resource_No__Caption.Value)</Value>
+                          <ZIndex>48</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Work_Type_Code_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Work_Type_Code_Caption.Value)</Value>
+                          <ZIndex>47</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Unit_of_Measure_Code_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Unit_of_Measure_Code_Caption.Value)</Value>
+                          <ZIndex>46</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line_QuantityCaption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line_QuantityCaption.Value)</Value>
+                          <ZIndex>45</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Unit_Cost_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Unit_Cost_Caption.Value)</Value>
+                          <ZIndex>44</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Total_Cost_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Total_Cost_Caption.Value)</Value>
+                          <ZIndex>43</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Unit_Price_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Unit_Price_Caption.Value)</Value>
+                          <ZIndex>42</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Total_Price_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line__Total_Price_Caption.Value)</Value>
+                          <ZIndex>41</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line_ChargeableCaption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>8pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>8pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Res__Journal_Line_ChargeableCaption.Value)</Value>
+                          <ZIndex>40</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.1cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="COMPANYNAME">
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!COMPANYNAME.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>39</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Journal_Template_Name_">
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!Res__Journal_Line__Journal_Template_Name_.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>38</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Journal_Batch_Name_">
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!Res__Journal_Line__Journal_Batch_Name_.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>37</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="CurrReport_PAGENOCaption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!CurrReport_PAGENOCaption.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>36</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Resource_Journal___TestCaption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!Resource_Journal___TestCaption.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>35</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Journal_Template_Name_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!Res__Journal_Line__Journal_Template_Name_Caption.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>34</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="Res__Journal_Line__Journal_Batch_Name_Caption">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <Color>#ff0000</Color>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!Res__Journal_Line__Journal_Batch_Name_Caption.Value</Value>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <ZIndex>33</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox56">
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>32</ZIndex>
+                          <rd:DefaultName>textbox56</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox35">
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>31</ZIndex>
+                          <rd:DefaultName>textbox35</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox36">
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>30</ZIndex>
+                          <rd:DefaultName>textbox36</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox37">
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>29</ZIndex>
+                          <rd:DefaultName>textbox37</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox38">
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>28</ZIndex>
+                          <rd:DefaultName>textbox38</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+              </TableRows>
+            </Header>
+            <Height>2.692cm</Height>
+            <TableColumns>
+              <TableColumn>
+                <Width>1.6cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.05cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.5cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.5cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.5cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>0.95238cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.8cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.8cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.8cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.8cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>1.875cm</Width>
+              </TableColumn>
+              <TableColumn>
+                <Width>0.825cm</Width>
+              </TableColumn>
+            </TableColumns>
+            <TableGroups>
+              <TableGroup>
+                <Footer>
+                  <TableRows>
+                    <TableRow>
+                      <Height>0.423cm</Height>
+                      <TableCells>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox1">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>13</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox11">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>12</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox12">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>11</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox13">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>10</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox14">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>9</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox15">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>8</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="TextBox16">
+                              <Style>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value />
+                              <ZIndex>7</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Total_Cost__Control25Caption">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <FontWeight>700</FontWeight>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=First(Fields!Res__Journal_Line__Total_Cost__Control25Caption.Value)</Value>
+                              <ZIndex>6</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Total_Cost__Control25">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <FontWeight>700</FontWeight>
+                                <Format>=First(Fields!Res__Journal_Line__Total_Cost_Format.Value)</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Last(Fields!GetTotalCost.Value)</Value>
+                              <ZIndex>5</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="GetTotalCost">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <Color>#ffff00</Color>
+                                <FontSize>7pt</FontSize>
+                                <Format>=First(Fields!GetTotalCostFormat.Value)</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Sum(Fields!GetTotalCost.Value)</Value>
+                              <Visibility>
+                                <Hidden>true</Hidden>
+                              </Visibility>
+                              <ZIndex>4</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Total_Price__Control26">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <FontWeight>700</FontWeight>
+                                <Format>=First(Fields!Res__Journal_Line__Total_Price_Format.Value)</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Last(Fields!GetTotalPrice.Value)</Value>
+                              <ZIndex>3</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="GetTotalPrice">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <Color>#ffff00</Color>
+                                <FontSize>7pt</FontSize>
+                                <Format>=First(Fields!GetTotalPriceFormat.Value)</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Sum(Fields!GetTotalPrice.Value)</Value>
+                              <Visibility>
+                                <Hidden>true</Hidden>
+                              </Visibility>
+                              <ZIndex>2</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                      </TableCells>
+                    </TableRow>
+                  </TableRows>
+                </Footer>
+                <Grouping Name="Table1_Group">
+                  <GroupExpressions>
+                    <GroupExpression>1</GroupExpression>
+                  </GroupExpressions>
+                </Grouping>
+              </TableGroup>
+              <TableGroup>
+                <Grouping Name="Table1_Group2">
+                  <GroupExpressions>
+                    <GroupExpression>=Fields!Res__Journal_Line___Line_No__.Value</GroupExpression>
+                  </GroupExpressions>
+                </Grouping>
+                <Header>
+                  <TableRows>
+                    <TableRow>
+                      <Height>0.423cm</Height>
+                      <TableCells>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Posting_Date_">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>d</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Posting_Date_.Value</Value>
+                              <ZIndex>27</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Entry_Type_">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Entry_Type_.Value</Value>
+                              <ZIndex>26</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Document_No__">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Document_No__.Value</Value>
+                              <ZIndex>25</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Resource_No__">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Resource_No__.Value</Value>
+                              <ZIndex>24</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Work_Type_Code_">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Work_Type_Code_.Value</Value>
+                              <ZIndex>23</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Unit_of_Measure_Code_">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Unit_of_Measure_Code_.Value</Value>
+                              <ZIndex>22</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line_Quantity">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>#,##0</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line_Quantity.Value</Value>
+                              <ZIndex>21</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Unit_Cost_">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>=Fields!Res__Journal_Line__Unit_Cost_Format.Value</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Unit_Cost_.Value</Value>
+                              <ZIndex>20</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Total_Cost_">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>=Fields!Res__Journal_Line__Total_Cost_Format.Value</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Total_Cost_.Value</Value>
+                              <ZIndex>19</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Unit_Price_">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>=Fields!Res__Journal_Line__Unit_Price_Format.Value</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Unit_Price_.Value</Value>
+                              <ZIndex>18</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line__Total_Price_">
+                              <CanGrow>true</CanGrow>
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <Format>=Fields!Res__Journal_Line__Total_Price_Format.Value</Format>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>2pt</PaddingLeft>
+                                <PaddingRight>0.075cm</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line__Total_Price_.Value</Value>
+                              <ZIndex>17</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                        <TableCell>
+                          <ReportItems>
+                            <Textbox Name="Res__Journal_Line_Chargeable">
+                              <Style>
+                                <FontSize>7pt</FontSize>
+                                <PaddingBottom>2pt</PaddingBottom>
+                                <PaddingLeft>0.075cm</PaddingLeft>
+                                <PaddingRight>2pt</PaddingRight>
+                                <PaddingTop>2pt</PaddingTop>
+                                <VerticalAlign>Middle</VerticalAlign>
+                              </Style>
+                              <Value>=Fields!Res__Journal_Line_Chargeable.Value</Value>
+                              <ZIndex>16</ZIndex>
+                            </Textbox>
+                          </ReportItems>
+                        </TableCell>
+                      </TableCells>
+                    </TableRow>
+                  </TableRows>
+                </Header>
+              </TableGroup>
+            </TableGroups>
+            <Top>1.26984cm</Top>
+            <ZIndex>1</ZIndex>
+          </Table>
+          <Table Name="table2">
+            <Header>
+              <TableRows>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox7">
+                          <Style>
+                            <FontSize>7pt</FontSize>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value>=Fields!Res__Journal_Line__TABLECAPTION__________ResJnlLineFilter.Value</Value>
+                          <ZIndex>1</ZIndex>
+                          <rd:DefaultName>textbox7</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                  <Visibility>
+                    <Hidden>=IIF(Fields!ResJnlLineFilter.Value="",True,False)</Hidden>
+                  </Visibility>
+                </TableRow>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox6">
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <rd:DefaultName>textbox6</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                  <Visibility>
+                    <Hidden>=IIF(Fields!ResJnlLineFilter.Value="",True,False)</Hidden>
+                  </Visibility>
+                </TableRow>
+              </TableRows>
+            </Header>
+            <Height>0.846cm</Height>
+            <TableColumns>
+              <TableColumn>
+                <Width>17.77778cm</Width>
+              </TableColumn>
+            </TableColumns>
+            <Top>0.31746cm</Top>
+            <Width>17.77778cm</Width>
+          </Table>
+        </ReportItems>
+        <Visibility>
+          <Hidden>=IIF(Fields!Res__Journal_Line__Posting_Date_Caption.Value="",True,False)</Hidden>
+        </Visibility>
+      </List>
+    </ReportItems>
+  </Body>
+  <BottomMargin>2cm</BottomMargin>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Shared offset as Integer
+Shared newPage as Object
+
+Public Function GetPageNumber(NewPage as Boolean, pagenumber as Integer) as Object
+  If NewPage
+    offset = pagenumber - 1
+    NewPage = FALSE
+  End If
+  Return pagenumber - offset
+End Function
+
+Public Function ResetPageNumber() as Boolean
+  NewPage = TRUE
+  Return NewPage
+End Function</Code>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <CommandText />
+        <DataSourceName>DummyDataSource</DataSourceName>
+      </Query>
+      <Fields>
+        <Field Name="Res__Journal_Batch_Journal_Template_Name">
+          <DataField>Res__Journal_Batch_Journal_Template_Name</DataField>
+        </Field>
+        <Field Name="Res__Journal_Batch_Name">
+          <DataField>Res__Journal_Batch_Name</DataField>
+        </Field>
+        <Field Name="USERID">
+          <DataField>USERID</DataField>
+        </Field>
+        <Field Name="FORMAT_TODAY_0_4_">
+          <DataField>FORMAT_TODAY_0_4_</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENO">
+          <DataField>CurrReport_PAGENO</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENOCaption">
+          <DataField>CurrReport_PAGENOCaption</DataField>
+        </Field>
+        <Field Name="Resource_Journal___TestCaption">
+          <DataField>Resource_Journal___TestCaption</DataField>
+        </Field>
+        <Field Name="COMPANYNAME">
+          <DataField>COMPANYNAME</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Journal_Template_Name_">
+          <DataField>Res__Journal_Line__Journal_Template_Name_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Journal_Batch_Name_">
+          <DataField>Res__Journal_Line__Journal_Batch_Name_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Journal_Template_Name_Caption">
+          <DataField>Res__Journal_Line__Journal_Template_Name_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Journal_Batch_Name_Caption">
+          <DataField>Res__Journal_Line__Journal_Batch_Name_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__TABLECAPTION__________ResJnlLineFilter">
+          <DataField>Res__Journal_Line__TABLECAPTION__________ResJnlLineFilter</DataField>
+        </Field>
+        <Field Name="ResJnlLineFilter">
+          <DataField>ResJnlLineFilter</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line_ChargeableCaption">
+          <DataField>Res__Journal_Line_ChargeableCaption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Price_Caption">
+          <DataField>Res__Journal_Line__Unit_Price_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Price_Caption">
+          <DataField>Res__Journal_Line__Total_Price_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Cost_Caption">
+          <DataField>Res__Journal_Line__Unit_Cost_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Cost_Caption">
+          <DataField>Res__Journal_Line__Total_Cost_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line_QuantityCaption">
+          <DataField>Res__Journal_Line_QuantityCaption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_of_Measure_Code_Caption">
+          <DataField>Res__Journal_Line__Unit_of_Measure_Code_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Work_Type_Code_Caption">
+          <DataField>Res__Journal_Line__Work_Type_Code_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Resource_No__Caption">
+          <DataField>Res__Journal_Line__Resource_No__Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Document_No__Caption">
+          <DataField>Res__Journal_Line__Document_No__Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Entry_Type_Caption">
+          <DataField>Res__Journal_Line__Entry_Type_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Posting_Date_Caption">
+          <DataField>Res__Journal_Line__Posting_Date_Caption</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line___Line_No__">
+          <DataField>Res__Journal_Line___Line_No__</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Entry_Type_">
+          <DataField>Res__Journal_Line__Entry_Type_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Document_No__">
+          <DataField>Res__Journal_Line__Document_No__</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Resource_No__">
+          <DataField>Res__Journal_Line__Resource_No__</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Work_Type_Code_">
+          <DataField>Res__Journal_Line__Work_Type_Code_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_of_Measure_Code_">
+          <DataField>Res__Journal_Line__Unit_of_Measure_Code_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line_Quantity">
+          <DataField>Res__Journal_Line_Quantity</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line_QuantityFormat">
+          <DataField>Res__Journal_Line_QuantityFormat</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Cost_">
+          <DataField>Res__Journal_Line__Unit_Cost_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Cost_Format">
+          <DataField>Res__Journal_Line__Unit_Cost_Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Cost_">
+          <DataField>Res__Journal_Line__Total_Cost_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Cost_Format">
+          <DataField>Res__Journal_Line__Total_Cost_Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Price_">
+          <DataField>Res__Journal_Line__Unit_Price_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Unit_Price_Format">
+          <DataField>Res__Journal_Line__Unit_Price_Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Price_">
+          <DataField>Res__Journal_Line__Total_Price_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Price_Format">
+          <DataField>Res__Journal_Line__Total_Price_Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line_Chargeable">
+          <DataField>Res__Journal_Line_Chargeable</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Posting_Date_">
+          <DataField>Res__Journal_Line__Posting_Date_</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Cost__Control25Format">
+          <DataField>Res__Journal_Line__Total_Cost__Control25Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Price__Control26Format">
+          <DataField>Res__Journal_Line__Total_Price__Control26Format</DataField>
+        </Field>
+        <Field Name="Res__Journal_Line__Total_Cost__Control25Caption">
+          <DataField>Res__Journal_Line__Total_Cost__Control25Caption</DataField>
+        </Field>
+        <Field Name="GetTotalPrice">
+          <DataField>GetTotalPrice</DataField>
+        </Field>
+        <Field Name="GetTotalPriceFormat">
+          <DataField>GetTotalPriceFormat</DataField>
+        </Field>
+        <Field Name="GetTotalCost">
+          <DataField>GetTotalCost</DataField>
+        </Field>
+        <Field Name="GetTotalCostFormat">
+          <DataField>GetTotalCostFormat</DataField>
+        </Field>
+        <Field Name="DimText">
+          <DataField>DimText</DataField>
+        </Field>
+        <Field Name="DimensionsCaption">
+          <DataField>DimensionsCaption</DataField>
+        </Field>
+        <Field Name="DimensionLoop_Number">
+          <DataField>DimensionLoop_Number</DataField>
+        </Field>
+        <Field Name="ErrorText_Number_">
+          <DataField>ErrorText_Number_</DataField>
+        </Field>
+        <Field Name="ErrorText_Number_Caption">
+          <DataField>ErrorText_Number_Caption</DataField>
+        </Field>
+      </Fields>
+      <rd:DataSetInfo>
+        <rd:DataSetName>DataSet</rd:DataSetName>
+        <rd:TableName>Result</rd:TableName>
+      </rd:DataSetInfo>
+    </DataSet>
+  </DataSets>
+  <DataSources>
+    <DataSource Name="DummyDataSource">
+      <ConnectionProperties>
+        <ConnectString />
+        <DataProvider>SQL</DataProvider>
+      </ConnectionProperties>
+      <rd:DataSourceID>85bf1609-18cd-4193-823f-0c90926efc7d</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <InteractiveHeight>11in</InteractiveHeight>
+  <InteractiveWidth>8.5in</InteractiveWidth>
+  <Language>=User!Language</Language>
+  <LeftMargin>1.5cm</LeftMargin>
+  <PageHeader>
+    <Height>2.538cm</Height>
+    <PrintOnFirstPage>true</PrintOnFirstPage>
+    <PrintOnLastPage>true</PrintOnLastPage>
+    <ReportItems>
+      <Textbox Name="Res__Journal_Line__Journal_Template_Name_1">
+        <Height>0.423cm</Height>
+        <Left>2.4cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <PaddingBottom>2pt</PaddingBottom>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>1.48176cm</Top>
+        <Value>=ReportItems!Res__Journal_Line__Journal_Template_Name_.Value</Value>
+        <Width>2.04444cm</Width>
+        <ZIndex>9</ZIndex>
+      </Textbox>
+      <Textbox Name="Res__Journal_Line__Journal_Batch_Name_1">
+        <Height>0.423cm</Height>
+        <Left>2.4cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <PaddingBottom>2pt</PaddingBottom>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>1.90476cm</Top>
+        <Value>=ReportItems!Res__Journal_Line__Journal_Batch_Name_.Value</Value>
+        <Width>2.04444cm</Width>
+        <ZIndex>8</ZIndex>
+      </Textbox>
+      <Textbox Name="Res__Journal_Line__Journal_Template_Name_Caption1">
+        <Height>0.423cm</Height>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <PaddingBottom>2pt</PaddingBottom>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>1.48176cm</Top>
+        <Value>=ReportItems!Res__Journal_Line__Journal_Template_Name_Caption.Value</Value>
+        <Width>2.25cm</Width>
+        <ZIndex>7</ZIndex>
+      </Textbox>
+      <Textbox Name="Res__Journal_Line__Journal_Batch_Name_Caption1">
+        <Height>0.423cm</Height>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <PaddingBottom>2pt</PaddingBottom>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>1.90476cm</Top>
+        <Value>=ReportItems!Res__Journal_Line__Journal_Batch_Name_Caption.Value</Value>
+        <Width>2.25cm</Width>
+        <ZIndex>6</ZIndex>
+      </Textbox>
+      <Textbox Name="PageNumberTextBox">
+        <Height>0.423cm</Height>
+        <Left>17.54127cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <TextAlign>Right</TextAlign>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>0.423cm</Top>
+        <Value>=Code.GetPageNumber(ReportItems!NewPage.Value,Globals!PageNumber)</Value>
+        <ZIndex>5</ZIndex>
+      </Textbox>
+      <Textbox Name="UserIdTextBox">
+        <Height>0.423cm</Height>
+        <Left>14.74127cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <TextAlign>Right</TextAlign>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>0.846cm</Top>
+        <Value>=User!UserID</Value>
+        <ZIndex>4</ZIndex>
+      </Textbox>
+      <Textbox Name="ExecutionTimeTextBox">
+        <Height>0.423cm</Height>
+        <Left>11.90476cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <Format>D</Format>
+          <TextAlign>Right</TextAlign>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Value>=Globals!ExecutionTime</Value>
+        <ZIndex>3</ZIndex>
+      </Textbox>
+      <Textbox Name="COMPANYNAME1">
+        <Height>0.423cm</Height>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>0.423cm</Top>
+        <Value>=ReportItems!COMPANYNAME.Value</Value>
+        <Width>7.5cm</Width>
+        <ZIndex>2</ZIndex>
+      </Textbox>
+      <Textbox Name="CurrReport_PAGENOCaption1">
+        <Height>0.423cm</Height>
+        <Left>16.79127cm</Left>
+        <Style>
+          <FontSize>7pt</FontSize>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Top>0.423cm</Top>
+        <Value>=ReportItems!CurrReport_PAGENOCaption.Value</Value>
+        <Width>0.75cm</Width>
+        <ZIndex>1</ZIndex>
+      </Textbox>
+      <Textbox Name="Resource_Journal___TestCaption1">
+        <Height>0.423cm</Height>
+        <Style>
+          <FontSize>8pt</FontSize>
+          <FontWeight>700</FontWeight>
+          <VerticalAlign>Middle</VerticalAlign>
+        </Style>
+        <Value>=ReportItems!Resource_Journal___TestCaption.Value</Value>
+        <Width>7.5cm</Width>
+      </Textbox>
+    </ReportItems>
+  </PageHeader>
+  <PageHeight>29.7cm</PageHeight>
+  <PageWidth>21cm</PageWidth>
+  <TopMargin>2cm</TopMargin>
+  <Width>18.00238cm</Width>
+  <rd:DrawGrid>true</rd:DrawGrid>
+  <rd:ReportID>3f6019eb-cc40-4b5a-8aee-2e012fbd2285</rd:ReportID>
+  <rd:SnapToGrid>true</rd:SnapToGrid>
+</Report>
+    END_OF_RDLDatA
+  }
+}

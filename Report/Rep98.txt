@@ -1,0 +1,605 @@
+OBJECT Report 98 Date Compress General Ledger
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 17=rimd,
+                TableData 45=rimd,
+                TableData 87=rimd,
+                TableData 253=rimd,
+                TableData 355=imd,
+                TableData 5823=rimd;
+    CaptionML=[ENU=Date Compress General Ledger;
+               ESP=Comprimir fechas movs. cont.];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  DimSelectionBuf.CompareDimText(3,REPORT::"Date Compress General Ledger",'',RetainDimText,Text010);
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table17;
+        DataItemTableView=SORTING(G/L Account No.,Posting Date);
+        OnPreDataItem=VAR
+                        GLSetup@1000 : Record 98;
+                      BEGIN
+                        IF NOT
+                           CONFIRM(
+                             Text000 +
+                             Text001 +
+                             Text002,FALSE)
+                        THEN
+                          CurrReport.BREAK;
+
+                        IF EntrdDateComprReg."Ending Date" = 0D THEN
+                          ERROR(STRSUBSTNO(Text003,EntrdDateComprReg.FIELDCAPTION("Ending Date")));
+
+                        IF AnalysisView.FIND('-') THEN BEGIN
+                          AnalysisView.CheckDimensionsAreRetained(3,REPORT::"Date Compress General Ledger",FALSE);
+                          AnalysisView.CheckViewsAreUpdated;
+                          COMMIT;
+                        END;
+
+                        Window.OPEN(
+                          Text004 +
+                          Text005 +
+                          Text006 +
+                          Text007 +
+                          Text008);
+
+                        SourceCodeSetup.GET;
+                        SourceCodeSetup.TESTFIELD("Compress G/L");
+
+                        SelectedDim.GetSelectedDim(
+                          USERID,3,REPORT::"Date Compress General Ledger",'',TempSelectedDim);
+                        GLSetup.GET;
+                        Retain[5] :=
+                          TempSelectedDim.GET(
+                            USERID,3,REPORT::"Date Compress General Ledger",'',GLSetup."Global Dimension 1 Code");
+                        Retain[6] :=
+                          TempSelectedDim.GET(
+                            USERID,3,REPORT::"Date Compress General Ledger",'',GLSetup."Global Dimension 2 Code");
+
+                        NewGLEntry.LOCKTABLE;
+                        GLReg.LOCKTABLE;
+                        DateComprReg.LOCKTABLE;
+                        IF GLEntry2.FIND('+') THEN;
+                        LastEntryNo := GLEntry2."Entry No.";
+                        NextTransactionNo := GLEntry2."Transaction No." + 1;
+                        SETRANGE("Entry No.",0,LastEntryNo);
+                        SETRANGE("Posting Date",EntrdDateComprReg."Starting Date",EntrdDateComprReg."Ending Date");
+
+                        InitRegisters;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           GLEntry2 := "G/L Entry";
+                           WITH GLEntry2 DO BEGIN
+                             SETCURRENTKEY("G/L Account No.","Posting Date");
+                             COPYFILTERS("G/L Entry");
+                             SETFILTER("Posting Date",DateComprMgt.GetDateFilter("Posting Date",EntrdDateComprReg,TRUE));
+                             REPEAT
+                               SETRANGE("G/L Account No.","G/L Account No.");
+                               SETRANGE("Gen. Posting Type","Gen. Posting Type");
+                               SETRANGE("Gen. Bus. Posting Group","Gen. Bus. Posting Group");
+                               SETRANGE("Gen. Prod. Posting Group","Gen. Prod. Posting Group");
+
+                               IF RetainNo(FIELDNO("Document Type")) THEN
+                                 SETRANGE("Document Type","Document Type");
+                               IF RetainNo(FIELDNO("Document No.")) THEN
+                                 SETRANGE("Document No.","Document No.");
+                               IF RetainNo(FIELDNO("Job No.")) THEN
+                                 SETRANGE("Job No.","Job No.");
+                               IF RetainNo(FIELDNO("Business Unit Code")) THEN
+                                 SETRANGE("Business Unit Code","Business Unit Code");
+                               IF RetainNo(FIELDNO("Global Dimension 1 Code")) THEN
+                                 SETRANGE("Global Dimension 1 Code","Global Dimension 1 Code");
+                               IF RetainNo(FIELDNO("Global Dimension 2 Code")) THEN
+                                 SETRANGE("Global Dimension 2 Code","Global Dimension 2 Code");
+                               IF Amount <> 0 THEN BEGIN
+                                 IF Amount > 0 THEN
+                                   SETFILTER(Amount,'>0')
+                                 ELSE
+                                   SETFILTER(Amount,'<0');
+                               END ELSE BEGIN
+                                 SETRANGE(Amount,0);
+                                 IF "Additional-Currency Amount" >= 0 THEN
+                                   SETFILTER("Additional-Currency Amount",'>=0')
+                                 ELSE
+                                   SETFILTER("Additional-Currency Amount",'<0');
+                               END;
+
+                               InitNewEntry(NewGLEntry);
+
+                               DimBufMgt.CollectDimEntryNo(
+                                 TempSelectedDim,DATABASE::"G/L Entry","Entry No.",
+                                 0,FALSE,DimEntryNo);
+                               ComprDimEntryNo := DimEntryNo;
+                               SummarizeEntry(NewGLEntry,GLEntry2);
+                               WHILE NEXT <> 0 DO BEGIN
+                                 DimBufMgt.CollectDimEntryNo(
+                                   TempSelectedDim,DATABASE::"G/L Entry","Entry No.",
+                                   ComprDimEntryNo,TRUE,DimEntryNo);
+                                 IF DimEntryNo = ComprDimEntryNo THEN
+                                   SummarizeEntry(NewGLEntry,GLEntry2);
+                               END;
+
+                               InsertNewEntry(NewGLEntry,ComprDimEntryNo);
+
+                               ComprCollectedEntries;
+
+                               COPYFILTERS("G/L Entry");
+                               SETFILTER("Posting Date",DateComprMgt.GetDateFilter("Posting Date",EntrdDateComprReg,TRUE));
+                             UNTIL NOT FIND('-');
+                           END;
+
+                           IF DateComprReg."No. Records Deleted" >= NoOfDeleted + 10 THEN BEGIN
+                             NoOfDeleted := DateComprReg."No. Records Deleted";
+                             InsertRegisters(GLReg,DateComprReg);
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF DateComprReg."No. Records Deleted" > NoOfDeleted THEN
+                           InsertRegisters(GLReg,DateComprReg);
+
+                         IF AnalysisView.FIND('-') THEN
+                           AnalysisView.UpdateLastEntryNo;
+                       END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8910;
+      Height=5610;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF EntrdDateComprReg."Ending Date" = 0D THEN
+                     EntrdDateComprReg."Ending Date" := TODAY;
+                   IF EntrdGLEntry.Description = '' THEN
+                     EntrdGLEntry.Description := Text009;
+
+                   WITH "G/L Entry" DO BEGIN
+                     InsertField(FIELDNO("Document Type"),FIELDCAPTION("Document Type"));
+                     InsertField(FIELDNO("Document No."),FIELDCAPTION("Document No."));
+                     InsertField(FIELDNO("Job No."),FIELDCAPTION("Job No."));
+                     InsertField(FIELDNO("Business Unit Code"),FIELDCAPTION("Business Unit Code"));
+                     InsertField(FIELDNO("Global Dimension 1 Code"),FIELDCAPTION("Global Dimension 1 Code"));
+                     InsertField(FIELDNO("Global Dimension 2 Code"),FIELDCAPTION("Global Dimension 2 Code"));
+                     NoOfFieldsContents := NoOfFields;
+                     InsertField(FIELDNO(Quantity),FIELDCAPTION(Quantity));
+                   END;
+
+                   RetainDimText := DimSelectionBuf.GetDimSelectionText(3,REPORT::"Date Compress General Ledger",'');
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Starting Date;
+                                                              ESP=Fecha inicial];
+                                                   ClosingDates=Yes;
+                                                   SourceExpr=EntrdDateComprReg."Starting Date" }
+      { 21  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 2   ;TextBox      ;3410 ;550  ;1650 ;440  ;CaptionML=[ENU=Ending Date;
+                                                              ESP=Fecha final];
+                                                   ClosingDates=Yes;
+                                                   SourceExpr=EntrdDateComprReg."Ending Date" }
+      { 22  ;Label        ;0    ;550  ;3300 ;440  ;ParentControl=2 }
+      { 3   ;TextBox      ;3410 ;1100 ;2750 ;440  ;CaptionML=[ENU=Period Length;
+                                                              ESP=Longitud periodo];
+                                                   OptionCaptionML=[ENU=Day,Week,Month,Quarter,Year,Period;
+                                                                    ESP=D¡a,Semana,Mes,Trimestre,A¤o,Periodo];
+                                                   OptionString=Day,Week,Month,Quarter,Year,Period;
+                                                   SourceExpr=EntrdDateComprReg."Period Length" }
+      { 23  ;Label        ;0    ;1100 ;3300 ;440  ;ParentControl=3 }
+      { 4   ;TextBox      ;3410 ;1650 ;5500 ;440  ;CaptionML=[ENU=Posting Description;
+                                                              ESP=Texto de registro];
+                                                   SourceExpr=EntrdGLEntry.Description }
+      { 24  ;Label        ;0    ;1650 ;3300 ;440  ;ParentControl=4 }
+      { 5   ;CheckBox     ;3410 ;2310 ;3850 ;440  ;CaptionML=[ENU=Document Type;
+                                                              ESP=Tipo documento];
+                                                   SourceExpr=Retain[1] }
+      { 25  ;Label        ;0    ;2310 ;3300 ;440  ;ParentControl=5;
+                                                   CaptionML=[ENU=Retain Field Contents;
+                                                              ESP=Guardar contenido campo] }
+      { 6   ;CheckBox     ;3410 ;2860 ;3850 ;440  ;CaptionML=[ENU=Document No.;
+                                                              ESP=N§ documento];
+                                                   SourceExpr=Retain[2] }
+      { 7   ;CheckBox     ;3410 ;3410 ;3850 ;440  ;CaptionML=[ENU=Job No.;
+                                                              ESP=N§ proyecto];
+                                                   SourceExpr=Retain[3] }
+      { 8   ;CheckBox     ;3410 ;3960 ;3850 ;440  ;CaptionML=[ENU=Business Unit Code;
+                                                              ESP=C¢d. empresa];
+                                                   SourceExpr=Retain[4] }
+      { 11  ;CheckBox     ;3410 ;5170 ;3850 ;440  ;CaptionML=[ENU=Quantity;
+                                                              ESP=Cantidad];
+                                                   SourceExpr=Retain[7] }
+      { 41  ;Label        ;0    ;5170 ;3300 ;440  ;ParentControl=11;
+                                                   CaptionML=[ENU=Retain Totals;
+                                                              ESP=Guardar totales] }
+      { 12  ;TextBox      ;3410 ;4510 ;5500 ;440  ;Editable=No;
+                                                   PermanentAssist=Yes;
+                                                   CaptionML=[ENU=Retain Dimensions;
+                                                              ESP=Retener dimensiones];
+                                                   SourceExpr=RetainDimText;
+                                                   OnAssistEdit=BEGIN
+                                                                  DimSelectionBuf.SetDimSelectionMultiple(3,REPORT::"Date Compress General Ledger",RetainDimText);
+                                                                END;
+                                                                 }
+      { 13  ;Label        ;0    ;4510 ;3300 ;440  ;ParentControl=12 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF EntrdDateComprReg."Ending Date" = 0D THEN
+                     EntrdDateComprReg."Ending Date" := TODAY;
+                   IF EntrdGLEntry.Description = '' THEN
+                     EntrdGLEntry.Description := Text009;
+
+                   WITH "G/L Entry" DO BEGIN
+                     InsertField(FIELDNO("Document Type"),FIELDCAPTION("Document Type"));
+                     InsertField(FIELDNO("Document No."),FIELDCAPTION("Document No."));
+                     InsertField(FIELDNO("Job No."),FIELDCAPTION("Job No."));
+                     InsertField(FIELDNO("Business Unit Code"),FIELDCAPTION("Business Unit Code"));
+                     InsertField(FIELDNO("Global Dimension 1 Code"),FIELDCAPTION("Global Dimension 1 Code"));
+                     InsertField(FIELDNO("Global Dimension 2 Code"),FIELDCAPTION("Global Dimension 2 Code"));
+                     NoOfFieldsContents := NoOfFields;
+                     InsertField(FIELDNO(Quantity),FIELDCAPTION(Quantity));
+                   END;
+
+                   RetainDimText := DimSelectionBuf.GetDimSelectionText(3,REPORT::"Date Compress General Ledger",'');
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Starting Date;
+                             ESP=Fecha inicial];
+                  ClosingDates=Yes;
+                  SourceExpr=EntrdDateComprReg."Starting Date" }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=[ENU=Ending Date;
+                             ESP=Fecha final];
+                  ClosingDates=Yes;
+                  SourceExpr=EntrdDateComprReg."Ending Date" }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Period Length;
+                             ESP=Longitud periodo];
+                  OptionCaptionML=[ENU=Day,Week,Month,Quarter,Year,Period;
+                                   ESP=D¡a,Semana,Mes,Trimestre,A¤o,Periodo];
+                  SourceExpr=EntrdDateComprReg."Period Length" }
+
+      { 4   ;2   ;Field     ;
+                  CaptionML=[ENU=Posting Description;
+                             ESP=Texto de registro];
+                  SourceExpr=EntrdGLEntry.Description }
+
+      { 1907651001;2;Group  ;
+                  CaptionML=[ENU=Retain Field Contents;
+                             ESP=Guardar contenido campo] }
+
+      { 5   ;3   ;Field     ;
+                  CaptionML=[ENU=Document Type;
+                             ESP=Tipo documento];
+                  SourceExpr=Retain[1] }
+
+      { 6   ;3   ;Field     ;
+                  CaptionML=[ENU=Document No.;
+                             ESP=N§ documento];
+                  SourceExpr=Retain[2] }
+
+      { 7   ;3   ;Field     ;
+                  CaptionML=[ENU=Job No.;
+                             ESP=N§ proyecto];
+                  SourceExpr=Retain[3] }
+
+      { 8   ;3   ;Field     ;
+                  CaptionML=[ENU=Business Unit Code;
+                             ESP=C¢d. empresa];
+                  SourceExpr=Retain[4] }
+
+      { 12  ;2   ;Field     ;
+                  CaptionML=[ENU=Retain Dimensions;
+                             ESP=Retener dimensiones];
+                  SourceExpr=RetainDimText;
+                  Editable=FALSE;
+                  OnAssistEdit=BEGIN
+                                 DimSelectionBuf.SetDimSelectionMultiple(3,REPORT::"Date Compress General Ledger",RetainDimText);
+                               END;
+                                }
+
+      { 1907155901;2;Group  ;
+                  CaptionML=[ENU=Retain Totals;
+                             ESP=Guardar totales] }
+
+      { 11  ;3   ;Field     ;
+                  CaptionML=[ENU=Quantity;
+                             ESP=Cantidad];
+                  SourceExpr=Retain[7] }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU="This batch job deletes entries. ";ESP="Este proceso borra movimientos. "';
+      Text001@1001 : TextConst 'ENU=Therefore, it is important that you make a backup of the database before you run the batch job.\\;ESP=Es muy importante realizar una copia de seguridad de la base de datos antes de ejecutar este proceso.\\';
+      Text002@1002 : TextConst 'ENU=Do you want to date compress the entries?;ESP=¨Confirma que desea comprimir los movimientos?';
+      Text003@1003 : TextConst 'ENU=%1 must be specified.;ESP=Se debe indicar %1.';
+      Text004@1004 : TextConst 'ENU=Date compressing G/L entries...\\;ESP=Comprimiendo por fechas movs. contabilidad...\\';
+      Text005@1005 : TextConst 'ENU=G/L Account No.      #1##########\;ESP=N§ cuenta            #1##########\';
+      Text006@1006 : TextConst 'ENU=Date                 #2######\\;ESP=Fecha                #2######\\';
+      Text007@1007 : TextConst 'ENU=No. of new entries   #3######\;ESP=Nuevo n§ movs.       #3######\';
+      Text008@1008 : TextConst 'ENU=No. of entries del.  #4######;ESP=N§ movs. borrados    #4######';
+      Text009@1009 : TextConst 'ENU=Date Compressed;ESP=Comprimido por fechas';
+      Text010@1010 : TextConst 'ENU=Retain Dimensions;ESP=Retener dimensiones';
+      SourceCodeSetup@1011 : Record 242;
+      DateComprReg@1012 : Record 87;
+      EntrdDateComprReg@1013 : Record 87;
+      GLReg@1014 : Record 45;
+      EntrdGLEntry@1015 : Record 17;
+      NewGLEntry@1016 : Record 17;
+      GLEntry2@1017 : Record 17;
+      SelectedDim@1018 : Record 369;
+      TempSelectedDim@1019 : TEMPORARY Record 369;
+      DimSelectionBuf@1020 : Record 368;
+      AnalysisView@1021 : Record 363;
+      DateComprMgt@1022 : Codeunit 356;
+      DimBufMgt@1023 : Codeunit 411;
+      DimMgt@1024 : Codeunit 408;
+      Window@1025 : Dialog;
+      NoOfFields@1026 : Integer;
+      NoOfFieldsContents@1027 : Integer;
+      Retain@1028 : ARRAY [10] OF Boolean;
+      FieldNumber@1029 : ARRAY [10] OF Integer;
+      FieldNameArray@1030 : ARRAY [10] OF Text[100];
+      LastEntryNo@1031 : Integer;
+      NextTransactionNo@1032 : Integer;
+      NoOfDeleted@1033 : Integer;
+      GLRegExists@1034 : Boolean;
+      i@1035 : Integer;
+      ComprDimEntryNo@1036 : Integer;
+      DimEntryNo@1037 : Integer;
+      RetainDimText@1038 : Text[250];
+
+    LOCAL PROCEDURE InitRegisters@4();
+    BEGIN
+      IF GLReg.FIND('+') THEN;
+      GLReg.INIT;
+      GLReg."No." := GLReg."No." + 1;
+      GLReg."Creation Date" := TODAY;
+      GLReg."Source Code" := SourceCodeSetup."Compress G/L";
+      GLReg."User ID" := USERID;
+      GLReg."From Entry No." := LastEntryNo + 1;
+
+      IF DateComprReg.FIND('+') THEN;
+      DateComprReg.INIT;
+      DateComprReg."No." := DateComprReg."No." + 1;
+      DateComprReg."Table ID" := DATABASE::"G/L Entry";
+      DateComprReg."Creation Date" := TODAY;
+      DateComprReg."Starting Date" := EntrdDateComprReg."Starting Date";
+      DateComprReg."Ending Date" := EntrdDateComprReg."Ending Date";
+      DateComprReg."Period Length" := EntrdDateComprReg."Period Length";
+      FOR i := 1 TO NoOfFieldsContents DO
+        IF Retain[i] THEN
+          DateComprReg."Retain Field Contents" :=
+            COPYSTR(
+              DateComprReg."Retain Field Contents" + ',' + FieldNameArray[i],1,
+              MAXSTRLEN(DateComprReg."Retain Field Contents"));
+      DateComprReg."Retain Field Contents" := COPYSTR(DateComprReg."Retain Field Contents",2);
+      FOR i := NoOfFieldsContents + 1 TO NoOfFields DO
+        IF Retain[i] THEN
+          DateComprReg."Retain Totals" :=
+            COPYSTR(
+              DateComprReg."Retain Totals" + ',' + FieldNameArray[i],1,
+              MAXSTRLEN(DateComprReg."Retain Totals"));
+      DateComprReg."Retain Totals" := COPYSTR(DateComprReg."Retain Totals",2);
+      DateComprReg."Register No." := GLReg."No.";
+      DateComprReg."Source Code" := SourceCodeSetup."Compress G/L";
+      DateComprReg."User ID" := USERID;
+
+      GLRegExists := FALSE;
+      NoOfDeleted := 0;
+    END;
+
+    LOCAL PROCEDURE InsertRegisters@1(VAR GLReg@1000 : Record 45;VAR DateComprReg@1001 : Record 87);
+    BEGIN
+      GLReg."To Entry No." := NewGLEntry."Entry No.";
+
+      IF GLRegExists THEN BEGIN
+        GLReg.MODIFY;
+        DateComprReg.MODIFY;
+      END ELSE BEGIN
+        GLReg.INSERT;
+        DateComprReg.INSERT;
+        GLRegExists := TRUE;
+      END;
+      COMMIT;
+
+      NewGLEntry.LOCKTABLE;
+      GLReg.LOCKTABLE;
+      DateComprReg.LOCKTABLE;
+
+      GLEntry2.RESET;
+      IF GLEntry2.FIND('+') THEN;
+      IF LastEntryNo <> GLEntry2."Entry No." THEN BEGIN
+        LastEntryNo := GLEntry2."Entry No.";
+        NextTransactionNo := GLEntry2."Transaction No." + 1;
+        InitRegisters;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertField@2(Number@1000 : Integer;Name@1001 : Text[100]);
+    BEGIN
+      NoOfFields := NoOfFields + 1;
+      FieldNumber[NoOfFields] := Number;
+      FieldNameArray[NoOfFields] := Name;
+    END;
+
+    LOCAL PROCEDURE RetainNo@3(Number@1000 : Integer) : Boolean;
+    BEGIN
+      EXIT(Retain[Index(Number)]);
+    END;
+
+    LOCAL PROCEDURE Index@6(Number@1000 : Integer) : Integer;
+    BEGIN
+      FOR i := 1 TO NoOfFields DO
+        IF Number = FieldNumber[i] THEN
+          EXIT(i);
+    END;
+
+    PROCEDURE SummarizeEntry@5(VAR NewGLEntry@1000 : Record 17;GLEntry@1001 : Record 17);
+    VAR
+      LedgEntryDim@1002 : Record 355;
+      GLItemLedgRelation@1003 : Record 5823;
+      GLEntryVatEntrylink@1004 : Record 253;
+      GLEntryVatEntrylink2@1005 : Record 253;
+    BEGIN
+      WITH GLEntry DO BEGIN
+        NewGLEntry.Amount := NewGLEntry.Amount + Amount;
+        NewGLEntry."VAT Amount" := NewGLEntry."VAT Amount" + "VAT Amount";
+        NewGLEntry."Debit Amount" := NewGLEntry."Debit Amount" + "Debit Amount";
+        NewGLEntry."Credit Amount" := NewGLEntry."Credit Amount" + "Credit Amount";
+        NewGLEntry."Additional-Currency Amount" :=
+          NewGLEntry."Additional-Currency Amount" + "Additional-Currency Amount";
+        NewGLEntry."Add.-Currency Debit Amount" :=
+          NewGLEntry."Add.-Currency Debit Amount" + "Add.-Currency Debit Amount";
+        NewGLEntry."Add.-Currency Credit Amount" :=
+          NewGLEntry."Add.-Currency Credit Amount" + "Add.-Currency Credit Amount";
+        IF RetainNo(FIELDNO(Quantity)) THEN
+          NewGLEntry.Quantity := NewGLEntry.Quantity + Quantity;
+        DELETE;
+        LedgEntryDim.RESET;
+        LedgEntryDim.SETRANGE("Table ID",DATABASE::"G/L Entry");
+        LedgEntryDim.SETRANGE("Entry No.","Entry No.");
+        LedgEntryDim.DELETEALL;
+
+        GLItemLedgRelation.SETRANGE("G/L Entry No.","Entry No.");
+        GLItemLedgRelation.DELETEALL;
+
+        GLEntryVatEntrylink.SETRANGE("G/L Entry No.","Entry No.");
+        IF GLEntryVatEntrylink.FINDSET THEN
+          REPEAT
+            GLEntryVatEntrylink2 := GLEntryVatEntrylink;
+            GLEntryVatEntrylink2.DELETE;
+            GLEntryVatEntrylink2."G/L Entry No." := NewGLEntry."Entry No.";
+            IF GLEntryVatEntrylink2.INSERT THEN;
+          UNTIL GLEntryVatEntrylink.NEXT = 0;
+        DateComprReg."No. Records Deleted" := DateComprReg."No. Records Deleted" + 1;
+        Window.UPDATE(4,DateComprReg."No. Records Deleted");
+      END;
+    END;
+
+    PROCEDURE ComprCollectedEntries@12();
+    VAR
+      GLEntry@1000 : Record 17;
+      OldDimEntryNo@1001 : Integer;
+      Found@1002 : Boolean;
+      GLEntryNo@1003 : Integer;
+    BEGIN
+      OldDimEntryNo := 0;
+      IF DimBufMgt.FindFirstDimEntryNo(DimEntryNo,GLEntryNo) THEN BEGIN
+        InitNewEntry(NewGLEntry);
+        REPEAT
+          GLEntry.GET(GLEntryNo);
+          SummarizeEntry(NewGLEntry,GLEntry);
+          OldDimEntryNo := DimEntryNo;
+          Found := DimBufMgt.NextDimEntryNo(DimEntryNo,GLEntryNo);
+          IF (OldDimEntryNo <> DimEntryNo) OR NOT Found THEN BEGIN
+            InsertNewEntry(NewGLEntry,OldDimEntryNo);
+            IF Found THEN
+              InitNewEntry(NewGLEntry);
+          END;
+          OldDimEntryNo := DimEntryNo;
+        UNTIL NOT Found;
+      END;
+      DimBufMgt.DeleteAllDimEntryNo;
+    END;
+
+    PROCEDURE InitNewEntry@7(VAR NewGLEntry@1000 : Record 17);
+    BEGIN
+      LastEntryNo := LastEntryNo + 1;
+
+      WITH GLEntry2 DO BEGIN
+        NewGLEntry.INIT;
+        NewGLEntry."Entry No." := LastEntryNo;
+        NewGLEntry."G/L Account No." := "G/L Account No.";
+        NewGLEntry."Posting Date" := GETRANGEMIN("Posting Date");
+        NewGLEntry.Description := EntrdGLEntry.Description;
+        NewGLEntry."Gen. Posting Type" := "Gen. Posting Type";
+        NewGLEntry."Gen. Bus. Posting Group" := "Gen. Bus. Posting Group";
+        NewGLEntry."Gen. Prod. Posting Group" := "Gen. Prod. Posting Group";
+        NewGLEntry."System-Created Entry" := TRUE;
+        NewGLEntry."Prior-Year Entry" := TRUE;
+        NewGLEntry."Source Code" := SourceCodeSetup."Compress G/L";
+        NewGLEntry."User ID" := USERID;
+        NewGLEntry."Transaction No." := NextTransactionNo;
+
+        IF RetainNo(FIELDNO("Document Type")) THEN
+          NewGLEntry."Document Type" := "Document Type";
+        IF RetainNo(FIELDNO("Document No.")) THEN
+          NewGLEntry."Document No." := "Document No.";
+        IF RetainNo(FIELDNO("Job No.")) THEN
+          NewGLEntry."Job No." := "Job No.";
+        IF RetainNo(FIELDNO("Business Unit Code")) THEN
+          NewGLEntry."Business Unit Code" := "Business Unit Code";
+        IF RetainNo(FIELDNO("Global Dimension 1 Code")) THEN
+          NewGLEntry."Global Dimension 1 Code" := "Global Dimension 1 Code";
+        IF RetainNo(FIELDNO("Global Dimension 2 Code")) THEN
+          NewGLEntry."Global Dimension 2 Code" := "Global Dimension 2 Code";
+
+        Window.UPDATE(1,NewGLEntry."G/L Account No.");
+        Window.UPDATE(2,NewGLEntry."Posting Date");
+        DateComprReg."No. of New Records" := DateComprReg."No. of New Records" + 1;
+        Window.UPDATE(3,DateComprReg."No. of New Records");
+      END;
+    END;
+
+    PROCEDURE InsertNewEntry@23(VAR NewGLEntry@1000 : Record 17;DimEntryNo@1001 : Integer);
+    VAR
+      TempDimBuf@1002 : TEMPORARY Record 360;
+    BEGIN
+      NewGLEntry.INSERT;
+      TempDimBuf.DELETEALL;
+      DimBufMgt.GetDimensions(DimEntryNo,TempDimBuf);
+      DimMgt.MoveDimBufToLedgEntryDim(
+        TempDimBuf,DATABASE::"G/L Entry",NewGLEntry."Entry No.");
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

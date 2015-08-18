@@ -1,0 +1,1892 @@
+OBJECT Codeunit 5940 ServContractManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=5965;
+    Permissions=TableData 5907=rimd,
+                TableData 5908=rimd,
+                TableData 5934=rimd,
+                TableData 5967=rimd,
+                TableData 5969=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1015 : TextConst 'ENU=%1 cannot be created for service contract  %2, because %3 and %4 are not equal.;ESP=%1 no se puede crear para contrato serv.  %2, porque %3 y %4 no son iguales.';
+      Text002@1016 : TextConst 'ENU=Service Contract: %1;ESP=Contrato servicio: %1';
+      Text003@1018 : TextConst 'ENU=Service contract line(s) included in:;ESP=Se ha/n incluido l¡nea/s contrato servicio en:';
+      Text004@1019 : TextConst 'ENU=A credit memo cannot be created, because the %1 %2 is after the work date.;ESP=No puede crear un abono, porque el %1 %2 es posterior a la fecha de trabajo.';
+      Text005@1020 : TextConst 'ENU=%1 %2 removed;ESP=Eliminado %1 %2';
+      Text006@1021 : TextConst 'ENU=Do you want to create a service invoice for the period %1 .. %2 ?;ESP=¨Desea crear una factura de servicio para el periodo %1 .. %2?';
+      GlAcc@1003 : Record 15;
+      ServMgtSetup@1022 : Record 5911;
+      ServLedgEntry@1029 : Record 5907;
+      ServLedgEntry2@1030 : Record 5907;
+      ServLine@1031 : Record 5902;
+      ServHeader@1032 : Record 5900;
+      DocDim@1063 : Record 357;
+      ServiceRegister@1060 : Record 5934;
+      ServContractAccGr@1000 : Record 5973;
+      ServContractDim@1065 : Record 389;
+      TempServContractDim@1001 : TEMPORARY Record 389;
+      NoSeriesMgt@1038 : Codeunit 396;
+      DimMgt@1059 : Codeunit 408;
+      NextLine@1041 : Integer;
+      PostingDate@1053 : Date;
+      WDate@1004 : Date;
+      ServLineNo@1055 : Integer;
+      NextEntry@1056 : Integer;
+      AppliedEntry@1062 : Integer;
+      Text007@1064 : TextConst 'ENU=Invoice cannot be created because amount to invoice for this invoice period is zero.;ESP=No se puede crear la factura porque el importe a facturar para este periodo factura es cero.';
+      Text008@1068 : TextConst 'ENU=The combination of dimensions used in %1 %2 is blocked. %3;ESP=La combinaci¢n de dimensiones utilizada en %1 %2 est  bloqueada. %3';
+      Text009@1066 : TextConst 'ENU=The dimensions used in %1 %2 are invalid. %3;ESP=Las dimensiones usadas en %1 %2 no son v lidas. %3';
+      InvoicingStartingPeriod@1002 : Boolean;
+      Text010@1006 : TextConst 'ENU=You cannot create an invoice for contract %1 before the service under this contract is completed because the %2 check box is selected.;ESP=No puede crear una factura para el contrato %1 antes de que se haya completado el servicio de este contrato porque la casilla de %2 est  activada.';
+      Text011@1005 : TextConst 'ENU=You cannot create an invoice for contract %1 because %2 is within the invoice period.;ESP=No puede crear una factura para el contrato %1 porque %2 est  dentro del periodo de facturaci¢n.';
+      Text012@1070 : TextConst 'ENU=You must fill in the New Customer No. field.;ESP=Debe rellenar el campo N§ cliente nuevo.';
+      Text013@1007 : TextConst 'ENU=%1 cannot be created because the %2 is too long. Please shorten the %3 %4 %5 by removing %6 character(s).;ESP=%1 no se puede crear porque %2 es demasiado largo. Acorte %3 %4 %5 eliminando %6 caracteres.';
+      TempServLineDescription@1008 : Text[250];
+      Text014@1009 : TextConst 'ENU=A %1 cannot be created because %2 %3 has at least one unposted %4 linked to it.;ESP=No se puede crear un %1 porque %2 %3 tiene al menos un %4 no registrado vinculado.';
+      Text015@1102601000 : TextConst 'ENU=%1 %2 for the existing %3 %4 for %5 %6 differs from the newly calculated %1 %7. Do you want to use the existing %1?;ESP=%1 %2 para el  %3 %4 existente para %5 %6 es diferente del %1 %7 calculado. ¨Desea utilizar el %1 existente?';
+
+    PROCEDURE CreateInvoice@3(ServContractToInvoice@1001 : Record 5965) InvNo@1000 : Code[20];
+    VAR
+      ServContractLine@1003 : Record 5964;
+      InvoicedAmount@1002 : Decimal;
+      InvoiceFrom@1004 : Date;
+      InvoiceTo@1005 : Date;
+    BEGIN
+      ServContractToInvoice.TESTFIELD("Change Status",ServContractToInvoice."Change Status"::Locked);
+      GetNextInvoicePeriod(ServContractToInvoice,InvoiceFrom,InvoiceTo);
+      IF ServContractToInvoice.Prepaid THEN
+        PostingDate := InvoiceFrom
+      ELSE
+        PostingDate := InvoiceTo;
+      InvoicedAmount := CalcContractAmount(ServContractToInvoice,InvoiceFrom,InvoiceTo);
+
+      IF InvoicedAmount = 0 THEN
+        ERROR(Text007);
+
+      InvNo := CreateRemainingPeriodInvoice(ServContractToInvoice);
+
+      IF InvNo = '' THEN
+        InvNo := CreateServHeader(ServContractToInvoice,PostingDate,FALSE);
+
+      IF InvoicingStartingPeriod THEN BEGIN
+        GetNextInvoicePeriod(ServContractToInvoice,InvoiceFrom,InvoiceTo);
+        PostingDate := InvoiceFrom;
+        InvoicedAmount := CalcContractAmount(ServContractToInvoice,InvoiceFrom,InvoiceTo);
+      END;
+
+      IF NOT CheckIfServiceExist(ServContractToInvoice) THEN
+        ERROR(
+          Text010,
+          ServContractToInvoice."Contract No.",
+          ServContractToInvoice.FIELDCAPTION("Invoice after Service"));
+
+      CreateAllServLines(InvNo,ServContractToInvoice,InvoicedAmount);
+    END;
+
+    PROCEDURE CreateServiceLedgerEntry@4(ServHeader2@1001 : Record 5900;ContractType@1020 : Integer;ContractNo@1002 : Code[20];InvFrom@1003 : Date;InvTo@1004 : Date;AmountToInvoice@1005 : Decimal;SigningContract@1023 : Boolean;AddingNewLines@1012 : Boolean;VAR InvAmountRounded@8000 : Decimal) ReturnLedgerEntry@1000 : Integer;
+    VAR
+      ServContractLine@1022 : Record 5964;
+      ServContractHeader@1021 : Record 5965;
+      Currency@1026 : Record 4;
+      LastEntry@1007 : Integer;
+      FirstLineEntry@1008 : Integer;
+      LedgerAmount@1009 : Decimal;
+      NoOfPayments@1015 : Integer;
+      Index@1016 : Integer;
+      DueDate@1017 : Date;
+      Days@1019 : Integer;
+      InvTo2@1025 : Date;
+      LineInvFrom@1102601000 : Date;
+      ProcessSigningSLECreation@1006 : Boolean;
+      InvUnitPriceRounded@1102601001 : Decimal;
+      InvCostAmtRounded@1102601002 : Decimal;
+      InvDiscountAmtRounded@1102601003 : Decimal;
+      InvAmountReal@1102601004 : Decimal;
+      InvUnitPriceReal@1102601005 : Decimal;
+      InvCostAmtReal@1102601006 : Decimal;
+      InvDiscountAmtReal@1102601007 : Decimal;
+      NonDistrAmount@1102601008 : Decimal;
+      NonDistrUnitPrice@1102601009 : Decimal;
+      NonDistrCostAmt@1102601010 : Decimal;
+      NonDistrDiscountAmt@1102601011 : Decimal;
+      ServiceLdgEnt@1071 : Record 5907;
+      AccumulatedAmts@1072 : ARRAY [4] OF Decimal;
+      i@1073 : Integer;
+      YearContractCorrection@1074 : Boolean;
+    BEGIN
+      IF NOT ServContractHeader.GET(ContractType,ContractNo) THEN
+        EXIT;
+
+      IF ServContractHeader."Invoice Period" = ServContractHeader."Invoice Period"::None THEN
+        EXIT;
+
+      ServContractHeader.CALCFIELDS("Calcd. Annual Amount");
+      IF ServContractHeader."Calcd. Annual Amount" <> ServContractHeader."Annual Amount" THEN
+        ERROR(
+          Text000,
+          ServLedgEntry2.TABLECAPTION,
+          ServContractHeader."Contract No.",
+          ServContractHeader.FIELDCAPTION("Calcd. Annual Amount"),
+          ServContractHeader.FIELDCAPTION("Annual Amount"));
+
+      Currency.InitRoundingPrecision;
+
+      ReturnLedgerEntry := NextEntry;
+      CLEAR(ServLedgEntry);
+      ServLedgEntry.INIT;
+      ServLedgEntry.Type := ServLedgEntry.Type::"Service Contract";
+      ServLedgEntry."No." := ServContractHeader."Contract No.";
+      ServLedgEntry."Service Contract No." := ServContractHeader."Contract No.";
+      ServLedgEntry."Document Type" := ServLedgEntry."Document Type"::" ";
+      ServLedgEntry."Document No." := ServHeader2."No.";
+      ServLedgEntry."Serv. Contract Acc. Gr. Code" := ServContractHeader."Serv. Contract Acc. Gr. Code";
+      ServLedgEntry."Bill-to Customer No." := ServContractHeader."Bill-to Customer No.";
+      ServLedgEntry."Customer No." := ServContractHeader."Customer No.";
+      ServLedgEntry."Ship-to Code" := ServContractHeader."Ship-to Code";
+      ServLedgEntry."Global Dimension 1 Code" := ServHeader2."Shortcut Dimension 1 Code";
+      ServLedgEntry."Global Dimension 2 Code" := ServHeader2."Shortcut Dimension 2 Code";
+      ServLedgEntry."Entry Type" := ServLedgEntry."Entry Type"::Sale;
+      ServLedgEntry."User ID" := USERID;
+      ServLedgEntry."Contract Invoice Period" := FORMAT(ServContractHeader."Invoice Period");
+      ServLedgEntry."Contract Group Code" := ServContractHeader."Contract Group Code";
+      ServLedgEntry."Responsibility Center" := ServContractHeader."Responsibility Center";
+
+      ServLedgEntry.Open := TRUE;
+      ServLedgEntry.Quantity := -1;
+      ServLedgEntry."Charged Qty." := -1;
+
+      IF ServContractHeader.Prepaid AND NOT SigningContract THEN BEGIN
+        ServLedgEntry."Moved from Prepaid Acc." := FALSE;
+        FirstLineEntry := NextEntry;
+        InvAmountRounded := 0;
+        ServContractLine.RESET;
+        ServContractLine.SETRANGE("Contract No.",ServContractHeader."Contract No.");
+        ServContractLine.SETRANGE("Contract Type",ServContractHeader."Contract Type");
+        IF AddingNewLines THEN
+          ServContractLine.SETRANGE("New Line",TRUE)
+        ELSE
+          ServContractLine.SETFILTER("Starting Date",'<=%1',ServContractHeader."Next Invoice Date");
+        IF ServContractLine.FIND('-') THEN BEGIN
+          REPEAT
+            YearContractCorrection := FALSE;
+            Days := 0;
+            WDate := CALCDATE('<-CM>',InvFrom);
+            IF (InvFrom <= ServContractLine."Contract Expiration Date") OR
+               (ServContractLine."Contract Expiration Date" = 0D)
+            THEN BEGIN
+              NoOfPayments := 0;
+              REPEAT
+                NoOfPayments := NoOfPayments + 1;
+                WDate := CALCDATE('<1M>',WDate);
+              UNTIL (WDate >= InvTo) OR
+                    ((WDate > ServContractLine."Contract Expiration Date") AND
+                     (ServContractLine."Contract Expiration Date" <> 0D));
+              IF (ServContractLine."Contract Expiration Date" < WDate) AND
+                 (ServContractLine."Contract Expiration Date" <> 0D)
+              THEN BEGIN
+                Days := DATE2DMY(ServContractLine."Contract Expiration Date",1);
+                NoOfPayments := NoOfPayments - 1;
+              END;
+              WDate := InvTo;
+              IF (WDate > ServContractLine."Contract Expiration Date") AND
+                 (ServContractLine."Contract Expiration Date" <> 0D)
+              THEN
+                WDate := ServContractLine."Contract Expiration Date";
+              DueDate := WDate;
+              InvAmountReal := InvAmountReal + CalcContractLineAmount(ServContractLine."Line Amount",InvFrom,WDate);
+              InvUnitPriceReal := InvUnitPriceReal + CalcContractLineAmount(ServContractLine."Line Value",InvFrom,WDate);
+              InvCostAmtReal := InvCostAmtReal + CalcContractLineAmount(ServContractLine."Line Cost",InvFrom,WDate);
+              InvDiscountAmtReal := InvDiscountAmtReal + CalcContractLineAmount(ServContractLine."Line Discount Amount",InvFrom,WDate);
+              IF DueDate <> CALCDATE('<CM>',DueDate) THEN
+                DueDate := CALCDATE('<-CM-1D>',DueDate);
+              NonDistrAmount := -CalcContractLineAmount(ServContractLine."Line Amount",InvFrom,DueDate);
+              NonDistrUnitPrice := -CalcContractLineAmount(ServContractLine."Line Value",InvFrom,DueDate);
+              NonDistrCostAmt := CalcContractLineAmount(ServContractLine."Line Cost",InvFrom,DueDate);
+              NonDistrDiscountAmt := CalcContractLineAmount(ServContractLine."Line Discount Amount",InvFrom,DueDate);
+              ServLedgEntry."Service Item No. (Serviced)" := ServContractLine."Service Item No.";
+              ServLedgEntry."Item No. (Serviced)" := ServContractLine."Item No.";
+              ServLedgEntry."Serial No. (Serviced)" := ServContractLine."Serial No.";
+              DueDate := ServContractHeader."Next Invoice Date";
+
+              IF AddingNewLines THEN
+                DueDate := InvFrom;
+              FOR Index := 1 TO NoOfPayments DO BEGIN
+                ServLedgEntry."Amount (LCY)" :=
+                  ROUND(NonDistrAmount / (NoOfPayments + 1 - Index),Currency."Amount Rounding Precision");
+                ServLedgEntry."Unit Price" :=
+                  ROUND(NonDistrUnitPrice / (NoOfPayments + 1 - Index),Currency."Amount Rounding Precision");
+                ServLedgEntry."Unit Cost" :=
+                  ROUND(NonDistrCostAmt / (NoOfPayments + 1 - Index),Currency."Amount Rounding Precision");
+                ServLedgEntry."Contract Disc. Amount" :=
+                  ROUND(NonDistrDiscountAmt / (NoOfPayments + 1 - Index),Currency."Amount Rounding Precision");
+                ServLedgEntry."Cost Amount" := ServLedgEntry."Unit Cost";
+                ServLedgEntry."Discount Amount" := ServLedgEntry."Contract Disc. Amount";
+                ServLedgEntry."Discount %" :=
+                  -ROUND(ServLedgEntry."Discount Amount" / ServLedgEntry."Unit Price" * 100,0.00001);
+                NonDistrAmount := NonDistrAmount - ServLedgEntry."Amount (LCY)";
+                NonDistrUnitPrice := NonDistrUnitPrice - ServLedgEntry."Unit Price";
+                NonDistrCostAmt := NonDistrCostAmt - ServLedgEntry."Unit Cost";
+                NonDistrDiscountAmt := NonDistrDiscountAmt - ServLedgEntry."Contract Disc. Amount";
+                InvAmountRounded := InvAmountRounded - ServLedgEntry."Amount (LCY)";
+                InvUnitPriceRounded := InvUnitPriceRounded - ServLedgEntry."Unit Price";
+                InvCostAmtRounded := InvCostAmtRounded + ServLedgEntry."Unit Cost";
+                InvDiscountAmtRounded := InvDiscountAmtRounded + ServLedgEntry."Contract Disc. Amount";
+                ServLedgEntry."Entry No." := NextEntry;
+                IF ServHeader2."Currency Code" <> '' THEN
+                  ServLedgEntry.Amount := AmountToFCY(ServLedgEntry."Amount (LCY)",ServHeader2)
+                ELSE
+                  ServLedgEntry.Amount := ServLedgEntry."Amount (LCY)";
+                ServLedgEntry."Posting Date" := DueDate;
+                ServLedgEntry.Prepaid := TRUE;
+                ServLedgEntry.INSERT;
+
+                DocDim.RESET;
+                DocDim.SETRANGE("Table ID",DATABASE::"Service Header");
+                DocDim.SETRANGE("Document Type",DocDim."Document Type"::Invoice);
+                DocDim.SETRANGE("Document No.",ServHeader2."No.");
+                DimMgt.MoveDocDimToLedgEntryDim(
+                  DocDim,DATABASE::"Service Ledger Entry",ServLedgEntry."Entry No.");
+                NextEntry := NextEntry + 1;
+                DueDate := CALCDATE('<1M>',DueDate);
+              END;
+              IF Days <> 0 THEN BEGIN
+                IF YearContract(ServContractLine."Contract Type",ServContractLine."Contract No.") THEN BEGIN
+                  YearContractCorrection := TRUE;
+                  CLEAR(ServiceLdgEnt);
+                  ServiceLdgEnt.SETCURRENTKEY("Service Contract No.");
+                  ServiceLdgEnt.SETRANGE("Service Contract No.",ServContractLine."Contract No.");
+                  ServiceLdgEnt.SETRANGE("Service Item No. (Serviced)",ServContractLine."Service Item No.");
+                  FOR i := 1 TO 4 DO
+                    AccumulatedAmts[i] := 0;
+                  IF ServiceLdgEnt.FINDSET THEN REPEAT
+                    AccumulatedAmts[1] := AccumulatedAmts[1] + ServiceLdgEnt."Cost Amount";
+                    AccumulatedAmts[2] := AccumulatedAmts[2] - ServiceLdgEnt."Amount (LCY)";
+                    AccumulatedAmts[3] := AccumulatedAmts[3] + ServiceLdgEnt."Discount Amount";
+                    AccumulatedAmts[4] := AccumulatedAmts[4] - ServiceLdgEnt."Unit Price";
+                  UNTIL ServiceLdgEnt.NEXT = 0;
+                  ServLedgEntry."Cost Amount" := ROUND(ServContractLine."Line Cost" - AccumulatedAmts[1]);
+                  ServLedgEntry."Unit Cost" := ServLedgEntry."Cost Amount";
+                  ServLedgEntry."Amount (LCY)" := AccumulatedAmts[2] - ServContractLine."Line Amount";
+                  ServLedgEntry."Discount Amount" := ServContractLine."Line Discount Amount" - AccumulatedAmts[3];
+                  ServLedgEntry."Contract Disc. Amount" := ServLedgEntry."Discount Amount";
+                  ServLedgEntry."Unit Price" := AccumulatedAmts[4] - ServContractLine."Line Value";
+                  IF ServLedgEntry."Unit Price" <> 0 THEN BEGIN
+                    ServLedgEntry."Discount %" :=
+                      -ROUND(ServLedgEntry."Discount Amount" / ServLedgEntry."Unit Price" * 100,0.00001);
+                  END;
+                  InvAmountRounded := InvAmountRounded - ServLedgEntry."Amount (LCY)";
+                  InvUnitPriceRounded := InvUnitPriceRounded - ServLedgEntry."Unit Price";
+                  InvCostAmtRounded := InvCostAmtRounded + ServLedgEntry."Unit Cost";
+                  InvDiscountAmtRounded := InvDiscountAmtRounded + ServLedgEntry."Contract Disc. Amount";
+                  ServLedgEntry."Entry No." := NextEntry;
+                  IF ServHeader2."Currency Code" <> '' THEN
+                    ServLedgEntry.Amount := AmountToFCY(ServLedgEntry."Amount (LCY)",ServHeader2)
+                  ELSE
+                    ServLedgEntry.Amount := ServLedgEntry."Amount (LCY)";
+                END ELSE BEGIN
+                  YearContractCorrection := FALSE;
+                  ServLedgEntry."Amount (LCY)" :=
+                    -ROUND(
+                      CalcContractLineAmount(ServContractLine."Line Amount",
+                        CALCDATE('<-CM>',ServContractLine."Contract Expiration Date"),
+                        ServContractLine."Contract Expiration Date"),
+                      Currency."Amount Rounding Precision");
+                  ServLedgEntry."Unit Price" :=
+                    -ROUND(
+                      CalcContractLineAmount(ServContractLine."Line Value",
+                        CALCDATE('<-CM>',ServContractLine."Contract Expiration Date"),ServContractLine."Contract Expiration Date"),
+                      Currency."Amount Rounding Precision");
+                  ServLedgEntry."Cost Amount" :=
+                    ROUND(
+                      CalcContractLineAmount(ServContractLine."Line Cost",
+                        CALCDATE('<-CM>',ServContractLine."Contract Expiration Date"),
+                        ServContractLine."Contract Expiration Date"),
+                      Currency."Amount Rounding Precision");
+                  ServLedgEntry."Unit Cost" := ServLedgEntry."Cost Amount";
+                  ServLedgEntry."Contract Disc. Amount" :=
+                    ROUND(
+                      CalcContractLineAmount(ServContractLine."Line Discount Amount",
+                        CALCDATE('<-CM>',ServContractLine."Contract Expiration Date"),
+                        ServContractLine."Contract Expiration Date"),
+                      Currency."Amount Rounding Precision");
+                  ServLedgEntry."Discount Amount" := ServLedgEntry."Contract Disc. Amount";
+                  ServLedgEntry."Discount %" :=
+                    -ROUND(ServLedgEntry."Discount Amount" / ServLedgEntry."Unit Price" * 100,0.00001);
+                  InvAmountRounded := InvAmountRounded - ServLedgEntry."Amount (LCY)";
+                  InvUnitPriceRounded := InvUnitPriceRounded - ServLedgEntry."Unit Price";
+                  InvCostAmtRounded := InvCostAmtRounded + ServLedgEntry."Unit Cost";
+                  InvDiscountAmtRounded := InvDiscountAmtRounded + ServLedgEntry."Contract Disc. Amount";
+                  ServLedgEntry."Entry No." := NextEntry;
+                  IF ServHeader2."Currency Code" <> '' THEN
+                    ServLedgEntry.Amount := AmountToFCY(ServLedgEntry."Amount (LCY)",ServHeader2)
+                  ELSE
+                    ServLedgEntry.Amount := ServLedgEntry."Amount (LCY)";
+                END;
+                ServLedgEntry."Posting Date" := DueDate;
+                ServLedgEntry.Prepaid := TRUE;
+                ServLedgEntry.INSERT;
+
+                DocDim.RESET;
+                DocDim.SETRANGE("Table ID",DATABASE::"Service Header");
+                DocDim.SETRANGE("Document Type",DocDim."Document Type"::Invoice);
+                DocDim.SETRANGE("Document No.",ServHeader2."No.");
+                DimMgt.MoveDocDimToLedgEntryDim(
+                  DocDim,DATABASE::"Service Ledger Entry",ServLedgEntry."Entry No.");
+                NextEntry := NextEntry + 1;
+              END ELSE
+                YearContractCorrection := FALSE;
+              LastEntry := ServLedgEntry."Entry No.";
+              IF ServContractLine."Contract Expiration Date" <> 0D THEN BEGIN
+                IF (ServContractLine."Contract Expiration Date" >= InvFrom) AND
+                   (ServContractLine."Contract Expiration Date" <= InvTo)
+                THEN
+                  ServContractLine."Invoiced to Date" := ServContractLine."Contract Expiration Date"
+                ELSE
+                  IF ServContractLine."Contract Expiration Date" > InvTo THEN
+                    ServContractLine."Invoiced to Date" := InvTo;
+              END ELSE
+                ServContractLine."Invoiced to Date" := InvTo;
+              ServContractLine.MODIFY;
+            END ELSE
+              YearContractCorrection := FALSE;
+          UNTIL ServContractLine.NEXT = 0;
+          ServLedgEntry.GET(FirstLineEntry);
+          ServLedgEntry."Apply Until Entry No." := LastEntry;
+          ServLedgEntry.MODIFY;
+        END;
+      END ELSE BEGIN
+        YearContractCorrection := FALSE;
+        ServLedgEntry."Moved from Prepaid Acc." := TRUE;
+        ServLedgEntry."Posting Date" := ServHeader2."Posting Date";
+        ServContractLine.RESET;
+        ServContractLine.SETRANGE("Contract Type",ServContractHeader."Contract Type");
+        ServContractLine.SETRANGE("Contract No.",ServContractHeader."Contract No.");
+        IF AddingNewLines THEN
+          ServContractLine.SETRANGE("New Line",TRUE)
+        ELSE
+          IF (NOT SigningContract) THEN BEGIN
+            IF (ServContractHeader."Last Invoice Date" <> 0D) THEN
+              ServContractLine.SETFILTER("Invoiced to Date",'%1|%2',ServContractHeader."Last Invoice Date",0D)
+            ELSE
+              ServContractLine.SETRANGE("Invoiced to Date",0D);
+            ServContractLine.SETFILTER("Starting Date",'<=%1',InvFrom);
+          END ELSE
+            ServContractLine.SETFILTER("Starting Date",'<=%1',InvTo);
+        FirstLineEntry := NextEntry;
+        InvAmountRounded := 0;
+        InvTo2 := InvTo;
+        IF ServContractLine.FIND('-') THEN BEGIN
+          REPEAT
+            IF SigningContract THEN BEGIN
+              IF (ServContractLine."Invoiced to Date" = 0D) THEN
+                ProcessSigningSLECreation := TRUE
+              ELSE
+                IF (ServContractLine."Invoiced to Date" <> 0D) AND
+                   (ServContractLine."Invoiced to Date" <> CALCDATE('<CM>',ServContractLine."Invoiced to Date")) THEN
+                  ProcessSigningSLECreation := TRUE
+            END ELSE
+              ProcessSigningSLECreation := TRUE;
+            IF ((InvFrom <= ServContractLine."Contract Expiration Date") OR
+                (ServContractLine."Contract Expiration Date" = 0D)) AND ProcessSigningSLECreation
+            THEN BEGIN
+              IF (ServContractLine."Contract Expiration Date" >= InvFrom) AND
+                 (ServContractLine."Contract Expiration Date" < InvTo)
+              THEN
+                InvTo := ServContractLine."Contract Expiration Date";
+              ServLedgEntry."Service Item No. (Serviced)" := ServContractLine."Service Item No.";
+              ServLedgEntry."Item No. (Serviced)" := ServContractLine."Item No.";
+              ServLedgEntry."Serial No. (Serviced)" := ServContractLine."Serial No.";
+              IF SigningContract THEN BEGIN
+                IF (ServContractLine."Invoiced to Date" = 0D) THEN
+                  LineInvFrom := ServContractLine."Starting Date"
+                ELSE
+                  IF (ServContractLine."Invoiced to Date" <> CALCDATE('<CM>',ServContractLine."Invoiced to Date")) THEN
+                    LineInvFrom := ServContractLine."Invoiced to Date" + 1
+              END ELSE
+                IF ServContractLine."Invoiced to Date" = 0D THEN BEGIN
+                  IF ServContractLine."Starting Date" = CALCDATE('<-CM>',ServContractLine."Starting Date") THEN
+                    LineInvFrom := ServContractLine."Starting Date"
+                  ELSE
+                    IF ServContractLine."Starting Date" <= InvFrom THEN
+                      LineInvFrom := CALCDATE('<CM+1D>',ServContractLine."Starting Date")
+                    ELSE
+                      LineInvFrom := 0D;
+                END ELSE
+                  LineInvFrom := InvFrom;
+              IF (LineInvFrom <> 0D) AND (LineInvFrom <= InvTo) THEN BEGIN
+                ServLedgEntry."Amount (LCY)" :=
+                  -ROUND(
+                    CalcContractLineAmount(ServContractLine."Line Amount",LineInvFrom,InvTo),
+                    Currency."Amount Rounding Precision");
+                ServLedgEntry."Unit Price" :=
+                  -ROUND(
+                    CalcContractLineAmount(ServContractLine."Line Value",LineInvFrom,InvTo),
+                    Currency."Amount Rounding Precision");
+                ServLedgEntry."Unit Cost" :=
+                  ROUND(
+                    CalcContractLineAmount(ServContractLine."Line Cost",LineInvFrom,InvTo),
+                    Currency."Amount Rounding Precision");
+                ServLedgEntry."Cost Amount" := ServLedgEntry."Unit Cost";
+                ServLedgEntry."Contract Disc. Amount" :=
+                  ROUND(
+                    CalcContractLineAmount(ServContractLine."Line Discount Amount",LineInvFrom,InvTo),
+                    Currency."Amount Rounding Precision");
+                ServLedgEntry."Discount Amount" := ServLedgEntry."Contract Disc. Amount";
+                ServLedgEntry."Discount %" :=
+                  -ROUND(ServLedgEntry."Discount Amount" / ServLedgEntry."Unit Price" * 100,0.00001);
+                IF ServHeader2."Currency Code" <> '' THEN
+                  ServLedgEntry.Amount := AmountToFCY(ServLedgEntry."Amount (LCY)",ServHeader2)
+                ELSE
+                  ServLedgEntry.Amount := ServLedgEntry."Amount (LCY)";
+                ServLedgEntry."Entry No." := NextEntry;
+                InvAmountReal := InvAmountReal + CalcContractLineAmount(ServContractLine."Line Amount",LineInvFrom,InvTo);
+                InvUnitPriceReal := InvUnitPriceReal + CalcContractLineAmount(ServContractLine."Line Value",LineInvFrom,InvTo);
+                InvCostAmtReal := InvCostAmtReal + CalcContractLineAmount(ServContractLine."Line Cost",LineInvFrom,InvTo);
+                InvDiscountAmtReal := InvDiscountAmtReal +
+                  CalcContractLineAmount(ServContractLine."Line Discount Amount",LineInvFrom,InvTo);
+                InvAmountRounded := InvAmountRounded - ServLedgEntry."Amount (LCY)";
+                InvUnitPriceRounded := InvUnitPriceRounded - ServLedgEntry."Unit Price";
+                InvCostAmtRounded := InvCostAmtRounded + ServLedgEntry."Unit Cost";
+                InvDiscountAmtRounded := InvDiscountAmtRounded + ServLedgEntry."Contract Disc. Amount";
+                ServLedgEntry.INSERT;
+
+                DocDim.RESET;
+                DocDim.SETRANGE("Table ID",DATABASE::"Service Header");
+                DocDim.SETRANGE("Document Type",DocDim."Document Type"::Invoice);
+                DocDim.SETRANGE("Document No.",ServHeader2."No.");
+                DimMgt.MoveDocDimToLedgEntryDim(
+                  DocDim,DATABASE::"Service Ledger Entry",ServLedgEntry."Entry No.");
+
+                LastEntry := ServLedgEntry."Entry No.";
+                NextEntry := NextEntry + 1;
+                InvTo := InvTo2;
+              END;
+              IF ServContractLine."Contract Expiration Date" <> 0D THEN BEGIN
+                IF (ServContractLine."Contract Expiration Date" >= InvFrom) AND
+                   (ServContractLine."Contract Expiration Date" <= InvTo)
+                THEN
+                  ServContractLine."Invoiced to Date" := ServContractLine."Contract Expiration Date"
+                ELSE
+                  IF ServContractLine."Contract Expiration Date" > InvTo THEN
+                    ServContractLine."Invoiced to Date" := InvTo;
+              END ELSE
+                ServContractLine."Invoiced to Date" := InvTo;
+              ServContractLine.MODIFY;
+            END;
+          UNTIL ServContractLine.NEXT = 0;
+
+          ServLedgEntry.GET(FirstLineEntry);
+          ServLedgEntry."Apply Until Entry No." := LastEntry;
+          ServLedgEntry.MODIFY;
+        END;
+      END;
+      IF ServLedgEntry.GET(LastEntry) AND (NOT YearContractCorrection)
+      THEN BEGIN
+        ServLedgEntry."Amount (LCY)" := ServLedgEntry."Amount (LCY)" + InvAmountRounded -
+          ROUND(InvAmountReal,Currency."Amount Rounding Precision");
+        ServLedgEntry."Unit Price" := ServLedgEntry."Unit Price" + InvUnitPriceRounded -
+          ROUND(InvUnitPriceReal,Currency."Amount Rounding Precision");
+        ServLedgEntry."Cost Amount" := ServLedgEntry."Cost Amount" - InvCostAmtRounded +
+          ROUND(InvCostAmtReal,Currency."Amount Rounding Precision");
+        ServLedgEntry."Unit Cost" := ServLedgEntry."Cost Amount";
+        ServLedgEntry."Contract Disc. Amount" := ServLedgEntry."Contract Disc. Amount" - InvDiscountAmtRounded +
+          ROUND(InvDiscountAmtReal,Currency."Amount Rounding Precision");
+        ServLedgEntry."Discount Amount" := ServLedgEntry."Contract Disc. Amount";
+        IF ServLedgEntry."Unit Price" <> 0 THEN BEGIN
+          ServLedgEntry."Discount %" :=
+            -ROUND(ServLedgEntry."Discount Amount" / ServLedgEntry."Unit Price" * 100,0.00001);
+        END;
+        InvAmountRounded := ROUND(InvAmountReal,Currency."Amount Rounding Precision");
+        IF ServHeader2."Currency Code" <> '' THEN
+          ServLedgEntry.Amount := AmountToFCY(ServLedgEntry."Amount (LCY)",ServHeader2)
+        ELSE
+          ServLedgEntry.Amount := ServLedgEntry."Amount (LCY)";
+        ServLedgEntry.MODIFY;
+      END;
+    END;
+
+    PROCEDURE CreateServHeader@5(ServContract2@1001 : Record 5965;PostDate@1003 : Date;ContractExists@1009 : Boolean) ServInvNo@1000 : Code[20];
+    VAR
+      ServHeader2@1005 : Record 5900;
+      Cust@1006 : Record 18;
+      ServDocReg@1007 : Record 5936;
+      CurrExchRate@1008 : Record 330;
+      UserMgt@1102601000 : Codeunit 5700;
+      GLSetup@1102601001 : Record 98;
+      Cust2@1102601002 : Record 18;
+    BEGIN
+      IF ServContract2."Invoice Period" = ServContract2."Invoice Period"::None THEN
+        EXIT;
+
+      IF PostDate = 0D THEN
+        PostDate := WORKDATE;
+
+      CLEAR(ServHeader2);
+      ServHeader2.INIT;
+      ServHeader2.SetHideValidationDialog(TRUE);
+      ServHeader2."Document Type" := ServHeader2."Document Type"::Invoice;
+      ServMgtSetup.GET ;
+      ServMgtSetup.TESTFIELD("Contract Invoice Nos.");
+      NoSeriesMgt.InitSeries(
+        ServMgtSetup."Contract Invoice Nos.",'',
+        PostDate,ServHeader2."No.",ServHeader2."No. Series");
+      ServHeader2.INSERT(TRUE);
+      ServInvNo := ServHeader2."No.";
+
+      ServHeader2."Order Date" := WORKDATE;
+      ServHeader2."Posting Description" :=
+        FORMAT(ServHeader2."Document Type") + ' ' + ServHeader2."No.";
+      ServHeader2.VALIDATE("Bill-to Customer No.",ServContract2."Bill-to Customer No.");
+      ServHeader2."Customer No." := ServContract2."Customer No.";
+      ServHeader2.VALIDATE("Ship-to Code",ServContract2."Ship-to Code");
+      Cust.GET(ServHeader2."Customer No.");
+      ServHeader2."Responsibility Center" := ServContract2."Responsibility Center";
+
+      Cust.CheckBlockedCustOnDocs(Cust,ServHeader2."Document Type",FALSE,FALSE);
+
+      Cust.TESTFIELD("Gen. Bus. Posting Group");
+      ServHeader2.Name := Cust.Name;
+      ServHeader2."Name 2" := Cust."Name 2";
+      ServHeader2.Address := Cust.Address;
+      ServHeader2."Address 2" := Cust."Address 2";
+      ServHeader2.City := Cust.City;
+      ServHeader2."Post Code" := Cust."Post Code";
+      ServHeader2.County := Cust.County;
+      ServHeader2."Country/Region Code" := Cust."Country/Region Code";
+      ServHeader2."Contact Name" := ServContract2."Contact Name";
+      ServHeader2."Contact No." := ServContract2."Contact No.";
+
+      IF NOT ContractExists THEN
+        IF ServHeader2."Customer No." = ServContract2."Customer No." THEN
+          ServHeader2.VALIDATE("Ship-to Code",ServContract2."Ship-to Code");
+      ServHeader2.VALIDATE("Posting Date",PostDate);
+      ServHeader2.VALIDATE("Document Date",PostDate);
+      ServHeader2."Contract No." := ServContract2."Contract No.";
+      ServHeader2."Gen. Bus. Posting Group" := Cust."Gen. Bus. Posting Group";
+      GLSetup.GET;
+      IF GLSetup."Bill-to/Sell-to VAT Calc." = GLSetup."Bill-to/Sell-to VAT Calc."::"Bill-to/Pay-to No." THEN BEGIN
+        Cust2.GET(ServContract2."Bill-to Customer No.");
+        ServHeader2."VAT Bus. Posting Group" := Cust2."VAT Bus. Posting Group";
+      END ELSE
+        ServHeader2."VAT Bus. Posting Group" := Cust."VAT Bus. Posting Group";
+      ServHeader2."Currency Code" := ServContract2."Currency Code";
+      ServHeader2."Currency Factor" :=
+        CurrExchRate.ExchangeRate(
+          ServHeader2."Posting Date",ServHeader2."Currency Code");
+      ServHeader2.VALIDATE("Payment Terms Code",ServContract2."Payment Terms Code");
+      ServHeader2."Your Reference" := ServContract2."Your Reference";
+      ServHeader2."Salesperson Code" := ServContract2."Salesperson Code";
+      ServHeader2."Shortcut Dimension 1 Code" := ServContract2."Shortcut Dimension 1 Code";
+      ServHeader2."Shortcut Dimension 2 Code" := ServContract2."Shortcut Dimension 2 Code";
+      ServHeader2.VALIDATE("Location Code",
+        UserMgt.GetLocation(2,Cust."Location Code",ServContract2."Responsibility Center"));
+      ServHeader2.MODIFY;
+
+      CLEAR(ServDocReg);
+      ServDocReg.InsertServSalesDocument(
+        ServDocReg."Source Document Type"::Contract,
+        ServContract2."Contract No.",
+        ServDocReg."Destination Document Type"::Invoice,
+        ServHeader2."No.");
+
+      AdjustServiceInvoiceDimensions(ServContract2,ServInvNo);
+    END;
+
+    PROCEDURE CreateServLine@9(ServHeader@1000 : Record 5900;ContractType@1010 : Integer;ContractNo@1001 : Code[20];InvFrom@1002 : Date;InvTo@1003 : Date;InvoiceAmount@1004 : Decimal;ServiceApplyEntry@1005 : Integer;SignningContract@1011 : Boolean);
+    VAR
+      ServContractHeader@1009 : Record 5965;
+      StdText@1006 : Record 7;
+      Cust@1007 : Record 18;
+      ServDocReg@1008 : Record 5936;
+      ServiceLedgerEntry@1012 : Record 5907;
+    BEGIN
+      ServContractHeader.GET(ContractType,ContractNo);
+
+      IF ServContractHeader."Invoice Period" = ServContractHeader."Invoice Period"::None THEN
+        EXIT;
+
+      Cust.GET(ServContractHeader."Bill-to Customer No.");
+
+      ServLineNo := 0;
+      ServLine.RESET;
+      ServLine.SETRANGE("Document Type",ServLine."Document Type"::Invoice);
+      ServLine.SETRANGE("Document No.",ServHeader."No.");
+      IF ServLine.FIND('+') THEN
+        ServLineNo := ServLine."Line No.";
+
+      ServLine.RESET;
+
+      ServLine.INIT;
+      ServLineNo := ServLineNo + 10000;
+      ServLine."Document Type" := ServHeader."Document Type";
+      ServLine."Document No." := ServHeader."No.";
+      ServLine."Line No." := ServLineNo;
+      ServLine."Customer No." := ServHeader."Customer No.";
+      ServLine."Location Code" := ServHeader."Location Code";
+      ServLine."Shortcut Dimension 1 Code" := ServHeader."Shortcut Dimension 1 Code";
+      ServLine."Shortcut Dimension 2 Code" := ServHeader."Shortcut Dimension 2 Code";
+      ServLine."Gen. Bus. Posting Group" := ServHeader."Gen. Bus. Posting Group";
+      ServLine."Transaction Specification" := ServHeader."Transaction Specification";
+      ServLine."Transport Method" := ServHeader."Transport Method";
+      ServLine."Exit Point" := ServHeader."Exit Point";
+      ServLine.Area := ServHeader.Area;
+      ServLine."Transaction Specification" := ServHeader."Transaction Specification";
+      ServLine.Type := ServLine.Type::"G/L Account";
+
+      IF ServContractHeader.Prepaid AND NOT SignningContract THEN BEGIN
+        ServContractHeader.TESTFIELD("Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.GET(ServContractHeader."Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.TESTFIELD("Prepaid Contract Acc.");
+        GlAcc.GET(ServContractAccGr."Prepaid Contract Acc.");
+        GlAcc.TESTFIELD("Direct Posting");
+        ServLine.VALIDATE("No.",ServContractAccGr."Prepaid Contract Acc.");
+      END ELSE BEGIN
+        ServContractHeader.TESTFIELD("Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.GET(ServContractHeader."Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.TESTFIELD("Non-Prepaid Contract Acc.");
+        GlAcc.GET(ServContractAccGr."Non-Prepaid Contract Acc.");
+        GlAcc.TESTFIELD("Direct Posting");
+        ServLine.VALIDATE("No.",ServContractAccGr."Non-Prepaid Contract Acc.");
+      END;
+
+      ServContractDim.RESET;
+      ServContractDim.SETRANGE("Table ID",DATABASE::"Service Contract Header");
+      ServContractDim.SETRANGE(Type,ServContractHeader."Contract Type");
+      ServContractDim.SETRANGE("No.",ServContractHeader."Contract No.");
+      ServContractDim.SETRANGE("Line No.",0);
+
+      DocDim.RESET;
+      DocDim.SETRANGE("Table ID",DATABASE::"Service Line");
+      DocDim.SETRANGE("Document Type",ServLine."Document Type");
+      DocDim.SETRANGE("Document No.",ServLine."Document No.");
+      DocDim.SETRANGE("Line No.",ServLine."Line No.");
+
+      DimMgt.UpdateSCInvLineDim(
+        ServContractDim,DocDim,ServLine,ServContractHeader,
+        ServLine."Shortcut Dimension 1 Code",
+        ServLine."Shortcut Dimension 2 Code");
+
+      ServLine.VALIDATE(Quantity,1);
+      IF ServMgtSetup."Contract Inv. Period Text Code" <> '' THEN BEGIN
+        StdText.GET(ServMgtSetup."Contract Inv. Period Text Code");
+        TempServLineDescription := STRSUBSTNO('%1 %2 - %3',StdText.Description,FORMAT(InvFrom),FORMAT(InvTo));
+        IF STRLEN(TempServLineDescription) > MAXSTRLEN(ServLine.Description) THEN
+          ERROR(
+            Text013,
+            ServLine.TABLECAPTION,ServLine.FIELDCAPTION(Description),
+            StdText.TABLECAPTION,StdText.Code,StdText.FIELDCAPTION(Description),
+            FORMAT(STRLEN(TempServLineDescription) - MAXSTRLEN(ServLine.Description)));
+        ServLine.Description := TempServLineDescription;
+      END ELSE
+        ServLine.Description :=
+          STRSUBSTNO('%1 - %2',FORMAT(InvFrom),FORMAT(InvTo));
+      ServLine."Contract No." := ContractNo;
+      ServLine."Appl.-to Service Entry" := ServiceApplyEntry;
+      IF ServiceLedgerEntry.GET(ServiceApplyEntry) THEN BEGIN
+        ServiceLedgerEntry.SETRANGE("Entry No.",ServiceApplyEntry,ServiceLedgerEntry."Apply Until Entry No.");
+        IF ServiceLedgerEntry.FIND('-') THEN
+          REPEAT
+            ServLine."Unit Cost (LCY)" := ServLine."Unit Cost (LCY)" + ServiceLedgerEntry."Unit Cost";
+            ServLine."Unit Price" := ServLine."Unit Price" - ServiceLedgerEntry."Unit Price";
+          UNTIL ServiceLedgerEntry.NEXT = 0;
+      END;
+      IF ServHeader."Currency Code" <> '' THEN BEGIN
+        ServLine.VALIDATE("Unit Price",AmountToFCY(ServLine."Unit Price",ServHeader));
+        ServLine.VALIDATE("Line Amount",AmountToFCY(InvoiceAmount,ServHeader));
+      END ELSE BEGIN
+        ServLine.VALIDATE("Unit Price");
+        ServLine.VALIDATE("Line Amount",InvoiceAmount);
+      END;
+
+      ServLine.INSERT;
+
+      WITH ServLine DO BEGIN
+        CreateDim(
+          DimMgt.TypeToTableID5(Type),"No.",
+          DATABASE::Job,"Job No.",
+          DATABASE::"Responsibility Center","Responsibility Center");
+      END;
+
+      DimMgt.DeleteDocDim(
+        DATABASE::"Service Line",
+        ServHeader."Document Type",
+        ServHeader."No.",
+        ServLineNo);
+      CopyContractDimToDocDim(
+        ServContractHeader,DATABASE::"Service Line",
+        ServHeader."Document Type",
+        ServHeader."No.",
+        ServLineNo);
+
+      CLEAR(ServDocReg);
+      ServDocReg.InsertServSalesDocument(
+        ServDocReg."Source Document Type"::Contract,
+        ContractNo,
+        ServDocReg."Destination Document Type"::Invoice,
+        ServLine."Document No.");
+    END;
+
+    PROCEDURE CreateDetailedServLine@11(ServHeader@1000 : Record 5900;ServContractLine@1002 : Record 5964;ContractType@1008 : Integer;ContractNo@1001 : Code[20]);
+    VAR
+      ServContractHeader@1006 : Record 5965;
+      Cust@1003 : Record 18;
+      StdText@1004 : Record 7;
+      FirstLine@1009 : Boolean;
+      NewContract@1010 : Boolean;
+    BEGIN
+      ServContractHeader.GET(ContractType,ContractNo);
+      IF ServContractHeader."Invoice Period" = ServContractHeader."Invoice Period"::None THEN
+        EXIT;
+
+      ServLineNo := 0;
+      ServLine.SETRANGE("Document Type",ServLine."Document Type"::Invoice);
+      ServLine.SETRANGE("Document No.",ServHeader."No.");
+      IF ServLine.FIND('+') THEN BEGIN
+        ServLineNo := ServLine."Line No.";
+        IF ServLine.Type = ServLine.Type::"G/L Account" THEN
+          NewContract := TRUE;
+      END ELSE BEGIN
+        FirstLine := TRUE;
+        NewContract := TRUE;
+      END;
+
+      Cust.GET(ServContractHeader."Bill-to Customer No.");
+      ServLine.RESET;
+
+      IF FirstLine OR NewContract THEN
+        ServMgtSetup.GET;
+
+      IF FirstLine THEN BEGIN
+        ServLine.INIT;
+        ServLineNo := ServLineNo + 10000;
+        ServLine."Document Type" := ServHeader."Document Type";
+        ServLine."Document No." := ServHeader."No.";
+        ServLine."Line No." := ServLineNo;
+        ServLine.Type := ServLine.Type::" ";
+        IF ServMgtSetup."Contract Line Inv. Text Code" <> '' THEN BEGIN
+          StdText.GET(ServMgtSetup."Contract Line Inv. Text Code");
+          ServLine.Description := StdText.Description;
+        END ELSE
+          ServLine.Description := Text003;
+        ServLine.INSERT;
+      END;
+
+      IF NewContract THEN BEGIN
+        ServLine.INIT;
+        ServLineNo := ServLineNo + 10000;
+        ServLine."Document Type" := ServHeader."Document Type";
+        ServLine."Document No." := ServHeader."No.";
+        ServLine."Line No." := ServLineNo;
+        ServLine.Type := ServLine.Type::" ";
+        IF ServMgtSetup."Contract Inv. Line Text Code" <> '' THEN BEGIN
+          StdText.GET(ServMgtSetup."Contract Inv. Line Text Code");
+          TempServLineDescription := STRSUBSTNO('%1 %2',StdText.Description,ServContractHeader."Contract No.");
+          IF STRLEN(TempServLineDescription) > MAXSTRLEN(ServLine.Description) THEN
+            ERROR(
+              Text013,
+              ServLine.TABLECAPTION,ServLine.FIELDCAPTION(Description),
+              StdText.TABLECAPTION,StdText.Code,StdText.FIELDCAPTION(Description),
+              FORMAT(STRLEN(TempServLineDescription) - MAXSTRLEN(ServLine.Description)));
+          ServLine.Description := TempServLineDescription;
+        END ELSE
+          ServLine.Description := STRSUBSTNO(Text002,ServContractHeader."Contract No.");
+        ServLine.INSERT;
+      END;
+
+      ServLineNo := ServLineNo + 10000;
+      ServLine."Line No." := ServLineNo;
+      IF ServContractLine."Service Item No." <> '' THEN
+        ServLine.Description := STRSUBSTNO('%1 %2',ServContractLine."Service Item No.",ServContractLine.Description)
+      ELSE
+        ServLine.Description := ServContractLine.Description;
+      ServLine.INSERT;
+    END;
+
+    PROCEDURE CreateLastServLines@14(ServHeader@1000 : Record 5900;ContractType@1005 : Integer;ContractNo@1001 : Code[20]);
+    VAR
+      ServContractHeader@1006 : Record 5965;
+      StdText@1002 : Record 7;
+      Cust@1003 : Record 18;
+      TransferExtendedText@1004 : Codeunit 378;
+    BEGIN
+      ServContractHeader.GET(ContractType,ContractNo);
+      IF ServContractHeader."Invoice Period" = ServContractHeader."Invoice Period"::None THEN
+        EXIT;
+
+      Cust.GET(ServContractHeader."Bill-to Customer No.");
+      IF ServContractHeader."Print Increase Text" THEN BEGIN
+        IF ServContractHeader."Price Inv. Increase Code" <> '' THEN BEGIN
+          IF StdText.GET(ServContractHeader."Price Inv. Increase Code") THEN BEGIN
+            ServLine.INIT;
+            ServLine."Document Type" := ServHeader."Document Type";
+            ServLine."Document No." := ServHeader."No.";
+            ServLine.Type := ServLine.Type::" ";
+            ServLine."No." := ServContractHeader."Price Inv. Increase Code";
+            ServLine."Contract No." := ContractNo;
+            ServLine.Description := StdText.Description;
+            IF ServLine.Description <> '' THEN BEGIN
+              ServLineNo := ServLineNo + 10000;
+              ServLine."Line No." := ServLineNo;
+              ServLine.INSERT;
+              IF TransferExtendedText.ServCheckIfAnyExtText(ServLine,TRUE) THEN
+                TransferExtendedText.InsertServExtText(ServLine);
+              IF TransferExtendedText.MakeUpdate THEN;
+              ServLine."No." := '';
+              ServLine.MODIFY;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateOrGetCreditHeader@15(ServContract@1001 : Record 5965) ServInvoiceNo@1000 : Code[20];
+    VAR
+      GLSetup@1002 : Record 98;
+      ServHeader2@1003 : Record 5900;
+      Cust@1004 : Record 18;
+      ServDocReg@1005 : Record 5936;
+      CurrExchRate@1006 : Record 330;
+      CreditMemoForm@1102601000 : Form 5935;
+      ServContractForm@1102601001 : Form 6050;
+      UserMgt@1102601002 : Codeunit 5700;
+      LocationCode@1102601003 : Code[10];
+    BEGIN
+      CLEAR(ServHeader2);
+      ServDocReg.RESET;
+      ServDocReg.SETRANGE("Source Document Type",ServDocReg."Source Document Type"::Contract);
+      ServDocReg.SETRANGE("Source Document No.",ServContract."Contract No.");
+      ServDocReg.SETRANGE("Destination Document Type",ServDocReg."Destination Document Type"::"Credit Memo");
+      ServInvoiceNo := '';
+      IF ServDocReg.FIND('-') THEN
+        REPEAT
+          ServInvoiceNo := ServDocReg."Destination Document No.";
+        UNTIL (ServDocReg.NEXT = 0) OR (ServDocReg."Destination Document No." <> '');
+
+      IF ServInvoiceNo <> '' THEN BEGIN
+        ServHeader2.GET(ServHeader2."Document Type"::"Credit Memo",ServInvoiceNo);
+        Cust.GET(ServHeader2."Bill-to Customer No.");
+        LocationCode := UserMgt.GetLocation(2,Cust."Location Code",ServContract."Responsibility Center");
+        IF ServHeader2."Location Code" <> LocationCode THEN
+          IF NOT CONFIRM(
+                   STRSUBSTNO(
+                     Text015,
+                     ServHeader2.FIELDNAME("Location Code"),
+                     ServHeader2."Location Code",
+                     CreditMemoForm.CAPTION,
+                     ServInvoiceNo,
+                     ServContractForm.CAPTION,
+                     ServContract."Contract No.",
+                     LocationCode))
+          THEN
+            ERROR('');
+        EXIT;
+      END;
+
+      CLEAR(ServHeader2);
+      ServHeader2.INIT;
+      ServHeader2.SetHideValidationDialog(TRUE);
+      ServHeader2."Document Type" := ServHeader2."Document Type"::"Credit Memo";
+      ServMgtSetup.GET ;
+      ServMgtSetup.TESTFIELD("Contract Credit Memo Nos.");
+      NoSeriesMgt.InitSeries(
+        ServMgtSetup."Contract Credit Memo Nos.",ServHeader2."No. Series",0D,
+        ServHeader2."No.",ServHeader2."No. Series");
+      ServHeader2.INSERT(TRUE);
+      ServInvoiceNo := ServHeader2."No.";
+
+      GLSetup.GET;
+      ServHeader2.Correction := GLSetup."Mark Cr. Memos as Corrections";
+      ServHeader2."Posting Description" := FORMAT(ServHeader2."Document Type") + ' ' + ServHeader2."No.";
+      ServHeader2.VALIDATE("Bill-to Customer No.",ServContract."Bill-to Customer No.");
+      ServHeader2."Customer No." := ServContract."Customer No.";
+      ServHeader2."Responsibility Center" := ServContract."Responsibility Center";
+      Cust.GET(ServHeader2."Customer No.");
+      Cust.CheckBlockedCustOnDocs(Cust,ServHeader2."Document Type",FALSE,FALSE);
+      Cust.TESTFIELD("Gen. Bus. Posting Group");
+      ServHeader2.Name := Cust.Name;
+      ServHeader2."Name 2" := Cust."Name 2";
+      ServHeader2.Address := Cust.Address;
+      ServHeader2."Address 2" := Cust."Address 2";
+      ServHeader2.City := Cust.City;
+      ServHeader2."Post Code" := Cust."Post Code";
+      ServHeader2.County := Cust.County;
+      ServHeader2."Country/Region Code" := Cust."Country/Region Code";
+      ServHeader2."Contact Name" := ServContract."Contact Name";
+      ServHeader2."Contact No." := ServContract."Contact No.";
+      ServHeader2."Gen. Bus. Posting Group" := Cust."Gen. Bus. Posting Group";
+      IF GLSetup."Bill-to/Sell-to VAT Calc." = GLSetup."Bill-to/Sell-to VAT Calc."::"Sell-to/Buy-from No." THEN
+        ServHeader2."VAT Bus. Posting Group" := Cust."VAT Bus. Posting Group";
+      ServHeader2.VALIDATE("Ship-to Code",ServContract."Ship-to Code");
+      ServHeader2.VALIDATE("Posting Date",WORKDATE);
+      ServHeader2.VALIDATE("Document Date",WORKDATE);
+      ServHeader2."Contract No." := ServContract."Contract No.";
+      ServHeader2."Currency Code" := ServContract."Currency Code";
+      ServHeader2."Currency Factor" :=
+        CurrExchRate.ExchangeRate(
+          ServHeader2."Posting Date",ServHeader2."Currency Code");
+      ServHeader2."Payment Terms Code" := ServContract."Payment Terms Code";
+      ServHeader2."Your Reference" := ServContract."Your Reference";
+      ServHeader2."Salesperson Code" := ServContract."Salesperson Code";
+      ServHeader2."Shortcut Dimension 1 Code" := ServContract."Shortcut Dimension 1 Code";
+      ServHeader2."Shortcut Dimension 2 Code" := ServContract."Shortcut Dimension 2 Code";
+      ServHeader2.VALIDATE("Location Code",
+        UserMgt.GetLocation(2,Cust."Location Code",ServContract."Responsibility Center"));
+      ServHeader2.MODIFY;
+
+      DimMgt.DeleteDocDim(
+        DATABASE::"Service Header",
+        ServHeader2."Document Type",
+        ServHeader2."No.",0);
+      CopyContractDimToDocDim(
+        ServContract,DATABASE::"Service Header",
+        ServHeader2."Document Type",
+        ServHeader2."No.",0);
+
+      CLEAR(ServDocReg);
+      ServDocReg.InsertServSalesDocument(
+        ServDocReg."Source Document Type"::Contract,
+        ServContract."Contract No.",
+        ServDocReg."Destination Document Type"::"Credit Memo",
+        ServHeader2."No.");
+    END;
+
+    LOCAL PROCEDURE CreateCreditLine@16(CreditNo@1000 : Code[20];AccountNo@1001 : Code[20];CreditAmount@1002 : Decimal;PeriodStarts@1003 : Date;PeriodEnds@1004 : Date;LineDescription@1005 : Text[50];ServItemNo@1010 : Code[20];ServContract@1009 : Record 5965;CreditCost@1011 : Decimal;CreditUnitPrice@1012 : Decimal);
+    VAR
+      ServHeader2@1006 : Record 5900;
+      ServLine2@1007 : Record 5902;
+      Cust@1008 : Record 18;
+    BEGIN
+      ServHeader2.GET(ServHeader2."Document Type"::"Credit Memo",CreditNo);
+      Cust.GET(ServHeader2."Bill-to Customer No.");
+
+      CLEAR(ServLine2);
+      ServLine2.SETRANGE("Document Type",ServHeader2."Document Type");
+      ServLine2.SETRANGE("Document No.",CreditNo);
+      IF ServLine2.FIND('+') THEN
+        NextLine := ServLine2."Line No." + 10000
+      ELSE
+        NextLine := 10000;
+      CLEAR(ServLine2);
+      ServLine2.INIT;
+      ServLine2."Document Type" := ServHeader2."Document Type";
+      ServLine2."Document No." := ServHeader2."No.";
+      ServLine2.Type := ServLine2.Type::" ";
+      ServLine2.Description := STRSUBSTNO('%1 - %2',FORMAT(PeriodStarts),FORMAT(PeriodEnds));
+      ServLine2."Line No." := NextLine;
+      ServLine2."Posting Date" := PeriodStarts;
+      ServLine2.INSERT;
+
+      NextLine := NextLine + 10000;
+      ServLine2."Customer No." := ServHeader2."Customer No.";
+      ServLine2."Location Code" := ServHeader2."Location Code";
+      ServLine2."Shortcut Dimension 1 Code" := ServHeader2."Shortcut Dimension 1 Code";
+      ServLine2."Shortcut Dimension 2 Code" := ServHeader2."Shortcut Dimension 2 Code";
+      ServLine2."Gen. Bus. Posting Group" := ServHeader2."Gen. Bus. Posting Group";
+      ServLine2."Transaction Specification" := ServHeader2."Transaction Specification";
+      ServLine2."Transport Method" := ServHeader2."Transport Method";
+      ServLine2."Exit Point" := ServHeader2."Exit Point";
+      ServLine2.Area := ServHeader2.Area;
+      ServLine2."Transaction Specification" := ServHeader2."Transaction Specification";
+      ServLine2."Line No." := NextLine;
+      ServLine2.Type := ServLine.Type::"G/L Account";
+      ServLine2.VALIDATE("No.",AccountNo);
+      ServLine2.VALIDATE(Quantity,1);
+      IF ServHeader2."Currency Code" <> '' THEN BEGIN
+        ServLine2.VALIDATE("Unit Price",AmountToFCY(CreditUnitPrice,ServHeader2));
+        ServLine2.VALIDATE("Line Amount",AmountToFCY(CreditAmount,ServHeader2));
+      END ELSE BEGIN
+        ServLine2.VALIDATE("Unit Price",CreditUnitPrice);
+        ServLine2.VALIDATE("Line Amount",CreditAmount);
+      END;
+      ServLine2.Description := LineDescription;
+      ServLine2."Contract No." := ServContract."Contract No.";
+      ServLine2."Service Item No." := ServItemNo;
+      ServLine2."Appl.-to Service Entry" := 0;
+      ServLine2."Unit Cost (LCY)" := CreditCost;
+      ServLine2."Posting Date" := PeriodStarts;
+      ServLine2.INSERT;
+
+      DimMgt.DeleteDocDim(
+        DATABASE::"Service Line",
+        ServHeader2."Document Type",
+        ServHeader2."No.",
+        NextLine);
+      CopyContractDimToDocDim(
+        ServContract,DATABASE::"Service Line",
+        ServHeader2."Document Type",
+        ServHeader2."No.",
+        NextLine);
+
+      WITH ServLine2 DO BEGIN
+        CreateDim(
+          DimMgt.TypeToTableID5(Type),"No.",
+          DATABASE::Job,"Job No.",
+          DATABASE::"Responsibility Center","Responsibility Center");
+      END;
+    END;
+
+    PROCEDURE CreateContractLineCreditMemo@17(VAR FromContractLine@1001 : Record 5964;Deleting@1010 : Boolean) CreditMemoNo@1000 : Code[20];
+    VAR
+      ServItem@1009 : Record 5940;
+      ServContractHeader@1002 : Record 5965;
+      StdText@1003 : Record 7;
+      Currency@1012 : Record 4;
+      ServiceContract@1014 : Form 6050;
+      ServiceCreditMemo@1013 : Form 5935;
+      ServiceInvoice@1015 : Form 5933;
+      CreditAmount@1004 : Decimal;
+      FirstPrepaidPostingDate@1005 : Date;
+      LastIncomePostingDate@1006 : Date;
+      WDate@1016 : Date;
+      LineDescription@1007 : Text[50];
+    BEGIN
+      CreditMemoNo := '';
+      WITH FromContractLine DO BEGIN
+        ServContractHeader.GET("Contract Type","Contract No.");
+        TESTFIELD("Contract Expiration Date");
+        TESTFIELD("Credit Memo Date");
+        IF "Credit Memo Date" > WORKDATE THEN
+          ERROR(
+            Text004,
+            FIELDCAPTION("Credit Memo Date"),"Credit Memo Date");
+        ServContractHeader.CALCFIELDS("No. of Unposted Invoices");
+        IF ServContractHeader."No. of Unposted Invoices" <> 0 THEN
+          ERROR(
+            Text014,
+            ServiceCreditMemo.CAPTION,
+            ServiceContract.CAPTION,
+            ServContractHeader."Contract No.",
+            ServiceInvoice.CAPTION);
+        ServContractHeader.TESTFIELD("Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.GET(ServContractHeader."Serv. Contract Acc. Gr. Code");
+        ServContractAccGr.TESTFIELD("Non-Prepaid Contract Acc.");
+        GlAcc.GET(ServContractAccGr."Non-Prepaid Contract Acc.");
+        GlAcc.TESTFIELD("Direct Posting");
+        IF ServContractHeader.Prepaid THEN BEGIN
+          ServContractAccGr.TESTFIELD("Prepaid Contract Acc.");
+          GlAcc.GET(ServContractAccGr."Prepaid Contract Acc.");
+          GlAcc.TESTFIELD("Direct Posting");
+        END;
+
+        Currency.InitRoundingPrecision;
+
+        IF "Line Amount" > 0 THEN BEGIN
+          ServMgtSetup.GET;
+          IF ServMgtSetup."Contract Credit Line Text Code" <> '' THEN BEGIN
+            StdText.GET(ServMgtSetup."Contract Credit Line Text Code");
+            LineDescription := COPYSTR(STRSUBSTNO('%1 %2',StdText.Description,"Service Item No."),1,50);
+          END ELSE
+            IF "Service Item No." <> '' THEN
+              LineDescription := COPYSTR(STRSUBSTNO(Text005,ServItem.TABLECAPTION,"Service Item No."),1,50)
+            ELSE
+              LineDescription := COPYSTR(STRSUBSTNO(Text005,TABLECAPTION,"Line No."),1,50);
+          IF "Invoiced to Date" >= "Contract Expiration Date" THEN BEGIN
+            IF ServContractHeader.Prepaid THEN BEGIN
+              FirstPrepaidPostingDate := FindFirstPrepaidTransaction("Contract No.");
+            END ELSE BEGIN
+              FirstPrepaidPostingDate := 0D;
+            END;
+            LastIncomePostingDate := "Invoiced to Date";
+            IF FirstPrepaidPostingDate <> 0D THEN
+              LastIncomePostingDate := FirstPrepaidPostingDate - 1;
+            WDate := "Contract Expiration Date";
+            CreditAmount :=
+              ROUND(
+                CalcContractLineAmount("Line Amount",
+                  WDate,"Invoiced to Date"),
+                Currency."Amount Rounding Precision");
+            IF CreditAmount > 0 THEN BEGIN
+              CreditMemoNo := CreateOrGetCreditHeader(ServContractHeader);
+              CreateAllCreditLines(
+                CreditMemoNo,
+                "Line Amount",
+                WDate,
+                "Invoiced to Date",
+                LineDescription,
+                "Service Item No.",
+                ServContractHeader,
+                "Line Cost",
+                "Line Value",
+                LastIncomePostingDate,
+                "Starting Date")
+            END;
+          END;
+        END;
+        IF (CreditMemoNo <> '') AND NOT Deleting THEN BEGIN
+          Credited := TRUE;
+          MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE FindFirstPrepaidTransaction@21(ContractNo@1000 : Code[20]) : Date;
+    VAR
+      ServLedgEntry@1001 : Record 5907;
+    BEGIN
+      CLEAR(ServLedgEntry);
+      ServLedgEntry.SETCURRENTKEY(Type,"No.","Entry Type","Moved from Prepaid Acc.","Posting Date",Open);
+      ServLedgEntry.SETRANGE(Type,ServLedgEntry.Type::"Service Contract");
+      ServLedgEntry.SETRANGE("No.",ContractNo);
+      ServLedgEntry.SETRANGE("Moved from Prepaid Acc.",FALSE);
+      ServLedgEntry.SETRANGE(Prepaid,TRUE);
+      IF ServLedgEntry.FIND('-') THEN BEGIN
+        EXIT(ServLedgEntry."Posting Date")
+      END ELSE
+        EXIT(0D);
+    END;
+
+    PROCEDURE CreateAllCreditLines@36(CreditNo@1000 : Code[20];ContractLineAmount@1001 : Decimal;PeriodStarts@1002 : Date;PeriodEnds@1003 : Date;LineDescription@1004 : Text[50];ServItemNo@1005 : Code[20];ServContract@1006 : Record 5965;ContractLineCost@1007 : Decimal;ContractLineUnitPrice@1008 : Decimal;LastIncomePostingDate@1009 : Date;ContractLineStartingDate@1010 : Date);
+    VAR
+      Currency@1011 : Record 4;
+      ServContractAccGr@1012 : Record 5973;
+      AccountNo@1013 : Code[20];
+      WDate@1014 : Date;
+      OldWDate@1015 : Date;
+      i@1016 : Integer;
+      Days@1017 : Integer;
+      InvPeriod@1018 : Integer;
+    BEGIN
+      Days := DATE2DMY(ContractLineStartingDate,1);
+      Currency.InitRoundingPrecision;
+      IF ServContract.Prepaid THEN
+        InvPeriod := 1
+      ELSE CASE ServContract."Invoice Period" OF
+        ServContract."Invoice Period"::Month:
+          InvPeriod := 1;
+        ServContract."Invoice Period"::"Two Months":
+          InvPeriod := 2;
+        ServContract."Invoice Period"::Quarter:
+          InvPeriod := 3;
+        ServContract."Invoice Period"::"Half Year":
+          InvPeriod := 6;
+        ServContract."Invoice Period"::Year:
+          InvPeriod := 12;
+        ServContract."Invoice Period"::None:
+          InvPeriod := 0;
+      END;
+      ServContract.TESTFIELD("Serv. Contract Acc. Gr. Code");
+      ServContractAccGr.GET(ServContract."Serv. Contract Acc. Gr. Code");
+      ServContractAccGr.TESTFIELD("Prepaid Contract Acc.");
+      WDate := ContractLineStartingDate;
+      REPEAT
+        OldWDate := CALCDATE('<CM>',WDate);
+        IF (Days <> 1) THEN
+          Days := 1
+        ELSE BEGIN
+          FOR i := 1 TO InvPeriod DO
+            OldWDate := CALCDATE('<CM>',OldWDate) + 1;
+          OldWDate := OldWDate - 1;
+        END;
+        IF OldWDate >= PeriodStarts THEN BEGIN
+          IF WDate < PeriodStarts THEN
+            WDate := PeriodStarts;
+          IF OldWDate > PeriodEnds THEN
+            OldWDate := PeriodEnds;
+          IF OldWDate > LastIncomePostingDate THEN
+            AccountNo := ServContractAccGr."Prepaid Contract Acc."
+          ELSE
+            AccountNo := ServContractAccGr."Non-Prepaid Contract Acc.";
+          CreateCreditLine(
+            CreditNo,
+            AccountNo,
+            ROUND(
+              CalcContractLineAmount(ContractLineAmount,WDate,OldWDate),
+              Currency."Amount Rounding Precision"),
+            WDate,
+            OldWDate,
+            LineDescription,
+            ServItemNo,
+            ServContract,
+            ROUND(
+              CalcContractLineAmount(ContractLineCost,WDate,OldWDate),
+              Currency."Amount Rounding Precision"),
+            ROUND(
+              CalcContractLineAmount(ContractLineUnitPrice,WDate,OldWDate),
+              Currency."Amount Rounding Precision"));
+        END;
+        WDate := CALCDATE('<CM>',OldWDate) + 1;
+      UNTIL (OldWDate >= PeriodEnds);
+    END;
+
+    PROCEDURE GetNextInvoicePeriod@6(InvoicedServContractHeader@1000 : Record 5965;VAR InvFrom@1001 : Date;VAR InvTo@1002 : Date);
+    BEGIN
+      InvFrom := InvoicedServContractHeader."Next Invoice Period Start";
+      InvTo := InvoicedServContractHeader."Next Invoice Period End";
+    END;
+
+    PROCEDURE NoOfDayInYear@1(InputDate@1000 : Date) : Integer;
+    VAR
+      W1@1001 : Date;
+      W2@1002 : Date;
+      YY@1003 : Integer;
+    BEGIN
+      YY := DATE2DMY(InputDate,3);
+      W1 := DMY2DATE(1,1,YY);
+      W2 := DMY2DATE(31,12,YY);
+      EXIT(W2 - W1 + 1);
+    END;
+
+    PROCEDURE NoOfDaysInMonth@7(WDay@1000 : Date) : Integer;
+    VAR
+      FirstDay@1001 : Date;
+      LastDay@1002 : Date;
+    BEGIN
+      FirstDay := CALCDATE('<-CM>',WDay);
+      LastDay := CALCDATE('<CM>',WDay);
+      EXIT(LastDay - FirstDay + 1);
+    END;
+
+    PROCEDURE NoOfMonthsAndDaysInPeriod@18(Day1@1000 : Date;Day2@1001 : Date;VAR NoOfMonthsInPeriod@1002 : Integer;VAR NoOfDaysInPeriod@1003 : Integer);
+    VAR
+      Wdate@1004 : Date;
+      FirstDayinCrntMonth@1005 : Date;
+      LastDayinCrntMonth@1006 : Date;
+    BEGIN
+      NoOfMonthsInPeriod := 0;
+      NoOfDaysInPeriod := 0;
+
+      IF Day1 > Day2 THEN
+        EXIT;
+      IF Day1 = 0D THEN
+        EXIT;
+      IF Day2 = 0D THEN
+        EXIT;
+
+      Wdate := Day1;
+      REPEAT
+        FirstDayinCrntMonth := CALCDATE('<-CM>',Wdate);
+        LastDayinCrntMonth := CALCDATE('<CM>',Wdate);
+        IF (Wdate = FirstDayinCrntMonth) AND (LastDayinCrntMonth <= Day2) THEN BEGIN
+          NoOfMonthsInPeriod := NoOfMonthsInPeriod + 1;
+          Wdate := LastDayinCrntMonth + 1;
+        END ELSE BEGIN
+          NoOfDaysInPeriod := NoOfDaysInPeriod + 1;
+          Wdate := Wdate + 1;
+        END;
+      UNTIL Wdate > Day2;
+    END;
+
+    PROCEDURE NoOfMonthsAndMPartsInPeriod@32(Day1@1000 : Date;Day2@1001 : Date) MonthsAndMParts : Decimal;
+    VAR
+      WDate@1002 : Date;
+      OldWDate@1003 : Date;
+    BEGIN
+      IF Day1 > Day2 THEN
+        EXIT;
+      IF (Day1 = 0D) OR (Day2 = 0D) THEN
+        EXIT;
+      MonthsAndMParts := 0;
+
+      WDate := CALCDATE('<-CM>',Day1);
+      REPEAT
+        OldWDate := CALCDATE('<CM>',WDate);
+        IF WDate < Day1 THEN
+          WDate := Day1;
+        IF OldWDate > Day2 THEN
+          OldWDate := Day2;
+        IF (WDate <> CALCDATE('<-CM>',WDate)) OR (OldWDate <> CALCDATE('<CM>',OldWDate)) THEN
+          MonthsAndMParts := MonthsAndMParts +
+            (OldWDate - WDate + 1)/(CALCDATE('<CM>',OldWDate) - CALCDATE('<-CM>',WDate) + 1)
+        ELSE
+          MonthsAndMParts := MonthsAndMParts + 1;
+        WDate := CALCDATE('<CM>',OldWDate) + 1;
+      UNTIL WDate > Day2;
+    END;
+
+    PROCEDURE CalcContractAmount@19(ServContractHeader@1001 : Record 5965;PeriodStarts@1002 : Date;PeriodEnds@1003 : Date) AmountCalculated@1000 : Decimal;
+    VAR
+      ServContractLine@1004 : Record 5964;
+      Currency@1008 : Record 4;
+      LinePeriodStarts@1005 : Date;
+      LinePeriodEnds@1006 : Date;
+      ContractLineIncluded@1007 : Boolean;
+    BEGIN
+      Currency.InitRoundingPrecision;
+      AmountCalculated := 0;
+
+      IF ServContractHeader."Expiration Date" <> 0D THEN BEGIN
+        IF ServContractHeader."Expiration Date" < PeriodStarts THEN
+          EXIT;
+        IF (ServContractHeader."Expiration Date" >= PeriodStarts) AND
+           (ServContractHeader."Expiration Date" <= PeriodEnds)
+        THEN
+          PeriodEnds := ServContractHeader."Expiration Date";
+      END;
+
+      ServContractLine.RESET;
+      ServContractLine.SETRANGE("Contract Type",ServContractHeader."Contract Type");
+      ServContractLine.SETRANGE("Contract No.",ServContractHeader."Contract No.");
+      IF ServContractHeader.Prepaid THEN
+        ServContractLine.SETFILTER("Starting Date",'<=%1',ServContractHeader."Next Invoice Date")
+      ELSE IF ServContractHeader."Last Invoice Date" <> 0D
+        THEN
+          ServContractLine.SETFILTER("Invoiced to Date",'%1|%2',ServContractHeader."Last Invoice Date",0D);
+      IF ServContractLine.FIND('-') THEN BEGIN
+        REPEAT
+          ContractLineIncluded := TRUE;
+          IF ServContractLine."Invoiced to Date" = 0D THEN
+            LinePeriodStarts := ServContractLine."Starting Date"
+          ELSE
+          LinePeriodStarts := PeriodStarts;
+          LinePeriodEnds := PeriodEnds;
+          IF ServContractLine."Contract Expiration Date" <> 0D THEN BEGIN
+            IF ServContractLine."Contract Expiration Date" < PeriodStarts THEN
+              ContractLineIncluded := FALSE
+            ELSE
+              IF (ServContractLine."Contract Expiration Date" >= PeriodStarts) AND
+                 (ServContractLine."Contract Expiration Date" < PeriodEnds)
+              THEN BEGIN
+                LinePeriodStarts := PeriodStarts;
+                LinePeriodEnds := ServContractLine."Contract Expiration Date";
+              END;
+          END;
+          IF ContractLineIncluded THEN
+            AmountCalculated := AmountCalculated +
+              CalcContractLineAmount(ServContractLine."Line Amount",LinePeriodStarts,LinePeriodEnds);
+
+        UNTIL ServContractLine.NEXT = 0;
+        AmountCalculated := ROUND(AmountCalculated,Currency."Amount Rounding Precision");
+      END
+    END;
+
+    PROCEDURE CalcContractLineAmount@24(AnnualAmount@1001 : Decimal;PeriodStarts@1002 : Date;PeriodEnds@1003 : Date) AmountCalculated@1000 : Decimal;
+    BEGIN
+      AmountCalculated := 0;
+      AmountCalculated :=
+        AnnualAmount / 12 * NoOfMonthsAndMPartsInPeriod(PeriodStarts,PeriodEnds);
+    END;
+
+    PROCEDURE CreateRemainingPeriodInvoice@20(VAR CurrServContract@1001 : Record 5965) InvoiceNo@1000 : Code[20];
+    VAR
+      InvFrom@1002 : Date;
+      InvTo@1003 : Date;
+      Amt@1004 : Decimal;
+      TempDate2@1005 : Date;
+      ServContractLine@1006 : Record 5964;
+      InvAmountRounded@9000 : Decimal;
+    BEGIN
+      CurrServContract.TESTFIELD("Change Status",CurrServContract."Change Status"::Locked);
+      IF CurrServContract.Prepaid THEN
+        InvTo := CurrServContract."Next Invoice Date" - 1
+      ELSE
+        InvTo := CurrServContract."Next Invoice Period Start" - 1;
+      IF (CurrServContract."Last Invoice Date" = 0D) AND
+         (CurrServContract."Starting Date" < CurrServContract."Next Invoice Period Start")
+      THEN BEGIN
+        InvFrom := CurrServContract."Starting Date";
+        IF (InvFrom = CALCDATE('<-CM>',InvFrom)) AND CurrServContract.Prepaid THEN
+          EXIT;
+      END ELSE
+        IF CurrServContract."Last Invoice Period End" <> 0D THEN BEGIN
+          IF CurrServContract."Last Invoice Period End" <> CALCDATE('<CM>',CurrServContract."Last Invoice Period End") THEN
+            InvFrom := CALCDATE('<+1D>',CurrServContract."Last Invoice Period End");
+        ServContractLine.RESET;
+        ServContractLine.SETRANGE("Contract Type",CurrServContract."Contract Type");
+        ServContractLine.SETRANGE("Contract No.",CurrServContract."Contract No.");
+        ServContractLine.SETRANGE("Invoiced to Date",0D);
+        ServContractLine.SETFILTER("Starting Date",'<=%1',InvTo);
+        IF ServContractLine.FIND('-') THEN
+          REPEAT
+            IF InvFrom <> 0D THEN BEGIN
+              IF ServContractLine."Starting Date" < InvFrom THEN
+                InvFrom := ServContractLine."Starting Date"
+            END ELSE
+              InvFrom := ServContractLine."Starting Date";
+          UNTIL ServContractLine.NEXT = 0;
+        END;
+
+      IF (InvFrom = 0D) OR (InvFrom > InvTo) THEN
+        EXIT;
+      IF CONFIRM(Text006,TRUE,InvFrom,InvTo) THEN BEGIN
+        Amt := CalcContractAmount(CurrServContract,InvFrom,InvTo);
+        InvoiceNo := CreateServHeader(CurrServContract,PostingDate,FALSE);
+        ServHeader.GET(ServHeader."Document Type"::Invoice,InvoiceNo);
+        ServMgtSetup.GET;
+        IF NOT CurrServContract.Prepaid THEN
+          CurrServContract.VALIDATE("Last Invoice Date",InvTo)
+        ELSE BEGIN
+          CurrServContract."Last Invoice Date" := CurrServContract."Starting Date";
+          CurrServContract.VALIDATE("Last Invoice Period End",InvTo);
+        END;
+        IF CurrServContract."Contract Lines on Invoice" THEN BEGIN
+          ServContractLine.RESET;
+          ServContractLine.SETRANGE("Contract Type",CurrServContract."Contract Type");
+          ServContractLine.SETRANGE("Contract No.",CurrServContract."Contract No.");
+          ServContractLine.SETFILTER("Starting Date",'<=%1',InvTo);
+          IF ServContractLine.FIND('-') THEN
+            REPEAT
+              IF (ServContractLine."Invoiced to Date" = 0D) THEN
+                CreateDetailedServLine(
+                  ServHeader,
+                  ServContractLine,
+                  CurrServContract."Contract Type",
+                  CurrServContract."Contract No.");
+              IF (ServContractLine."Invoiced to Date" <> 0D) THEN
+                IF (ServContractLine."Invoiced to Date" <> CALCDATE('<CM>',ServContractLine."Invoiced to Date")) THEN
+                  CreateDetailedServLine(
+                    ServHeader,
+                    ServContractLine,
+                    CurrServContract."Contract Type",
+                    CurrServContract."Contract No.");
+            UNTIL ServContractLine.NEXT = 0;
+        END ELSE
+          CreateHeadingServLine(
+            ServHeader,
+            CurrServContract."Contract Type",
+            CurrServContract."Contract No.");
+
+        AppliedEntry :=
+          CreateServiceLedgerEntry(
+            ServHeader,CurrServContract."Contract Type",
+            CurrServContract."Contract No.",InvFrom,InvTo,Amt,TRUE,FALSE,InvAmountRounded);
+        CreateServLine(
+          ServHeader,CurrServContract."Contract Type",
+          CurrServContract."Contract No.",InvFrom,InvTo,InvAmountRounded,AppliedEntry,TRUE);
+        CurrServContract.MODIFY;
+        InvoicingStartingPeriod := TRUE;
+      END;
+    END;
+
+    PROCEDURE InitCodeUnit@8();
+    VAR
+      ServLedgEntry@1000 : Record 5907;
+      SourceCodeSetup@1001 : Record 242;
+      KeepFromWarrEntryNo@1002 : Integer;
+      KeepToWarrEntryNo@1003 : Integer;
+    BEGIN
+      WITH ServLedgEntry DO BEGIN
+        RESET;
+        LOCKTABLE;
+        IF FIND('+') THEN BEGIN
+          NextEntry := "Entry No." + 1;
+        END ELSE BEGIN
+          NextEntry := 1;
+        END;
+
+        ServiceRegister.RESET;
+        ServiceRegister.LOCKTABLE;
+        IF ServiceRegister.FIND('+') THEN BEGIN
+          ServiceRegister."No." := ServiceRegister."No." + 1;
+          KeepFromWarrEntryNo := ServiceRegister."From Warranty Entry No.";
+          KeepToWarrEntryNo := ServiceRegister."To Warranty Entry No.";
+        END ELSE
+          ServiceRegister."No." := 1;
+
+        ServiceRegister.INIT;
+        ServiceRegister."From Entry No." := NextEntry;
+        ServiceRegister."From Warranty Entry No." := KeepFromWarrEntryNo;
+        ServiceRegister."To Warranty Entry No." := KeepToWarrEntryNo;
+        ServiceRegister."Creation Date" := TODAY;
+        SourceCodeSetup.GET;
+        ServiceRegister."Source Code" := SourceCodeSetup."Service Management";
+        ServiceRegister."User ID" := USERID;
+      END;
+    END;
+
+    PROCEDURE FinishCodeunit@25();
+    BEGIN
+      ServiceRegister."To Entry No." := NextEntry - 1;
+      ServiceRegister.INSERT;
+    END;
+
+    PROCEDURE CopyCheckSCDimToTempSCDim@34(ServContract@1001 : Record 5965);
+    BEGIN
+      TempServContractDim.RESET;
+      TempServContractDim.DELETEALL;
+      ServContractDim.RESET;
+      ServContractDim.SETRANGE("Table ID",DATABASE::"Service Contract Header");
+      ServContractDim.SETRANGE(Type,ServContract."Contract Type");
+      ServContractDim.SETRANGE("No.",ServContract."Contract No.");
+      IF ServContractDim.FIND('-') THEN BEGIN
+        REPEAT
+          TempServContractDim.INIT;
+          TempServContractDim := ServContractDim;
+          TempServContractDim.INSERT;
+        UNTIL ServContractDim.NEXT = 0;
+        TempServContractDim.SETRANGE("Line No.",0);
+      END;
+      TempServContractDim.RESET;
+
+      CheckDimComb(ServContract,0);
+      CheckDimValuePosting(ServContract,0);
+    END;
+
+    LOCAL PROCEDURE CheckDimComb@30(ServContract@1001 : Record 5965;LineNo@1000 : Integer);
+    BEGIN
+      IF NOT DimMgt.CheckServContractDimComb(TempServContractDim) THEN
+        IF LineNo = 0 THEN
+          ERROR(
+            Text008,
+            ServContract."Contract Type",ServContract."Contract No.",DimMgt.GetDimCombErr);
+    END;
+
+    LOCAL PROCEDURE CheckDimValuePosting@28(ServContract@1001 : Record 5965;LineNo@1000 : Integer);
+    VAR
+      TableIDArr@1002 : ARRAY [10] OF Integer;
+      NumberArr@1003 : ARRAY [10] OF Code[20];
+    BEGIN
+      IF LineNo = 0 THEN BEGIN
+        TableIDArr[1] := DATABASE::Customer;
+        NumberArr[1] := ServContract."Bill-to Customer No.";
+        TableIDArr[2] := DATABASE::"Salesperson/Purchaser";
+        NumberArr[2] := ServContract."Salesperson Code";
+        TableIDArr[3] := DATABASE::"Responsibility Center";
+        NumberArr[3] := ServContract."Responsibility Center";
+        TableIDArr[4] := DATABASE::"Service Contract Template";
+        NumberArr[4] := ServContract."Template No.";
+        IF NOT DimMgt.CheckServContrDimValuePosting(TempServContractDim,TableIDArr,NumberArr) THEN
+          ERROR(
+            Text009,
+            ServContract."Contract Type",ServContract."Contract No.",DimMgt.GetDimValuePostingErr);
+      END;
+    END;
+
+    PROCEDURE CopyContractDimToDocDim@29(ServContract@1000 : Record 5965;TableID@1004 : Integer;DocumentType@1001 : Option;DocumentNo@1002 : Code[20];LineNo@1003 : Integer);
+    BEGIN
+      ServContractDim.RESET;
+      ServContractDim.SETRANGE("Table ID",DATABASE::"Service Contract Header");
+      ServContractDim.SETRANGE(Type,ServContract."Contract Type");
+      ServContractDim.SETRANGE("No.",ServContract."Contract No.");
+      DimMgt.CopySCDimToDocDim(
+        ServContractDim,TableID,
+        DocumentType,DocumentNo,LineNo);
+    END;
+
+    PROCEDURE CreateAllServLines@2(InvNo@1001 : Code[20];ServContractToInvoice@1000 : Record 5965;InvoicedAmount@1002 : Decimal);
+    VAR
+      ServContractLine@1007 : Record 5964;
+      ServHeader@1006 : Record 5900;
+      InvoiceFrom@1004 : Date;
+      InvoiceTo@1003 : Date;
+      ServiceApplyEntry@1005 : Integer;
+      InvAmountRounded@1008 : Decimal;
+    BEGIN
+      GetNextInvoicePeriod(ServContractToInvoice,InvoiceFrom,InvoiceTo);
+      WITH ServContractToInvoice DO BEGIN
+        IF ServHeader.GET(ServHeader."Document Type"::Invoice,InvNo) THEN BEGIN
+          ServContractLine.RESET;
+          ServContractLine.SETRANGE("Contract Type","Contract Type");
+          ServContractLine.SETRANGE("Contract No.","Contract No.");
+          IF NOT "Contract Lines on Invoice" THEN
+            CreateHeadingServLine(ServHeader,"Contract Type","Contract No.");
+          IF ServContractLine.FIND('-') THEN
+            REPEAT
+              IF ("Contract Lines on Invoice") AND (ServContractLine."Starting Date" <= InvoiceFrom) THEN
+                IF Prepaid AND (ServContractLine."Starting Date" <= "Next Invoice Date") OR
+                  ((NOT Prepaid) AND
+                   ((ServContractLine."Invoiced to Date" = "Last Invoice Date") OR
+                    (ServContractLine."Invoiced to Date" = 0D)))
+                THEN
+                  IF (ServContractLine."Contract Expiration Date" = 0D) OR
+                     (ServContractLine."Contract Expiration Date" >= InvoiceFrom)
+                  THEN
+                    CreateDetailedServLine(ServHeader,ServContractLine,"Contract Type","Contract No.");
+            UNTIL ServContractLine.NEXT = 0;
+        END;
+
+        ServiceApplyEntry :=
+          CreateServiceLedgerEntry(
+            ServHeader,"Contract Type","Contract No.",InvoiceFrom,InvoiceTo,InvoicedAmount,FALSE,FALSE,InvAmountRounded);
+
+        CreateServLine(
+          ServHeader,"Contract Type","Contract No.",
+          InvoiceFrom,InvoiceTo,InvAmountRounded,ServiceApplyEntry,FALSE);
+
+        CreateLastServLines(ServHeader,"Contract Type","Contract No.");
+
+        VALIDATE("Last Invoice Date","Next Invoice Date");
+        "Print Increase Text" := FALSE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE CheckIfServiceExist@10(ServContractHeader@1000 : Record 5965) : Boolean;
+    VAR
+      ServContractLine@1001 : Record 5964;
+    BEGIN
+      WITH ServContractHeader DO BEGIN
+        IF "Invoice after Service" THEN BEGIN
+          ServContractLine.RESET;
+          ServContractLine.SETRANGE("Contract Type","Contract Type");
+          ServContractLine.SETRANGE("Contract No.","Contract No.");
+          ServContractLine.SETFILTER("Last Service Date", '<%1 | >%2', "Next Invoice Period Start", "Next Invoice Period End");
+          IF ServContractLine.FIND('-') THEN
+            EXIT(FALSE);
+        END;
+      END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetAffectedItemsOnCustChange@13(ContractNoToBeChanged@1002 : Code[20];VAR TempServContract@1001 : Record 5965;VAR TempServItem@1000 : Record 5940;Recursive@1003 : Boolean;ContractTypeToBeChanged@1008 : Integer);
+    VAR
+      ServContract@1004 : Record 5965;
+      ServItem@1005 : Record 5940;
+      ServContractLine@1006 : Record 5964;
+      ServContractLine2@1007 : Record 5964;
+    BEGIN
+      IF NOT Recursive THEN BEGIN
+        TempServContract.DELETEALL;
+        TempServItem.DELETEALL;
+      END;
+      IF TempServContract.GET(ContractTypeToBeChanged,ContractNoToBeChanged) THEN
+        EXIT;
+      ServContract.GET(ContractTypeToBeChanged,ContractNoToBeChanged);
+      IF (ServContract.Status = ServContract.Status::Canceled) AND
+         (ServContract."Contract Type" = ServContract."Contract Type"::Contract)
+      THEN
+        EXIT;
+      TempServContract := ServContract;
+      TempServContract.INSERT;
+
+      ServContractLine.SETRANGE("Contract Type",ContractTypeToBeChanged);
+      ServContractLine.SETRANGE("Contract No.",ServContract."Contract No.");
+      ServContractLine.SETFILTER("Contract Status",'<>%1',ServContractLine."Contract Status"::Cancelled);
+      ServContractLine.SETFILTER("Service Item No.",'<>%1','');
+      IF ServContractLine.FIND('-') THEN
+        REPEAT
+          IF NOT TempServItem.GET(ServContractLine."Service Item No.") THEN BEGIN
+            ServItem.GET(ServContractLine."Service Item No.");
+            TempServItem := ServItem;
+            TempServItem.INSERT;
+          END;
+
+          ServContractLine2.RESET;
+          ServContractLine2.SETCURRENTKEY("Service Item No.","Contract Status");
+          ServContractLine2.SETRANGE("Service Item No.",ServContractLine."Service Item No.");
+          ServContractLine2.SETFILTER("Contract Status",'<>%1',ServContractLine."Contract Status"::Cancelled);
+          ServContractLine2.SETRANGE("Contract Type",ServContractLine."Contract Type"::Contract);
+          ServContractLine2.SETFILTER("Contract No.",'<>%1',ServContractLine."Contract No.");
+          IF ServContractLine2.FIND('-') THEN
+            REPEAT
+              GetAffectedItemsOnCustChange(
+                ServContractLine2."Contract No.",
+                TempServContract,
+                TempServItem,
+                TRUE,
+                ServContractLine."Contract Type"::Contract)
+            UNTIL ServContractLine2.NEXT = 0;
+
+          ServContractLine2.RESET;
+          ServContractLine2.SETCURRENTKEY("Service Item No.");
+          ServContractLine2.SETRANGE("Service Item No.",ServContractLine."Service Item No.");
+          ServContractLine2.SETRANGE("Contract Type",ServContractLine."Contract Type"::Quote);
+          IF ServContractLine2.FIND('-') THEN
+            REPEAT
+              GetAffectedItemsOnCustChange(
+                ServContractLine2."Contract No.",
+                TempServContract,
+                TempServItem,
+                TRUE,
+                ServContractLine."Contract Type"::Quote)
+            UNTIL ServContractLine2.NEXT = 0;
+
+        UNTIL ServContractLine.NEXT = 0;
+    END;
+
+    PROCEDURE ChangeCustNoOnServContract@23(NewCustomertNo@1000 : Code[20];NewShipToCode@1001 : Code[20];ServContractHeader@1002 : Record 5965);
+    VAR
+      ServContractLine@1018 : Record 5964;
+      Cust@1014 : Record 18;
+      ContractChangeLog@1011 : Record 5967;
+      UserMgt@1003 : Codeunit 5700;
+      OldSalespersonCode@1004 : Code[10];
+      OldCurrencyCode@1005 : Code[10];
+    BEGIN
+      IF NewCustomertNo = '' THEN
+        ERROR(Text012);
+
+      ServMgtSetup.GET;
+
+      WITH ServContractHeader DO BEGIN
+        OldSalespersonCode := "Salesperson Code";
+        OldCurrencyCode := "Currency Code";
+
+        IF "Customer No." <> NewCustomertNo THEN BEGIN
+          IF ServMgtSetup."Register Contract Changes" THEN
+            ContractChangeLog.LogContractChange(
+              "Contract No.",0,FIELDCAPTION("Customer No."),0,"Customer No.",NewCustomertNo,'',0);
+          "Customer No." := NewCustomertNo;
+          Cust.GET(NewCustomertNo);
+          SetHideValidationDialog(TRUE);
+          IF Cust."Bill-to Customer No." <> '' THEN
+            VALIDATE("Bill-to Customer No.",Cust."Bill-to Customer No.")
+          ELSE
+            VALIDATE("Bill-to Customer No.",Cust."No.");
+          "Responsibility Center" := UserMgt.GetRespCenter(2,Cust."Responsibility Center");
+          UpdateShiptoCode;
+          CALCFIELDS(
+            Name,"Name 2",Address,"Address 2",
+            "Post Code",City,County,"Country/Region Code");
+        END;
+
+        IF "Ship-to Code" <> NewShipToCode THEN BEGIN
+          IF ServMgtSetup."Register Contract Changes" THEN
+            ContractChangeLog.LogContractChange(
+              "Contract No.",0,FIELDCAPTION("Ship-to Code"),0,"Ship-to Code",NewShipToCode,'',0);
+          "Ship-to Code" := NewShipToCode;
+          IF NewShipToCode = '' THEN
+            UpdateShiptoCode
+          ELSE
+            CALCFIELDS(
+              "Ship-to Name","Ship-to Name 2","Ship-to Address","Ship-to Address 2",
+              "Ship-to Post Code","Ship-to City","Ship-to County","Ship-to Country/Region Code");
+        END;
+
+        UpdateServZone;
+        UpdateCont("Customer No.");
+        UpdateCust("Contact No.");
+        "Salesperson Code" := OldSalespersonCode;
+        "Currency Code" := OldCurrencyCode;
+
+        CreateDim(
+          DATABASE::Customer,"Bill-to Customer No.",
+          DATABASE::"Salesperson/Purchaser","Salesperson Code",
+          DATABASE::"Responsibility Center","Responsibility Center",
+          DATABASE::"Service Contract Template","Template No.");
+
+        ServContractLine.RESET;
+        ServContractLine.SETRANGE("Contract Type","Contract Type");
+        ServContractLine.SETRANGE("Contract No.","Contract No.");
+        IF ServContractLine.FIND('-') THEN
+          REPEAT
+            ServContractLine."Customer No." := NewCustomertNo;
+            ServContractLine."Ship-to Code" := NewShipToCode;
+            ServContractLine.MODIFY;
+          UNTIL ServContractLine.NEXT = 0;
+      END;
+      ServContractHeader.MODIFY;
+    END;
+
+    PROCEDURE ChangeCustNoOnServItem@26(NewCustomertNo@1001 : Code[20];NewShipToCode@1000 : Code[20];ServItem@1002 : Record 5940);
+    VAR
+      OldServItem@1005 : Record 5940;
+      ServLogMgt@1003 : Codeunit 5906;
+    BEGIN
+      OldServItem := ServItem;
+      ServItem."Customer No." := NewCustomertNo;
+      ServItem."Ship-to Code" := NewShipToCode;
+      IF OldServItem."Customer No." <> NewCustomertNo THEN BEGIN
+        ServLogMgt.ServItemCustChange(ServItem,OldServItem);
+        ServLogMgt.ServItemShipToCodeChange(ServItem,OldServItem);
+      END ELSE
+        IF OldServItem."Ship-to Code" <> NewShipToCode THEN
+          ServLogMgt.ServItemShipToCodeChange(ServItem,OldServItem);
+      ServItem.MODIFY;
+    END;
+
+    PROCEDURE CreateHeadingServLine@27(ServHeader@1000 : Record 5900;ContractType@1008 : Integer;ContractNo@1001 : Code[20]);
+    VAR
+      ServContractHeader@1006 : Record 5965;
+      Cust@1003 : Record 18;
+      StdText@1004 : Record 7;
+    BEGIN
+      ServContractHeader.GET(ContractType,ContractNo);
+      IF ServContractHeader."Invoice Period" = ServContractHeader."Invoice Period"::None THEN
+        EXIT;
+
+      ServLineNo := 0;
+      ServLine.SETRANGE("Document Type",ServLine."Document Type"::Invoice);
+      ServLine.SETRANGE("Document No.",ServHeader."No.");
+      IF ServLine.FIND('+') THEN
+        ServLineNo := ServLine."Line No.";
+      Cust.GET(ServContractHeader."Bill-to Customer No.");
+      ServMgtSetup.GET;
+      ServLine.RESET;
+      ServLine.INIT;
+      ServLineNo := ServLineNo + 10000;
+      ServLine."Document Type" := ServHeader."Document Type";
+      ServLine."Document No." := ServHeader."No.";
+      ServLine."Line No." := ServLineNo;
+      ServLine.Type := ServLine.Type::" ";
+      IF ServMgtSetup."Contract Inv. Line Text Code" <> '' THEN BEGIN
+        StdText.GET(ServMgtSetup."Contract Inv. Line Text Code");
+        TempServLineDescription := STRSUBSTNO('%1 %2',StdText.Description,ServContractHeader."Contract No.");
+        IF STRLEN(TempServLineDescription) > MAXSTRLEN(ServLine.Description) THEN
+          ERROR(Text013,ServLine.TABLECAPTION,ServLine.FIELDCAPTION(Description),
+            StdText.TABLECAPTION,StdText.Code,StdText.FIELDCAPTION(Description),
+            FORMAT(STRLEN(TempServLineDescription) - MAXSTRLEN(ServLine.Description)));
+        ServLine.Description := TempServLineDescription;
+      END ELSE
+        ServLine.Description := STRSUBSTNO(Text002,ServContractHeader."Contract No.");
+      ServLine.INSERT;
+    END;
+
+    PROCEDURE LookupServItemNo@31(VAR ServiceContractLine@1002 : Record 5964);
+    VAR
+      ServContractHeader@1003 : Record 5965;
+      ServItem@1001 : Record 5940;
+      ServItemList@1000 : Form 5981;
+    BEGIN
+      CLEAR(ServItemList);
+      IF ServItem.GET(ServiceContractLine."Service Item No.") THEN
+        ServItemList.SETRECORD(ServItem);
+      ServItem.RESET;
+      ServItem.SETCURRENTKEY("Customer No.","Ship-to Code");
+      ServItem.FILTERGROUP(2);
+      IF ServiceContractLine."Customer No." <> '' THEN
+        ServItem.SETRANGE("Customer No.",ServiceContractLine."Customer No.");
+      ServItem.FILTERGROUP(0);
+      IF ServContractHeader.GET(ServiceContractLine."Contract Type",ServiceContractLine."Contract No.") AND
+         (ServiceContractLine."Ship-to Code" = ServContractHeader."Ship-to Code")
+      THEN
+        ServItem.SETRANGE("Ship-to Code",ServiceContractLine."Ship-to Code");
+      ServItemList.SETTABLEVIEW(ServItem);
+      ServItemList.LOOKUPMODE(TRUE);
+      IF ServItemList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        ServItemList.GETRECORD(ServItem);
+        ServiceContractLine.VALIDATE("Service Item No.",ServItem."No.");
+      END;
+    END;
+
+    PROCEDURE AmountToFCY@35(AmountLCY@1000 : Decimal;VAR ServHeader3@1001 : Record 5900) : Decimal;
+    VAR
+      CurrExchRate@1002 : Record 330;
+      Currency@1003 : Record 4;
+    BEGIN
+      Currency.GET(ServHeader3."Currency Code");
+      Currency.TESTFIELD("Unit-Amount Rounding Precision");
+      EXIT(
+        ROUND(
+          CurrExchRate.ExchangeAmtLCYToFCY(
+            ServHeader3."Posting Date",ServHeader3."Currency Code",
+            AmountLCY,ServHeader3."Currency Factor"),
+          Currency."Unit-Amount Rounding Precision"));
+    END;
+
+    PROCEDURE AdjustServiceInvoiceDimensions@1102601000(ServContrHeader@1102601000 : Record 5965;InvNo@1102601001 : Code[20]);
+    VAR
+      ServContrDim@1102601004 : Record 389;
+    BEGIN
+      DimMgt.DeleteDocDim(DATABASE::"Service Header",2,InvNo,0);
+      ServContrDim.SETRANGE("Table ID",DATABASE::"Service Contract Header");
+      ServContrDim.SETRANGE(Type,ServContrHeader."Contract Type");
+      ServContrDim.SETRANGE("No.",ServContrHeader."Contract No.");
+      DimMgt.CopySCDimToDocDim(ServContrDim,DATABASE::"Service Header",2,InvNo,0);
+    END;
+
+    PROCEDURE YearContract@37(ContrType@1000 : Integer;ContrNo@1001 : Code[20]) : Boolean;
+    VAR
+      ServContrHeader@1002 : Record 5965;
+    BEGIN
+      IF NOT ServContrHeader.GET(ContrType,ContrNo) THEN
+        EXIT(FALSE);
+      EXIT(ServContrHeader."Expiration Date" = CALCDATE('<1Y-1D>',ServContrHeader."Starting Date"));
+    END;
+
+    BEGIN
+    END.
+  }
+}

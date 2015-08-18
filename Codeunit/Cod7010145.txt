@@ -1,0 +1,1107 @@
+OBJECT Codeunit 7010145 Macros Modulo excursiones
+{
+  OBJECT-PROPERTIES
+  {
+    Date=18/05/15;
+    Time=11:30:01;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 36=rimd,
+                TableData 37=rimd,
+                TableData 81=rimd,
+                TableData 357=rimd;
+    OnRun=BEGIN
+            RellenaImporteBaseCostes;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100217000 : TextConst 'ENU=Reservation must be invoiced, liquidated or confirmed to use this tool.;ESP=La reserva debe estar facturada, liquidada o confirmada para utilizar esta herramienta.';
+      wDialog@1100217001 : Dialog;
+      Text002@1100217002 : TextConst 'ENU=CHANGE CURRENCY AND EXCHANGE DATE;ESP=CAMBIO DE DIVISA Y FECHA CAMBIO';
+      Text003@1100217003 : TextConst 'ENU=Currency #1########;ESP=Divisa #1########';
+      Text004@1100217004 : TextConst 'ENU=Date #2########;ESP=Fecha #2########';
+      Text005@1100217005 : TextConst 'ESP=CAMBIO DE FORMA DE PAGO';
+      Text006@1100217006 : TextConst 'ESP=Forma de pago #1########';
+      rPar@1100217007 : Record 7009700;
+      Text007@1100217008 : TextConst 'ENU=Do you want to mark as cancelled the ticket %1;ESP=Desea marcar como anulada el ticket %1';
+      Text008@1100217009 : TextConst 'ESP=Solo se puede marcar si el importe es cero.';
+      Text009@1100217010 : TextConst 'ENU=Cancel liquidation #1########;ESP=Retroceder liquidacion #1########';
+      Text010@1100217011 : TextConst 'ENU=The liquidation entries has been posted;ESP=El asiento de liquidacion ya se ha registrado';
+      Text011@1100217012 : TextConst 'ESP=Desea retroceder el reembolso del ticket %1.';
+      rParPer@1100217022 : Record 7009701;
+      rHis@1100217013 : Record 7009751;
+      Text012@1100217014 : TextConst 'ENU=The refund has been liquidated, cannot be cancelled.;ESP=El reembolso se ha liquidado no se puede retroceder.';
+      Text013@1100217015 : TextConst 'ESP=Nuevo Touroperador #1########';
+      cPar@1100217016 : Codeunit 7009700;
+      Text014@1100217017 : TextConst 'ENU=There are invoiced reservations, it can''t be cancelled.;ESP=Hay reservas facturadas, no se puede cancelar.';
+      Text015@1100217018 : TextConst 'ESP=CAMBIO DE FECHA EXCURSION';
+      Text016@1100217019 : TextConst 'ENU=The credit memo related with this refund has been posted. You must cancel this post before continue.;ESP=El abono relacionado con este reembolso ha sido registrado. Debe anular el registro antes de continuar.';
+      Text017@1100217020 : TextConst 'ENU=The service date cannot be changed in a confirmed reservation.;ESP=No se puede cambiar la fecha de servicio de una reserva confirmada.';
+      Text018@1100217021 : TextConst 'ENU=This function cannot be executed with confirmed reservations.;ESP=Esta funcion no puede ejecutarse con reservas confirmadas.';
+      Text019@1100217023 : TextConst 'ENU=The new excursion should have the same price than the current.;ESP=La nueva excursion debe tener el mismo precio que la actual.';
+      Text020@1100217024 : TextConst 'ENU=This function can only be executed with liquidated reservations.;ESP=Esta funcion solo puede ejecutarse con reservas liquidadas.';
+      Text021@1100217025 : TextConst 'ENU=The reservation cannot be cancelled or refunded.;ESP=La reserva no puede estar anulada o reembolsada.';
+      Text022@1100217026 : TextConst 'ENU=New hotel #1########;ESP=Nuevo Hotel #1########';
+      Text023@1100217028 : TextConst 'ENU=Excursion,Sales Guide;ESP=Excursion,Guia Venta';
+      Text024@1100217027 : TextConst 'ENU=It''ll recalculate the commission of the touroperator %1 for the reservations sold from %2;ESP="Se va a recalcular la comision del touroperador %1 de las reservas vendidas a partir de dia %2 "';
+      Text025@1100217029 : TextConst 'ENU=Select the first day to process #1########;ESP=Seleccione la primera fecha a procesar #1########';
+      Text026@1100217030 : TextConst;
+
+    LOCAL PROCEDURE _SeleccionaReserva@1100217002(VAR prRsv@1100217000 : Record 7010162;pwReembolsadas@1100217002 : Boolean) : Boolean;
+    VAR
+      lfExcursiones@1100217001 : Form 7010199;
+    BEGIN
+      // _SeleccionaReserva
+
+      prRsv.RESET;
+      IF pwReembolsadas THEN
+        prRsv.SETRANGE(Reembolsada, TRUE);
+      prRsv.FINDFIRST;
+
+      CLEAR(lfExcursiones);
+      lfExcursiones.SETTABLEVIEW(prRsv);
+      lfExcursiones.SETRECORD(prRsv);
+      lfExcursiones.LOOKUPMODE(TRUE);
+      IF lfExcursiones.RUNMODAL <> ACTION::LookupOK THEN
+        EXIT(FALSE);
+
+      lfExcursiones.GETRECORD(prRsv);
+
+      IF NOT pwReembolsadas THEN
+        IF NOT ((prRsv."N§ liquidacion GV" <> 0) OR prRsv.Confirmada OR prRsv.Facturada) THEN
+          ERROR(Text001);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _SeleccionaFecha@1100217022(VAR pwFecha@1100217000 : Date);
+    BEGIN
+      // _SeleccionaFecha
+
+      wDialog.OPEN(Text025);
+      wDialog.INPUT(1, pwFecha);
+      wDialog.CLOSE;
+    END;
+
+    PROCEDURE ModFechaCambio@1100217000();
+    VAR
+      lrCurrExc@1100217003 : Record 330;
+      lrRsv@1100217005 : Record 7010162;
+      lrCobro@1100217000 : Record 7010240;
+      lwDivisa@1100217002 : Code[10];
+      lwFecha@1100217001 : Date;
+    BEGIN
+      // ModFechaCambio
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      lwDivisa := lrRsv.Divisa;
+      lwFecha  := lrRsv."Fecha cambio";
+
+      wDialog.OPEN(Text002 + '\' + Text003 + '\' + Text004);
+      wDialog.INPUT(1, lwDivisa);
+      wDialog.INPUT(2, lwFecha);
+      wDialog.CLOSE;
+
+      IF (lwDivisa = '') OR
+         (lwFecha = 0D) THEN
+        EXIT;
+
+      lrCurrExc.SETRANGE ("Currency Code", lwDivisa);
+      lrCurrExc.SETFILTER("Starting Date", '<=%1', lwFecha);
+      lrCurrExc.FINDLAST;
+
+      lrRsv.Divisa         := lwDivisa;
+      lrRsv."Fecha cambio" := lwFecha;
+      lrRsv."Tipo cambio"  := lrCurrExc."Relational Exch. Rate Amount";
+      lrRsv.MODIFY;
+
+      lrCobro.RESET;
+      lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+      lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+      IF lrCobro.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrCobro."Fecha cambio cobro" := lwFecha;
+          lrCobro.CALCFIELDS("Cod. Divisa Reserva");
+          lrCobro.SetImpDivResv;
+          lrCobro.MODIFY;
+        UNTIL lrCobro.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModFormaPago@1100217001();
+    VAR
+      lrRsv@1100217005 : Record 7010162;
+      lrCobro@1100217000 : Record 7010240;
+      lwFormaPago@1100217002 : Code[10];
+    BEGIN
+      // ModFormaPago
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      lrCobro.RESET;
+      lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+      lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+      IF NOT lrCobro.FINDFIRST THEN
+        EXIT;
+
+      lwFormaPago := lrCobro."Forma de Pago";
+
+      wDialog.OPEN(Text005 + '\' + Text006);
+      wDialog.INPUT(1, lwFormaPago);
+      wDialog.CLOSE;
+
+      IF (lwFormaPago = '') THEN
+        EXIT;
+
+      lrCobro."Forma de Pago" := lwFormaPago;
+      lrCobro.MODIFY;
+    END;
+
+    PROCEDURE RecalculaExcursion@1100217003();
+    VAR
+      lfExcursiones@1100217000 : Form 7009710;
+      lrExcursion@1100217001 : Record 7009710;
+      lrRsv@1100217002 : Record 7010162;
+      lwFecha@1100217003 : Date;
+    BEGIN
+      // RecalculaExcursion
+
+      CLEAR(lfExcursiones);
+      lfExcursiones.LOOKUPMODE(TRUE);
+      IF lfExcursiones.RUNMODAL() <> ACTION::LookupOK THEN
+        EXIT;
+      lfExcursiones.GETRECORD(lrExcursion);
+
+      _SeleccionaFecha(lwFecha);
+      IF lwFecha = 0D THEN
+        EXIT;
+
+      IF NOT rPar.FINDFIRST THEN
+        EXIT;
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY(Delegacion,
+                          "Fecha Excursion",
+                          Producto);
+      lrRsv.SETRANGE (Delegacion         , rPar.Delegacion);
+      lrRsv.SETRANGE (Producto           , lrExcursion.Codigo);
+      lrRsv.SETRANGE ("N§ liquidacion GV", 0);
+      lrRsv.SETRANGE (Facturada          , FALSE);
+      lrRsv.SETFILTER("Fecha Venta"      , '>=%1', lwFecha);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsv.calcular_reserva(FALSE);
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AnulaTicketLiquidado@1100217004();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrServicio@1100217001 : Record 7010163;
+      lrDetEco@1100217002 : Record 7010245;
+      lrCobro@1100217003 : Record 7010240;
+    BEGIN
+      // AnulaTicketLiquidado
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      IF NOT CONFIRM(Text007, FALSE, lrRsv."N§ Ticket") THEN
+        EXIT;
+
+      IF lrRsv."Ingreso reserva" <> 0 THEN
+        ERROR(Text008);
+
+      //. Aumentar el contador de reservas anuladas del servicio
+
+      IF lrRsv."N§ Servicio" <> 0 THEN BEGIN
+        lrServicio.GET(lrRsv.Delegacion, lrRsv."N§ Servicio");
+        lrServicio."Reservas Anuladas" += 1;
+        lrServicio."Pendiente Recalcular" := TRUE;
+        lrServicio.MODIFY;
+      END;
+
+      //. Modificamos la reserva
+
+      lrRsv.VALIDATE(Anulada, TRUE);
+
+      lrRsv."Fecha anulaci¢n/Reembolso" := TODAY;
+      lrRsv."Usuario Modificacion"      := USERID;
+      lrRsv."N§ Servicio"               := 0;
+      lrRsv."Comentarios Reembolso"     := 'CXL';
+      lrRsv."Ingreso reserva"           := 0;
+      lrRsv."Ingreso comisionable"      := 0;
+      lrRsv."Ingreso Adulto"            := 0;
+      lrRsv."Ingreso Ni¤o"              := 0;
+      lrRsv."Ingreso reserva neto"      := 0;
+      lrRsv."Ingreso comisionable neto" := 0;
+      lrRsv."Ingreso adulto neto"       := 0;
+      lrRsv."Ingreso ni¤o neto"         := 0;
+      lrRsv."Comision Guia Venta"       := 0;
+      lrRsv."Comision Touroperador"     := 0;
+      lrRsv."Num. Prefactura"           := ''; //+$005
+      lrRsv.MODIFY;
+
+      //. Vaciamos el detalle economico
+      IF lrDetEco.GET(lrRsv.Delegacion, lrRsv."N§ Reserva") THEN
+      BEGIN
+        lrDetEco.INIT;
+        lrDetEco."Cod. Divisa" := lrRsv.Divisa;
+        lrDetEco.MODIFY;
+      END;
+
+      // $014 Eliminamos la reseva Soporte si existe
+      lrRsv.BorraReservasSoporte;
+
+      //. Dejamos a cero el importe recibido del cobro
+      //+$023 <
+      lrCobro.RESET;
+      lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+      lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+      IF lrCobro.FINDSET(TRUE) THEN
+      BEGIN
+        REPEAT
+          lrCobro.VALIDATE("Importe Recibido", 0);
+          lrCobro.MODIFY;
+        UNTIL lrCobro.NEXT = 0;
+      END;
+      //+$023 >
+    END;
+
+    PROCEDURE RetrocedeLiquidacion@1100217005();
+    VAR
+      rRsv@1100217000 : Record 7010162;
+      rLiq@1100217001 : Record 7010178;
+      rDet@1100217004 : Record 7010250;
+      rGenJournal@1100217006 : Record 81;
+      rMovCont@1100217007 : Record 17;
+      rRevEntry@1100217008 : Record 179;
+      rReemb@1000000000 : Record 7010266;
+      wVentana@1100217003 : Dialog;
+      wLiquidacion@1100217002 : Integer;
+      wDocumento@1100217005 : Code[20];
+    BEGIN
+      // RetrocedeLiquidacion
+
+      wVentana.OPEN(Text009);
+      wVentana.INPUT(1, wLiquidacion);
+      wVentana.CLOSE;
+
+      IF wLiquidacion <= 0 THEN
+        EXIT;
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY("Guia Venta",
+                         "N§ Ticket",
+                         "Liquidado GV",
+                         "N§ liquidacion GV",
+                         "N§ liquidacion GV reembolso");
+      rRsv.SETRANGE("N§ liquidacion GV", wLiquidacion);
+      IF rRsv.FINDSET(TRUE) THEN
+      BEGIN
+        REPEAT
+          IF rRsv."Num. Factura" <> '' THEN
+            ERROR(Text014);
+        UNTIL rRsv.NEXT = 0;
+
+        rRsv.MODIFYALL("Num. Prefactura"  , '');
+        rRsv.MODIFYALL("Liquidado GV"     , FALSE);
+        rRsv.MODIFYALL("N§ liquidacion GV", 0);
+      END;
+
+      rRsv.SETRANGE("N§ liquidacion GV");
+      rRsv.SETRANGE("N§ liquidacion GV reembolso", wLiquidacion);
+      IF rRsv.FINDSET(TRUE) THEN
+      BEGIN
+        rRsv.MODIFYALL("Liquidado GV", FALSE);
+        rRsv.MODIFYALL("N§ liquidacion GV reembolso", 0);
+      END;
+
+      // $010 Retrocedemos los reembolsos
+      rReemb.RESET;
+      rReemb.SETRANGE(rReemb."N§ liquidacion GV" ,wLiquidacion);
+      IF rReemb.FINDSET(TRUE) THEN BEGIN
+        rReemb.MODIFYALL("Liquidado GV", FALSE);
+        rReemb.MODIFYALL("N§ liquidacion GV", 0);
+      END;
+
+      rLiq.RESET;
+      rLiq.SETRANGE("N§ Liquidacion", wLiquidacion);
+      IF rLiq.FINDSET(TRUE) THEN
+        rLiq.DELETE;
+
+      rDet.RESET;
+      rDet.SETCURRENTKEY("N§ Liquidacion");
+      rDet.SETRANGE("N§ Liquidacion", wLiquidacion);
+      IF rDet.FINDSET(TRUE) THEN
+        rDet.DELETEALL;
+
+      wDocumento := 'LIQ' + FORMAT(wLiquidacion);
+
+      rGenJournal.RESET;
+      rGenJournal.SETRANGE("Document No.", wDocumento);
+      IF rGenJournal.FINDSET(TRUE) THEN
+      BEGIN
+        rGenJournal.MODIFYALL("System-Created Entry", FALSE); //+$007
+        rGenJournal.DELETEALL(TRUE)
+      END
+      ELSE
+      BEGIN
+        //MESSAGE(Text010);
+
+        //+$006 <
+        COMMIT;
+
+        rMovCont.RESET;
+        rMovCont.SETCURRENTKEY("Document No.");
+        rMovCont.SETRANGE("Document No.", wDocumento);
+        IF rMovCont.FINDFIRST THEN
+        BEGIN
+          IF NOT rMovCont.Reversed THEN
+            rRevEntry.ReverseTransaction(rMovCont."Transaction No.");
+        END;
+        //+$006 >
+      END;
+    END;
+
+    PROCEDURE RecalculaComisionGuiaVenta@1100217006();
+    VAR
+      lfExcursiones@1100217002 : Form 7009710;
+      lrExcursion@1100217001 : Record 7009710;
+      lrGuiaVenta@1100217003 : Record 7010241;
+      lfGuias@1100217005 : Form 7010234;
+      lrRsv@1100217000 : Record 7010162;
+      lwOpcion@1100217004 : Integer;
+      lwFecha@1100217006 : Date;
+    BEGIN
+      // RecalculaComisionGuiaVenta
+
+      lwOpcion := STRMENU(Text023);
+      IF lwOpcion = 0 THEN
+        EXIT;
+
+      IF lwOpcion = 1 THEN
+      BEGIN
+        CLEAR(lfExcursiones);
+        lfExcursiones.LOOKUPMODE(TRUE);
+        IF lfExcursiones.RUNMODAL() <> ACTION::LookupOK THEN
+          EXIT;
+        lfExcursiones.GETRECORD(lrExcursion);
+      END
+      ELSE
+      BEGIN
+        CLEAR(lfGuias);
+        lfGuias.LOOKUPMODE(TRUE);
+        IF lfGuias.RUNMODAL() <> ACTION::LookupOK THEN
+          EXIT;
+        lfGuias.GETRECORD(lrGuiaVenta);
+      END;
+
+      _SeleccionaFecha(lwFecha);
+      IF lwFecha = 0D THEN
+        EXIT;
+
+      IF NOT rPar.FINDFIRST THEN
+        EXIT;
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY(Delegacion,
+                          "Fecha Excursion",
+                          Producto);
+      lrRsv.SETRANGE(Delegacion, rPar.Delegacion);
+
+      IF lwOpcion = 1 THEN
+        lrRsv.SETRANGE(Producto, lrExcursion.Codigo)
+      ELSE
+        lrRsv.SETRANGE("Guia Venta", lrGuiaVenta.Codigo);
+
+      lrRsv.SETRANGE(Anulada       , FALSE);
+      //lrRsv.SETRANGE(Reembolsada   , FALSE);   -$010
+      lrRsv.SETFILTER("Fecha Venta", '>=%1', lwFecha);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsv.calcula_comisionGV;
+          lrRsv.MODIFY;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE RetrocedeReembolso@1100217007();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrCobro@1100217001 : Record 7010240;
+      lrServicio@1100217002 : Record 7010163;
+      lrPostCrMemo@1100217003 : Record 114;
+      lrCrMemo@1100217004 : Record 36;
+      lrLinVenta@1100217005 : Record 37;
+      lrDocDim@1100217006 : Record 357;
+      lrReemb@1000000000 : Record 7010266;
+      lrReembDet@1000000001 : Record 7010267;
+    BEGIN
+      // RetrocedeReembolso
+      // $010 Adaptado a los nuevos reembolsos
+
+      IF NOT _SeleccionaReserva(lrRsv, TRUE) THEN
+        EXIT;
+
+      lrReemb.RESET;
+      lrReemb.SETRANGE(lrReemb.Delegacion, lrRsv.Delegacion);
+      lrReemb.SETRANGE(lrReemb."Num Reserva", lrRsv."N§ Reserva");
+      IF lrReemb.FINDLAST THEN BEGIN
+
+        IF lrReemb."N§ liquidacion GV" <> 0 THEN
+          ERROR(Text012);
+
+        IF NOT CONFIRM(Text011, FALSE, lrRsv."N§ Ticket") THEN
+          EXIT;
+
+        //. Buscamos si el abono esta registrado
+
+        lrPostCrMemo.RESET;
+        IF lrPostCrMemo.GET(lrReemb."Num. abono reembolso") THEN
+          ERROR(Text016);
+
+        //. Borramos el abono que esta pendiente de registrar
+        IF lrCrMemo.GET(lrCrMemo."Document Type"::"Credit Memo", lrReemb."Num. abono reembolso") THEN
+        BEGIN
+          lrLinVenta.SETRANGE("Document Type", lrCrMemo."Document Type");
+          lrLinVenta.SETRANGE("Document No." , lrCrMemo."No.");
+          IF lrLinVenta.FINDSET(TRUE) THEN
+            lrLinVenta.DELETEALL;
+
+          lrDocDim.SETRANGE("Table ID"     , 36, 37);
+          lrDocDim.SETRANGE("Document Type", lrCrMemo."Document Type");
+          lrDocDim.SETRANGE("Document No." , lrCrMemo."No.");
+          IF lrDocDim.FINDSET(TRUE) THEN
+            lrDocDim.DELETEALL;
+
+          lrCrMemo.DELETE;
+        END;
+
+        //. Recuperar el contador de reservas anuladas del servicio
+
+        IF lrRsv."N§ Servicio anulado" <> 0 THEN BEGIN
+          lrServicio.GET(lrRsv.Delegacion, lrRsv."N§ Servicio anulado");
+          lrServicio."Reservas Anuladas"    -= 1;
+          lrServicio."Pendiente Recalcular" := TRUE;
+          lrServicio.MODIFY;
+        END;
+
+        //. Modificamos la reserva
+
+        lrRsv.Reembolsada                 := FALSE;
+        lrRsv."Fecha anulaci¢n/Reembolso" := 0D;
+        lrRsv."Usuario Modificacion"      := '';
+        lrRsv."N§ Servicio anulado"       := 0;
+        lrRsv."N§ Servicio"               := lrRsv."N§ Servicio anulado";
+        lrRsv."Comentarios Reembolso"     := '';
+        lrRsv."Liquidado GV"              := TRUE;
+        lrRsv.MODIFY;
+
+        //. Buscamos el registro de cobro para desmarcar el campo reembolsado
+        lrCobro.RESET;
+        lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+        lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+        lrCobro.FINDFIRST;
+        lrCobro.MODIFYALL(Reembolsado, FALSE);
+
+        // $010
+        lrReembDet.RESET;
+        lrReembDet.SETRANGE(lrReembDet.Delegacion, lrReemb.Delegacion);
+        lrReembDet.SETRANGE(lrReembDet."Num Reserva", lrReemb."Num Reserva");
+        lrReembDet.SETRANGE(lrReembDet."Id Reembolso", lrReemb."ID Reembolso");
+        lrReembDet.DELETEALL;
+        lrReemb.DELETE;
+
+        cPar.intro_historic(lrRsv.Delegacion, lrRsv."N§ Interno", lrRsv."N§ Periodo", lrRsv."N§ Reserva",
+                            rHis."Tipo Reserva"::Excursion, lrRsv.FIELDCAPTION(Reembolsada),
+                            FORMAT(TRUE), FORMAT(FALSE));
+      END;
+    END;
+
+    PROCEDURE ModTouroperador@1100217008();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lwTTOO@1100217001 : Code[10];
+      lwTTOOAnt@1100217003 : Code[10];
+      lrTTOO@1100217002 : Record 7009717;
+    BEGIN
+      // ModTouroperador
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      lwTTOOAnt := lrRsv.TourOperador;
+
+      wDialog.OPEN(Text013);
+      wDialog.INPUT(1, lwTTOO);
+      wDialog.CLOSE;
+
+      IF (lwTTOO = '') THEN
+        EXIT;
+
+      lrTTOO.GET(lwTTOO);
+
+      lrRsv.TourOperador := lwTTOO;
+      lrRsv.calcula_comisionTO;
+      lrRsv.MODIFY;
+
+      cPar.intro_historic(lrRsv.Delegacion, lrRsv."N§ Interno", lrRsv."N§ Periodo", lrRsv."N§ Reserva",
+                          rHis."Tipo Reserva"::Excursion, lrRsv.FIELDCAPTION(TourOperador),
+                          lwTTOOAnt, lwTTOO);
+    END;
+
+    PROCEDURE RellenarParametroDivisa@1100217009();
+    VAR
+      lrTar@1100217000 : Record 7010147;
+      lrPar@1100217001 : Record 7009700;
+    BEGIN
+      // RellenarParametroDivisa
+
+      IF NOT lrPar.FINDFIRST THEN
+        EXIT;
+
+      IF lrTar.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF (lrTar."o_C¢d. divisa" <> '') AND (lrPar."Divisa venta excursiones" = '') THEN
+          BEGIN
+            lrPar."Divisa venta excursiones" := lrTar."o_C¢d. divisa";
+            lrPar.MODIFY;
+          END;
+
+          lrTar."o_C¢d. divisa" := '';
+          lrTar."o_Fecha cambio divisa" := 0D;
+          lrTar.MODIFY;
+        UNTIL lrTar.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModFechaExcursion@1100217010();
+    VAR
+      lwFecha@1100217000 : Date;
+      lrRsv@1100217001 : Record 7010162;
+      lrExcursion@1100217002 : Record 7009710;
+    BEGIN
+      // ModFechaExcursion
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      IF lrRsv.Confirmada THEN
+        ERROR(Text017);
+
+      lwFecha  := lrRsv."Fecha Excursion";
+
+      wDialog.OPEN(Text015 + '\' + Text004);
+      wDialog.INPUT(2, lwFecha);
+      wDialog.CLOSE;
+
+      IF lwFecha = 0D THEN
+        EXIT;
+
+      lrRsv."Fecha Excursion" := lwFecha;
+      lrRsv.MODIFY;
+    END;
+
+    PROCEDURE MarcarLiquidacionPrefacturada@1100217011();
+    VAR
+      lrLiq@1100217000 : Record 7010178;
+      lrRsv@1100217001 : Record 7010162;
+    BEGIN
+      // MarcarLiquidacionPrefacturada
+
+      lrLiq.RESET;
+      IF lrLiq.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrRsv.SETCURRENTKEY("Guia Venta", "Fecha Excursion", "Liquidado GV", Producto, "Zona Hotel", "Precio Adulto",
+                              "Precio Ni¤o", "N§ liquidacion GV", "N§ liquidacion GV reembolso");
+          lrRsv.SETRANGE("Guia Venta"       , lrLiq."Guia Venta");
+          lrRsv.SETRANGE("N§ liquidacion GV", lrLiq."N§ Liquidacion");
+          lrRsv.SETRANGE("Num. Prefactura"  , '');
+          IF lrRsv.ISEMPTY THEN
+          BEGIN
+            lrLiq."Venta prefacturada" := TRUE;
+            lrLiq.MODIFY;
+          END;
+        UNTIL lrLiq.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModExcursionReserva@1100217012();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrExcursion@1100217001 : Record 7009710;
+      lrTarActual@1100217002 : Record 7010147;
+      lrTarNew@1100217003 : Record 7010147;
+      lrPreActual@1100217004 : Record 7010148;
+      lrPreNew@1100217005 : Record 7010148;
+      lrSuplRsv@1100217006 : Record 7010165;
+    BEGIN
+      // ModExcursionReserva
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      //. No dejamos modificar una reserva confirmada
+      IF lrRsv.Confirmada THEN
+        ERROR(Text018);
+
+      //. Tiene que esta liquidada
+      IF (lrRsv."N§ liquidacion GV" = 0) THEN
+        ERROR(Text020);
+
+      //. No puede estar anulada ni reembolsada
+      IF lrRsv.Anulada OR lrRsv.Reembolsada THEN
+        ERROR(Text021);
+
+      //. Seleccion del nuevo codigo de excursion
+      lrExcursion.RESET;
+      lrExcursion.SETRANGE(Caducado       , FALSE);
+      lrExcursion.SETRANGE("Tipo Producto", lrExcursion."Tipo Producto"::Excursion);
+      IF FORM.RUNMODAL(0, lrExcursion) <> ACTION::LookupOK THEN
+        EXIT;
+
+      //. La excursion debe ser diferente a la que ahora tiene la reserva
+      IF lrExcursion.Codigo = lrRsv.Producto THEN
+        EXIT;
+
+      IF NOT rPar.FINDFIRST THEN
+        EXIT;
+      IF NOT rParPer.FINDFIRST THEN
+        EXIT;
+
+      //. Buscamos la tarifa actual y la nueva
+      _BuscaTarifa(lrTarActual, lrRsv.Delegacion, lrRsv.Producto, lrRsv."Fecha Venta", lrRsv."Fecha Excursion");
+      _BuscaTarifa(lrTarNew, lrRsv.Delegacion, lrExcursion.Codigo, lrRsv."Fecha Venta", lrRsv."Fecha Excursion");
+
+      //. Buscamos los precios base actual y nuevo
+      _BuscaPrecioBase(lrTarActual, lrPreActual, lrRsv."Fecha Venta", lrRsv."Fecha Excursion");
+      _BuscaPrecioBase(lrTarNew, lrPreNew, lrRsv."Fecha Venta", lrRsv."Fecha Excursion");
+
+      IF lrPreActual.Precio <> lrPreNew.Precio THEN
+        ERROR(Text019);
+
+      //. Comprobamos si tiene suplementos
+      lrSuplRsv.RESET;
+      lrSuplRsv.SETRANGE(Delegacion  , lrRsv.Delegacion);
+      lrSuplRsv.SETRANGE("N§ Reserva", lrRsv."N§ Reserva");
+      IF lrSuplRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Buscamos los precios base actual y nuevo
+          _BuscaPrecioSuplemento(lrTarActual, lrPreActual, lrRsv."Fecha Venta", lrRsv."Fecha Excursion", lrSuplRsv."Codigo Suplemento");
+          _BuscaPrecioSuplemento(lrTarNew, lrPreNew, lrRsv."Fecha Venta", lrRsv."Fecha Excursion", lrSuplRsv."Codigo Suplemento");
+
+          IF lrPreActual.Precio <> lrPreNew.Precio THEN
+            ERROR(Text019);
+        UNTIL lrSuplRsv.NEXT = 0;
+      END;
+
+      //. Si tiene servicio, sacamos la reserva del servicio
+      IF lrRsv."N§ Servicio" <> 0 THEN
+        lrRsv.VALIDATE("N§ Servicio", 0);
+
+      //. Cambiamos la excursion en la reserva
+      lrRsv.Producto := lrExcursion.Codigo;
+      lrRsv.calcular_reserva(FALSE);
+    END;
+
+    LOCAL PROCEDURE _BuscaTarifa@1100217013(VAR prTarifa@1100217000 : Record 7010147;pwDelegacion@1100217001 : Code[10];pwExcursion@1100217002 : Code[20];pwFechaVenta@1100217003 : Date;pwFechaExcursion@1100217004 : Date);
+    BEGIN
+      //. Buscamos la tarifa de la excursion actual
+
+      prTarifa.RESET;
+      prTarifa.SETRANGE (Delegacion    , pwDelegacion);
+      prTarifa.SETRANGE (Excursion     , pwExcursion);
+      IF rPar."Busca tarifa por fecha venta" THEN
+      BEGIN
+        prTarifa.SETFILTER("Fecha Inicio", '<=%1', pwFechaVenta);
+        prTarifa.SETFILTER("Fecha Final" , '>=%1', pwFechaVenta);
+      END
+      ELSE
+      BEGIN
+        prTarifa.SETFILTER("Fecha Inicio", '<=%1', pwFechaExcursion);
+        prTarifa.SETFILTER("Fecha Final" , '>=%1', pwFechaExcursion);
+      END;
+      prTarifa.FINDFIRST;
+    END;
+
+    LOCAL PROCEDURE _BuscaPrecioBase@1100217016(prTar@1100217001 : Record 7010147;VAR prPre@1100217000 : Record 7010148;pwFechaVenta@1100217002 : Date;pwFechaExcursion@1100217003 : Date);
+    BEGIN
+      // _BuscaPrecioBase
+
+      prPre.RESET;
+      prPre.SETRANGE (Delegacion   , prTar.Delegacion);
+      prPre.SETRANGE ("Tipo precio", prPre."Tipo precio"::"Precio Base");
+      prPre.SETRANGE (Excursion    , prTar.Excursion);
+      prPre.SETRANGE ("ID Tarifa"  , prTar."ID Tarifa");
+      prPre.SETRANGE (Codigo       , rParPer."Codigo Adulto");
+
+      IF rPar."Busca tarifa por fecha venta" THEN
+      BEGIN
+        prPre.SETFILTER("Fecha Desde", '<=%1', pwFechaVenta);
+        prPre.SETFILTER("Fecha Hasta", '>=%1', pwFechaVenta);
+      END
+      ELSE
+      BEGIN
+        prPre.SETFILTER("Fecha Desde", '<=%1', pwFechaExcursion);
+        prPre.SETFILTER("Fecha Hasta", '>=%1', pwFechaExcursion);
+      END;
+      prPre.FINDFIRST;
+    END;
+
+    LOCAL PROCEDURE _BuscaPrecioSuplemento@1100217014(prTar@1100217003 : Record 7010147;VAR prPre@1100217002 : Record 7010148;pwFechaVenta@1100217001 : Date;pwFechaExcursion@1100217000 : Date;pwSuplemento@1100217004 : Code[10]);
+    BEGIN
+      // _BuscaPrecioSuplemento
+
+      prPre.RESET;
+      prPre.SETRANGE (Delegacion   , prTar.Delegacion);
+      prPre.SETRANGE ("Tipo precio", prPre."Tipo precio"::"Suplemento Varios");
+      prPre.SETRANGE (Excursion    , prTar.Excursion);
+      prPre.SETRANGE ("ID Tarifa"  , prTar."ID Tarifa");
+      prPre.SETRANGE (Codigo       , pwSuplemento);
+
+      IF rPar."Busca tarifa por fecha venta" THEN
+      BEGIN
+        prPre.SETFILTER("Fecha Desde", '<=%1', pwFechaVenta);
+        prPre.SETFILTER("Fecha Hasta", '>=%1', pwFechaVenta);
+      END
+      ELSE
+      BEGIN
+        prPre.SETFILTER("Fecha Desde", '<=%1', pwFechaExcursion);
+        prPre.SETFILTER("Fecha Hasta", '>=%1', pwFechaExcursion);
+      END;
+      prPre.FINDFIRST;
+    END;
+
+    PROCEDURE RellenaDetalleEconomico@1100217015();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrDetEco@1100217001 : Record 7010245;
+      lrCobro@1100217002 : Record 7010240;
+    BEGIN
+      // RellenaDetalleEconomico
+
+      lrRsv.RESET;
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lrDetEco.GET(lrRsv.Delegacion, lrRsv."N§ Reserva") THEN
+          BEGIN
+            lrDetEco."Guia Venta"  := lrRsv."Guia Venta";
+            lrDetEco."Fecha venta" := lrRsv."Fecha Venta";
+            lrDetEco."Cod. Divisa" := lrRsv.Divisa;
+            lrDetEco.MODIFY;
+          END;
+
+          lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+          lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+          IF lrCobro.FINDSET(TRUE) THEN
+            lrCobro.MODIFYALL("Guia venta", lrRsv."Guia Venta");
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModHotel@1100217017();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lwHotel@1100217001 : Code[10];
+      lwHotelAnt@1100217003 : Code[10];
+      lrHotel@1100217002 : Record 7009724;
+    BEGIN
+      // ModHotel
+
+      IF NOT _SeleccionaReserva(lrRsv, FALSE) THEN
+        EXIT;
+
+      lwHotelAnt := lrRsv."Hotel Cliente";
+
+      wDialog.OPEN(Text022);
+      wDialog.INPUT(1, lwHotel);
+      wDialog.CLOSE;
+
+      IF (lwHotel = '') THEN
+        EXIT;
+
+      lrHotel.GET(lwHotel);
+
+      lrRsv."Hotel Cliente" := lwHotel;
+      //+$009 <
+      lrRsv."Zona Hotel"     := lrHotel."Zona Fisica";
+      lrRsv."Punto Recogida" := lrHotel."Punto Recogida";
+      lrRsv."Orden hotel"    := lrHotel."Orden Salida";
+      //+$009 >
+      lrRsv.MODIFY;
+
+      cPar.intro_historic(lrRsv.Delegacion, lrRsv."N§ Interno", lrRsv."N§ Periodo", lrRsv."N§ Reserva",
+                          rHis."Tipo Reserva"::Excursion, lrRsv.FIELDCAPTION("Hotel Cliente"),
+                          lwHotelAnt, lwHotel);
+    END;
+
+    PROCEDURE RellenaReembolsadoCobro@1100217018();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrCobro@1100217001 : Record 7010240;
+    BEGIN
+      lrRsv.RESET;
+      IF lrRsv.FINDSET THEN
+      BEGIN;
+        REPEAT
+          IF lrRsv.Reembolsada THEN
+          BEGIN
+            lrCobro.RESET;
+            lrCobro.SETRANGE(Delegacion   , lrRsv.Delegacion);
+            lrCobro.SETRANGE("Num Reserva", lrRsv."N§ Reserva");
+            IF lrCobro.FINDSET(TRUE) THEN
+            BEGIN
+              lrCobro.MODIFYALL(Reembolsado      , TRUE);
+              lrCobro.MODIFYALL("Fecha reembolso", lrRsv."Fecha anulaci¢n/Reembolso");
+            END;
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE RellenaReservaCredito@1100217019();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrRep@1100217001 : Record 7010241;
+    BEGIN
+      lrRsv.RESET;
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lrRep.GET(lrRsv."Guia Venta") THEN
+          BEGIN
+            lrRsv."Reserva a credito" := lrRep."Trabaja a credito";
+            lrRsv.MODIFY;
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE VaciarElementoTransportExc@1100217020();
+    VAR
+      lrCompany@1100217002 : Record 2000000006;
+      lrElem@1100217000 : Record 7010164;
+      lrElemBck@1100217001 : Record 7009855;
+    BEGIN
+      // VaciarElementoTransportExc
+
+      lrCompany.FINDSET;
+      REPEAT
+        lrElem.CHANGECOMPANY(lrCompany.Name);
+        IF lrElem.FINDSET(TRUE) THEN
+          lrElem.DELETEALL;
+
+        lrElemBck.CHANGECOMPANY(lrCompany.Name);
+        IF lrElemBck.FINDSET(TRUE) THEN
+          lrElemBck.DELETEALL;
+      UNTIL lrCompany.NEXT = 0;
+    END;
+
+    PROCEDURE RecalculaComisionTouroperador@1100217021();
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrTTOO@1100217001 : Record 7009717;
+      lwFecha@1100217002 : Date;
+    BEGIN
+      // RecalculaComisionTouroperador
+
+      IF FORM.RUNMODAL(0, lrTTOO) <> ACTION::LookupOK THEN
+        EXIT;
+
+      _SeleccionaFecha(lwFecha);
+
+      IF NOT CONFIRM(Text024, FALSE, lrTTOO.TourOperador, lwFecha) THEN
+        EXIT;
+
+      lrRsv.RESET;
+      lrRsv.SETRANGE (Anulada      , FALSE);
+      //lrRsv.SETRANGE (Reembolsada  , FALSE);      $010 -
+      lrRsv.SETFILTER("Fecha Venta", '>=%1', lwFecha);
+      lrRsv.SETRANGE (TourOperador , lrTTOO.TourOperador);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF lrRsv."Ingreso reserva" <> 0 THEN
+          BEGIN
+            lrRsv.calcula_comisionTO;
+            lrRsv.MODIFY;
+          END;
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE RellenaVentaLibre@1100217023();
+    VAR
+      lrProd@1100217000 : Record 7009710;
+    BEGIN
+      // RellenaVentaLibre
+
+      lrProd.RESET;
+      lrProd.SETRANGE("Tipo Producto", lrProd."Tipo Producto"::Excursion);
+      IF lrProd.FINDSET(TRUE) THEN
+        lrProd.MODIFYALL("Venta libre", TRUE);
+    END;
+
+    PROCEDURE RellenaImporteBaseCostes@1000000000();
+    VAR
+      lrCoste@1000000000 : Record 7010166;
+    BEGIN
+      // RellenaImporteBaseCostes
+
+      lrCoste.RESET;
+      IF lrCoste.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrCoste."Importe base impuesto" := lrCoste."Importe sin Impuesto";
+          lrCoste.MODIFY;
+        UNTIL lrCoste.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CancelarPetWebColgadas@1000000001();
+    VAR
+      rPetExc@1000000000 : Record 7010257;
+      rPetTrf@1000000001 : Record 7009924;
+      vTiempoDec@1000000002 : Decimal;
+    BEGIN
+      // CancelarPetWebColgadas
+      // $011
+
+      vTiempoDec := (003000T - 000000T);
+
+      // Cancelamos la reservas de excursiones
+      rPetExc.RESET;
+      rPetExc.SETCURRENTKEY("Creation Date","Creation Time",Confirmed,Cancelled);
+      rPetExc.SETRANGE(Confirmed, FALSE);
+      rPetExc.SETRANGE(Cancelled, FALSE);
+      IF rPetExc.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          IF (_DifHoras(rPetExc."Creation Date",rPetExc."Creation Time",TODAY,TIME) > vTiempoDec) THEN BEGIN
+            rPetExc.Cancelled := TRUE;
+            rPetExc.MODIFY;
+          END;
+        UNTIL rPetExc.NEXT = 0;
+      END;
+
+      // Cancelamos las reservas de transfer
+      rPetTrf.RESET;
+      rPetTrf.SETCURRENTKEY("Creation Date","Creation Time",Confirmed,Cancelled);
+      rPetTrf.SETRANGE(Confirmed, FALSE);
+      rPetTrf.SETRANGE(Cancelled, FALSE);
+      IF rPetTrf.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          IF (_DifHoras(rPetTrf."Creation Date",rPetTrf."Creation Time",TODAY,TIME) > vTiempoDec) THEN BEGIN
+            rPetTrf.Cancelled := TRUE;
+            rPetTrf.MODIFY;
+          END;
+        UNTIL rPetTrf.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _DifHoras@1103355004(pFecini@1103355000 : Date;pHorini@1103355001 : Time;pFecfin@1103355002 : Date;pHorfin@1103355003 : Time) : Decimal;
+    VAR
+      vTothoras@1103355004 : Decimal;
+    BEGIN
+      // difhoras: calcula el tiempo entre dos fechas/horas devuelve minutos
+
+      vTothoras:=0;
+
+      //Si la diferencia de d¡as es m s de 15 d¡as pongo un maximo para que no pete
+      IF pFecfin-pFecini > 15 THEN
+        EXIT(1296000000);
+
+      IF (pHorfin > pHorini) THEN
+        vTothoras:=((pFecfin-pFecini)*86400000)+(pHorfin-pHorini)
+      ELSE
+        vTothoras:=((pFecfin-pFecini-1)*86400000)+(pHorfin-000000T)+(86400000-(pHorini-000000T));
+
+      EXIT(vTothoras);
+    END;
+
+    PROCEDURE RellenaInvitadosCompra@1000000002();
+    VAR
+      rReserva@1000000000 : Record 7010162;
+      rSupl@1000000001 : Record 7010148;
+    BEGIN
+      // RellenaInvitadosCompra
+      // $012
+
+      rReserva.RESET;
+      IF rReserva.FINDFIRST THEN BEGIN
+        REPEAT
+          rReserva."Compra - Invitados Adultos" := rReserva."Venta - Invitados Adultos";
+          rReserva."Compra - Invitados ni¤os"   := rReserva."Venta - Invitados ni¤os";
+          rReserva.MODIFY;
+        UNTIL rReserva.NEXT = 0;
+      END;
+
+      rSupl.RESET;
+      rSupl.SETCURRENTKEY(Delegacion,"Tipo precio",Excursion,"Temporada Tarifa",Codigo,"Fecha Desde","Fecha Hasta");
+      rSupl.SETRANGE(rSupl."Tipo precio", rSupl."Tipo precio"::"Suplemento Varios");
+      rSupl.SETRANGE(rSupl.Free, TRUE);
+      rSupl.SETFILTER(rSupl."Fecha Desde", '<=%1',TODAY);
+      rSupl.SETFILTER(rSupl."Fecha Hasta", '>=%1',TODAY);
+      IF rSupl.FINDSET(TRUE) THEN
+        rSupl.MODIFYALL(rSupl."Fecha Hasta", TODAY - 1);
+    END;
+
+    PROCEDURE MarcarVoucherPrinted@1000000003();
+    VAR
+      rReserva@1000000000 : Record 7010162;
+    BEGIN
+      // Marcar Voucher printed
+      // $013
+
+      rReserva.RESET;
+      rReserva.MODIFYALL(rReserva."Voucher printed", TRUE);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 24032013 Nueva macro para cambiar el hotel de una reserva liquidada
+
+      $002 AJS 26082013 Corrijo macros para que no den error en empresas en las que no haya informacion de excursiones
+
+      $003 AJS 30082013 Nueva macro para vaciar las tablas de Elemento transportar excursion y su tabla de backup
+
+      $004 AJS 26092013 Nueva funcion _SeleccionaFecha para poder filtrar en las funciones que se aplican sobre reservas
+
+      $005 AJS 14102013 Al marcar un ticket como anulado, le quito la prefactura
+
+      $006 AJS 14102013 Al retroceder una liquidacion hay que revertir el asiento contable
+
+      $007 AJS 21102013 Para borrar los asientos hay que desmarcar el campo Asiento automatico
+
+      $008 AJS 02022014 Proteger los FIND de las tablas de parametros para que no den error al ejecutar en nueva empresa
+
+      $009 AJS 10022014 Modificar la funcion ModHotel para rellenar campos desde el hotel
+
+      $010 ARM 29072014 Reembolsos CNT-OC-14047
+
+      $011 ARM 24112014 CNT-OC-14052 Marcar como canceladas peticiones web queno han sido confirmadas
+
+      $012 ARM 24112014 CNT-OC-14055 Rellenar campos de invitados compra
+
+      $013 ARM 18052015 CNT-OC-15131 Marcar voucher impreso
+    }
+    END.
+  }
+}

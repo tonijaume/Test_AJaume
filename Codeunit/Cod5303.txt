@@ -1,0 +1,221 @@
+OBJECT Codeunit 5303 Outlook Synch. Deletion Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1004 : TextConst 'ENU=APP;ESP=AP';
+      Text002@1003 : TextConst 'ENU=TASK;ESP=TAREA';
+      Text003@1002 : TextConst 'ENU=SEGMENT;ESP=SEGMENTO';
+      Text012@1001 : TextConst 'ENU=Members;ESP=Miembros';
+      Text010@1005 : TextConst 'ENU=Links;ESP=V¡nculos';
+      Text011@1006 : TextConst 'ENU=Recipients;ESP=Destinatarios';
+      OSynchOutlookMgt@1008 : Codeunit 5304;
+      OSynchProcessLine@1009 : Codeunit 5305;
+      Text100@1010 : TextConst 'ENU=A deleted Outlook item cannot be synchronized because a conflict has occurred when processing the %1 entity.;ESP=Uno de los elementos de Outlook eliminado no se puede sincronizar porque surgi¢ un conflicto al procesar el objeto %1.';
+      Text101@1011 : TextConst 'ENU=An Outlook item from the %1 entity cannot be synchronized because the deleting of the %2 collection of this entity is not supported. Try again later and if the problem persists contact your system administrator.;ESP=Uno de los elementos de Outlook del objeto %1 no se puede sincronizar porque la eliminaci¢n de la colecci¢n %2 de este objeto no es compatible. Vuelva a intentarlo m s tarde y, si el problema persiste, p¢ngase en contacto con el administrador del sistema.';
+      OSynchNAVMgt@1007 : Codeunit 5301;
+
+    PROCEDURE ProcessItem@8(OSynchUserSetup@1000 : Record 5305;EntityRecID@1001 : RecordID;VAR ErrorLogXMLWriter@1004 : Automation "{CAF2CEDD-2636-48EC-AE94-3A2E78BDCAA4} 1.0:{25FBE079-487E-44F2-8352-23B354C2AD0E}:Unknown Automation Server.Unknown Class";StartSynchTime@1002 : DateTime);
+    VAR
+      Container@1005 : Automation "{CAF2CEDD-2636-48EC-AE94-3A2E78BDCAA4} 1.0:{2884F16D-75BF-4E3D-A1B7-8FFF455F37ED}:Unknown Automation Server.Unknown Class";
+      EntityRecRef@1003 : RecordRef;
+    BEGIN
+      IF NOT EntityRecRef.GET(EntityRecID) THEN
+        EXIT;
+
+      IF NOT OSynchProcessLine.CheckEntityIdentity(EntityRecID,OSynchUserSetup."Synch. Entity Code") THEN BEGIN
+        RemoveLink(OSynchUserSetup."User ID",EntityRecID);
+        EXIT;
+      END;
+
+      IF ConflictDetected(EntityRecRef,OSynchUserSetup,StartSynchTime) THEN BEGIN
+        CLEAR(Container);
+        CREATE(Container);
+        Container.Clear;
+        OSynchOutlookMgt.WriteErrorLog(
+          OSynchUserSetup."User ID",
+          EntityRecID,
+          'Conflict',
+          OSynchUserSetup."Synch. Entity Code",
+          STRSUBSTNO(Text100,OSynchUserSetup."Synch. Entity Code"),
+          ErrorLogXMLWriter,
+          Container);
+
+        ERROR('');
+      END;
+
+      CASE OSynchUserSetup."Synch. Entity Code" OF
+        Text001:
+          ProcessAppointment(EntityRecRef);
+
+        Text002:
+          ProcessTask(EntityRecRef);
+      END;
+
+      RemoveLink(OSynchUserSetup."User ID",EntityRecID);
+    END;
+
+    LOCAL PROCEDURE ProcessTask@1(EntityRecRef@1000 : RecordRef);
+    VAR
+      EntityFieldRef@1002 : FieldRef;
+      FieldID@1003 : Integer;
+    BEGIN
+      FieldID := 17;
+
+      EntityFieldRef := EntityRecRef.FIELD(FieldID);
+      EntityFieldRef.VALIDATE(TRUE);
+      EntityRecRef.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE ProcessAppointment@2(EntityRecRef@1001 : RecordRef);
+    BEGIN
+      ProcessTask(EntityRecRef);
+    END;
+
+    PROCEDURE ProcessCollectionElements@11(VAR CollectionElementsBuffer@1001 : Record 5302;OSynchEntityElement@1000 : Record 5301;EntityRecID@1004 : RecordID);
+    VAR
+      EntityRecRef@1005 : RecordRef;
+      CollectionElementRecRef@1003 : RecordRef;
+      RecID@1002 : RecordID;
+    BEGIN
+      IF NOT CollectionElementsBuffer.FIND('-') THEN
+        EXIT;
+
+      IF NOT EntityRecRef.GET(EntityRecID) THEN
+        EXIT;
+
+      IF NOT OSynchProcessLine.CheckEntityIdentity(EntityRecID,OSynchEntityElement."Synch. Entity Code") THEN
+        EXIT;
+
+      REPEAT
+        EVALUATE(RecID,FORMAT(CollectionElementsBuffer."Record ID"));
+        IF CollectionElementRecRef.GET(RecID) THEN
+          CASE OSynchEntityElement."Synch. Entity Code" OF
+            Text001:
+              BEGIN
+                IF OSynchEntityElement."Outlook Collection" = Text010 THEN
+                  ProcessAppointmentLinks(CollectionElementRecRef);
+
+                IF OSynchEntityElement."Outlook Collection" = Text011 THEN
+                  ProcessAppointmentRecipients(CollectionElementRecRef);
+              END;
+
+            Text002:
+              IF OSynchEntityElement."Outlook Collection" = Text010 THEN
+                ProcessTaskLinks(CollectionElementRecRef);
+
+            Text003:
+              IF OSynchEntityElement."Outlook Collection" = Text012 THEN
+                ProcessDistListMembers(CollectionElementRecRef);
+
+            ELSE
+              ERROR(Text101,OSynchEntityElement."Synch. Entity Code",OSynchEntityElement."Outlook Collection");
+          END;
+      UNTIL CollectionElementsBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ProcessTaskLinks@7(VAR CollectionElementRecRef@1000 : RecordRef);
+    VAR
+      CollectionElementFieldRef@1002 : FieldRef;
+      CodeVar@1003 : Code[20];
+      FieldID@1001 : Integer;
+    BEGIN
+      CodeVar := '';
+      FieldID := 5;
+
+      CollectionElementFieldRef := CollectionElementRecRef.FIELD(FieldID);
+      CollectionElementFieldRef.VALIDATE(CodeVar);
+      CollectionElementRecRef.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE ProcessAppointmentRecipients@10(VAR CollectionElementRecRef@1000 : RecordRef);
+    BEGIN
+      CollectionElementRecRef.DELETE(TRUE);
+      UpdateChangeLog(CollectionElementRecRef);
+    END;
+
+    LOCAL PROCEDURE ProcessAppointmentLinks@9(VAR CollectionElementRecRef@1000 : RecordRef);
+    BEGIN
+      ProcessAppointmentRecipients(CollectionElementRecRef);
+    END;
+
+    LOCAL PROCEDURE ProcessDistListMembers@3(VAR CollectionElementRecRef@1000 : RecordRef);
+    BEGIN
+      CollectionElementRecRef.DELETE(TRUE);
+      UpdateChangeLog(CollectionElementRecRef);
+    END;
+
+    LOCAL PROCEDURE RemoveLink@6(UserID@1001 : Code[20];RecID@1002 : RecordID);
+    VAR
+      OSynchLink@1000 : Record 5302;
+    BEGIN
+      IF OSynchLink.GET(UserID,RecID) THEN BEGIN
+        OSynchLink."Outlook Entry ID Hash" := '';
+        OSynchLink.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE ConflictDetected@21(SynchRecRef@1009 : RecordRef;OSynchUserSetup@1006 : Record 5305;StartSynchTime@1002 : DateTime) IsConflict : Boolean;
+    VAR
+      ChangeLogEntry@1000 : Record 405;
+      OSynchField@1001 : Record 5304;
+      OSynchLink@1005 : Record 5302;
+      RecID@1004 : RecordID;
+    BEGIN
+      EVALUATE(RecID,FORMAT(SynchRecRef.RECORDID));
+
+      IF NOT OSynchLink.GET(OSynchUserSetup."User ID",RecID) THEN
+        EXIT;
+
+      ChangeLogEntry.SETCURRENTKEY("Table No.","Primary Key Field 1 Value");
+      OSynchProcessLine.FilterChangeLog(RecID,ChangeLogEntry);
+      ChangeLogEntry.SETFILTER("Type of Change",'<>%1',ChangeLogEntry."Type of Change"::Deletion);
+
+      IF OSynchLink."Synchronization Date" >= OSynchUserSetup."Last Synch. Time" THEN BEGIN
+        ChangeLogEntry.SETFILTER("Date and Time",'>=%1',OSynchUserSetup."Last Synch. Time");
+        IF NOT ChangeLogEntry.FINDLAST THEN
+          EXIT;
+
+        IF ChangeLogEntry."Date and Time" <= OSynchLink."Synchronization Date" THEN
+          EXIT;
+
+        ChangeLogEntry.SETFILTER("Date and Time",'>=%1',OSynchLink."Synchronization Date");
+      END ELSE
+        ChangeLogEntry.SETFILTER("Date and Time",'>=%1&<=%2',OSynchUserSetup."Last Synch. Time",StartSynchTime);
+
+      IF NOT ChangeLogEntry.FINDFIRST THEN
+        EXIT;
+
+      OSynchField.RESET;
+      OSynchField.SETRANGE("Synch. Entity Code",OSynchUserSetup."Synch. Entity Code");
+      OSynchField.SETRANGE("Element No.",0);
+      OSynchField.SETFILTER("Read-Only Status",'<>%1',OSynchField."Read-Only Status"::"Read-Only in Microsoft Dynamics NAV");
+      IsConflict := OSynchProcessLine.SetupFieldsModified(ChangeLogEntry,OSynchField);
+
+      IF IsConflict THEN
+        OSynchProcessLine.CheckUserSettingsForConflicts(SynchRecRef,RecID.TABLENO);
+    END;
+
+    LOCAL PROCEDURE UpdateChangeLog@12(RecRef@1000 : RecordRef);
+    VAR
+      ChangeLogMgt@1001 : Codeunit 423;
+    BEGIN
+      ChangeLogMgt.LogDeletion(RecRef);
+    END;
+
+    BEGIN
+    END.
+  }
+}

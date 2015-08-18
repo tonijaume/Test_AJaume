@@ -1,0 +1,177 @@
+OBJECT Table 752 Standard Item Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               StdItemJnlLine@1000 : Record 753;
+             BEGIN
+               StdItemJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+               StdItemJnlLine.SETRANGE("Standard Journal Code",Code);
+
+               StdItemJnlLine.DELETEALL(TRUE);
+             END;
+
+    OnDelete=VAR
+               StdItemJnlLine@1000 : Record 753;
+             BEGIN
+               StdItemJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+               StdItemJnlLine.SETRANGE("Standard Journal Code",Code);
+
+               StdItemJnlLine.DELETEALL(TRUE);
+             END;
+
+    OnRename=VAR
+               JnlLineDim@1001 : Record 356;
+               JnlLineDim2@1000 : Record 356;
+             BEGIN
+               JnlLineDim.SETRANGE("Table ID",DATABASE::"Standard General Journal Line");
+               JnlLineDim.SETRANGE("Journal Template Name",xRec."Journal Template Name");
+               JnlLineDim.SETRANGE("Journal Batch Name",xRec.Code);
+               IF JnlLineDim.FIND('-') THEN
+                 REPEAT
+                   JnlLineDim2 := JnlLineDim;
+                   JnlLineDim2."Journal Batch Name" := Code;
+                   IF JnlLineDim2.INSERT THEN;
+                 UNTIL JnlLineDim.NEXT = 0;
+               JnlLineDim.DELETEALL;
+             END;
+
+    CaptionML=[ENU=Standard Item Journal;
+               ESP=Diario productos est ndar];
+    LookupFormID=Form753;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Journal Template Name;Code10       ;TableRelation="Item Journal Template";
+                                                   CaptionML=[ENU=Journal Template Name;
+                                                              ESP=Nombre libro diario];
+                                                   NotBlank=Yes;
+                                                   Editable=No }
+    { 2   ;   ;Code                ;Code10        ;CaptionML=[ENU=Code;
+                                                              ESP=C¢digo];
+                                                   NotBlank=Yes }
+    { 3   ;   ;Description         ;Text50        ;CaptionML=[ENU=Description;
+                                                              ESP=Descripci¢n] }
+  }
+  KEYS
+  {
+    {    ;Journal Template Name,Code              ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      LastItemJnlLine@1007 : Record 83;
+      ItemJnlLine@1006 : Record 83;
+      JnlLineDimFrom@1005 : Record 356;
+      Window@1003 : Dialog;
+      WindowUpdateTime@1002 : Time;
+      NoOfJournalsToBeCreated@1001 : Integer;
+      NoOfJournalsCreated@1000 : Integer;
+      Text000@1004 : TextConst 'ENU=Getting Standard Item Journal Lines @1@@@@@@@;ESP=Obteniendo l¡neas diario productos est ndar @1@@@@@@@';
+
+    PROCEDURE Initialize@2(StdItemJnl@1000 : Record 752;JnlBatchName@1001 : Code[10]);
+    BEGIN
+      ItemJnlLine."Journal Template Name" := StdItemJnl."Journal Template Name";
+      ItemJnlLine."Journal Batch Name" := JnlBatchName;
+      ItemJnlLine.SETRANGE("Journal Template Name",StdItemJnl."Journal Template Name");
+      ItemJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+
+      LastItemJnlLine.SETRANGE("Journal Template Name",StdItemJnl."Journal Template Name");
+      LastItemJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+
+      IF LastItemJnlLine.FIND('+') THEN;
+    END;
+
+    PROCEDURE CreateItemJnlFromStdJnl@1(StdItemJnl@1005 : Record 752;JnlBatchName@1003 : Code[10]);
+    VAR
+      StdItemJnlLine@1002 : Record 753;
+    BEGIN
+      Initialize(StdItemJnl,JnlBatchName);
+
+      StdItemJnlLine.SETRANGE("Journal Template Name",StdItemJnl."Journal Template Name");
+      StdItemJnlLine.SETRANGE("Standard Journal Code",StdItemJnl.Code);
+      OpenWindow(Text000,StdItemJnlLine.COUNT);
+      IF StdItemJnlLine.FIND('-') THEN
+        REPEAT
+          UpdateWindow;
+          CopyItemJnlFromStdJnl(StdItemJnlLine);
+        UNTIL StdItemJnlLine.NEXT = 0;
+    END;
+
+    PROCEDURE CopyItemJnlFromStdJnl@7(StdItemJnlLine@1000 : Record 753);
+    BEGIN
+      ItemJnlLine.INIT;
+      ItemJnlLine."Line No." := 0;
+      ItemJnlLine.SetUpNewLine(LastItemJnlLine);
+      IF LastItemJnlLine."Line No." <> 0 THEN
+        ItemJnlLine."Line No." := LastItemJnlLine."Line No." + 10000
+      ELSE
+        ItemJnlLine."Line No." := 10000;
+
+
+      ItemJnlLine.TRANSFERFIELDS(StdItemJnlLine,FALSE);
+
+      IF (ItemJnlLine."Item No." <> '') AND (ItemJnlLine."Unit Amount" = 0)  THEN
+        ItemJnlLine.RecalculateUnitAmount;
+
+      IF (ItemJnlLine."Entry Type" = ItemJnlLine."Entry Type"::Output) AND
+        (ItemJnlLine."Value Entry Type" <> ItemJnlLine."Value Entry Type"::Revaluation)
+      THEN
+        ItemJnlLine."Invoiced Quantity" := 0
+      ELSE
+        ItemJnlLine."Invoiced Quantity" := ItemJnlLine.Quantity;
+      ItemJnlLine.TESTFIELD("Qty. per Unit of Measure");
+      ItemJnlLine."Invoiced Qty. (Base)" := ROUND(ItemJnlLine."Invoiced Quantity" * ItemJnlLine."Qty. per Unit of Measure",0.00001);
+
+      ItemJnlLine.INSERT(TRUE);
+      CopyStdItemJnlLineDims(StdItemJnlLine,ItemJnlLine);
+
+      LastItemJnlLine := ItemJnlLine;
+    END;
+
+    LOCAL PROCEDURE CopyStdItemJnlLineDims@5(StdItemJnlLine@1001 : Record 753;ItemJnlLine1@1000 : Record 83);
+    VAR
+      DimMgt@1004 : Codeunit 408;
+    BEGIN
+      JnlLineDimFrom.SETRANGE("Table ID",DATABASE::"Standard Item Journal Line");
+      JnlLineDimFrom.SETRANGE("Journal Template Name",StdItemJnlLine."Journal Template Name");
+      JnlLineDimFrom.SETRANGE("Journal Batch Name",StdItemJnlLine."Standard Journal Code");
+      JnlLineDimFrom.SETRANGE("Journal Line No.",StdItemJnlLine."Line No.");
+
+      DimMgt.DeleteJnlLineDim(DATABASE::"Item Journal Line",ItemJnlLine1."Journal Template Name",
+        ItemJnlLine1."Journal Batch Name",ItemJnlLine1."Line No.",0);
+
+      DimMgt.MoveJnlLineDimToJnlLineDim(JnlLineDimFrom,DATABASE::"Item Journal Line",
+        ItemJnlLine1."Journal Template Name",ItemJnlLine1."Journal Batch Name",ItemJnlLine1."Line No.");
+    END;
+
+    PROCEDURE OpenWindow@12(DisplayText@1001 : Text[250];NoOfJournalsToBeCreated2@1000 : Integer);
+    BEGIN
+      NoOfJournalsCreated := 0;
+      NoOfJournalsToBeCreated := NoOfJournalsToBeCreated2;
+      WindowUpdateTime := TIME;
+      Window.OPEN(DisplayText);
+    END;
+
+    PROCEDURE UpdateWindow@4();
+    BEGIN
+      NoOfJournalsCreated := NoOfJournalsCreated + 1;
+      IF TIME - WindowUpdateTime >= 300 THEN BEGIN
+        WindowUpdateTime := TIME;
+        Window.UPDATE(1,ROUND(NoOfJournalsCreated / NoOfJournalsToBeCreated * 10000,1));
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

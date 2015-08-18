@@ -1,0 +1,415 @@
+OBJECT Codeunit 32 BOM Jnl.-Post Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=89;
+    Permissions=TableData 27=imd,
+                TableData 32=imd,
+                TableData 238=imd,
+                TableData 239=imd,
+                TableData 339=imd,
+                TableData 5802=imd;
+    OnRun=VAR
+            TempJnlLineDim2@1000 : TEMPORARY Record 356;
+          BEGIN
+            GetGLSetup;
+            TempJnlLineDim2.RESET;
+            TempJnlLineDim2.DELETEALL;
+            IF "Shortcut Dimension 1 Code" <> '' THEN BEGIN
+              TempJnlLineDim2."Table ID" := DATABASE::"BOM Journal Line";
+              TempJnlLineDim2."Journal Template Name" := "Journal Template Name";
+              TempJnlLineDim2."Journal Batch Name" := "Journal Batch Name";
+              TempJnlLineDim2."Journal Line No." := "Line No.";
+              TempJnlLineDim2."Dimension Code" := GLSetup."Global Dimension 1 Code";
+              TempJnlLineDim2."Dimension Value Code" := "Shortcut Dimension 1 Code";
+              TempJnlLineDim2.INSERT;
+            END;
+            IF "Shortcut Dimension 2 Code" <> '' THEN BEGIN
+              TempJnlLineDim2."Table ID" := DATABASE::"BOM Journal Line";
+              TempJnlLineDim2."Journal Template Name" := "Journal Template Name";
+              TempJnlLineDim2."Journal Batch Name" := "Journal Batch Name";
+              TempJnlLineDim2."Journal Line No." := "Line No.";
+              TempJnlLineDim2."Dimension Code" := GLSetup."Global Dimension 2 Code";
+              TempJnlLineDim2."Dimension Value Code" := "Shortcut Dimension 2 Code";
+              TempJnlLineDim2.INSERT;
+            END;
+            RunWithCheck(Rec,TempJnlLineDim2);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1001 : TextConst 'ENU=The %1 for component %2 cannot be %3.;ESP=Para el componente %2, %1 no puede ser %3.';
+      Item@1003 : Record 27;
+      BOMReg@1002 : Record 239;
+      BOMLedgEntry@1007 : Record 238;
+      BOMJnlLine@1011 : Record 89;
+      GLSetup@1012 : Record 98;
+      TempJnlLineDim@1015 : TEMPORARY Record 356;
+      TempItemJnlLine@1027 : TEMPORARY Record 83;
+      TempResJnlLine@1026 : TEMPORARY Record 207;
+      Location@1004 : Record 14;
+      BOMJnlCheckLine@1016 : Codeunit 31;
+      ItemJnlPostLine@1017 : Codeunit 22;
+      ResJnlPostLine@1018 : Codeunit 212;
+      DimMgt@1019 : Codeunit 408;
+      ReserveBOMJnlLine@1025 : Codeunit 99000843;
+      WhseJnlPostLine@1005 : Codeunit 7301;
+      WMSMgmt@1006 : Codeunit 7302;
+      HasGLSetup@1000 : Boolean;
+
+    PROCEDURE RunWithCheck@13(VAR BOMJnlLine2@1000 : Record 89;VAR TempJnlLineDim2@1001 : Record 356);
+    BEGIN
+      BOMJnlLine.COPY(BOMJnlLine2);
+      TempJnlLineDim.RESET;
+      TempJnlLineDim.DELETEALL;
+      DimMgt.CopyJnlLineDimToJnlLineDim(TempJnlLineDim2,TempJnlLineDim);
+      Code;
+      BOMJnlLine2 := BOMJnlLine;
+    END;
+
+    LOCAL PROCEDURE Code@1();
+    VAR
+      ItemJnlLine@1009 : Record 83;
+      TempJnlLineDim2@1000 : TEMPORARY Record 356;
+      TempHandlingSpecification@1004 : TEMPORARY Record 336;
+      FirstBOMLedgEntryNo@1008 : Integer;
+      TrackingSpecificationExists@1005 : Boolean;
+      OriginalQuantity@1001 : Decimal;
+      OriginalQuantityBase@1002 : Decimal;
+    BEGIN
+      WITH BOMJnlLine DO BEGIN
+        IF EmptyLine THEN
+          EXIT;
+
+        BOMJnlCheckLine.RunCheck(BOMJnlLine,TempJnlLineDim);
+        CheckWMSBin(BOMJnlLine."Location Code");
+
+        ItemJnlLine.INIT;
+        ItemJnlLine.VALIDATE("Posting Date","Posting Date");
+        ItemJnlLine."Document Date" := "Document Date";
+        ItemJnlLine."Document No." := "Document No.";
+        ItemJnlLine."External Document No." := "External Document No.";
+        ItemJnlLine."Entry Type" := ItemJnlLine."Entry Type"::"Positive Adjmt.";
+        ItemJnlLine.VALIDATE("Item No.","Item No.");
+        ItemJnlLine.Description := Description;
+        ItemJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+        ItemJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+        ItemJnlLine."Location Code" := "Location Code";
+        ItemJnlLine."Source Code" := "Source Code";
+        ItemJnlLine."Journal Batch Name" := "Journal Batch Name";
+        ItemJnlLine."Reason Code" := "Reason Code";
+        ItemJnlLine."Source Type" := ItemJnlLine."Source Type"::Item;
+        ItemJnlLine.VALIDATE("Unit of Measure Code","Unit of Measure Code");
+        ItemJnlLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+        ItemJnlLine.VALIDATE(Quantity,Quantity);
+        ItemJnlLine."Posting No. Series" := "Posting No. Series";
+        ItemJnlLine."Variant Code" := "Variant Code";
+        ItemJnlLine."Bin Code" := "Bin Code";
+        OriginalQuantity := Quantity;
+        OriginalQuantityBase := "Quantity (Base)";
+
+        ExplodeBOMToTempJnlLines(BOMJnlLine);
+        ItemJnlLine.VALIDATE(Amount,"Total Cost");
+
+        TransferDimToItemJnlLine(ItemJnlLine,TempJnlLineDim2,FALSE);
+
+        ReserveBOMJnlLine.TransferBOMJnlToItemJnlLine(BOMJnlLine,ItemJnlLine,"Quantity (Base)");
+
+        ItemJnlPostLine.RunWithCheck(ItemJnlLine,TempJnlLineDim2);
+
+        IF FirstBOMLedgEntryNo = 0 THEN BEGIN
+          BOMLedgEntry.LOCKTABLE;
+          IF BOMLedgEntry.FIND('+') THEN
+            FirstBOMLedgEntryNo := BOMLedgEntry."Entry No.";
+          FirstBOMLedgEntryNo += 1;
+        END;
+
+        BOMLedgEntry."Entry Type" := BOMLedgEntry."Entry Type"::BOM;
+        BOMLedgEntry."Reference Type" := BOMLedgEntry."Reference Type"::Item;
+        BOMLedgEntry."Posting Date" := "Posting Date";
+        BOMLedgEntry."Document Date" := "Document Date";
+
+        TrackingSpecificationExists := ItemJnlPostLine.CollectTrackingSpecification(TempHandlingSpecification);
+
+        IF TempHandlingSpecification.FIND('-') THEN
+          REPEAT
+            BOMLedgEntry."Entry No." += 1;
+            BOMLedgEntry."Reference Entry No." := TempHandlingSpecification."Appl.-to Item Entry";
+            BOMLedgEntry.INSERT;
+            TempHandlingSpecification."Source Type" := DATABASE::"BOM Journal Line";
+            TempHandlingSpecification."Source ID" := BOMJnlLine."Journal Template Name";
+            TempHandlingSpecification."Source Ref. No." := BOMJnlLine."Line No.";
+            TempHandlingSpecification.MODIFY;
+          UNTIL TempHandlingSpecification.NEXT = 0
+        ELSE BEGIN
+          BOMLedgEntry."Entry No." += 1;
+          BOMLedgEntry."Reference Entry No." := ItemJnlLine."Item Shpt. Entry No.";
+          BOMLedgEntry.INSERT;
+        END;
+
+        PostWhseJnlLine(ItemJnlLine,TempHandlingSpecification,OriginalQuantity,OriginalQuantityBase);
+        PostTempJnlLines;
+
+        IF BOMReg."No." = 0 THEN BEGIN
+          BOMReg.LOCKTABLE;
+          IF BOMReg.FIND('+') THEN
+            BOMReg."No." := BOMReg."No." + 1
+          ELSE
+            BOMReg."No." := 1;
+          BOMReg.INIT;
+          BOMReg."From Entry No." := FirstBOMLedgEntryNo;
+          BOMReg."To Entry No." := BOMLedgEntry."Entry No.";
+          BOMReg."Creation Date" := TODAY;
+          BOMReg."Source Code" := "Source Code";
+          BOMReg."Journal Batch Name" := "Journal Batch Name";
+          BOMReg."User ID" := USERID;
+          BOMReg.INSERT;
+        END ELSE BEGIN
+          BOMReg."To Entry No." := BOMLedgEntry."Entry No.";
+          BOMReg.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExplodeBOMToTempJnlLines@4(VAR BOMJnlLine2@1001 : Record 89);
+    VAR
+      BOMComp@1002 : Record 90;
+      Item2@1003 : Record 27;
+      CompQty@1000 : Decimal;
+    BEGIN
+      WITH BOMJnlLine2 DO BEGIN
+
+        BOMComp.SETRANGE("Parent Item No.","Item No.");
+        Item."Bill of Materials" := BOMComp.FIND('-');
+        Item.TESTFIELD("Bill of Materials",TRUE);
+        "Total Cost" := 0;
+
+        REPEAT
+          CompQty := ROUND("Quantity (Base)" * BOMComp."Quantity per",0.00001);
+          IF CompQty <> 0 THEN BEGIN
+            CASE BOMComp.Type OF
+              BOMComp.Type::Item:
+                BEGIN
+                  Item2.GET(BOMComp."No.");
+                  IF Item2."Costing Method" = Item2."Costing Method"::Specific THEN
+                    ERROR(
+                      Text001,
+                      Item2.FIELDCAPTION("Costing Method"),BOMComp."No.",Item2."Costing Method");
+
+                  TempItemJnlLine."Journal Batch Name" := '';
+                  TempItemJnlLine."Line No." := 0;
+                  TempItemJnlLine.INIT;
+                  TempItemJnlLine.VALIDATE("Posting Date","Posting Date");
+                  TempItemJnlLine."Document Date" := "Document Date";
+                  TempItemJnlLine."Document No." := "Document No.";
+                  TempItemJnlLine."External Document No." := "External Document No.";
+                  TempItemJnlLine."Entry Type" := TempItemJnlLine."Entry Type"::"Negative Adjmt.";
+                  TempItemJnlLine.VALIDATE("Item No.",BOMComp."No.");
+                  TempItemJnlLine.VALIDATE("Variant Code",BOMComp."Variant Code");
+                  TempItemJnlLine.Description := Description;
+                  TempItemJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+                  TempItemJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+                  TempItemJnlLine.VALIDATE("Location Code","Location Code");
+                  TempItemJnlLine."Source Code" := "Source Code";
+                  TempItemJnlLine."Journal Batch Name" := "Journal Batch Name";
+                  TempItemJnlLine."Reason Code" := "Reason Code";
+                  TempItemJnlLine."Source Type" := TempItemJnlLine."Source Type"::Item;
+                  TempItemJnlLine."Source No." := "Item No.";
+                  TempItemJnlLine."Source Posting Group" := "Inventory Posting Group";
+                  TempItemJnlLine.VALIDATE("Unit of Measure Code",BOMComp."Unit of Measure Code");
+                  TempItemJnlLine.VALIDATE(Quantity,CompQty);
+                  TempItemJnlLine."Posting No. Series" := "Posting No. Series";
+                  TempItemJnlLine."Line No." := BOMComp."Line No.";
+                  TempItemJnlLine.INSERT;
+
+                  BOMJnlLine."Total Cost" += TempItemJnlLine."Unit Cost" * TempItemJnlLine.Quantity;
+                END;
+              BOMComp.Type::Resource:
+                BEGIN
+                  TempResJnlLine."Journal Batch Name" := '';
+                  TempResJnlLine.INIT;
+                  TempResJnlLine.VALIDATE("Posting Date","Posting Date");
+                  TempResJnlLine."Document Date" := "Document Date";
+
+                  TempResJnlLine."Document No." := "Document No.";
+                  TempResJnlLine."External Document No." := "External Document No.";
+                  TempResJnlLine."Entry Type" := TempResJnlLine."Entry Type"::Usage;
+                  TempResJnlLine.VALIDATE("Resource No.",BOMComp."No.");
+                  TempResJnlLine.Description := Description;
+                  TempResJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+                  TempResJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+                  TempResJnlLine."Source Code" := "Source Code";
+                  TempResJnlLine."Journal Batch Name" := "Journal Batch Name";
+                  TempResJnlLine."Reason Code" := "Reason Code";
+                  TempResJnlLine."Unit of Measure Code" := BOMComp."Unit of Measure Code";
+                  TempResJnlLine.VALIDATE(Quantity,CompQty);
+                  TempResJnlLine."Posting No. Series" := "Posting No. Series";
+                  TempResJnlLine."Line No." := BOMComp."Line No.";
+                  TempResJnlLine.INSERT;
+
+                  BOMJnlLine."Total Cost" += TempResJnlLine."Total Cost";
+                END;
+            END;
+          END;
+        UNTIL BOMComp.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostTempJnlLines@5();
+    VAR
+      TempJnlLineDim2@1000 : TEMPORARY Record 356;
+      ResReg@1001 : Record 240;
+      TempHandlingSpecification@1002 : Record 336;
+      TempItemJnlLine2@1003 : Record 83;
+    BEGIN
+      GetGLSetup;
+      IF TempItemJnlLine.FIND('-') THEN
+        REPEAT
+          TempItemJnlLine2 := TempItemJnlLine;
+          TransferDimToItemJnlLine(TempItemJnlLine,TempJnlLineDim2,TRUE);
+          ItemJnlPostLine.RunWithCheck(TempItemJnlLine,TempJnlLineDim2);
+          WITH TempItemJnlLine DO BEGIN
+            Quantity := TempItemJnlLine2.Quantity;
+            "Invoiced Quantity" := TempItemJnlLine2."Invoiced Quantity";
+            "Output Quantity" := TempItemJnlLine2."Output Quantity";
+            "Scrap Quantity" := TempItemJnlLine2."Scrap Quantity";
+            "Setup Time" := TempItemJnlLine2."Setup Time";
+            "Run Time" := TempItemJnlLine2."Run Time";
+            "Stop Time" := TempItemJnlLine2."Stop Time";
+          END;
+          PostWhseJnlLine(TempItemJnlLine,TempHandlingSpecification,TempItemJnlLine.Quantity,TempItemJnlLine."Quantity (Base)");
+          BOMLedgEntry."Entry No." += 1;
+          BOMLedgEntry."Entry Type" := BOMLedgEntry."Entry Type"::Component;
+          BOMLedgEntry."Reference Type" := BOMLedgEntry."Reference Type"::Item;
+          BOMLedgEntry."Reference Entry No." := TempItemJnlLine."Item Shpt. Entry No.";
+          BOMLedgEntry."Posting Date" := TempItemJnlLine."Posting Date";
+          BOMLedgEntry."Document Date" := TempItemJnlLine."Document Date";
+          BOMLedgEntry.INSERT;
+          TempItemJnlLine.DELETE;
+        UNTIL TempItemJnlLine.NEXT = 0;
+
+      IF TempResJnlLine.FIND('-') THEN
+        REPEAT
+          TransferDimToResJnlLine(TempResJnlLine,TempJnlLineDim2);
+          ResJnlPostLine.RunWithCheck(TempResJnlLine,TempJnlLineDim2);
+          ResJnlPostLine.GetResReg(ResReg);
+          BOMLedgEntry."Entry No." += 1;
+          BOMLedgEntry."Entry Type" := BOMLedgEntry."Entry Type"::Component;
+          BOMLedgEntry."Reference Type" := BOMLedgEntry."Reference Type"::Resource;
+          BOMLedgEntry."Reference Entry No." := ResReg."To Entry No.";
+          BOMLedgEntry."Posting Date" := TempResJnlLine."Posting Date";
+          BOMLedgEntry."Document Date" := TempResJnlLine."Document Date";
+          BOMLedgEntry.INSERT;
+          TempResJnlLine.DELETE;
+        UNTIL TempResJnlLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferDimToItemJnlLine@7(VAR ItemJnlLine2@1000 : Record 83;VAR TempJnlLineDim2@1002 : TEMPORARY Record 356;Consumption@1003 : Boolean);
+    VAR
+      DefDim@1001 : Record 352;
+    BEGIN
+      IF TempJnlLineDim.FIND('-') THEN BEGIN
+        TempJnlLineDim2.DELETEALL;
+        REPEAT
+          TempJnlLineDim2.INIT;
+          TempJnlLineDim2."Table ID" := DATABASE::"Item Journal Line";
+          TempJnlLineDim2."Journal Template Name" := ItemJnlLine2."Journal Template Name";
+          TempJnlLineDim2."Journal Batch Name" := ItemJnlLine2."Journal Batch Name";
+          TempJnlLineDim2."Journal Line No." := ItemJnlLine2."Line No.";
+          TempJnlLineDim2."Allocation Line No." := 0;
+          TempJnlLineDim2."Dimension Code" := TempJnlLineDim."Dimension Code";
+          IF Consumption THEN
+            IF DefDim.GET(DATABASE::Item,ItemJnlLine2."Item No.",TempJnlLineDim."Dimension Code") THEN BEGIN
+              TempJnlLineDim2."Dimension Value Code" := DefDim."Dimension Value Code";
+              CASE DefDim."Dimension Code" OF
+                GLSetup."Global Dimension 1 Code":
+                  ItemJnlLine2."Shortcut Dimension 1 Code" := DefDim."Dimension Value Code";
+                GLSetup."Global Dimension 2 Code":
+                  ItemJnlLine2."Shortcut Dimension 2 Code" := DefDim."Dimension Value Code";
+              END;
+            END ELSE
+              TempJnlLineDim2."Dimension Value Code" := TempJnlLineDim."Dimension Value Code"
+          ELSE
+            TempJnlLineDim2."Dimension Value Code" := TempJnlLineDim."Dimension Value Code";
+          TempJnlLineDim2.INSERT;
+        UNTIL TempJnlLineDim.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE TransferDimToResJnlLine@8(VAR ResJnlLine@1000 : Record 207;VAR TempJnlLineDim2@1001 : TEMPORARY Record 356);
+    BEGIN
+      IF TempJnlLineDim.FIND('-') THEN BEGIN
+        TempJnlLineDim2.DELETEALL;
+        REPEAT
+          TempJnlLineDim2.INIT;
+          TempJnlLineDim2."Table ID" := DATABASE::"Res. Journal Line";
+          TempJnlLineDim2."Journal Template Name" := ResJnlLine."Journal Template Name";
+          TempJnlLineDim2."Journal Batch Name" := ResJnlLine."Journal Batch Name";
+          TempJnlLineDim2."Journal Line No." := ResJnlLine."Line No.";
+          TempJnlLineDim2."Allocation Line No." := 0;
+          TempJnlLineDim2."Dimension Code" := TempJnlLineDim."Dimension Code";
+          TempJnlLineDim2."Dimension Value Code" := TempJnlLineDim."Dimension Value Code";
+          TempJnlLineDim2.INSERT;
+        UNTIL TempJnlLineDim.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostWhseJnlLine@7302(ItemJnlLine@1000 : Record 83;VAR TempHandlingSpecification@1003 : TEMPORARY Record 336;OriginalQuantity@1006 : Decimal;OriginalQuantityBase@1001 : Decimal);
+    VAR
+      WhseJnlLine@1002 : Record 7311;
+      TempWhseJnlLine2@1005 : TEMPORARY Record 7311;
+      ItemTrackingMgt@1004 : Codeunit 6500;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        Quantity := OriginalQuantity;
+        "Quantity (Base)" := OriginalQuantityBase;
+        GetLocation("Location Code");
+        IF Location."Bin Mandatory" THEN
+          IF WMSMgmt.CreateWhseJnlLine(ItemJnlLine,0,WhseJnlLine,FALSE,TRUE) THEN BEGIN
+            WMSMgmt.SetBOMLine(BOMJnlLine,WhseJnlLine);
+            WMSMgmt.CheckWhseJnlLine(WhseJnlLine,1,0,FALSE);
+            ItemTrackingMgt.SplitWhseJnlLine(WhseJnlLine,TempWhseJnlLine2,TempHandlingSpecification,FALSE);
+            IF TempWhseJnlLine2.FIND('-') THEN
+              REPEAT
+                WhseJnlPostLine.RUN(TempWhseJnlLine2);
+              UNTIL TempWhseJnlLine2.NEXT = 0;
+          END;
+      END;
+    END;
+
+    PROCEDURE CheckWMSBin@2(LocationCode@1000 : Code[10]);
+    BEGIN
+      GetLocation(LocationCode);
+      IF Location."Directed Put-away and Pick" THEN
+        WMSMgmt.CheckBOMBin(Location);
+    END;
+
+    LOCAL PROCEDURE GetLocation@7301(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        CLEAR(Location)
+      ELSE
+        IF Location.Code <> LocationCode THEN
+          Location.GET(LocationCode);
+    END;
+
+    LOCAL PROCEDURE GetGLSetup@3();
+    BEGIN
+      IF NOT HasGLSetup THEN BEGIN
+        HasGLSetup := TRUE;
+        GLSetup.GET;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

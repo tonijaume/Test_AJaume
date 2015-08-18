@@ -1,0 +1,134 @@
+OBJECT Codeunit 76 Purch.-Get Drop Shpt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=38;
+    Permissions=TableData 36=m,
+                TableData 37=m;
+    OnRun=BEGIN
+            PurchHeader.COPY(Rec);
+            Code;
+            Rec := PurchHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=There were no lines to be retrieved from sales order %1.;ESP=En el pedido de venta %1 no hab¡a l¡neas para recuperar.';
+      PurchHeader@1001 : Record 38;
+      PurchLine@1002 : Record 39;
+      SalesHeader@1003 : Record 36;
+      SalesLine@1004 : Record 37;
+      CopyDocMgt@1006 : Codeunit 6620;
+      ItemTrackingMgt@1007 : Codeunit 6500;
+      TransferExtendedText@1008 : Codeunit 378;
+      NextLineNo@1005 : Integer;
+      Text001@1009 : TextConst 'ENU=The %1 for %2 %3 has changed from %4 to %5 since the Sales Order was created. Adjust the %6 on the Sales Order or the %1.;ESP=%1 de %2 %3 ha cambiado de %4 a %5 desde la creaci¢n del pedido de venta. Ajuste %6 o %1 en el pedido de venta.';
+
+    LOCAL PROCEDURE Code@1();
+    VAR
+      PurchLine2@1000 : Record 39;
+      ItemUnitofMeasure@1001 : Record 5404;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        TESTFIELD("Document Type","Document Type"::Order);
+
+        SalesHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.");
+        SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+        SalesHeader.SETRANGE("Sell-to Customer No.","Sell-to Customer No.");
+        IF (FORM.RUNMODAL(FORM::"Sales List",SalesHeader) <> ACTION::LookupOK) OR
+           (SalesHeader."No." = '')
+        THEN
+          EXIT;
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+        SalesHeader.TESTFIELD("Document Type",SalesHeader."Document Type"::Order);
+        TESTFIELD("Sell-to Customer No.",SalesHeader."Sell-to Customer No.");
+        TESTFIELD("Ship-to Code",SalesHeader."Ship-to Code");
+
+        PurchLine.LOCKTABLE;
+        IF NOT RECORDLEVELLOCKING THEN
+          LOCKTABLE(TRUE,TRUE); // Only version check
+        SalesLine.LOCKTABLE;
+        IF NOT RECORDLEVELLOCKING THEN
+          SalesHeader.LOCKTABLE(TRUE,TRUE); // Only version check
+
+        PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Order);
+        PurchLine.SETRANGE("Document No.","No.");
+        IF PurchLine.FIND('+') THEN
+          NextLineNo := PurchLine."Line No." + 10000
+        ELSE
+          NextLineNo := 10000;
+
+        SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::Order);
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        SalesLine.SETRANGE("Drop Shipment",TRUE);
+        SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+        SalesLine.SETFILTER("No.",'<>%1','');
+        SalesLine.SETRANGE("Purch. Order Line No.",0);
+
+        IF SalesLine.FIND('-') THEN
+          REPEAT
+            IF (SalesLine.Type = SalesLine.Type::Item) AND ItemUnitofMeasure.GET(SalesLine."No.",SalesLine."Unit of Measure") THEN
+              IF SalesLine."Qty. per Unit of Measure" <> ItemUnitofMeasure."Qty. per Unit of Measure" THEN
+                ERROR(Text001,
+                  SalesLine.FIELDCAPTION("Qty. per Unit of Measure"),
+                  SalesLine.FIELDCAPTION("Unit of Measure"),
+                  SalesLine."Unit of Measure",
+                  SalesLine."Qty. per Unit of Measure",
+                  ItemUnitofMeasure."Qty. per Unit of Measure",
+                  SalesLine.FIELDCAPTION(Quantity));
+
+            PurchLine.INIT;
+            PurchLine."Document Type" := PurchLine."Document Type"::Order;
+            PurchLine."Document No." := "No.";
+            PurchLine."Line No." := NextLineNo;
+            CopyDocMgt.TransfldsFromSalesToPurchLine(SalesLine,PurchLine);
+            PurchLine.Description := SalesLine.Description;
+            PurchLine."Sales Order No." := SalesLine."Document No.";
+            PurchLine."Sales Order Line No." := SalesLine."Line No.";
+            PurchLine."Drop Shipment" := TRUE;
+            EVALUATE(PurchLine."Inbound Whse. Handling Time",'<0D>');
+            PurchLine.VALIDATE("Inbound Whse. Handling Time");
+            PurchLine.INSERT;
+            NextLineNo := NextLineNo + 10000;
+
+            SalesLine."Unit Cost (LCY)" := PurchLine."Unit Cost (LCY)";
+            SalesLine.VALIDATE("Unit Cost (LCY)");
+            SalesLine."Purchase Order No." := PurchLine."Document No.";
+            SalesLine."Purch. Order Line No." := PurchLine."Line No.";
+            SalesLine.MODIFY;
+            ItemTrackingMgt.CopyItemTracking(SalesLine.RowID1,PurchLine.RowID1,TRUE);
+
+            IF TransferExtendedText.PurchCheckIfAnyExtText(PurchLine,TRUE) THEN BEGIN
+              TransferExtendedText.InsertPurchExtText(PurchLine);
+              PurchLine2.SETRANGE("Document Type","Document Type");
+              PurchLine2.SETRANGE("Document No.","No.");
+              IF PurchLine2.FIND('+') THEN
+                NextLineNo := PurchLine2."Line No.";
+              NextLineNo := NextLineNo + 10000;
+            END;
+
+          UNTIL SalesLine.NEXT = 0
+        ELSE
+          ERROR(
+            Text000,
+            SalesHeader."No.");
+
+        MODIFY; // Only version check
+        SalesHeader.MODIFY; // Only version check
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

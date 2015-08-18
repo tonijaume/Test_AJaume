@@ -1,0 +1,921 @@
+OBJECT Report 7000096 Redraw Receivable Bills
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVES6.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 21=imd,
+                TableData 25=imd,
+                TableData 7000002=imd,
+                TableData 7000003=imd,
+                TableData 7000004=imd;
+    CaptionML=[ENU=Redraw Receivable Bills;
+               ESP=Recircular efecs. a cobrar];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF NewDueDate = 0D THEN
+                    ERROR(Text1100000);
+
+                  IF NOT GenJnlBatch.GET(TemplName,BatchName) THEN
+                    ERROR(Text1100001);
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table21;
+        DataItemTableView=SORTING(Entry No.);
+        DataItemVarName=CustLedgEntry;
+        OnPreDataItem=BEGIN
+                        IncludeExpenses := IncludeDiscCollExpenses OR IncludeRejExpenses OR IncludeFinanceCharges;
+
+                        ReasonCode :=  GenJnlBatch."Reason Code";
+                        GenJnlTemplate.GET(TemplName);
+                        SourceCode := GenJnlTemplate."Source Code";
+
+                        DocPost.CheckPostingDate(PostingDate);
+
+                        Window.OPEN(
+                          Text1100002);
+
+                        DocCount :=0;
+
+                        GenJnlLine.SETFILTER("Journal Template Name",TemplName);
+                        GenJnlLine.SETFILTER("Journal Batch Name",BatchName);
+                        IF GenJnlLine.FIND('+') THEN
+                          GenJnlLineNextNo := GenJnlLine."Line No." + 10000
+                        ELSE
+                          GenJnlLineNextNo := 10000;
+                        TransactionNo :=  GenJnlLine."Transaction No." + 1;
+
+                        CLEAR(BillGrPostingDate);
+                        CustLedgEntry.FIND('-');
+                        CASE TRUE OF
+                          PostedDoc.GET(PostedDoc.Type::Receivable,CustLedgEntry."Entry No."):
+                            BEGIN
+                              ArePostedDocs := TRUE;
+                              PostedBillGr.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+                              BillGrPostingDate := PostedBillGr."Posting Date";
+                              IF PostedBillGr."Dealing Type" = PostedBillGr."Dealing Type"::Discount THEN
+                                Discount := TRUE
+                              ELSE
+                                Discount := FALSE;
+                              BankAcc.GET(PostedBillGr."Bank Account No.");
+                            END;
+                          ClosedDoc.GET(ClosedDoc.Type::Receivable,CustLedgEntry."Entry No."):
+                            BEGIN
+                              ArePostedDocs := FALSE;
+                              IF ClosedDoc."Bill Gr./Pmt. Order No." <> '' THEN BEGIN
+                                ClosedBillGr.GET(ClosedDoc."Bill Gr./Pmt. Order No.");
+                                BillGrPostingDate := ClosedBillGr."Posting Date";
+                                IF ClosedBillGr."Dealing Type" = ClosedBillGr."Dealing Type"::Discount THEN
+                                  Discount := TRUE
+                                ELSE
+                                  Discount := FALSE;
+                                BankAcc.GET(ClosedBillGr."Bank Account No.");
+                              END;
+                            END;
+                        ELSE
+                          CurrReport.QUIT;
+                        END;
+
+                        IF IncludeDiscCollExpenses THEN
+                          IF Discount THEN BEGIN
+                              FeeRange.InitDiscExpenses(
+                                BankAcc."Operation Fees Code",
+                                BankAcc."Currency Code");
+                              FeeRange.InitDiscInterests(
+                                BankAcc."Operation Fees Code",
+                                BankAcc."Currency Code");
+                            END ELSE
+                              FeeRange.InitCollExpenses(
+                                BankAcc."Operation Fees Code",
+                                BankAcc."Currency Code");
+                          IF IncludeRejExpenses THEN
+                            FeeRange.InitRejExpenses(
+                              BankAcc."Operation Fees Code",
+                              BankAcc."Currency Code");
+
+
+                        IF BankAcc.FIND AND (IncludeDiscCollExpenses OR IncludeRejExpenses) THEN
+                          BankAcc.TESTFIELD("Operation Fees Code");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           CheckUnrealizedVAT(CustLedgEntry);
+
+                           CLEAR(FeeRange);
+                           CLEAR(FinanceChargeTerms);
+
+                           IF NewDueDate < "Due Date" THEN
+                             ERROR(
+                               Text1100003,
+                               FIELDCAPTION("Due Date"),
+                               FIELDCAPTION("Entry No."),
+                               "Entry No.");
+                           SumLCYAmt := 0;
+                           DocCount := DocCount + 1;
+                           Window.UPDATE(1,DocCount);
+
+                           GenJnlLineInit;
+                           CustLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+                           IF CustLedgEntry."Remaining Amount" <> 0 THEN BEGIN // open bill
+                             CarteraManagement.CreateReceivableDocPayment(GenJnlLine,CustLedgEntry);
+                             IsOpenBill := TRUE;
+                           END ELSE BEGIN //settled bill
+                             CarteraManagement.ReverseReceivableDocPayment(GenJnlLine,CustLedgEntry);
+                             IsOpenBill := FALSE;
+                           END;
+                           GenJnlLine.INSERT;
+                           CarteraDimMgt.CustInsertJnlLinDimension(GenJnlLine,CustLedgEntry,ArePostedDocs);
+
+                           SumLCYAmt := SumLCYAmt + GenJnlLine."Amount (LCY)";
+
+                           NewDocAmount := -GenJnlLine.Amount;
+                           NewDocAmountLCY := -GenJnlLine."Amount (LCY)";
+
+                           Customer.GET("Customer No.");
+                           Customer.TESTFIELD("Customer Posting Group");
+                           CustPostingGr.GET(Customer."Customer Posting Group");
+
+                           IF ((NOT IsOpenBill) AND
+                              (CustLedgEntry."Currency Code" <> '') AND
+                              (CustLedgEntry."Document Status" = CustLedgEntry."Document Status"::Honored)) THEN
+                             InsertGainLoss;
+
+                           CASE "Document Situation" OF
+                             "Document Situation"::"Posted BG/PO":
+                               BEGIN
+                                 PostedDoc.GET(PostedDoc.Type::Receivable,"Entry No.");
+                                 AmtForCollection := PostedDoc."Remaining Amount";
+                               END;
+                             "Document Situation"::"Closed BG/PO":
+                               BEGIN
+                                 ClosedDoc.GET(ClosedDoc.Type::Receivable,"Entry No.");
+                                 AmtForCollection := ClosedDoc."Remaining Amount";
+                               END;
+                           END;
+
+
+                           IF BillGrPostingDate <> 0D THEN BEGIN
+                             IF IncludeDiscCollExpenses THEN
+                               IF Discount THEN BEGIN
+                                 FeeRange.CalcDiscExpensesAmt(
+                                   BankAcc."Operation Fees Code",
+                                   BankAcc."Currency Code",
+                                   AmtForCollection,
+                                   CustLedgEntry."Entry No.");
+                                 FeeRange.CalcDiscInterestsAmt(
+                                   BankAcc."Operation Fees Code",
+                                   BankAcc."Currency Code",
+                                   NewDueDate - "Due Date",
+                                   AmtForCollection,
+                                   CustLedgEntry."Entry No.");
+                               END ELSE
+                                 FeeRange.CalcCollExpensesAmt(
+                                   BankAcc."Operation Fees Code",
+                                   BankAcc."Currency Code",
+                                   AmtForCollection,
+                                   CustLedgEntry."Entry No.");
+                             IF IncludeRejExpenses THEN
+                               FeeRange.CalcRejExpensesAmt(
+                                 BankAcc."Operation Fees Code",
+                                 BankAcc."Currency Code",
+                                 AmtForCollection,
+                                 CustLedgEntry."Entry No.");
+                             IF IncludeFinanceCharges THEN BEGIN
+                               Customer.TESTFIELD("Fin. Charge Terms Code");
+                               FinanceChargeTerms.CalcFinChargesAmt(
+                                 "Due Date",
+                                 Customer."Fin. Charge Terms Code",
+                                 CustLedgEntry."Currency Code",
+                                 AmtForCollection,
+                                 NewDueDate - "Due Date");
+                             END;
+                           END;
+
+                           WITH GenJnlLine DO BEGIN
+                            IF STRPOS("Bill No.",'-') = 0 THEN
+                               DocNo := CustLedgEntry."Bill No." + '-1'
+                             ELSE
+                               DocNo := INCSTR("Bill No.");
+                             TempCustLedgEntryInit(CustLedgEntry,DocNo,NewDocAmount,NewDocAmountLCY);
+                             GenJnlLineInit;
+                             IF ArePostedDocs THEN BEGIN
+                               PostedDoc.GET(
+                                 PostedDoc.Type::Receivable,CustLedgEntry."Entry No.");
+                               IF NewPmtMethod = '' THEN
+                                 "Payment Method Code" := PostedDoc."Payment Method Code"
+                               ELSE
+                                 "Payment Method Code" := NewPmtMethod;
+                               "Pmt. Address Code" := PostedDoc."Pmt. Address Code";
+                               "Cust./Vendor Bank Acc. Code" := PostedDoc."Cust./Vendor Bank Acc. Code";
+                             END ELSE BEGIN
+                               ClosedDoc.GET(
+                                 ClosedDoc.Type::Receivable,CustLedgEntry."Entry No.");
+                               IF NewPmtMethod = '' THEN
+                                 "Payment Method Code" := ClosedDoc."Payment Method Code"
+                               ELSE
+                                 "Payment Method Code" := NewPmtMethod;
+                               "Pmt. Address Code" := ClosedDoc."Pmt. Address Code";
+                               "Cust./Vendor Bank Acc. Code" := ClosedDoc."Cust./Vendor Bank Acc. Code";
+                             END;
+                             "Due Date" := NewDueDate;
+                             InsertGenJnlLine(
+                               "Account Type"::Customer,
+                               CustLedgEntry."Customer No.",
+                               "Document Type"::Bill,
+                               NewDocAmount +
+                               FeeRange.GetTotalCollExpensesAmt +
+                               FeeRange.GetTotalDiscExpensesAmt +
+                               FeeRange.GetTotalDiscInterestsAmt +
+                               FeeRange.GetTotalRejExpensesAmt +
+                               FinanceChargeTerms.GetTotalFinChargesAmt,
+                               STRSUBSTNO(
+                                 Text1100004,
+                                 CustLedgEntry."Document No.",
+                                 DocNo),
+                               DocNo);
+
+                             SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                           END;
+
+                           IF IncludeDiscCollExpenses THEN BEGIN
+                             CustPostingGr.TESTFIELD("Finance Income Acc.");
+                             WITH GenJnlLine DO BEGIN
+                               GenJnlLineInit;
+                               InsertGenJnlLine(
+                                 "Account Type"::"G/L Account",
+                                 CustPostingGr."Finance Income Acc.",
+                                 0,
+                                 -(FeeRange.GetTotalDiscExpensesAmt + FeeRange.GetTotalCollExpensesAmt),
+                                 STRSUBSTNO(
+                                   Text1100005,
+                                   CustLedgEntry."Document No.",
+                                   CustLedgEntry."Bill No."),
+                                 '');
+
+                               SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                               IF Discount THEN BEGIN
+                                 BankAcc.TESTFIELD("Bank Acc. Posting Group");
+                                 BankAccPostingGr.GET(BankAcc."Bank Acc. Posting Group");
+                                 BankAccPostingGr.TESTFIELD("Discount Interest Acc.");
+                                 GenJnlLineInit;
+                                 InsertGenJnlLine(
+                                   "Account Type"::"G/L Account",
+                                   BankAccPostingGr."Discount Interest Acc.",
+                                   0,
+                                   -FeeRange.GetTotalDiscInterestsAmt,
+                                   STRSUBSTNO(
+                                     Text1100006,
+                                     CustLedgEntry."Document No.",
+                                     CustLedgEntry."Bill No."),
+                                   '');
+
+                                 SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                               END;
+                             END;
+                           END;
+
+                           IF IncludeRejExpenses THEN BEGIN
+                             CustPostingGr.TESTFIELD("Finance Income Acc.");
+                             WITH GenJnlLine DO BEGIN
+                               GenJnlLineInit;
+                               InsertGenJnlLine(
+                                 "Account Type"::"G/L Account",
+                                 CustPostingGr."Finance Income Acc.",
+                                 0,
+                                 -FeeRange.GetTotalRejExpensesAmt,
+                                 STRSUBSTNO(
+                                   Text1100007,
+                                   CustLedgEntry."Document No.",
+                                   CustLedgEntry."Bill No."),
+                                 '');
+
+                               SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                             END;
+                           END;
+
+                           IF IncludeFinanceCharges THEN BEGIN
+                             CustPostingGr.TESTFIELD("Finance Income Acc.");
+                             WITH GenJnlLine DO BEGIN
+                               GenJnlLineInit;
+                               InsertGenJnlLine(
+                                 "Account Type"::"G/L Account",
+                                 CustPostingGr."Finance Income Acc.",
+                                 0,
+                                 -FinanceChargeTerms.GetTotalFinChargesAmt,
+                                 STRSUBSTNO(
+                                   Text1100008,
+                                   CustLedgEntry."Document No.",
+                                   CustLedgEntry."Bill No."),
+                                 '');
+
+                               SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                               END;
+                           END;
+                           IF CustLedgEntry."Currency Code" <> '' THEN BEGIN
+                             Currency.SETFILTER(Code,CustLedgEntry."Currency Code");
+                             Currency.FIND('-');
+                             IF SumLCYAmt <> 0 THEN BEGIN
+                               IF SumLCYAmt > 0 THEN BEGIN
+                                 Currency.TESTFIELD("Residual Gains Account");
+                                 Account := Currency."Residual Gains Account";
+                               END ELSE BEGIN
+                                 Currency.TESTFIELD("Residual Losses Account");
+                                 Account := Currency."Residual Losses Account";
+                              END;
+                               WITH GenJnlLine DO BEGIN
+                                 CustLedgEntry."Currency Code" := '';
+                               GenJnlLineInit;
+                               InsertGenJnlLine(
+                                 GenJnlLine."Account Type"::"G/L Account",
+                                 Account,
+                                 0,
+                                 -SumLCYAmt,
+                                 Text1100009,
+                                 '');
+
+                               END;
+                             END;
+                           END;
+
+                           "Document Status" := "Document Status"::Redrawn;
+
+                           MODIFY;
+
+                           IF NOT IsOpenBill THEN
+                             DocPost.InsertDtldCustLedgEntry(
+                               CustLedgEntry,
+                               NewDocAmount,
+                               NewDocAmountLCY,
+                               EntryType::Redrawal,
+                               PostingDate);
+                         END;
+
+        OnPostDataItem=BEGIN
+                         Window.CLOSE;
+                         //CarteraDimMgt.CopyJnlLinDim(GenJnlLine,GenJnlLine,TempJnlLineDim,JnlLineDim2);
+                         COMMIT;
+                         GenJnlLine.RESET;
+                         GenJnlTemplate.GET(TemplName);
+                         GenJnlLine.FILTERGROUP := 2;
+                         GenJnlLine.SETRANGE("Journal Template Name",TemplName);
+                         GenJnlLine.FILTERGROUP := 0;
+                         GenJnlManagement.SetName(BatchName,GenJnlLine);
+                         CarteraJnlForm.SETTABLEVIEW(GenJnlLine);
+                         CarteraJnlForm.SETRECORD(GenJnlLine);
+                         CarteraJnlForm.AllowClosing(TRUE);
+                         CarteraJnlForm.RUNMODAL;
+
+                         SplitDetailedCVEntry;
+
+                         MESSAGE(Text1100010,DocCount);
+                       END;
+
+        TotalFields=Remaining Amount;
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=6160;
+      Height=4950;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   PostingDate := WORKDATE;
+                 END;
+
+      OnCloseForm=BEGIN
+                    IncludeExpenses := IncludeDiscCollExpenses OR IncludeRejExpenses;
+                  END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;CheckBox     ;220  ;2200 ;3520 ;440  ;ParentControl=11;
+                                                   InFrame=Yes;
+                                                   CaptionML=[ENU=Disc./Coll. Expenses;
+                                                              ESP=Gastos gesti¢n dto./cobro];
+                                                   SourceExpr=IncludeDiscCollExpenses }
+      { 4   ;CheckBox     ;220  ;2750 ;3520 ;440  ;ParentControl=11;
+                                                   InFrame=Yes;
+                                                   CaptionML=[ENU=Rejection Expenses;
+                                                              ESP=Gastos impagados];
+                                                   SourceExpr=IncludeRejExpenses }
+      { 7   ;CheckBox     ;220  ;3300 ;3520 ;440  ;ParentControl=11;
+                                                   InFrame=Yes;
+                                                   CaptionML=[ENU=Finance Charges;
+                                                              ESP=Intereses];
+                                                   SourceExpr=IncludeFinanceCharges }
+      { 14  ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Posting Date;
+                                                              ESP=Fecha registro];
+                                                   SourceExpr=PostingDate }
+      { 3   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=14 }
+      { 9   ;TextBox      ;3300 ;3960 ;2750 ;440  ;CaptionML=[ENU=Aux. Jnl. Template Name;
+                                                              ESP=Nombre libro];
+                                                   SourceExpr=TemplName;
+                                                   TableRelation="Gen. Journal Template".Name WHERE (Type=CONST(Cartera),
+                                                                                                     Recurring=CONST(No));
+                                                   OnValidate=BEGIN
+                                                                IF TemplName = '' THEN
+                                                                  BatchName := '';
+                                                              END;
+                                                               }
+      { 10  ;Label        ;0    ;3960 ;3180 ;440  ;ParentControl=9 }
+      { 12  ;TextBox      ;3300 ;4510 ;2750 ;440  ;CaptionML=[ENU=Aux. Jnl. Batch Name;
+                                                              ESP=Nombre secci¢n];
+                                                   SourceExpr=BatchName;
+                                                   TableRelation="Gen. Journal Batch".Name;
+                                                   OnValidate=BEGIN
+                                                                IF BatchName = '' THEN
+                                                                  EXIT;
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              IF TemplName = '' THEN
+                                                                EXIT;
+
+                                                              IF GenJnlBatch.GET(TemplName,Text) THEN;
+                                                              GenJnlBatch.SETRANGE("Journal Template Name",TemplName);
+                                                              IF FORM.RUNMODAL(FORM::"General Journal Batches",GenJnlBatch) = ACTION::LookupOK THEN
+                                                                BatchName := GenJnlBatch.Name;
+                                                            END;
+
+                                                   OnAfterValidate=BEGIN
+                                                                     IF TemplName = '' THEN
+                                                                       BatchName := '';
+                                                                   END;
+                                                                    }
+      { 13  ;Label        ;0    ;4510 ;3180 ;440  ;ParentControl=12 }
+      { 15  ;TextBox      ;3410 ;660  ;1650 ;440  ;CaptionML=[ENU=New Due Date;
+                                                              ESP=Nueva fecha vencimiento];
+                                                   SourceExpr=NewDueDate }
+      { 16  ;Label        ;0    ;660  ;3300 ;440  ;ParentControl=15 }
+      { 17  ;TextBox      ;3410 ;1210 ;2750 ;440  ;CaptionML=[ENU=New Payment Method;
+                                                              ESP=Nueva forma pago];
+                                                   SourceExpr=NewPmtMethod;
+                                                   TableRelation="Payment Method" WHERE (Create Bills=CONST(Yes)) }
+      { 18  ;Label        ;0    ;1210 ;3300 ;440  ;ParentControl=17 }
+      { 11  ;Frame        ;0    ;1760 ;3850 ;2090 ;CaptionML=[ENU=Include;
+                                                              ESP=Incluye] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   PostingDate := WORKDATE;
+                 END;
+
+      OnClosePage=BEGIN
+                    IncludeExpenses := IncludeDiscCollExpenses OR IncludeRejExpenses;
+                  END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 14  ;2   ;Field     ;
+                  CaptionML=[ENU=Posting Date;
+                             ESP=Fecha registro];
+                  SourceExpr=PostingDate }
+
+      { 15  ;2   ;Field     ;
+                  CaptionML=[ENU=New Due Date;
+                             ESP=Nueva fecha vencimiento];
+                  SourceExpr=NewDueDate }
+
+      { 17  ;2   ;Field     ;
+                  CaptionML=[ENU=New Payment Method;
+                             ESP=Nueva forma pago];
+                  SourceExpr=NewPmtMethod;
+                  TableRelation="Payment Method" WHERE (Create Bills=CONST(Yes)) }
+
+      { 11  ;2   ;Group     ;
+                  CaptionML=[ENU=Include;
+                             ESP=Incluye] }
+
+      { 1   ;3   ;Field     ;
+                  CaptionML=[ENU=Disc./Coll. Expenses;
+                             ESP=Gastos gesti¢n dto./cobro];
+                  SourceExpr=IncludeDiscCollExpenses }
+
+      { 4   ;3   ;Field     ;
+                  CaptionML=[ENU=Rejection Expenses;
+                             ESP=Gastos impagados];
+                  SourceExpr=IncludeRejExpenses }
+
+      { 7   ;3   ;Field     ;
+                  CaptionML=[ENU=Finance Charges;
+                             ESP=Cargos financieros];
+                  SourceExpr=IncludeFinanceCharges }
+
+      { 9   ;2   ;Field     ;
+                  CaptionML=[ENU=Aux. Jnl. Template Name;
+                             ESP=Nombre libro];
+                  SourceExpr=TemplName;
+                  TableRelation="Gen. Journal Template".Name WHERE (Type=CONST(Cartera),
+                                                                    Recurring=CONST(No));
+                  OnValidate=BEGIN
+                               IF TemplName = '' THEN
+                                 BatchName := '';
+                             END;
+                              }
+
+      { 12  ;2   ;Field     ;
+                  CaptionML=[ENU=Aux. Jnl. Batch Name;
+                             ESP=Nombre secci¢n];
+                  SourceExpr=BatchName;
+                  TableRelation="Gen. Journal Batch".Name;
+                  OnValidate=BEGIN
+                               BatchNameOnValidate;
+                                 BatchNameOnAfterValidate;
+                             END;
+
+                  OnLookup=BEGIN
+                             IF TemplName = '' THEN
+                               EXIT;
+
+                             IF GenJnlBatch.GET(TemplName,Text) THEN;
+                             GenJnlBatch.SETRANGE("Journal Template Name",TemplName);
+                             IF FORM.RUNMODAL(FORM::"General Journal Batches",GenJnlBatch) = ACTION::LookupOK THEN
+                               BatchName := GenJnlBatch.Name;
+                           END;
+                            }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text1100000@1000 : TextConst 'ENU=Please, specify a New Due Date for the redrawn bill.;ESP=Indique la nueva fecha vencimiento para el efecto recirculado';
+      Text1100001@1001 : TextConst 'ENU=Please fill in both the Template Name and the Batch Name of the Auxiliary Journal with correct values.;ESP=Rellene el nombre del libro y la secci¢n del diario con los valores apropiados.';
+      Text1100002@1002 : TextConst 'ENU=Redrawing              #1######;ESP=Recirculando           #1######';
+      Text1100003@1003 : TextConst 'ENU=The New Due Date cannot be earlier than the current %1 in Bill %2 %3.;ESP=La nueva fecha de vencimiento no puede ser anterior a la actual %1 en doc. %2%3';
+      Text1100004@1004 : TextConst 'ENU=Bill %1/%2;ESP=Efecto %1/%2';
+      Text1100005@1005 : TextConst 'ENU=Bill %1/%2 Discount/Collection Expenses;ESP=Efecto %1/%2 Gastos gesti¢n cobro/dto.';
+      Text1100006@1006 : TextConst 'ENU=Bill %1/%2 Discount Interests;ESP=Efecto %1/%2 Intereses descuento';
+      Text1100007@1007 : TextConst 'ENU=Bill %1/%2 Rejection Expenses;ESP=Efecto %1/%2 Gastos impagado';
+      Text1100008@1008 : TextConst 'ENU=Bill %1/%2 Finance Charges;ESP=Efecto %1/%2 Intereses financieros';
+      Text1100009@1009 : TextConst 'ENU=Residual adjust generated by rounding Amount;ESP=Ajuste por redondeo';
+      Text1100010@1010 : TextConst 'ENU=%1 bills have been prepared for redrawal.;ESP=Se ha/n preparado %1 efecto/s para recircular.';
+      Customer@1100000 : Record 18;
+      CustPostingGr@1100001 : Record 92;
+      GenJnlTemplate@1100002 : Record 80;
+      GenJnlBatch@1100003 : Record 232;
+      GenJnlLine@1100004 : Record 81;
+      PostedDoc@1100005 : Record 7000003;
+      ClosedDoc@1100006 : Record 7000004;
+      FeeRange@1100007 : Record 7000019;
+      FinanceChargeTerms@1100008 : Record 5;
+      PostedBillGr@1100009 : Record 7000006;
+      ClosedBillGr@1100010 : Record 7000007;
+      BankAcc@1100011 : Record 270;
+      BankAccPostingGr@1100012 : Record 277;
+      Currency@1100013 : Record 4;
+      TempCVLedgEntryBuf@1100046 : TEMPORARY Record 382;
+      TempJnlLineDim@1100048 : Record 7000026;
+      JnlLineDim2@1100047 : Record 356;
+      CarteraManagement@1100014 : Codeunit 7000000;
+      DocPost@1100015 : Codeunit 7000006;
+      GenJnlManagement@1100016 : Codeunit 230;
+      CarteraDimMgt@1100049 : Codeunit 7000011;
+      CarteraJnlForm@1100017 : Form 7000036;
+      Window@1100018 : Dialog;
+      TransactionNo@1100019 : Integer;
+      IncludeDiscCollExpenses@1100020 : Boolean;
+      IncludeRejExpenses@1100021 : Boolean;
+      IncludeFinanceCharges@1100022 : Boolean;
+      IncludeExpenses@1100023 : Boolean;
+      ArePostedDocs@1100024 : Boolean;
+      Discount@1100025 : Boolean;
+      IsOpenBill@1100026 : Boolean;
+      PostingDate@1100027 : Date;
+      BillGrPostingDate@1100028 : Date;
+      BatchName@1100029 : Code[10];
+      TemplName@1100030 : Code[10];
+      SourceCode@1100031 : Code[10];
+      ReasonCode@1100032 : Code[10];
+      NewDocAmount@1100033 : Decimal;
+      NewDocAmountLCY@1100045 : Decimal;
+      GenJnlLineNextNo@1100034 : Integer;
+      DocCount@1100035 : Integer;
+      DocAmount@1100036 : Decimal;
+      Account@1100037 : Code[20];
+      DocNo@1100038 : Code[20];
+      NewDueDate@1100039 : Date;
+      NewPmtMethod@1100040 : Code[10];
+      DocFinCharge@1100041 : Decimal;
+      AmtForCollection@1100042 : Decimal;
+      SumLCYAmt@1100043 : Decimal;
+      EntryType@1100044 : ' ,Initial Entry,Application,Unrealized Loss,Unrealized Gain,Realized Loss,Realized Gain,Payment Discount,Payment Discount (VAT Excl.),Payment Discount (VAT Adjustment),Appln. Rounding,Correction of Remaining Amount,,,,,,,,,Settlement,Rejection,Redrawal,Expenses';
+
+    LOCAL PROCEDURE GenJnlLineInit@7();
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        CLEAR(GenJnlLine);
+        INIT;
+        "Line No." := GenJnlLineNextNo;
+        GenJnlLineNextNo :=  GenJnlLineNextNo + 10000;
+        "Transaction No." := TransactionNo;
+        "Journal Template Name" := TemplName;
+        "Journal Batch Name" := BatchName;
+        "Posting Date" := PostingDate;
+        "Source Code" := SourceCode;
+        "Reason Code" := ReasonCode;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertGenJnlLine@5(AccountType2@1100000 : Integer;AccountNo2@1100001 : Code[20];DocumentType2@1100002 : Integer;Amount2@1100003 : Decimal;Description2@1100004 : Text[250];DocNo2@1100005 : Code[20]);
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        "Account Type" := AccountType2;
+        "Account No." := AccountNo2;
+        "Document Type" := DocumentType2;
+        "Document No." := CustLedgEntry."Document No.";
+        "Bill No." := DocNo2;
+        Description := COPYSTR(Description2,1,MAXSTRLEN(Description));
+        VALIDATE("Currency Code",CustLedgEntry."Currency Code");
+        VALIDATE(Amount,Amount2);
+        "Shortcut Dimension 1 Code" := CustLedgEntry."Global Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := CustLedgEntry."Global Dimension 2 Code";
+        INSERT;
+        CarteraDimMgt.CustInsertJnlLinDimension(GenJnlLine,CustLedgEntry,ArePostedDocs);
+      END;
+    END;
+
+    PROCEDURE InsertGainLoss@2();
+    VAR
+      GLEntry@1100000 : Record 17;
+      DocMisc@1100001 : Codeunit 7000007;
+      GainLossAmt@1100002 : Decimal;
+      PostingDate2@1100003 : Date;
+      TempCurrencyCode@1100004 : Code[10];
+      BalanceAccNo@1100005 : Code[20];
+      AccNo@1100006 : Code[20];
+      Type@1100007 : 'Receivable,Payable';
+      TypeDoc@1100008 : 'Bill,Invoice';
+    BEGIN
+      Currency.GET(CustLedgEntry."Currency Code");
+      AccNo := GetAccount;
+      IF ArePostedDocs THEN
+        IF CustLedgEntry."Document Type" = CustLedgEntry."Document Type"::Bill THEN
+          DocMisc.FilterGLEntry(GLEntry,AccNo,PostedDoc."Document No.",PostedDoc."No.",TypeDoc::Bill,'')
+        ELSE
+          IF PostedDoc."Dealing Type" = PostedDoc."Dealing Type"::Discount THEN
+            DocMisc.FilterGLEntry(GLEntry,AccNo,PostedDoc."Document No.",PostedDoc."No.",TypeDoc::Invoice,PostedDoc."Account No.")
+          ELSE
+            DocMisc.FilterGLEntry(GLEntry,AccNo,PostedDoc."Document No.",PostedDoc."No.",TypeDoc::Invoice,'')
+      ELSE
+        IF CustLedgEntry."Document Type" = CustLedgEntry."Document Type"::Bill THEN
+          DocMisc.FilterGLEntry(GLEntry,AccNo,ClosedDoc."Document No.",ClosedDoc."No.",TypeDoc::Bill,'')
+        ELSE
+          IF ClosedDoc."Dealing Type" = ClosedDoc."Dealing Type"::Discount THEN
+            DocMisc.FilterGLEntry(GLEntry,AccNo,ClosedDoc."Document No.",ClosedDoc."No.",TypeDoc::Invoice,ClosedDoc."Account No.")
+          ELSE
+            DocMisc.FilterGLEntry(GLEntry,AccNo,ClosedDoc."Document No.",ClosedDoc."No.",TypeDoc::Invoice,'');
+
+      IF GLEntry.FIND('-') THEN BEGIN
+        GainLossAmt := 0;
+        GLEntry.CALCSUMS(Amount);
+        GainLossAmt := -(GenJnlLine."Amount (LCY)" + GLEntry.Amount);
+      END ELSE BEGIN
+        PostingDate2 := 0D;
+        GainLossAmt := 0;
+        IF ArePostedDocs THEN BEGIN
+          PostingDate2 := CarteraManagement.GetLastDate(
+           CustLedgEntry."Currency Code",
+           PostedDoc."Honored/Rejtd. at Date",
+           Type::Receivable);
+          GainLossAmt := CarteraManagement.GetGainLoss(
+            PostingDate2,
+            PostingDate,
+            PostedDoc."Original Amount",
+            CustLedgEntry."Currency Code");
+        END ELSE BEGIN
+         PostingDate2 := CarteraManagement.GetLastDate(CustLedgEntry."Currency Code",ClosedDoc."Honored/Rejtd. at Date",Type::Receivable
+      );
+          GainLossAmt := CarteraManagement.GetGainLoss(
+            PostingDate2,
+            PostingDate,
+            ClosedDoc."Original Amount",
+            CustLedgEntry."Currency Code");
+        END;
+      END;
+        IF GainLossAmt <> 0 THEN BEGIN
+          TempCurrencyCode := CustLedgEntry."Currency Code";
+          CustLedgEntry."Currency Code" := '';
+          IF GainLossAmt > 0 THEN BEGIN
+            Currency.TESTFIELD("Realized Gains Acc.");
+            GenJnlLineInit;
+            InsertGenJnlLine(
+              GenJnlLine."Account Type"::"G/L Account",
+              Currency."Realized Gains Acc.",
+              0,
+              -GainLossAmt,
+              STRSUBSTNO(
+                Text1100004,
+                CustLedgEntry."Document No.",
+                CustLedgEntry."Bill No."),
+              '');
+          END ELSE BEGIN
+            Currency.TESTFIELD("Realized Losses Acc.");
+            GenJnlLineInit;
+            InsertGenJnlLine(
+              GenJnlLine."Account Type"::"G/L Account",
+              Currency."Realized Losses Acc.",
+              0,
+              -GainLossAmt,
+              STRSUBSTNO(
+                Text1100004,
+                CustLedgEntry."Document No.",
+                CustLedgEntry."Bill No."),
+              '');
+          END;
+          GenJnlLineInit;
+
+          BankAccPostingGr.GET(BankAcc."Bank Acc. Posting Group");
+          InsertGenJnlLine(
+            GenJnlLine."Account Type"::"G/L Account",
+            BankAccPostingGr."G/L Bank Account No.",
+            0,
+            GainLossAmt,
+            STRSUBSTNO(
+              Text1100004,
+              CustLedgEntry."Document No.",
+              CustLedgEntry."Bill No."),
+            '');
+          CustLedgEntry."Currency Code" := TempCurrencyCode;
+        END;
+    END;
+
+    PROCEDURE GetAccount@4() : Code[20];
+    BEGIN
+      BankAccPostingGr.GET(BankAcc."Bank Acc. Posting Group");
+      IF PostedDoc."Dealing Type" = PostedDoc."Dealing Type"::Discount THEN
+        IF PostedBillGr.Factoring = PostedBillGr.Factoring::" " THEN
+          EXIT(BankAccPostingGr."Liabs. for Disc. Bills Acc.")
+        ELSE
+          EXIT(BankAccPostingGr."Liabs. for Factoring Acc.")
+      ELSE
+        EXIT(BankAccPostingGr."G/L Bank Account No.");
+    END;
+
+    PROCEDURE SplitDetailedCVEntry@1100000();
+    VAR
+      DtldCustLedgEntry@1100002 : Record 379;
+      CustLedgEntry2@1100000 : Record 21;
+      ExpAmount@1100001 : Decimal;
+      ExpAmountLCY@1100003 : Decimal;
+    BEGIN
+      IF TempCVLedgEntryBuf.FIND('-') THEN
+        REPEAT
+          BEGIN
+            DtldCustLedgEntry.RESET;
+            DtldCustLedgEntry.SETRANGE("Entry Type",EntryType::"Initial Entry");
+            DtldCustLedgEntry.SETRANGE("Posting Date",PostingDate);
+            DtldCustLedgEntry.SETRANGE("Document Type",TempCVLedgEntryBuf."Document Type"::Bill);
+            DtldCustLedgEntry.SETRANGE("Document No.",TempCVLedgEntryBuf."Document No.");
+            DtldCustLedgEntry.SETRANGE("Customer No.",TempCVLedgEntryBuf."CV No.");
+            DtldCustLedgEntry.SETRANGE("Bill No.",TempCVLedgEntryBuf."Bill No.");
+
+            IF DtldCustLedgEntry.FIND('-') THEN BEGIN
+              ExpAmount :=  DtldCustLedgEntry.Amount - TempCVLedgEntryBuf.Amount;
+              ExpAmountLCY := DtldCustLedgEntry."Amount (LCY)" - TempCVLedgEntryBuf."Amount (LCY)";
+              IF ExpAmount <> 0 THEN BEGIN
+                DtldCustLedgEntry.Amount := TempCVLedgEntryBuf.Amount;
+                DtldCustLedgEntry."Amount (LCY)" := TempCVLedgEntryBuf."Amount (LCY)";
+                CustLedgEntry2.GET(DtldCustLedgEntry."Cust. Ledger Entry No.");
+                DocPost.InsertDtldCustLedgEntry(
+                  CustLedgEntry2,
+                  ExpAmount,
+                  ExpAmountLCY,
+                  EntryType::Expenses,
+                  PostingDate);
+                DtldCustLedgEntry.MODIFY;
+              END;
+            END;
+          END;
+        UNTIL TempCVLedgEntryBuf.NEXT = 0;
+    END;
+
+    PROCEDURE TempCustLedgEntryInit@1100001(CustLedgEntry3@1100000 : Record 21;DocNo2@1100001 : Code[20];InitialDocAmount@1100003 : Decimal;InitialDocAmountLCY@1100002 : Decimal);
+    BEGIN
+      TempCVLedgEntryBuf.INIT;
+      TempCVLedgEntryBuf.TRANSFERFIELDS(CustLedgEntry3);
+      TempCVLedgEntryBuf."CV No." := CustLedgEntry."Customer No.";
+      TempCVLedgEntryBuf.INSERT;
+      TempCVLedgEntryBuf."Bill No." := DocNo2;
+      TempCVLedgEntryBuf.Amount := InitialDocAmount;
+      TempCVLedgEntryBuf."Amount (LCY)" := InitialDocAmountLCY;
+      TempCVLedgEntryBuf.MODIFY;
+    END;
+
+    PROCEDURE InsertDimension@1100006(GenJnlLine3@1100000 : Record 81);
+    VAR
+      CarteraDocDim@1100002 : Record 7000025;
+      PostedDocDim@1100001 : Record 359;
+    BEGIN
+      WITH GenJnlLine3 DO BEGIN
+          IF CustLedgEntry."Document Type" = CustLedgEntry."Document Type"::Bill THEN BEGIN
+          IF ArePostedDocs THEN
+            CarteraDocDim.SETRANGE("Table ID",DATABASE::"Posted Cartera Doc.")
+          ELSE
+            CarteraDocDim.SETRANGE("Table ID",DATABASE::"Closed Cartera Doc.");
+          CarteraDocDim.SETRANGE("Document No.",CustLedgEntry."Document No.");
+          CarteraDocDim.SETRANGE("Bill No.",CustLedgEntry."Bill No.");
+          CarteraDocDim.SETRANGE(Type,0); // 0 = Receivable
+          IF CarteraDocDim.FIND('-') THEN BEGIN
+            REPEAT
+              BEGIN
+                JnlLineDim2.INIT;
+                JnlLineDim2."Table ID" := DATABASE::"Gen. Journal Line";
+                JnlLineDim2."Journal Template Name" := "Journal Template Name";
+                JnlLineDim2."Journal Batch Name" := "Journal Batch Name";
+                JnlLineDim2."Journal Line No." := "Line No.";
+                JnlLineDim2."Dimension Code" := CarteraDocDim."Dimension Code";
+                JnlLineDim2."Dimension Value Code" := CarteraDocDim."Dimension Value Code";
+                JnlLineDim2.INSERT;
+              END;
+            UNTIL CarteraDocDim.NEXT = 0;
+          CarteraDocDim.RESET;
+          END;
+        END ELSE BEGIN
+          PostedDocDim.SETRANGE("Table ID",DATABASE::"Sales Invoice Header");
+          PostedDocDim.SETRANGE("Document No.",CustLedgEntry."Document No.");
+          IF PostedDocDim.FIND('-') THEN BEGIN
+            REPEAT
+              BEGIN
+                JnlLineDim2.INIT;
+                JnlLineDim2."Table ID" := DATABASE::"Gen. Journal Line";
+                JnlLineDim2."Journal Template Name" := "Journal Template Name";
+                JnlLineDim2."Journal Batch Name" := "Journal Batch Name";
+                JnlLineDim2."Journal Line No." := "Line No.";
+                JnlLineDim2."Dimension Code" := PostedDocDim."Dimension Code";
+                JnlLineDim2."Dimension Value Code" := PostedDocDim."Dimension Value Code";
+                JnlLineDim2.INSERT;
+              END;
+            UNTIL PostedDocDim.NEXT = 0;
+          PostedDocDim.RESET;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CheckUnrealizedVAT@1100100(CustLedgEntry@1100100 : Record 21);
+    VAR
+      ExistVATNOReal@1100101 : Boolean;
+      VATPostingSetup@1100102 : Record 325;
+      Text1100101@1100105 : TextConst 'ENU=You can not redraw a bill when this contains Unrealized VAT.;ESP=No puede recircular un efecto cuando contenga IVA no realizado.';
+      GenJnlPostLine@1100103 : Codeunit 12;
+      CustLedgEntry2@1100104 : Record 21;
+    BEGIN
+      CustLedgEntry2.SETCURRENTKEY("Document No.","Document Type","Customer No.");
+      CustLedgEntry2.SETRANGE("Document No.",CustLedgEntry."Document No.");
+      CustLedgEntry2.SETRANGE("Document Type",CustLedgEntry."Document Type");
+      CustLedgEntry2.SETRANGE("Customer No.",CustLedgEntry."Customer No.");
+      IF CustLedgEntry2.FIND('-') THEN
+        ExistVATNOReal := GenJnlPostLine.CustFindVATSetup(VATPostingSetup,CustLedgEntry2,TRUE);
+      IF ExistVATNOReal THEN
+        ERROR(Text1100101);
+    END;
+
+    LOCAL PROCEDURE BatchNameOnAfterValidate@19021358();
+    BEGIN
+      IF TemplName = '' THEN
+        BatchName := '';
+    END;
+
+    LOCAL PROCEDURE BatchNameOnValidate@19072059();
+    BEGIN
+      IF BatchName = '' THEN
+        EXIT;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

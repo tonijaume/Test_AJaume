@@ -1,0 +1,380 @@
+OBJECT Codeunit 423 Change Log Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 402=r,
+                TableData 403=r,
+                TableData 404=r,
+                TableData 405=ri;
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ChangeLogSetup@1000 : Record 402;
+      ChangeLogSetupTable@1003 : Record 403;
+      TempChangeLogSetupTable@1002 : TEMPORARY Record 403;
+      ChangeLogSetupField@1004 : Record 404;
+      TempChangeLogSetupField@1005 : TEMPORARY Record 404;
+      TempField@1006 : TEMPORARY Record 2000000041;
+      ChangeLogSetupRead@1001 : Boolean;
+      LogEmployeePortalActivity@8700 : Boolean;
+      LogEmployeePortalUser@8701 : Code[20];
+
+    PROCEDURE GetTableTriggerMask@5(TableNumber@1000 : Integer) : Integer;
+    VAR
+      ResultMask@1001 : Integer;
+    BEGIN
+      IF TableNumber = DATABASE::"Change Log Entry" THEN
+        EXIT(0);
+
+      IF COMPANYNAME = '' THEN
+        EXIT(0);
+
+      IF TableNumber IN
+         [DATABASE::"Change Log Setup",DATABASE::"Change Log Setup (Table)",
+          DATABASE::"Change Log Setup (Field)"]
+      THEN
+        EXIT(15);
+
+      IF NOT ChangeLogSetupRead THEN BEGIN
+        IF ChangeLogSetup.GET THEN;
+        ChangeLogSetupRead := TRUE;
+      END;
+
+      IF NOT ChangeLogSetup."Change Log Activated" THEN
+        EXIT(0);
+
+      IF NOT TempChangeLogSetupTable.GET(TableNumber) THEN BEGIN
+        IF NOT ChangeLogSetupTable.GET(TableNumber) THEN BEGIN
+          TempChangeLogSetupTable.INIT;
+          TempChangeLogSetupTable."Table No." := TableNumber;
+        END ELSE
+          TempChangeLogSetupTable := ChangeLogSetupTable;
+        TempChangeLogSetupTable.INSERT;
+      END;
+
+      ResultMask := 0;
+      WITH TempChangeLogSetupTable DO BEGIN
+        IF "Log Insertion" <> "Log Insertion"::" " THEN
+          ResultMask := 1;
+        IF "Log Modification" <> "Log Modification"::" " THEN
+          ResultMask := ResultMask + 2 + 8; // also rename
+        IF "Log Deletion" <> "Log Deletion"::" " THEN
+          ResultMask := ResultMask + 4;
+      END;
+      EXIT(ResultMask);
+    END;
+
+    LOCAL PROCEDURE IsLogActive@2(TableNumber@1000 : Integer;FieldNumber@1001 : Integer;TypeOfChange@1002 : 'Insertion,Modification,Deletion') : Boolean;
+    BEGIN
+      IF TableNumber IN
+         [DATABASE::"Change Log Setup",DATABASE::"Change Log Setup (Table)",
+          DATABASE::"Change Log Setup (Field)"]
+      THEN
+        EXIT(TRUE);
+
+      IF NOT ChangeLogSetupRead THEN BEGIN
+        IF ChangeLogSetup.GET THEN;
+        ChangeLogSetupRead := TRUE;
+      END;
+      IF NOT ChangeLogSetup."Change Log Activated" THEN
+        EXIT(FALSE);
+      IF NOT TempChangeLogSetupTable.GET(TableNumber) THEN BEGIN
+        IF NOT ChangeLogSetupTable.GET(TableNumber) THEN BEGIN
+          TempChangeLogSetupTable.INIT;
+          TempChangeLogSetupTable."Table No." := TableNumber;
+        END ELSE
+          TempChangeLogSetupTable := ChangeLogSetupTable;
+        TempChangeLogSetupTable.INSERT;
+      END;
+
+      WITH TempChangeLogSetupTable DO
+        CASE TypeOfChange OF
+          TypeOfChange::Insertion:
+            IF "Log Insertion" = "Log Insertion"::"Some Fields" THEN
+              EXIT(IsFieldLogActive(TableNumber,FieldNumber,TypeOfChange))
+            ELSE
+              EXIT("Log Insertion" = "Log Insertion"::"All Fields");
+          TypeOfChange::Modification:
+            IF "Log Modification" = "Log Modification"::"Some Fields" THEN
+              EXIT(IsFieldLogActive(TableNumber,FieldNumber,TypeOfChange))
+            ELSE
+              EXIT("Log Modification" = "Log Modification"::"All Fields");
+          TypeOfChange::Deletion:
+            IF "Log Deletion" = "Log Deletion"::"Some Fields" THEN
+              EXIT(IsFieldLogActive(TableNumber,FieldNumber,TypeOfChange))
+            ELSE
+              EXIT("Log Deletion" = "Log Deletion"::"All Fields");
+        END;
+    END;
+
+    LOCAL PROCEDURE IsFieldLogActive@6(TableNumber@1000 : Integer;FieldNumber@1001 : Integer;TypeOfChange@1002 : 'Insertion,Modification,Deletion') : Boolean;
+    BEGIN
+      IF FieldNumber = 0 THEN
+        EXIT(TRUE);
+
+      IF NOT TempChangeLogSetupField.GET(TableNumber,FieldNumber) THEN BEGIN
+        IF NOT ChangeLogSetupField.GET(TableNumber,FieldNumber) THEN BEGIN
+          TempChangeLogSetupField.INIT;
+          TempChangeLogSetupField."Table No." := TableNumber;
+          TempChangeLogSetupField."Field No." := FieldNumber;
+        END ELSE
+          TempChangeLogSetupField := ChangeLogSetupField;
+        TempChangeLogSetupField.INSERT;
+      END;
+
+      WITH TempChangeLogSetupField DO
+        CASE TypeOfChange OF
+          TypeOfChange::Insertion:
+            EXIT("Log Insertion");
+          TypeOfChange::Modification:
+            EXIT("Log Modification");
+          TypeOfChange::Deletion:
+            EXIT("Log Deletion");
+        END;
+    END;
+
+    PROCEDURE FormatValue@17(VAR FldRef@1000 : FieldRef;TableNumber@1005 : Integer) : Text[250];
+    VAR
+      Field@1004 : Record 2000000041;
+      OptionNo@1001 : Integer;
+      OptionStr@1002 : Text[1024];
+      i@1003 : Integer;
+    BEGIN
+      GetField(TableNumber,FldRef.NUMBER,Field);
+      IF Field.Type = Field.Type::Option THEN BEGIN
+        OptionNo := FldRef.VALUE;
+        OptionStr := FORMAT(FldRef.OPTIONCAPTION);
+        FOR i := 1 TO OptionNo DO
+          OptionStr := COPYSTR(OptionStr,STRPOS(OptionStr,',') + 1);
+        IF STRPOS(OptionStr,',') > 0 THEN
+          IF STRPOS(OptionStr,',') = 1 THEN
+            OptionStr := ''
+          ELSE
+            OptionStr := COPYSTR(OptionStr,1,STRPOS(OptionStr,',') - 1);
+        EXIT(OptionStr);
+      END ELSE
+        EXIT(FORMAT(FldRef.VALUE));
+    END;
+
+    LOCAL PROCEDURE InsertLogEntry@8(VAR FldRef@1000 : FieldRef;VAR xFldRef@1001 : FieldRef;VAR RecRef@1004 : RecordRef;TypeOfChange@1002 : 'Insertion,Modification,Deletion');
+    VAR
+      ChangeLogEntry@1003 : Record 405;
+      KeyFldRef@1005 : FieldRef;
+      KeyRef1@1006 : KeyRef;
+      i@1007 : Integer;
+    BEGIN
+      ChangeLogEntry.INIT;
+      ChangeLogEntry."Date and Time" := CURRENTDATETIME;
+      ChangeLogEntry.Time := DT2TIME(ChangeLogEntry."Date and Time");
+
+      IF LogEmployeePortalActivity THEN
+        ChangeLogEntry."User ID" := LogEmployeePortalUser
+      ELSE
+        ChangeLogEntry."User ID" := USERID;
+
+      ChangeLogEntry."Table No." := RecRef.NUMBER;
+      ChangeLogEntry."Field No." := FldRef.NUMBER;
+      ChangeLogEntry."Type of Change" := TypeOfChange;
+      IF (RecRef.NUMBER = DATABASE::User) AND (FldRef.NUMBER = 2) THEN BEGIN // Password
+        ChangeLogEntry."Old Value" := '*';
+        ChangeLogEntry."New Value" := '*';
+      END ELSE BEGIN
+        IF TypeOfChange <> TypeOfChange::Insertion THEN
+          ChangeLogEntry."Old Value" := FormatValue(xFldRef,RecRef.NUMBER);
+        IF TypeOfChange <> TypeOfChange::Deletion THEN
+          ChangeLogEntry."New Value" := FormatValue(FldRef,RecRef.NUMBER);
+      END;
+
+      KeyRef1 := RecRef.KEYINDEX(1);
+      FOR i := 1 TO KeyRef1.FIELDCOUNT DO BEGIN
+        KeyFldRef := KeyRef1.FIELDINDEX(i);
+        IF i = 1 THEN
+          ChangeLogEntry."Primary Key" :=
+            STRSUBSTNO('%1=%2',KeyFldRef.CAPTION,FormatValue(KeyFldRef,RecRef.NUMBER))
+        ELSE
+          IF MAXSTRLEN(ChangeLogEntry."Primary Key") >
+            STRLEN(ChangeLogEntry."Primary Key") +
+            STRLEN(STRSUBSTNO(', %1=%2',KeyFldRef.CAPTION,FormatValue(KeyFldRef,RecRef.NUMBER)))
+          THEN
+            ChangeLogEntry."Primary Key" :=
+              COPYSTR(
+                ChangeLogEntry."Primary Key" +
+                STRSUBSTNO(', %1=%2',KeyFldRef.CAPTION,FormatValue(KeyFldRef,RecRef.NUMBER)),
+                1,MAXSTRLEN(ChangeLogEntry."Primary Key"));
+
+        CASE i OF
+          1:
+            BEGIN
+              ChangeLogEntry."Primary Key Field 1 No." := KeyFldRef.NUMBER;
+              ChangeLogEntry."Primary Key Field 1 Value" := FormatValue(KeyFldRef,RecRef.NUMBER);
+            END;
+          2:
+            BEGIN
+              ChangeLogEntry."Primary Key Field 2 No." := KeyFldRef.NUMBER;
+              ChangeLogEntry."Primary Key Field 2 Value" := FormatValue(KeyFldRef,RecRef.NUMBER);
+            END;
+          3:
+            BEGIN
+              ChangeLogEntry."Primary Key Field 3 No." := KeyFldRef.NUMBER;
+              ChangeLogEntry."Primary Key Field 3 Value" := FormatValue(KeyFldRef,RecRef.NUMBER);
+            END;
+        END;
+      END;
+      ChangeLogEntry.INSERT;
+    END;
+
+    PROCEDURE LogInsertion@1(VAR RecRef@1000 : RecordRef);
+    VAR
+      FldRef@1003 : FieldRef;
+      i@1002 : Integer;
+    BEGIN
+      IF NOT IsLogActive(RecRef.NUMBER,0,0) THEN
+        EXIT;
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FldRef := RecRef.FIELDINDEX(i);
+        IF HasValue(FldRef) THEN
+          IF IsNormalField(RecRef.NUMBER,FldRef.NUMBER) THEN
+            IF IsLogActive(RecRef.NUMBER,FldRef.NUMBER,0) THEN
+              InsertLogEntry(FldRef,FldRef,RecRef,0);
+      END;
+    END;
+
+    PROCEDURE LogModification@3(VAR RecRef@1000 : RecordRef;VAR xRecRef@1001 : RecordRef);
+    VAR
+      FldRef@1003 : FieldRef;
+      xFldRef@1004 : FieldRef;
+      i@1002 : Integer;
+    BEGIN
+      IF NOT IsLogActive(RecRef.NUMBER,0,1) THEN
+        EXIT;
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FldRef := RecRef.FIELDINDEX(i);
+        xFldRef := xRecRef.FIELDINDEX(i);
+        IF IsNormalField(RecRef.NUMBER,FldRef.NUMBER) THEN
+          IF FORMAT(FldRef.VALUE) <> FORMAT(xFldRef.VALUE) THEN
+            IF IsLogActive(RecRef.NUMBER,FldRef.NUMBER,1) THEN
+              InsertLogEntry(FldRef,xFldRef,RecRef,1);
+      END;
+    END;
+
+    PROCEDURE LogRename@9(VAR RecRef@1000 : RecordRef;VAR xRecRef@1001 : RecordRef);
+    VAR
+      FldRef@1003 : FieldRef;
+      xFldRef@1004 : FieldRef;
+      i@1002 : Integer;
+    BEGIN
+      IF NOT IsLogActive(RecRef.NUMBER,0,1) THEN
+        EXIT;
+      xRecRef.GET(xRecRef.RECORDID);
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FldRef := RecRef.FIELDINDEX(i);
+        xFldRef := xRecRef.FIELDINDEX(i);
+        IF IsNormalField(RecRef.NUMBER,FldRef.NUMBER) THEN
+          IF FORMAT(FldRef.VALUE) <> FORMAT(xFldRef.VALUE) THEN
+            IF IsLogActive(RecRef.NUMBER,FldRef.NUMBER,1) THEN
+              InsertLogEntry(FldRef,xFldRef,RecRef,1);
+      END;
+    END;
+
+    PROCEDURE LogDeletion@4(VAR RecRef@1000 : RecordRef);
+    VAR
+      FldRef@1001 : FieldRef;
+      i@1002 : Integer;
+    BEGIN
+      IF NOT IsLogActive(RecRef.NUMBER,0,2) THEN
+        EXIT;
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FldRef := RecRef.FIELDINDEX(i);
+        IF HasValue(FldRef) THEN
+          IF IsNormalField(RecRef.NUMBER,FldRef.NUMBER) THEN
+            IF IsLogActive(RecRef.NUMBER,FldRef.NUMBER,2) THEN
+              InsertLogEntry(FldRef,FldRef,RecRef,2);
+      END;
+    END;
+
+    LOCAL PROCEDURE IsNormalField@12(TableNumber@1001 : Integer;FieldNumber@1002 : Integer) : Boolean;
+    VAR
+      Field@1000 : Record 2000000041;
+    BEGIN
+      GetField(TableNumber,FieldNumber,Field);
+      EXIT(Field.Class = TempField.Class::Normal);
+    END;
+
+    LOCAL PROCEDURE GetField@7(TableNumber@1001 : Integer;FieldNumber@1002 : Integer;VAR Field2@1003 : Record 2000000041);
+    VAR
+      Field@1000 : Record 2000000041;
+    BEGIN
+      IF NOT TempField.GET(TableNumber,FieldNumber) THEN BEGIN
+        Field.GET(TableNumber,FieldNumber);
+        TempField := Field;
+        TempField.INSERT;
+      END;
+      Field2 := TempField;
+    END;
+
+    LOCAL PROCEDURE HasValue@10(FldRef@1000 : FieldRef) : Boolean;
+    VAR
+      Field@1102601000 : Record 2000000041;
+      HasValue@1001 : Boolean;
+      Int@1002 : Integer;
+      Dec@1003 : Decimal;
+      D@1007 : Date;
+      T@1008 : Time;
+    BEGIN
+      EVALUATE(Field.Type,FORMAT(FldRef.TYPE));
+
+      CASE Field.Type OF
+        Field.Type::Boolean:
+          HasValue := FldRef.VALUE;
+        Field.Type::Option:
+          HasValue := TRUE;
+        Field.Type::Integer:
+          BEGIN
+            Int := FldRef.VALUE;
+            HasValue := Int <> 0;
+          END;
+        Field.Type::Decimal:
+          BEGIN
+            Dec := FldRef.VALUE;
+            HasValue := Dec <> 0;
+          END;
+        Field.Type::Date:
+          BEGIN
+            D := FldRef.VALUE;
+            HasValue := D <> 0D;
+          END;
+        Field.Type::Time:
+          BEGIN
+            T := FldRef.VALUE;
+            HasValue := T <> 0T;
+          END;
+        Field.Type::BLOB:
+          HasValue := FALSE;
+        ELSE
+          HasValue := FORMAT(FldRef.VALUE) <> '';
+      END;
+
+      EXIT(HasValue);
+    END;
+
+    PROCEDURE SetLogEmployeePortalActivity@8700(lUser@8700 : Code[20]);
+    BEGIN
+      LogEmployeePortalActivity := TRUE;
+      LogEmployeePortalUser := lUser;
+    END;
+
+    BEGIN
+    END.
+  }
+}

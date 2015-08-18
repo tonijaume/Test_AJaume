@@ -1,0 +1,382 @@
+OBJECT Codeunit 7010466 Cancel purchase credit memo
+{
+  OBJECT-PROPERTIES
+  {
+    Date=27/06/13;
+    Time=[ 4:08:20];
+    Modified=Yes;
+    Version List=AIC2009,AF3.10.01,AF3.70;
+  }
+  PROPERTIES
+  {
+    TableNo=124;
+    Permissions=TableData 17=rimd,
+                TableData 25=rimd,
+                TableData 32=rim,
+                TableData 38=rimd,
+                TableData 43=rimd,
+                TableData 87=r,
+                TableData 122=rimd,
+                TableData 123=rimd,
+                TableData 124=rimd,
+                TableData 125=rimd,
+                TableData 254=rimd,
+                TableData 355=rimd,
+                TableData 379=rimd,
+                TableData 380=rimd,
+                TableData 5802=rimd,
+                TableData 7000002=rimd,
+                TableData 7000003=rimd,
+                TableData 7010471=rimd,
+                TableData 7010472=rimd,
+                TableData 7010473=rimd,
+                TableData 7010474=rimd;
+    OnRun=VAR
+            lcSeg@1100217000 : Codeunit 7009751;
+          BEGIN
+            lcSeg.TienePermiso('NAV-ANU-FCO', TRUE); //+$010
+
+            IF NOT CONFIRM(Text90000,FALSE) THEN
+              EXIT;
+
+            // Create corrective invoice
+            ConfCompras.GET;
+            IF ConfCompras."N§ serie anulaciones" = '' THEN
+              ERROR(Text90008);
+
+            CrearAbono := CONFIRM(Text90001);
+
+            //+$008
+            // Check that user can post to date
+            IF cCheckLine.DateNotAllowed("Posting Date") THEN
+              ERROR(Text90002);
+
+            IF AnulaMovs.LiquidationDateNotAllowed("Posting Date") THEN
+              ERROR(Text90013);
+            //+$008
+
+            // Check receivables
+
+            MovProveedor.RESET;
+            MovProveedor.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+            MovProveedor.SETRANGE("Document No.","No.");
+            MovProveedor.SETRANGE("Vendor No.","Pay-to Vendor No.");
+            IF MovProveedor.FINDSET THEN BEGIN
+              MovProveedor.CALCFIELDS(Amount,"Amount (LCY)");
+              MPImporte := MovProveedor.Amount;
+              MPImporteDL := MovProveedor."Amount (LCY)";
+              REPEAT
+                MovProveedor.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+                MPImportePen := MPImportePen + MovProveedor."Remaining Amount";
+                MPImportePenDL := MPImportePenDL + MovProveedor."Remaining Amt. (LCY)";
+              UNTIL MovProveedor.NEXT = 0;
+
+              IF (MPImporte <> MPImportePen) OR
+                (MPImporteDL <> MPImportePenDL) OR
+                (MPImportePen = 0) OR
+                (MPImportePenDL = 0) THEN
+                  ERROR(Text90003);
+            END;
+
+            // Check that VAT has not been applied
+            MovIVA.SETRANGE("Document No.","No.");
+            MovIVA.SETRANGE("Posting Date","Posting Date");
+            MovIVA.SETRANGE(Closed,TRUE);
+            IF MovIVA.FIND THEN
+              ERROR(Text90004);
+
+            // Check that there are not a closing date later posting date
+            PeriodoContable.SETFILTER("Starting Date", '>=%1', "Posting Date");
+            PeriodoContable.SETRANGE(Closed          , TRUE);
+            IF PeriodoContable.FIND THEN
+              ERROR(Text90005);
+
+            // Check that ther are not a date compression to date
+            HistCompFechas.SETFILTER("Ending Date", '>=%1', "Posting Date");
+            IF HistCompFechas.FINDFIRST THEN
+              ERROR(Text90006);
+
+            // Check that auto credit memos has not been created
+            IF "Autocredit Memo No." <> '' THEN
+              ERROR(Text90007);
+
+            //. Borramos el comentario que se crea cuando el programa no puede mover el PDF
+            LinComentCompra.RESET;
+            LinComentCompra.SETRANGE("Document Type", LinComentCompra."Document Type"::"Posted Credit Memo");
+            LinComentCompra.SETRANGE("No."          , "No.");
+            LinComentCompra.SETRANGE("Line No."     , -1);
+            IF LinComentCompra.FINDSET(TRUE) THEN
+              LinComentCompra.DELETE;
+
+            // Create new credit memo header
+            IF CrearAbono THEN BEGIN
+              CabCompra2.INIT;
+              CabCompra2."Document Type" := CabCompra2."Document Type"::"Credit Memo";
+
+              //+$004 <
+              IF ConfCompras."Credit Memo Nos." = ConfCompras."Posted Credit Memo Nos." THEN
+                CabCompra2."No." := "No.";
+              //+$004 >
+
+              CabCompra2.INSERT(TRUE);
+              CopiarDocCompra.SetPurchHeader(CabCompra2);
+              CopiarDocCompra.DefOpciones(9,"No.",TRUE,FALSE,TRUE);
+              CopiarDocCompra.USEREQUESTFORM(FALSE);
+              CopiarDocCompra.RUN;
+              CabCompra2.GET(CabCompra2."Document Type",CabCompra2."No.");
+              CabCompra2."Posting No." := "No.";
+              //+$011 <
+              rVendor.GET("Buy-from Vendor No.");
+              CabCompra2."Payment Terms Code"  := rVendor."Payment Terms Code";
+              //+$011 >
+              CabCompra2.MODIFY;
+            END;
+
+            //. Create new invoice header
+            CabCompra.INIT;
+            CabCompra."Document Type" := CabCompra."Document Type"::Invoice;
+            CabCompra."No. Series"    := ConfCompras."N§ serie anulaciones";
+
+            // $001 AJS 08.02.2007, Comprobantes fiscales
+
+            CabCompra.Anulaci¢n := TRUE;                               //FCL-17/03/04
+            CabCompra.INSERT(TRUE);
+
+            CopiarDocCompra.SetPurchHeader(CabCompra);
+            CopiarDocCompra.DefOpciones(9,"No.",TRUE,FALSE,TRUE);
+            CopiarDocCompra.USEREQUESTFORM(FALSE);
+            CopiarDocCompra.RUN;
+
+            CabCompra.GET(CabCompra."Document Type",CabCompra."No.");
+            //-$011CabCompra.VALIDATE("Buy-from Vendor No.");
+            //+$011 <
+            rVendor.GET("Buy-from Vendor No.");
+            CabCompra."Payment Terms Code"  := rVendor."Payment Terms Code";
+            CabCompra."Payment Method Code" := rVendor."Payment Method Code";
+            //+$011 >
+            CabCompra."Posting No. Series" := ConfCompras."N§ serie anulaciones";
+            CabCompra.Correction := TRUE;
+            // CabCompra."Vendor Invoice No." := Text90009;
+            CabCompra."Vendor Invoice No." := "Vendor Cr. Memo No.";
+            //+$013 <
+            IF CabCompra."Due Date" = 0D THEN
+              CabCompra."Due Date" := CabCompra."Posting Date";
+            //+$013 >
+            // CabCompra.Anulaci¢n := TRUE;                               //FCL-17/03/04
+            CabCompra.MODIFY;
+
+            RegisCompras.RUN(CabCompra);
+
+            CabFacturaCompras.SETCURRENTKEY("Pre-Assigned No.");
+            CabFacturaCompras.SETRANGE("Pre-Assigned No.",CabCompra."No.");
+            CabFacturaCompras.FINDFIRST;
+
+            // Cancel Purchase Credit Memo
+            CabAbonoCompAnulado.SETFILTER("No.",'>%1&<%2',STRSUBSTNO('%1/',"No."),STRSUBSTNO('%1/',INCSTR("No.")));
+            IF CabAbonoCompAnulado.FIND('+') THEN
+              NoVersion := INCSTR(CabAbonoCompAnulado."No.")
+            ELSE
+              NoVersion := "No." + '/1';
+
+            CabAbonoCompAnulado.INIT;
+            CabAbonoCompAnulado.TRANSFERFIELDS(Rec);
+            CabAbonoCompAnulado."No." := NoVersion;
+            CabAbonoCompAnulado."Cancel by invoice" := CabFacturaCompras."No.";
+            CabAbonoCompAnulado.INSERT;
+
+            LinAbonoCompra.SETRANGE("Document No.","No.");
+            IF LinAbonoCompra.FINDSET THEN
+              REPEAT
+                LinAbonoCompraAnulado.INIT;
+                LinAbonoCompraAnulado.TRANSFERFIELDS(LinAbonoCompra);
+                LinAbonoCompraAnulado."Document No." := NoVersion;
+                LinAbonoCompraAnulado.INSERT;
+              UNTIL LinAbonoCompra.NEXT = 0;
+
+            //Parche 240700
+            IF Comment THEN BEGIN
+              CopiarLinsComent(
+                LinComentCompra."Document Type"::"Posted Invoice",
+                LinComentCompra."Document Type"::"Posted Invoice",
+                "No.",
+                CabAbonoCompAnulado."No.");
+            END;
+            //Fin
+
+            AnulaDimensiones.DeleteDocDimensions("No.");
+            AnulaDimensiones.DeleteDimensions("No.", "Posting Date");
+            AnulaDimensiones.DeleteDimensions(CabFacturaCompras."No.", CabFacturaCompras."Posting Date");
+
+            DocNo := "No.";
+            DELETE;
+            LinAbonoCompra.DELETEALL;
+
+            // Cancel Invoice
+            CabFacturaCompAnulado.INIT;
+            CabFacturaCompAnulado.TRANSFERFIELDS(CabFacturaCompras);
+            CabFacturaCompAnulado."No." := CabFacturaCompras."No.";
+
+            LinFacturaCompras.SETRANGE("Document No.",CabFacturaCompras."No.");
+            IF LinFacturaCompras.FINDSET THEN
+              REPEAT
+                LinFacturaCompAnulado.INIT;
+                LinFacturaCompAnulado.TRANSFERFIELDS(LinFacturaCompras);
+                LinFacturaCompAnulado."Document No." := CabFacturaCompras."No.";
+                LinFacturaCompAnulado.INSERT;
+              UNTIL LinFacturaCompras.NEXT = 0;
+
+            CabFacturaCompAnulado.INSERT;
+            AnulaDimensiones.DeleteDocDimensions(CabFacturaCompAnulado."No.");
+
+            CabFacturaCompras.DELETE;
+            LinFacturaCompras.DELETEALL;
+
+            // Cancel credit memo ledger entries
+            MovContabilidad.SETCURRENTKEY("Document No.", "Posting Date");
+            MovContabilidad.SETRANGE("Document No.", "No.");
+            MovContabilidad.SETRANGE("Posting Date", "Posting Date"); //+$012
+            WHILE MovContabilidad.FINDFIRST DO
+              AnulaMovs.RUN(MovContabilidad);
+
+            // Cancel invoice ledger entries
+            MovContabilidad.SETRANGE("Document No.", CabFacturaCompras."No.");
+            MovContabilidad.SETRANGE("Posting Date", CabFacturaCompras."Posting Date");
+            IF MovContabilidad.FINDFIRST THEN
+              AnulaMovs.RUN(MovContabilidad);
+
+            //Cancel item ledger entries
+            //-$003MovProducto.SETCURRENTKEY("Document No.","Posting Date");
+            MovProducto.SETCURRENTKEY("Document No."); //+$003
+            MovProducto.SETRANGE("Document No.", "No.");
+            MovProducto.SETRANGE("Posting Date", "Posting Date");
+            WHILE MovProducto.FINDFIRST DO
+              MovProducto.MODIFYALL(MovProducto."Document No.", CabFacturaCompras."No.");
+
+            //-$003ValueEntry.SETCURRENTKEY("Document No.","Posting Date");
+            ValueEntry.SETCURRENTKEY("Document No."); //-$003
+            ValueEntry.SETRANGE("Document No.", DocNo);
+            ValueEntry.SETRANGE("Posting Date", "Posting Date");
+            WHILE ValueEntry.FINDFIRST DO
+              ValueEntry.MODIFYALL(ValueEntry."Document No.",CabFacturaCompras."No.");
+
+            DetVendLedgEntry.SETRANGE("Document No.", CabFacturaCompras."No.");
+            DetVendLedgEntry.SETRANGE("Posting Date", CabFacturaCompras."Posting Date");
+            DetVendLedgEntry.SETRANGE("Vendor No.", CabFacturaCompras."Pay-to Vendor No.");
+            IF DetVendLedgEntry.FINDSET(TRUE) THEN
+              DetVendLedgEntry.DELETEALL;
+
+            DetVendLedgEntry.SETRANGE("Document No.", DocNo);
+            DetVendLedgEntry.SETRANGE("Posting Date", "Posting Date");
+            DetVendLedgEntry.SETRANGE("Vendor No."  , "Pay-to Vendor No.");
+            IF DetVendLedgEntry.FINDSET(TRUE) THEN
+              DetVendLedgEntry.DELETEALL;
+
+            // $002 AJS 28.02.2007, Escaneo documentos
+
+            cFunVar.AnularDocCompraEscaneado("Codigo barras PDF", "Posting Date");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text90000@1100039 : TextConst 'ENU=Do you wish to continue?;ESP=¨Confirma que desea anular el abono?';
+      Text90001@1100040 : TextConst 'ENU=Create new credit memo?;ESP=¨Generar nuevo abono?';
+      Text90002@1100041 : TextConst 'ENU=Posting date is out of range;ESP=La fecha de contabilizaci¢n est  fuera del rango de fechas';
+      Text90003@1100042 : TextConst 'ENU=You can not cancel a credit memo with payments;ESP=No se puede anular un abono con pagos';
+      Text90004@1100043 : TextConst 'ENU=You can not cancel a credit memo with applied VAT.;ESP=No se puede anular un abono con IVA liquidado.';
+      Text90005@1100044 : TextConst 'ENU=You can not cancel an invoice previous a closing date.;ESP=No se puede anular una factura anterior a un cierre.';
+      Text90006@1100045 : TextConst 'ENU=Previous date compression to date.;ESP=Compresi¢n de datos previa efectuada para esa fecha.';
+      Text90007@1100046 : TextConst 'ENU=You can not cancel a credit memo that created an auto credit memo;ESP=No se puede anular un abono que ha generado un autoabono.';
+      Text90008@1100047 : TextConst 'ENU=You must create a Serial No. to cancel puchases;ESP=Necesita definir una serie de anulaci¢n de compras';
+      Text90009@1100048 : TextConst 'ENU=Cancel;ESP=Anulacion';
+      HistCompFechas@1100000 : Record 87;
+      CabAbonoCompAnulado@1100001 : Record 7010473;
+      LinAbonoCompra@1100002 : Record 125;
+      LinAbonoCompraAnulado@1100003 : Record 7010474;
+      CabFacturaCompras@1100004 : Record 122;
+      CabFacturaCompAnulado@1100005 : Record 7010471;
+      LinFacturaCompras@1100006 : Record 123;
+      LinFacturaCompAnulado@1100007 : Record 7010472;
+      DetVendLedgEntry@1100033 : Record 380;
+      CabCompra@1100008 : Record 38;
+      LinCompra@1100009 : Record 39;
+      CabCompra2@1100010 : Record 38;
+      LinCompra2@1100011 : Record 39;
+      MovContabilidad@1100012 : Record 17;
+      MovProveedor@1100013 : Record 25;
+      MovProducto@1100014 : Record 32;
+      MovIVA@1100015 : Record 254;
+      ConfContabilidad@1100016 : Record 98;
+      ConfUsuario@1100017 : Record 91;
+      PeriodoContable@1100018 : Record 50;
+      ConfCompras@1100019 : Record 312;
+      ValueEntry@1100030 : Record 5802;
+      rVendor@1100217002 : Record 23;
+      RegisCompras@1100020 : Codeunit 90;
+      AnulaMovs@1100021 : Codeunit 7010458;
+      AnulaDimensiones@1100032 : Codeunit 7010452;
+      cFunVar@1103355000 : Codeunit 7009720;
+      cCheckLine@1100217000 : Codeunit 11;
+      CopiarDocCompra@1100022 : Report 492;
+      FechaDesde@1100023 : Date;
+      FechaHasta@1100024 : Date;
+      Saldo@1100025 : Decimal;
+      CrearAbono@1100026 : Boolean;
+      NoVersion@1100027 : Code[20];
+      LinComentCompra@1100028 : Record 43;
+      LinComentCompra2@1100029 : Record 43;
+      DocNo@1100031 : Code[10];
+      MPImporte@1100034 : Decimal;
+      MPImporteDL@1100035 : Decimal;
+      MPImportePen@1100036 : Decimal;
+      MPImportePenDL@1100037 : Decimal;
+      kk@1000 : Codeunit 7010452;
+      Text90013@1100217001 : TextConst 'ESP=La fecha del documento esta fuera del rango permitido de liquidacion.';
+
+    PROCEDURE CopiarLinsComent@22(DesdeTipoDocument@1100000 : Integer;HastaTipoDocument@1100001 : Integer;DesdeNro@1100002 : Code[20];HastaNro@1100003 : Code[20]);
+    BEGIN
+      LinComentCompra.SETRANGE("Document Type",DesdeTipoDocument);
+      LinComentCompra.SETRANGE("No.",DesdeNro);
+      IF LinComentCompra.FINDSET THEN
+        REPEAT
+          LinComentCompra2 := LinComentCompra;
+          LinComentCompra2."Document Type" := HastaTipoDocument;
+          LinComentCompra2."No." := HastaNro;
+          LinComentCompra2.INSERT;
+        UNTIL LinComentCompra.NEXT = 0;
+      LinComentCompra.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 08.02.2007, Comprobantes fiscales
+         Mover la linea que marca el abono como anulacion para que este antes de la llamada a la codeunit de copiar
+         documento.
+
+          CabCompra.Anulaci¢n := TRUE;  // FCL-17/03/04
+
+      $002 AJS 28.02.2007, Escaneo documentos
+         Mover el documento escaneado desde la carpeta de documentos registrados a la carpeta de documentos pendientes
+
+      $003 AJS 08052012 Modifico la clave para acceder a Mov. Producto y Mov. Valor porque usan una que no existe
+
+      $004 AJS 14022013 Hacemos que el borrador de abono se cree con el mismo numero que tenia
+
+      $008 AJS 26022013 Establecemos los controles de fecha registro y liquidacion antes de anular
+
+      $009 AJS 02032013 Borrar el posible comentario ocasionado por la gestion de los PDF
+
+      $010 AJS 09042013 Control de seguridad por usuario
+
+      $011 AJS 23052013 Comento una validaci¢n sobre Buy vendor porque generaba un error de dimensiones y tomo los
+                        campos de proveedor que son realmente necesarios
+
+      $012 AJS 16062013 Corrijo un problema que habia con los filtros por fecha de registro, si el usuario habia cambiado la
+                        fecha de trabajo
+
+      $013 AJS 27062013 Corrijo un problema con la fecha de vencimiento en la factura que se crea para anular el abono
+    }
+    END.
+  }
+}

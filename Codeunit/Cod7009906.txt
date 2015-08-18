@@ -1,0 +1,1002 @@
+OBJECT Codeunit 7009906 Traspaso Facturas
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1103355000 : TextConst 'ENU=There is a remaining header. Process or Cancel it before creating a new one;ESP=Queda una cabecera pendiente. Procesela o Anulela antes de crear una cabecera nueva.';
+      Text002@1103355002 : TextConst 'ENU=FTP directory was not found;ESP=No se han podido obtener los directorios del FTP.';
+      Text003@1103355003 : TextConst 'ENU=temp;ESP=temp';
+      Text004@1103355004 : TextConst 'ENU=Supplier does not exist;ESP=No existe el proveedor.';
+      Text005@1103355006 : TextConst 'ENU=Unique Hotel for supplier does not exist;ESP=No existe un hotel £nico para el proveedor.';
+      Text006@1103355007 : TextConst 'ENU=Only remaining transfers can be cancelled;ESP=Solo se pueden anular traspasos pendientes.';
+      Text007@1103355008 : TextConst 'ENU=An invoice for supplier and hotel already exists;ESP=Ya existe una factura para el proveedor y hotel.';
+      Text008@1103355009 : TextConst 'ENU=Some of the documents were not found in the temporary folder, Would you like to import again from FTP?;ESP=Algunos de los documentos no se han encontrado en la carpeta temporal, ¨Desea volver a reimportar desde el FTP?';
+      Text009@1103355010 : TextConst 'ENU=Some documents could no be found. These are marked;ESP=No se han podido encontrar algunos documentos. Estos se han marcado.';
+      Text010@1103355011 : TextConst 'ENU=Errors were found during transferring;ESP=Se han encontrado errores en el traspaso.';
+      Text011@1103355013 : TextConst 'ENU=File %1 was not found;ESP=No se ha encontrado el archivo %1.';
+      Text020@1103355001 : TextConst 'ENU=ftp.cmd;ESP=ftp.cmd';
+      rError@1103355005 : Record 7009879;
+      wTipoRegistro@1103355012 : 'Doc Compra,Conf Hotel,Ext Banco';
+      Text021@1103355014 : TextConst 'ENU=Folder name seems no corresponding with one invoice;ESP=El Nombre del fichero parece no corresponder con una factura.';
+      cVarias@1103355015 : Codeunit 7009720;
+      cSeries@1103355016 : Codeunit 396;
+      Text022@1103355017 : TextConst 'ENU=Unable to copy the folder %1 to \%2;ESP=Imposible copiar el fichero %1 a \%2.';
+      Text023@1103355018 : TextConst 'ENU=Unable to create %1;ESP=Imposible crear %1.';
+
+    LOCAL PROCEDURE ComprobarPendientes@1103355000();
+    VAR
+      lrCab@1103355000 : Record 7009877;
+    BEGIN
+      // ComprobarPendientes
+
+      lrCab.SETCURRENTKEY(Estado);
+      lrCab.SETRANGE (Estado, lrCab.Estado::Pendiente);
+      IF NOT lrCab.ISEMPTY THEN
+        ERROR(Text001);
+    END;
+
+    PROCEDURE CrearNuevoTraspaso@1103355004();
+    VAR
+      lrParInt@1103355000 : Record 7010081;
+      lrPar@1103355002 : Record 7009700;
+      lrDirsTMP@1103355001 : TEMPORARY Record 318;
+      lwRutaTemp@1103355003 : Text[1024];
+      lrCab@1103355004 : Record 7009877;
+      lwProvEnc@1103355005 : Boolean;
+      lwHotel@1103355006 : Code[20];
+    BEGIN
+      // CrearNuevoTraspaso.
+
+      lrParInt.FINDFIRST;
+      lrPar.FINDFIRST;
+
+      ComprobarPendientes;
+
+      IF NOT ObtenerDirectoriosFTP(lrParInt."Direccion FTP Facturas", lrParInt."Usuario FTP Facturas",
+                                    lrParInt."Password FTP Facturas", lrParInt."Ruta FTP Facturas", lrDirsTMP) THEN
+        ERROR(Text002);
+
+      LimpiarCarpetaTemporal;
+
+      // primero Traspasamos los ficheros a la carpeta temporal.
+
+      lwRutaTemp := lrPar."Ruta ficheros PDF" + '\' + Text003 + '\';
+      ComprobarRuta(lwRutaTemp);
+      ImportarFicherosFTP(lrParInt."Direccion FTP Facturas", lrParInt."Usuario FTP Facturas",lrParInt."Password FTP Facturas",
+                          lrParInt."Ruta FTP Facturas", lwRutaTemp, lrDirsTMP);
+
+      lrDirsTMP.RESET;
+      IF lrDirsTMP.FINDSET THEN BEGIN
+
+        // Comprobamos si existe el directorio temporal para los ficheros
+
+        CrearCabecera(lrCab);
+
+        // Hago commit despu‚s de crear la cabecera, para evitar que se creen dos cabeceras pendientes a la vez.
+        COMMIT;
+
+        REPEAT
+
+          lwProvEnc := ComprobarProveedor(lrCab, lrDirsTMP.Code, lwHotel);
+          CrearLineasxProveedor(lrCab, lrDirsTMP, lwRutaTemp, lwProvEnc, lwHotel);
+
+        UNTIL lrDirsTMP.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ImportarFicherosFTP@1103355041(pwDireccion@1103355007 : Text[250];pwUsuario@1103355006 : Text[250];pwPassword@1103355005 : Text[250];pwRuta@1103355003 : Text[250];pwRutaDestino@1103355008 : Text[250];VAR prDirsTMp@1103355002 : TEMPORARY Record 318) : Boolean;
+    VAR
+      lfFtp@1103355000 : File;
+      lwScrpName@1103355001 : Text[250];
+      lwFTPOK@1103355004 : Boolean;
+    BEGIN
+      // ImportarFicherosFTP
+
+      // Nombre de la archivo script
+      IF NOT prDirsTMp.FINDSET THEN
+        EXIT(FALSE);
+
+      lwScrpName:= 'scpt.ftp';
+
+      //GENERAMOS EL SCRIPT PARA EL FTP
+      lfFtp.CREATE(lwScrpName);
+      lfFtp.WRITEMODE (TRUE);
+      lfFtp.TEXTMODE (TRUE);
+
+      lfFtp.WRITE(STRSUBSTNO('o %1'   , pwDireccion));
+      lfFtp.WRITE(STRSUBSTNO('%1'     , pwUsuario));
+      lfFtp.WRITE(STRSUBSTNO('%1'     , pwPassword));
+      lfFtp.WRITE('binary');
+      lfFtp.WRITE(STRSUBSTNO('cd %1'  , '/' + pwRuta + '/'));
+
+      REPEAT
+        ComprobarRuta(pwRutaDestino + '\' + prDirsTMp.Code);
+        lfFtp.WRITE(STRSUBSTNO('lcd %1' , pwRutaDestino + '\' + prDirsTMp.Code));
+        lfFtp.WRITE(STRSUBSTNO('cd %1'  , '/' + pwRuta + '/' + prDirsTMp.Code + '/Invoices'));
+        lfFtp.WRITE('mget *');
+      UNTIL prDirsTMp.NEXT = 0;
+
+      lfFtp.WRITE('bye');
+      lfFtp.CLOSE;
+
+
+      lwFTPOK:= SHELL('C:\WINDOWS\system32\ftp.exe','-v -i -s:' + lwScrpName) = 0;
+
+      //SI EXISTE EL SCRIPT PARA EL FTP LO BORRAMOS
+      IF EXISTS(lwScrpName) THEN
+        ERASE(lwScrpName);
+
+      EXIT(lwFTPOK);
+    END;
+
+    LOCAL PROCEDURE ObtenerDirectoriosFTP@1103355040(pwDireccion@1103355005 : Text[250];pwUsusario@1103355006 : Text[250];pwPasswprd@1103355007 : Text[250];pwRuta@1103355013 : Text[250];VAR prProveedores@1103355003 : TEMPORARY Record 318) : Boolean;
+    VAR
+      lfFtp@1103355000 : File;
+      lwScrpName@1103355001 : Text[250];
+      lwFTPOK@1103355004 : Boolean;
+      lwInStream@1103355010 : InStream;
+      lwLinea@1103355011 : Text[1024];
+      lwLog@1103355008 : File;
+      lwCmdName@1103355009 : Text[250];
+      lwLista@1103355002 : Boolean;
+      lwDir@1103355012 : Text[250];
+      lwAuxPos@1103355014 : Integer;
+    BEGIN
+      // ObtenerDirectoriosFTP
+      // Devolvemos la lista de directorios del FTP en la ruta indicada.
+
+      // Limpio el temporary donde guardo los nombres de directorios que hay en el FTP
+      prProveedores.RESET;
+      prProveedores.DELETEALL;
+
+      // Nombre de la archivo script para el ftp.
+      lwScrpName:= 'scpt.ftp';
+
+      //GENERAMOS EL SCRIPT PARA EL FTP
+      lfFtp.CREATE(lwScrpName);
+      lfFtp.WRITEMODE (TRUE);
+      lfFtp.TEXTMODE (TRUE);
+
+      lfFtp.WRITE(STRSUBSTNO('o %1'   , pwDireccion));
+      lfFtp.WRITE(STRSUBSTNO('%1'     , pwUsusario));
+      lfFtp.WRITE(STRSUBSTNO('%1'     , pwPasswprd));
+      //lfFtp.WRITE('binary');
+
+      IF pwRuta <> '' THEN
+        lfFtp.WRITE(STRSUBSTNO('cd %1', pwRuta));
+
+      lfFtp.WRITE('dir');
+      lfFtp.WRITE('bye');
+      lfFtp.CLOSE;
+
+      lwCmdName := Text020;
+      //Genero EL CMD para guardar el log
+
+      lfFtp.CREATE(lwCmdName);
+      lfFtp.WRITEMODE (TRUE);
+      lfFtp.TEXTMODE (TRUE);
+      lfFtp.WRITE('c:\windows\system32\ftp.exe %1 %2 > %3');
+      lfFtp.CLOSE;
+
+      lwFTPOK := SHELL(Text020, '-i -s:scpt.ftp ftp.log') = 0;
+
+
+      lwLista := FALSE;
+
+      IF lwFTPOK THEN BEGIN
+
+        lwFTPOK := FALSE;
+
+        IF NOT lwLog.OPEN('ftp.log') THEN
+          EXIT;
+
+        lwLog.CREATEINSTREAM(lwInStream);
+
+        WHILE NOT lwInStream.EOS DO BEGIN
+
+          lwInStream.READTEXT(lwLinea);
+
+          IF STRPOS(lwLinea, '550 ') = 1 THEN BEGIN // Si da un error sale del proceso
+            MESSAGE(lwLinea);
+            EXIT;
+          END;
+
+
+          IF NOT lwLista THEN BEGIN
+            // empieza el dir.
+            IF STRPOS(lwLinea, '150 ') = 1 THEN
+              lwLista := TRUE;
+          END
+          ELSE BEGIN
+            // Acaba el dir.
+            IF STRPOS(lwLinea, '226 ') = 1 THEN
+             lwLista := FALSE;
+
+            // Es un directorio,.
+            IF STRPOS(lwLinea, 'd') = 1 THEN BEGIN
+              // busco los : de la hora
+              // me desplazo 3 posiciones para obtener el nombre del directorio.
+              // AJF 23/11/09
+              // Vamos a intentar con posiciones fijas.
+              //lwAuxPos := STRPOS(lwLinea, ':');
+              lwDir := COPYSTR(lwLinea, 61, STRLEN(lwLinea));
+              // No son los directorios comodines.
+              IF NOT(lwDir IN ['.', '..']) THEN BEGIN
+                lwFTPOK := TRUE;
+                IF STRLEN(lwDir) <= MAXSTRLEN(prProveedores.Code) THEN BEGIN
+                  prProveedores.INIT;
+                  prProveedores.Code := lwDir;
+                  prProveedores.INSERT;
+                END;
+              END;
+            END;
+
+          END;
+
+
+        END;
+
+      END;
+
+      IF EXISTS(lwCmdName) THEN
+        ERASE(lwCmdName);
+
+      IF EXISTS(lwScrpName) THEN
+        ERASE(lwScrpName);
+
+      EXIT(lwFTPOK);
+    END;
+
+    LOCAL PROCEDURE EliminarFicherosFTP@1103355036(pwDireccion@1103355008 : Text[250];pwUsuario@1103355007 : Text[250];pwPassword@1103355006 : Text[250];pwRuta@1103355005 : Text[250];VAR prCab@1103355000 : Record 7009877) : Boolean;
+    VAR
+      lrFicheros@1103355001 : Record 7009878;
+      lfFtp@1103355004 : File;
+      lwScrpName@1103355003 : Text[250];
+      lwFTPOK@1103355002 : Boolean;
+      lwCmdName@1103355009 : Text[250];
+    BEGIN
+      // EliminarFicherosFTP
+
+      // Recuperamos los ficheros que se tienen que eliminar de FTP;
+      lrFicheros.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFicheros.SETRANGE ("Id Cabecera", prCab.Id);
+      lrFicheros.SETFILTER (Accion      , '%1|%2|%3|%4', lrFicheros.Accion::Traspasar,
+                                                         lrFicheros.Accion::Borrar,
+                                                         lrFicheros.Accion::Forzar,
+                                                         lrFicheros.Accion::Guardar);
+
+      IF lrFicheros.FINDSET THEN BEGIN
+
+        // Nombre de la archivo script
+
+        lwScrpName:= 'scpt.ftp';
+
+        //GENERAMOS EL SCRIPT PARA EL FTP
+        lfFtp.CREATE(lwScrpName);
+        lfFtp.WRITEMODE (TRUE);
+        lfFtp.TEXTMODE (TRUE);
+
+        lfFtp.WRITE(STRSUBSTNO('o %1'   , pwDireccion));
+        lfFtp.WRITE(STRSUBSTNO('%1'     , pwUsuario));
+        lfFtp.WRITE(STRSUBSTNO('%1'     , pwPassword));
+        lfFtp.WRITE('binary');
+
+        lfFtp.WRITE(STRSUBSTNO('cd %1'  , '/' + pwRuta));
+
+        // AJF 24/06/09
+        // A¤ado comillas al nombre para que funcione con los archivos con espacios.
+        REPEAT
+          lfFtp.WRITE(STRSUBSTNO('cd %1', '/' + pwRuta + '/' + lrFicheros.Proveedor + '/Invoices'));
+          lfFtp.WRITE(STRSUBSTNO('delete %1', '"' + lrFicheros."Nombre fichero" + '"'));
+        UNTIL lrFicheros.NEXT = 0;
+
+        lfFtp.WRITE('bye');
+        lfFtp.CLOSE;
+
+        lwCmdName := Text020;
+        //Genero EL CMD para guardar el log
+
+        lfFtp.CREATE(lwCmdName);
+        lfFtp.WRITEMODE (TRUE);
+        lfFtp.TEXTMODE (TRUE);
+        lfFtp.WRITE('c:\windows\system32\ftp.exe %1 %2 > %3');
+        lfFtp.CLOSE;
+
+        lwFTPOK := SHELL(Text020, '-i -s:scpt.ftp ftp.log') = 0;
+
+        //lwFTPOK:= SHELL('C:\WINDOWS\system32\ftp.exe','-v -i -s:' + lwScrpName) = 0;
+
+        //SI EXISTE EL SCRIPT PARA EL FTP LO BORRAMOS
+        IF EXISTS(lwScrpName) THEN
+          ERASE(lwScrpName);
+
+        EXIT(lwFTPOK);
+
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE ComprobarRuta@1103355012(pwRuta@1103355000 : Text[1024]);
+    VAR
+      autFileSystem@1103355001 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+    BEGIN
+      // ComprobarRuta
+
+      CREATE(autFileSystem);
+      IF NOT autFileSystem.FolderExists(pwRuta) THEN BEGIN
+        autFileSystem.CreateFolder(pwRuta);
+      END;
+    END;
+
+    LOCAL PROCEDURE CrearCabecera@1103355011(VAR prCab@1103355000 : Record 7009877);
+    BEGIN
+      // CrearCabecera
+
+      prCab.RESET;
+      prCab.Estado := prCab.Estado::Pendiente;
+      prCab.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CrearLineasxProveedor@1103355016(VAR prCab@1103355000 : Record 7009877;VAR prDirTMP@1103355001 : TEMPORARY Record 318;pwRutaTemp@1103355003 : Text[1024];pwProvEnc@1103355009 : Boolean;pwHotel@1103355010 : Code[20]);
+    VAR
+      lwIndex@1103355007 : Integer;
+      lwFichero@1103355008 : Text[250];
+      lrFicheros@1103355002 : Record 2000000022;
+      lwNumFact@1103355004 : Integer;
+      lwErrorNombre@1103355005 : Boolean;
+      lwNFactExt@1103355006 : Code[20];
+    BEGIN
+      // CrearLineasxProveedor
+
+      lrFicheros.SETRANGE(Path, pwRutaTemp + prDirTMP.Code);
+      lrFicheros.SETRANGE("Is a file", TRUE);
+
+      IF lrFicheros.FINDSET THEN BEGIN
+        REPEAT
+
+          // Comprobaciones por l¡nea.
+
+          lwNFactExt := '';
+          lwNumFact := ComprobarNumFactura(lrFicheros.Name, prDirTMP.Code, pwHotel, lwErrorNombre, lwNFactExt);
+
+          CrearLinea(prCab, prDirTMP, lrFicheros.Name, pwProvEnc, pwHotel, lwNumFact, lwErrorNombre, lwNFactExt);
+
+        UNTIL lrFicheros.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CrearLinea@1103355008(VAR prCab@1103355000 : Record 7009877;VAR prDirTMP@1103355001 : TEMPORARY Record 318;pwArchivo@1103355002 : Text[250];pwProveedorEnc@1103355004 : Boolean;pwHotel@1103355005 : Code[20];pwNumFact@1103355006 : Integer;pwErrorNombre@1103355007 : Boolean;pwFactExt@1103355008 : Code[20]);
+    VAR
+      lrFichero@1103355003 : Record 7009878;
+    BEGIN
+      // CrearLinea
+
+      lrFichero.Proveedor            := prDirTMP.Code;
+      lrFichero."Nombre fichero"     := pwArchivo;
+      lrFichero."Id Cabecera"        := prCab.Id;
+      lrFichero.Hotel                := pwHotel;
+      lrFichero."N§ Factura"         := pwNumFact;
+      lrFichero."N§ Factura Externa" := pwFactExt;
+      //+001
+      lrFichero.Accion               := lrFichero.Accion::Guardar;
+      //-001
+      lrFichero.INSERT(TRUE);
+
+      InsertarErroresLinea(prCab, lrFichero, pwProveedorEnc, pwErrorNombre);
+    END;
+
+    LOCAL PROCEDURE ComprobarProveedor@1103355024(VAR prCab@1103355002 : Record 7009877;VAR pwProveedor@1103355000 : Code[20];VAR pwHotel@1103355003 : Code[20]) : Boolean;
+    VAR
+      lrProveedor@1103355001 : Record 23;
+      lrHotel@1103355004 : Record 7009724;
+      lwCount@1103355005 : Integer;
+    BEGIN
+      // ComprobarProveedor
+
+      pwHotel := '';
+
+      IF lrProveedor.GET(pwProveedor) THEN BEGIN
+
+        lrHotel.SETCURRENTKEY(NoName, "Proveedor Intermediacion", "Proveedor Cuenta Propia");
+        lrHotel.SETRANGE("Proveedor Intermediacion", pwProveedor);
+
+        // Solo si el proveedor tiene un solo hotel podemos asignarlo.
+        lwCount := lrHotel.COUNT;
+
+        IF lwCount = 1 THEN BEGIN
+          lrHotel.FINDFIRST;
+          pwHotel := lrHotel.Hotel;
+        END;
+
+        EXIT(TRUE);
+
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE InsertarError@1103355027(pwCab@1103355004 : Integer;pwFichero@1103355005 : Integer;pwProveedor@1103355001 : Code[20];pwTipo@1103355002 : Integer;pwMensaje@1103355003 : Text[250]);
+    VAR
+      lrError@1103355000 : Record 7009879;
+    BEGIN
+      // InsertarError
+
+      lrError.Proveedor     := pwProveedor;
+      lrError.Tipo          := pwTipo;
+      lrError.Mensaje       := pwMensaje;
+
+      lrError."Id Cabecera" := pwCab;
+      lrError."Id Fichero"  := pwFichero;
+
+      lrError.INSERT(TRUE);
+    END;
+
+    PROCEDURE ComprobarErrores@1103355005(VAR prCab@1103355000 : Record 7009877) rvRes : Boolean;
+    VAR
+      lrErrores@1103355001 : Record 7009879;
+      lrFicheros@1103355002 : Record 7009878;
+      lwProvEnc@1103355003 : Boolean;
+      lwDummy@1103355004 : Code[20];
+      lwErrorNombre@1103355005 : Boolean;
+      lwFactExt@1103355006 : Code[20];
+    BEGIN
+      // ComprobarErrores
+
+      IF prCab.Estado <> prCab.Estado::Pendiente THEN
+        EXIT(FALSE);
+
+      // limpiamos los errores previos.
+
+      lrErrores.SETCURRENTKEY("Id Cabecera", "Id Fichero");
+      lrErrores.SETRANGE ("Id Cabecera", prCab.Id);
+      lrErrores.DELETEALL;
+
+      // Comprobamos errores de los ficheros marcados como traspasar.
+
+      lrFicheros.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFicheros.SETRANGE ("Id Cabecera", prCab.Id);
+      lrFicheros.SETFILTER(Accion       , '%1|%2', lrFicheros.Accion::Traspasar, lrFicheros.Accion::Forzar);
+
+      IF lrFicheros.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          // AJF 28/04/09
+          // las facturas pasan sin forzar sin hotel asignado.
+          //IF (lrFicheros.Accion = lrFicheros.Accion::Forzar) AND (lrFicheros.Hotel <> '') THEN
+          //  lwProvEnc := ComprobarProveedor(prCab, lrFicheros.Proveedor, lwDummy)
+          //ELSE
+          //  lwProvEnc := ComprobarProveedor(prCab, lrFicheros.Proveedor, lrFicheros.Hotel);
+          lwProvEnc := ComprobarProveedor(prCab, lrFicheros.Proveedor, lrFicheros.Hotel);
+
+          lrFicheros."N§ Factura" := ComprobarNumFactura(lrFicheros."Nombre fichero", lrFicheros.Proveedor,
+                                                         lrFicheros.Hotel, lwErrorNombre, lrFicheros."N§ Factura Externa");
+          lrFicheros.MODIFY;
+
+          rvRes := rvRes OR InsertarErroresLinea(prCab,lrFicheros, lwProvEnc, lwErrorNombre);
+
+        UNTIL lrFicheros.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertarErroresLinea@1103355001(VAR prCab@1103355000 : Record 7009877;VAR prFichero@1103355001 : Record 7009878;pwProvEnc@1103355002 : Boolean;pwErrorNombre@1103355003 : Boolean) rvRes : Boolean;
+    BEGIN
+      // InsertarErroresLinea
+
+      rvRes := FALSE;
+
+      IF NOT pwProvEnc THEN BEGIN
+        InsertarError(prCab.Id, prFichero.Id, prFichero.Proveedor, rError.Tipo::Proveedor, Text004);
+        rvRes := TRUE;
+      END;
+      //ELSE
+      // AJF 28/04/09
+      // No inserto inserta error al no encontrar hotel.
+      ////Si no se ha podido encontrar un hotel £nico para el proveedor incluimos un error.
+      //  IF (prFichero.Hotel = '') AND (prFichero.Accion <> prFichero.Accion::Forzar) THEN BEGIN
+      //  InsertarError(prCab.Id, prFichero.Id, prFichero.Proveedor, rError.Tipo::Hotel, Text005);
+      //  rvRes := TRUE;
+      //END;
+
+      IF (prFichero."N§ Factura" <> 0) AND (prFichero.Accion <> prFichero.Accion::Forzar) THEN BEGIN
+        InsertarError(prCab.Id, prFichero.Id, prFichero.Proveedor, rError.Tipo::Factura, Text007);
+        rvRes := TRUE;
+      END;
+
+      IF pwErrorNombre THEN BEGIN
+        InsertarError(prCab.Id, prFichero.Id, prFichero.Proveedor, rError.Tipo::Factura, Text021);
+        rvRes := TRUE;
+      END;
+
+      EXIT(rvRes);
+    END;
+
+    PROCEDURE AnularTraspaso@1103355007(VAR prCab@1103355000 : Record 7009877);
+    BEGIN
+      // AnularTraspaso
+
+      IF prCab.Estado <> prCab.Estado::Pendiente THEN
+        ERROR(Text006);
+
+      LimpiarCarpetaTemporal;
+
+      prCab.SetDatosAnulacion;
+      prCab.Estado := prCab.Estado::Anulado;
+      prCab.MODIFY;
+    END;
+
+    LOCAL PROCEDURE LimpiarCarpetaTemporal@1103355010();
+    VAR
+      lrPar@1103355000 : Record 7009700;
+      lrCarpetas@1103355001 : Record 2000000022;
+      lrFicheros@1103355002 : Record 2000000022;
+    BEGIN
+      // LimpiarCarpetaTemporal
+
+      lrPar.FINDFIRST;
+
+      lrCarpetas.SETRANGE (Path       , lrPar."Ruta ficheros PDF" + '\' + Text003);
+      lrCarpetas.SETRANGE ("Is a file", FALSE);
+
+      IF lrCarpetas.FINDSET THEN BEGIN
+        REPEAT
+          IF NOT(lrCarpetas.Name IN ['.','..']) THEN BEGIN
+            lrFicheros.RESET;
+            lrFicheros.SETRANGE (Path       , lrCarpetas.Path + '\' + lrCarpetas.Name);
+            lrFicheros.SETRANGE ("Is a file", TRUE);
+            IF lrFicheros.FINDSET THEN BEGIN
+              REPEAT
+                ERASE(lrFicheros.Path + '\' + lrFicheros.Name);
+              UNTIL lrFicheros.NEXT = 0;
+            END;
+          END;
+        UNTIL lrCarpetas.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ComprobarNumFactura@1103355021(VAR pwFichero@1103355001 : Text[1024];VAR pwProveedor@1103355004 : Code[20];VAR pwHotel@1103355005 : Code[20];VAR pwErrorNombre@1103355006 : Boolean;VAR pwNumFact@1103355007 : Code[20]) : Integer;
+    VAR
+      lrFactura@1103355000 : Record 7010014;
+      lwNomFile@1103355002 : Text[1024];
+      lwExt@1103355003 : Text[1024];
+    BEGIN
+      // ComprobarNumFactura
+
+      pwErrorNombre := FALSE;
+
+      IF (pwProveedor = '') OR (pwHotel = '') THEN
+        EXIT;
+
+      SepararNombreExtension(pwFichero, lwNomFile, lwExt);
+
+      // AJF 16/06/09
+      // Controlo que el nombre no sea demasiado largo para ser una n§ de factura.
+      IF STRLEN(lwNomFile) > MAXSTRLEN(lrFactura."Num. Factura") THEN BEGIN
+        IF pwNumFact = '' THEN BEGIN
+          pwErrorNombre := TRUE;
+          EXIT(0);
+        END;
+      END;
+
+      IF pwNumFact = '' THEN
+        pwNumFact := lwNomFile;
+
+      lrFactura.SETCURRENTKEY(Hotel, "Num. Factura", "Fecha factura");
+      lrFactura.SETRANGE (Hotel       , pwHotel);
+      lrFactura.SETRANGE ("Num. Factura", lwNomFile);
+      lrFactura.SETRANGE (Proveedor   , pwProveedor);
+
+      IF lrFactura.FINDFIRST THEN BEGIN
+        EXIT(lrFactura.ID);
+      END;
+
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE SepararNombreExtension@1103355002(pwFichero@1103355000 : Text[1024];VAR pwNombre@1103355001 : Text[1024];VAR pwExtension@1103355002 : Text[1024]);
+    VAR
+      lwPos@1103355003 : Integer;
+      lwPosAux@1103355004 : Integer;
+    BEGIN
+      // SepararNombreExtension
+
+      pwNombre    := pwFichero;
+      pwExtension := '';
+
+      lwPos    := 0;
+      lwPosAux := STRPOS(pwNombre, '.');
+
+      WHILE lwPosAux <> 0 DO BEGIN
+        lwPos := lwPosAux;
+        pwNombre[lwPosAux] := ',';
+        lwPosAux := STRPOS(pwNombre, '.');
+      END;
+
+      IF lwPos <> 0 THEN BEGIN
+        pwNombre    := COPYSTR(pwFichero, 1, lwPos - 1);
+        pwExtension := COPYSTR(pwFichero, lwPos + 1, STRLEN(pwFichero));
+      END;
+    END;
+
+    PROCEDURE Traspasar@1103355014(VAR prCab@1103355000 : Record 7009877);
+    VAR
+      lrPar@1103355001 : Record 7009700;
+      lrParInt@1103355002 : Record 7010081;
+      lrFicheros@1103355003 : Record 7009878;
+    BEGIN
+      // Traspasar
+
+      IF prCab.Estado <> prCab.Estado::Pendiente THEN
+        EXIT;
+
+      lrPar.FINDFIRST;
+      lrParInt.FINDFIRST;
+
+      // Comprobamos que no haya errores.
+      IF ComprobarErrores(prCab) THEN
+        ERROR(Text010);
+
+      IF NOT ComprobarFicheros(prCab)THEN
+        EXIT;
+
+      // Tratamos la opci¢n "Guardar"
+      GuardarFicheros(prCab);
+
+      // Creamos las Facturas.
+      lrFicheros.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFicheros.SETRANGE ("Id Cabecera"         , prCab.Id);
+      lrFicheros.SETFILTER(Accion                , '%1|%2', lrFicheros.Accion::Traspasar, lrFicheros.Accion::Forzar);
+      lrFicheros.SETRANGE("Fichero no encontrado", FALSE);
+
+      IF lrFicheros.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+         lrFicheros."N§ Factura" := CrearFactura(lrFicheros);
+         lrFicheros.MODIFY;
+        UNTIL lrFicheros.NEXT = 0;
+      END;
+
+      // Eliminamos los documentos del FTP.
+      EliminarFicherosFTP(lrParInt."Direccion FTP Facturas", lrParInt."Usuario FTP Facturas", lrParInt."Password FTP Facturas",
+                          lrParInt."Ruta FTP Facturas", prCab);
+
+      prCab.SetDatosProceso;
+      prCab.Estado := prCab.Estado::Procesado;
+      prCab.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ComprobarCarpetaTemporal@1103355003(VAR prCab@1103355000 : Record 7009877;pwMarcar@1103355003 : Boolean) : Boolean;
+    VAR
+      lwRutaTemp@1103355001 : Text[1024];
+      lrPar@1103355004 : Record 7009700;
+      lrFichero@1103355002 : Record 2000000022;
+      lrFichTras@1103355005 : Record 7009878;
+      lwAuxBool@1103355006 : Boolean;
+      autFileSystem@1103355007 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+    BEGIN
+      // ComprobarCarpetaTemporal
+      // Comprobamos que los documentos siguen en la carpeta temporal.
+
+      lrPar.FINDFIRST;
+
+      lwRutaTemp := lrPar."Ruta ficheros PDF" + '\' + Text003 + '\';
+
+      lrFichTras.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFichTras.SETRANGE ("Id Cabecera", prCab.Id);
+      lrFichTras.SETFILTER(Accion       , '%1|%2|%3', lrFichTras.Accion::Traspasar,
+                                                      lrFichTras.Accion::Forzar,
+                                                      lrFichTras.Accion::Borrar);
+
+      lwAuxBool := TRUE;
+
+      IF lrFichTras.FINDSET(TRUE) THEN BEGIN
+
+        CREATE(autFileSystem);
+
+        REPEAT
+          IF NOT autFileSystem.FileExists(lwRutaTemp + lrFichTras.Proveedor + '\' + lrFichTras."Nombre fichero") THEN BEGIN
+            IF NOT pwMarcar THEN
+              EXIT(FALSE)
+            ELSE BEGIN
+
+              lrFichTras."Fichero no encontrado" := TRUE;
+              lrFichTras.MODIFY;
+
+              lwAuxBool := FALSE;
+            END;
+
+          END;
+        UNTIL lrFichTras.NEXT = 0;
+
+      END;
+
+      EXIT(lwAuxBool);
+    END;
+
+    LOCAL PROCEDURE ReImportarFicherosFTP@1103355006(pwDireccion@1103355008 : Text[250];pwUsuario@1103355007 : Text[250];pwPassword@1103355006 : Text[250];pwRuta@1103355005 : Text[250];pwRutaDestino@1103355009 : Text[250];VAR prCab@1103355000 : Record 7009877) : Boolean;
+    VAR
+      lrFicheros@1103355001 : Record 7009878;
+      lfFtp@1103355004 : File;
+      lwScrpName@1103355003 : Text[250];
+      lwFTPOK@1103355002 : Boolean;
+    BEGIN
+      // ReImportarFicherosFTP
+
+      // Recuperamos los ficheros que se tienen que eliminar de FTP;
+      lrFicheros.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFicheros.SETRANGE ("Id Cabecera", prCab.Id);
+      lrFicheros.SETFILTER(Accion       , '%1|%2', lrFicheros.Accion::Traspasar,
+                                                      lrFicheros.Accion::Forzar);
+
+      IF lrFicheros.FINDSET THEN BEGIN
+
+        // Nombre de la archivo script
+
+        lwScrpName:= 'scpt.ftp';
+
+        //GENERAMOS EL SCRIPT PARA EL FTP
+        lfFtp.CREATE(lwScrpName);
+        lfFtp.WRITEMODE (TRUE);
+        lfFtp.TEXTMODE (TRUE);
+        lfFtp.WRITE(STRSUBSTNO('o %1'   , pwDireccion));
+        lfFtp.WRITE(STRSUBSTNO('%1'     , pwUsuario));
+        lfFtp.WRITE(STRSUBSTNO('%1'     , pwPassword));
+        lfFtp.WRITE('binary');
+
+        lfFtp.WRITE(STRSUBSTNO('cd %1'  , '\' + pwRuta));
+
+
+        REPEAT
+          ComprobarRuta(pwRutaDestino + '\' + lrFicheros.Proveedor);
+          lfFtp.WRITE(STRSUBSTNO('lcd %1'  , pwRutaDestino + '\' + lrFicheros.Proveedor));
+          lfFtp.WRITE(STRSUBSTNO('get %1\%2', lrFicheros.Proveedor, lrFicheros."Nombre fichero"));
+        UNTIL lrFicheros.NEXT = 0;
+
+        lfFtp.WRITE('bye');
+        lfFtp.CLOSE;
+
+
+        lwFTPOK:= SHELL('C:\WINDOWS\system32\ftp.exe','-v -i -s:' + lwScrpName) = 0;
+
+        //SI EXISTE EL SCRIPT PARA EL FTP LO BORRAMOS
+        IF EXISTS(lwScrpName) THEN
+          ERASE(lwScrpName);
+
+        EXIT(lwFTPOK);
+
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CrearFactura@1103355038(VAR prFichero@1103355000 : Record 7009878) : Integer;
+    VAR
+      lrFactura@1103355001 : Record 7010014;
+      lwNombre@1103355002 : Text[1024];
+      lwExtension@1103355003 : Text[1024];
+      lwCodigoBarras@1103355004 : Code[20];
+      lwDummy@1103355005 : Code[20];
+      lrpCodigoBarras@1103355006 : Report 7009743;
+      autFileSystem@1103355007 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      lrPar@1103355008 : Record 7009700;
+      lwOrigen@1103355009 : Text[1024];
+      lwDestino@1103355010 : Text[1024];
+      lrProveedor@1103355011 : Record 23;
+    BEGIN
+      // CrearFactura
+
+      lrPar.FINDFIRST;
+
+      SepararNombreExtension(prFichero."Nombre fichero", lwNombre, lwExtension);
+      lrpCodigoBarras.CalculaCodigoBarras(wTipoRegistro::"Doc Compra", lwDummy, lwCodigoBarras);
+
+      lrFactura.INIT;
+      lrFactura.Hotel               := prFichero.Hotel;
+      // lrFactura."N§ Factura"        := COPYSTR(lwNombre, 1, MAXSTRLEN(lrFactura."N§ Factura"));
+      lrFactura."Num. Factura"        := prFichero."N§ Factura Externa";
+      lrFactura.Delegacion          := COPYSTR(prFichero.Hotel, 1, 3);
+      lrFactura.Proveedor           := prFichero.Proveedor;
+
+      // AJF 19/05/09
+      // A¤ado el c¢digo de departamento del proveedor.
+      IF lrProveedor.GET(prFichero.Proveedor) THEN
+        lrFactura."Global Dimension 1 Code" := lrProveedor."Global Dimension 1 Code";
+
+      lrFactura."Codigo barras PDF" := lwCodigoBarras;
+      lrFactura.INSERT(TRUE);
+
+      CREATE(autFileSystem);
+      lwOrigen  := lrPar."Ruta ficheros PDF" + '\' + Text003 + '\' + prFichero.Proveedor + '\' + prFichero."Nombre fichero";
+      lwDestino := lrPar."Ruta ficheros PDF" + '\' + lrFactura."Codigo barras PDF" + '.PDF';
+      autFileSystem.MoveFile(lwOrigen, lwDestino);
+
+      EXIT(lrFactura.ID);
+    END;
+
+    PROCEDURE VerPDFTemp@1103355009(VAR prFichero@1103355000 : Record 7009878);
+    VAR
+      autFileSystem@1103355001 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      lrPar@1103355002 : Record 7009700;
+      lwFichero@1103355003 : Text[1024];
+    BEGIN
+      // VerPDFTemp
+
+      lrPar.FINDFIRST;
+      CREATE(autFileSystem);
+
+      lwFichero := lrPar."Ruta ficheros PDF" + '\' + Text003 + '\' + prFichero.Proveedor + '\' + prFichero."Nombre fichero";
+
+      IF NOT autFileSystem.FileExists(lwFichero) THEN BEGIN
+        // Si no encuentra el temporal intenta ense¤ar el traspasado
+        IF VerPDFTrasp(prFichero, FALSE) THEN
+          EXIT;
+        ERROR(Text011, lwFichero);
+      END;
+
+
+      HYPERLINK(lwFichero);
+    END;
+
+    PROCEDURE VerPDFTrasp@1100253000(VAR prFichero@1103355000 : Record 7009878;pwError@1100253000 : Boolean) : Boolean;
+    VAR
+      lwFichero@1103355003 : Text[1024];
+      lwOk@1100253001 : Boolean;
+    BEGIN
+      // VerPDFTrasp
+      // JPT 19/12/11 Muestra el archivo traspasado
+
+      lwFichero := prFichero.GetDestFilename;
+      lwOk := EXISTS(lwFichero);
+      IF (NOT lwOk) AND pwError THEN
+        ERROR(Text011, lwFichero);
+
+      IF lwOk THEN
+        HYPERLINK(lwFichero);
+
+      EXIT(lwOk);
+    END;
+
+    PROCEDURE ComprobarFicheros@1103355013(VAR prCab@1103355000 : Record 7009877) : Boolean;
+    VAR
+      lrPar@1103355001 : Record 7009700;
+      lrParInt@1103355002 : Record 7010081;
+    BEGIN
+      // ComprobarFicheros
+
+      IF prCab.Estado <> prCab.Estado::Pendiente THEN
+        EXIT;
+
+      lrPar.FINDFIRST;
+      lrParInt.FINDFIRST;
+
+
+      IF NOT ComprobarCarpetaTemporal(prCab, FALSE) THEN BEGIN
+        IF NOT CONFIRM(Text008) THEN
+          EXIT(FALSE);
+
+        LimpiarCarpetaTemporal;
+        ReImportarFicherosFTP(lrParInt."Direccion FTP Facturas", lrParInt."Usuario FTP Facturas", lrParInt."Password FTP Facturas",
+                              lrParInt."Ruta FTP Facturas", lrPar."Ruta ficheros PDF" + '\' + Text003, prCab);
+
+        IF NOT ComprobarCarpetaTemporal(prCab, TRUE) THEN BEGIN
+          MESSAGE(Text009);
+          EXIT(FALSE);
+        END;
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GuardarFicheros@1103355022(VAR prCab@1103355001 : Record 7009877);
+    VAR
+      lrParInt@1103355003 : Record 7010081;
+      lrFicheros@1103355000 : Record 7009878;
+      lwCarpeta@1103355002 : Text[250];
+      lwFichero@1103355004 : Text[1024];
+      lwCode@1103355005 : Code[20];
+      lwOrigen@1103355006 : Text[250];
+      lrPar@1103355007 : Record 7009700;
+      lrFich@1103355008 : Record 2000000022;
+      lwCarpDest@1103355009 : Text[1024];
+      lwFecha@1100253000 : Date;
+    BEGIN
+      // GuardarFicheros.
+
+      lrFicheros.SETCURRENTKEY("Id Cabecera", Proveedor, Accion);
+      lrFicheros.SETRANGE ("Id Cabecera"         , prCab.Id);
+      lrFicheros.SETRANGE (Accion                , lrFicheros.Accion::Guardar);
+      lrFicheros.SETRANGE("Fichero no encontrado", FALSE);
+      IF lrFicheros.FINDSET THEN BEGIN
+
+        lrPar.FINDFIRST;
+        lrPar.TESTFIELD("Ruta ficheros PDF");
+        lrParInt.FINDFIRST;
+        lrParInt.TESTFIELD("Carpeta Guardar FTP Facturas");
+        lrParInt.TESTFIELD("Serie Ficheros Guardar");
+        lwFecha := TODAY;
+        lwCarpDest := lrParInt."Carpeta Guardar FTP Facturas" + '\' +  FORMAT(lwFecha, 0, '<Day,2><Month,2><Year4>') + '-' +
+                     FORMAT(prCab.Id) + '\';
+
+        IF NOT cVarias.ExisteDirectorio(lwCarpDest, FALSE, FALSE, TRUE) THEN
+          ERROR(Text023, lwCarpDest);
+
+        REPEAT
+
+          CLEAR(lwCode);
+
+          cSeries.InitSeries(lrParInt."Serie Ficheros Guardar", '', TODAY, lwCode, lrParInt."Serie Ficheros Guardar");
+
+          lwFichero := lwCarpDest + lwCode + '.PDF';
+
+
+          lwOrigen  := lrPar."Ruta ficheros PDF" + '\' + Text003 + '\' +
+                       lrFicheros.Proveedor + '\' + lrFicheros."Nombre fichero";
+
+          // En caso de que alg£n fichero no se pueda copiar vaciamos la carpeta de destino
+          // y damos error.
+          IF NOT cVarias.CopiarFichero(lwOrigen, lwFichero, FALSE) THEN BEGIN
+
+            lrFich.RESET;
+            lrFich.SETRANGE (Path       , lwCarpDest);
+            lrFich.SETRANGE ("Is a file", TRUE);
+            IF lrFich.FINDSET THEN BEGIN
+              REPEAT
+                ERASE(lrFich.Path + '\' + lrFich.Name);
+              UNTIL lrFich.NEXT = 0;
+            END;
+
+            ERROR(Text022, lwOrigen, lwFichero);
+          END;
+
+          // JPT 19/12/11 Guardamos informacion para recuperar fichero
+          lrFicheros."Codigo Traspaso" := lwCode;
+          lrFicheros."Fecha Traspaso"  := lwFecha;
+          lrFicheros.MODIFY;
+        UNTIL lrFicheros.NEXT = 0;
+
+      END;
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 19/05/09
+
+        .- A¤adido el c¢digo de departamento del proveedor a la factura al crearla.
+
+      ## AJF 16/06/09
+
+        .- (09/00281) Modifico comprobaci¢n de errores para que compruebe si el nombre del fichero es demasiado largo
+           para la factura.
+        .- (09/00281) Ahora se traspasa el N§ de fatura externa de la tabla de ficheros a la factura hotel.
+
+      ## AJF 24/06/09
+
+        .- Pongo comillas en el nombre del archivo al borrar para que coja los nombres con espacios.
+
+      ## AJF 29/06/09
+
+        .- (09/00319) Modificados variables y par metros que hacen referencia a c¢digos de hotel de code10 a code20.
+
+      ## AJF 23/11/09
+        .- Se cambia el la obtenci¢n de directorios a posiciones fijas.
+
+      $001 AJF 26042011 La opci¢n por defecto pasa a ser guardar al crear un fichero nuevo en CrearLinea.
+    }
+    END.
+  }
+}

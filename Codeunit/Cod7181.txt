@@ -1,0 +1,325 @@
+OBJECT Codeunit 7181 Purchases Info-Pane Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Vend@1000 : Record 23;
+      Item@1001 : Record 27;
+      PurchHeader@1003 : Record 38;
+      PurchPriceCalcMgt@1002 : Codeunit 7010;
+      Text000@1004 : TextConst 'ENU=The Ship-to Address has been changed.;ESP=La direcci¢n de env¡o ha cambiado.';
+
+    PROCEDURE CalcNoOfDocuments@1(VAR Vend@1000 : Record 23);
+    BEGIN
+      Vend.CALCFIELDS(
+        "No. of Quotes","No. of Blanket Orders","No. of Orders","No. of Invoices",
+        "No. of Return Orders","No. of Credit Memos","No. of Pstd. Return Shipments", "No. of Pstd. Invoices",
+        "No. of Pstd. Receipts", "No. of Pstd. Credit Memos",
+        "Buy-from No. Of Archived Doc.");
+    END;
+
+    PROCEDURE CalcTotalNoOfDocuments@2(VendNo@1000 : Code[20]) : Integer;
+    BEGIN
+      GetVend(VendNo);
+      WITH Vend DO BEGIN
+        CalcNoOfDocuments(Vend);
+        EXIT(
+          "No. of Quotes" + "No. of Blanket Orders" + "No. of Orders" + "No. of Invoices" +
+          "No. of Return Orders" + "No. of Credit Memos" +
+          "No. of Pstd. Receipts" + "No. of Pstd. Invoices" +
+          "No. of Pstd. Return Shipments" + "No. of Pstd. Credit Memos" +
+          "Buy-from No. Of Archived Doc.");
+      END;
+    END;
+
+    PROCEDURE CalcNoOfOrderAddr@5(VendNo@1000 : Code[20]) : Integer;
+    BEGIN
+      GetVend(VendNo);
+      Vend.CALCFIELDS("No. of Order Addresses");
+      EXIT(Vend."No. of Order Addresses");
+    END;
+
+    PROCEDURE CalcNoOfContacts@3(PurchHeader@1002 : Record 38) : Integer;
+    VAR
+      Cont@1000 : Record 5050;
+      ContBusRelation@1001 : Record 5054;
+    BEGIN
+      Cont.SETCURRENTKEY("Company No.");
+      WITH PurchHeader DO
+        IF "Buy-from Vendor No." <> '' THEN BEGIN
+          IF Cont.GET("Buy-from Contact No.") THEN BEGIN
+            Cont.SETRANGE("Company No.",Cont."Company No.");
+            EXIT(Cont.COUNT);
+          END ELSE BEGIN
+            ContBusRelation.RESET;
+            ContBusRelation.SETCURRENTKEY("Link to Table","No.");
+            ContBusRelation.SETRANGE("Link to Table",ContBusRelation."Link to Table"::Vendor);
+            ContBusRelation.SETRANGE("No.","Buy-from Vendor No.");
+            IF ContBusRelation.FINDFIRST THEN BEGIN
+              Cont.SETRANGE("Company No.",ContBusRelation."Contact No.");
+              EXIT(Cont.COUNT);
+            END ELSE
+              EXIT(0)
+          END;
+        END;
+    END;
+
+    PROCEDURE CalcAvailability@18(VAR PurchLine@1000 : Record 39) : Decimal;
+    VAR
+      AvailableToPromise@1001 : Codeunit 5790;
+      GrossRequirement@1002 : Decimal;
+      ScheduledReceipt@1003 : Decimal;
+      PeriodType@1006 : 'Day,Week,Month,Quarter,Year';
+      AvailabilityDate@1004 : Date;
+      LookaheadDateformula@1005 : DateFormula;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        IF PurchLine."Expected Receipt Date" <> 0D THEN
+          AvailabilityDate := PurchLine."Expected Receipt Date"
+        ELSE
+          AvailabilityDate := WORKDATE;
+
+        Item.RESET;
+        Item.SETRANGE("Date Filter",0D,AvailabilityDate);
+        Item.SETRANGE("Variant Filter",PurchLine."Variant Code");
+        Item.SETRANGE("Location Filter",PurchLine."Location Code");
+        Item.SETRANGE("Drop Shipment Filter",FALSE);
+
+        EXIT(
+          AvailableToPromise.QtyAvailabletoPromise(
+            Item,
+            GrossRequirement,
+            ScheduledReceipt,
+            AvailabilityDate,
+            PeriodType,
+            LookaheadDateformula));
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSubstitutions@20(VAR PurchLine@1102628000 : Record 39) : Integer;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        Item.CALCFIELDS("No. of Substitutes");
+        EXIT(Item."No. of Substitutes");
+      END;
+    END;
+
+    PROCEDURE CalcNoOfPurchasePrices@19(VAR PurchLine@1102628000 : Record 39) : Integer;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        GetPurchHeader(PurchLine);
+        EXIT(PurchPriceCalcMgt.NoOfPurchLinePrice(PurchHeader,PurchLine,TRUE));
+      END;
+    END;
+
+    PROCEDURE CalcNoOfPurchLineDisc@22(VAR PurchLine@1102628000 : Record 39) : Integer;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        GetPurchHeader(PurchLine);
+        EXIT(PurchPriceCalcMgt.NoOfPurchLineLineDisc(PurchHeader,PurchLine,TRUE));
+      END;
+    END;
+
+    PROCEDURE DocExist@16(CurrentPurchHeader@1005 : Record 38;VendNo@1000 : Code[20]) : Boolean;
+    VAR
+      PurchInvHeader@1001 : Record 122;
+      PurchRcptHeader@1002 : Record 120;
+      PurchCrMemoHeader@1003 : Record 124;
+      ReturnShipment@1006 : Record 6650;
+      PurchHeader@1004 : Record 38;
+    BEGIN
+      IF VendNo = '' THEN
+        EXIT(FALSE);
+      WITH PurchInvHeader DO BEGIN
+        SETCURRENTKEY("Buy-from Vendor No.");
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH PurchRcptHeader DO BEGIN
+        SETCURRENTKEY("Buy-from Vendor No.");
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH PurchCrMemoHeader DO BEGIN
+        SETCURRENTKEY("Buy-from Vendor No.");
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH PurchHeader DO BEGIN
+        SETCURRENTKEY("Buy-from Vendor No.");
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        IF FINDFIRST THEN BEGIN
+          IF ("Document Type" <> CurrentPurchHeader."Document Type") OR
+             ("No." <> CurrentPurchHeader."No.")
+          THEN
+            EXIT(TRUE);
+          IF FIND('>') THEN
+            EXIT(TRUE);
+        END;
+      END;
+      WITH ReturnShipment DO BEGIN
+        SETCURRENTKEY("Buy-from Vendor No.");
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE VendCommentExists@8(VendNo@1000 : Code[20]) : Boolean;
+    BEGIN
+      GetVend(VendNo);
+      Vend.CALCFIELDS(Comment);
+      EXIT(Vend.Comment);
+    END;
+
+    PROCEDURE ItemCommentExists@12(VAR PurchLine@1102628000 : Record 39) : Boolean;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        Item.CALCFIELDS(Comment);
+        EXIT(Item.Comment);
+      END;
+    END;
+
+    PROCEDURE LookupVendPurchaseHistory@9(VAR PurchHeader@1001 : Record 38;VendNo@1000 : Code[20];UsePayTo@1003 : Boolean);
+    VAR
+      VendPurchHistory@1002 : Form 7181;
+    BEGIN
+      GetVend(VendNo);
+      VendPurchHistory.SetToPurchHeader(PurchHeader,UsePayTo);
+      VendPurchHistory.SETRECORD(Vend);
+      VendPurchHistory.LOOKUPMODE := TRUE;
+      VendPurchHistory.RUNMODAL;
+    END;
+
+    PROCEDURE LookupVendHistory@1102628000(VendNo@1000 : Code[20];UsePayTo@1003 : Boolean);
+    VAR
+      VendPurchHistory@1002 : Form 7181;
+    BEGIN
+      GetVend(VendNo);
+      VendPurchHistory.SetToPurchHeader(PurchHeader,UsePayTo);
+      VendPurchHistory.SETRECORD(Vend);
+      VendPurchHistory.LOOKUPMODE := UsePayTo;
+      VendPurchHistory.RUNMODAL;
+    END;
+
+    PROCEDURE LookupOrderAddr@10(VAR PurchHeader@1000 : Record 38);
+    VAR
+      OrderAddress@1001 : Record 224;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        OrderAddress.SETRANGE("Vendor No.","Buy-from Vendor No.");
+        IF FORM.RUNMODAL(0,OrderAddress) = ACTION::LookupOK THEN BEGIN
+          VALIDATE("Order Address Code",OrderAddress.Code);
+          MODIFY(TRUE);
+          MESSAGE(Text000);
+        END;
+      END;
+    END;
+
+    PROCEDURE LookupContacts@11(VAR PurchHeader@1000 : Record 38);
+    VAR
+      Cont@1002 : Record 5050;
+      ContBusRelation@1001 : Record 5054;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        IF "Buy-from Vendor No." <> '' THEN BEGIN
+          IF Cont.GET("Buy-from Contact No.") THEN
+            Cont.SETRANGE("Company No.",Cont."Company No.")
+          ELSE BEGIN
+            ContBusRelation.RESET;
+            ContBusRelation.SETCURRENTKEY("Link to Table","No.");
+            ContBusRelation.SETRANGE("Link to Table",ContBusRelation."Link to Table"::Vendor);
+            ContBusRelation.SETRANGE("No.","Buy-from Vendor No.");
+            IF ContBusRelation.FINDFIRST THEN
+              Cont.SETRANGE("Company No.",ContBusRelation."Contact No.")
+            ELSE
+              Cont.SETRANGE("No.",'');
+          END;
+
+          IF Cont.GET("Buy-from Contact No.") THEN ;
+        END ELSE
+          Cont.SETRANGE("No.",'');
+        IF FORM.RUNMODAL(0,Cont) = ACTION::LookupOK THEN BEGIN
+          VALIDATE("Buy-from Contact No.",Cont."No.");
+          MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE LookupItem@7(PurchLine@1000 : Record 39);
+    BEGIN
+      PurchLine.TESTFIELD(Type,PurchLine.Type::Item);
+      PurchLine.TESTFIELD("No.");
+      GetItem(PurchLine);
+      FORM.RUNMODAL(FORM::"Item Card",Item);
+    END;
+
+    PROCEDURE LookupItemComment@14(PurchLine@1000 : Record 39);
+    VAR
+      CommentLine@1001 : Record 97;
+    BEGIN
+      IF GetItem(PurchLine) THEN BEGIN
+        CommentLine.SETRANGE("Table Name",CommentLine."Table Name"::Item);
+        CommentLine.SETRANGE("No.",PurchLine."No.");
+        FORM.RUNMODAL(FORM::"Comment Sheet",CommentLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetVend@6(VendNo@1000 : Code[20]);
+    BEGIN
+      IF VendNo <> '' THEN BEGIN
+        IF VendNo <> Vend."No." THEN
+          IF NOT Vend.GET(VendNo) THEN
+            CLEAR(Vend);
+      END ELSE
+        CLEAR(Vend);
+    END;
+
+    LOCAL PROCEDURE GetItem@24(VAR PurchLine@1000 : Record 39) : Boolean;
+    BEGIN
+      WITH Item DO BEGIN
+        IF (PurchLine.Type <> PurchLine.Type::Item) OR (PurchLine."No." = '') THEN
+          EXIT(FALSE);
+
+        IF PurchLine."No." <> "No." THEN
+          GET(PurchLine."No.");
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPurchHeader@13(PurchLine@1000 : Record 39);
+    BEGIN
+      IF (PurchLine."Document Type" <> PurchHeader."Document Type") OR
+         (PurchLine."Document No." <> PurchHeader."No.")
+      THEN
+        PurchHeader.GET(PurchLine."Document Type",PurchLine."Document No.");
+    END;
+
+    PROCEDURE CalcNoOfPayToDocuments@17(VAR Vend@1000 : Record 23);
+    BEGIN
+      Vend.CALCFIELDS(
+        "Pay-to No. of Quotes","Pay-to No. of Blanket Orders","Pay-to No. of Orders","Pay-to No. of Invoices",
+        "Pay-to No. of Return Orders","Pay-to No. of Credit Memos","Pay-to No. of Pstd. Receipts",
+        "Pay-to No. of Pstd. Invoices","Pay-to No. of Pstd. Return S.","Pay-to No. of Pstd. Cr. Memos",
+        "Pay-to No. Of Archived Doc.");
+    END;
+
+    BEGIN
+    END.
+  }
+}

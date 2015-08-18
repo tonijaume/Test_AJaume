@@ -1,0 +1,331 @@
+OBJECT Form 398 Sales Credit Memo Statistics
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00,NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    Width=13420;
+    Height=11330;
+    Editable=No;
+    CaptionML=[ENU=Sales Credit Memo Statistics;
+               ESP=Estad. abono ventas];
+    LinksAllowed=No;
+    SourceTable=Table114;
+    OnAfterGetRecord=VAR
+                       CostCalcMgt@1000 : Codeunit 5836;
+                       CustLedgEntry@1001 : Record 21;
+                     BEGIN
+                       SETRANGE("No.");
+                       CLEARALL;
+
+                       IF "Currency Code" = '' THEN
+                         Currency.InitRoundingPrecision
+                       ELSE
+                         Currency.GET("Currency Code");
+
+                       SalesCrMemoLine.SETRANGE("Document No.","No.");
+                       IF SalesCrMemoLine.FIND('-') THEN
+                         REPEAT
+                           CustAmount := CustAmount + SalesCrMemoLine.Amount;
+                           AmountInclVAT := AmountInclVAT + SalesCrMemoLine."Amount Including VAT";
+                           IF "Prices Including VAT" THEN
+                           IF "Prices Including VAT" THEN BEGIN
+                             InvDiscAmount := InvDiscAmount + SalesCrMemoLine."Inv. Discount Amount" /
+                               (1 + (SalesCrMemoLine."VAT %" + SalesCrMemoLine."EC %") / 100);
+                             PmtDiscAmount := PmtDiscAmount + SalesCrMemoLine."Pmt. Disc. Given Amount" /
+                               (1+ (SalesCrMemoLine."VAT %" + SalesCrMemoLine."EC %") / 100)
+                           END ELSE BEGIN
+                             InvDiscAmount := InvDiscAmount + SalesCrMemoLine."Inv. Discount Amount";
+                             PmtDiscAmount := PmtDiscAmount + SalesCrMemoLine."Pmt. Disc. Given Amount";
+                           END;
+                           CostLCY := CostLCY + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Unit Cost (LCY)");
+                           LineQty := LineQty + SalesCrMemoLine.Quantity;
+                           TotalNetWeight := TotalNetWeight + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Net Weight");
+                           TotalGrossWeight := TotalGrossWeight + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Gross Weight");
+                           TotalVolume := TotalVolume + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Unit Volume");
+                           IF SalesCrMemoLine."Units per Parcel" > 0 THEN
+                             TotalParcels := TotalParcels + ROUND(SalesCrMemoLine.Quantity / SalesCrMemoLine."Units per Parcel",1,'>');
+                           IF SalesCrMemoLine."VAT %" <> VATpercentage THEN
+                             IF VATpercentage = 0 THEN
+                               VATpercentage := SalesCrMemoLine."VAT %" + SalesCrMemoLine."EC %"
+                             ELSE
+                               VATpercentage := -1;
+                           TotalAdjCostLCY := TotalAdjCostLCY + CostCalcMgt.CalcSalesCrMemoLineCostLCY(SalesCrMemoLine);
+                         UNTIL SalesCrMemoLine.NEXT = 0;
+                       VATAmount := AmountInclVAT - CustAmount;
+                       InvDiscAmount := ROUND(InvDiscAmount,Currency."Amount Rounding Precision");
+
+                       IF VATpercentage <= 0 THEN
+                         VATAmountText := Text000
+                       ELSE
+                         VATAmountText := STRSUBSTNO(Text001,VATpercentage);
+
+                       IF "Currency Code" = '' THEN
+                         AmountLCY := CustAmount
+                       ELSE
+                         AmountLCY :=
+                           CurrExchRate.ExchangeAmtFCYToLCY(
+                             WORKDATE,"Currency Code",CustAmount,"Currency Factor");
+
+                       ProfitLCY := AmountLCY - CostLCY;
+
+                       CustLedgEntry.SETCURRENTKEY("Document No.");
+                       CustLedgEntry.SETRANGE("Document No.","No.");
+                       CustLedgEntry.SETRANGE("Document Type",CustLedgEntry."Document Type"::"Credit Memo");
+                       CustLedgEntry.SETRANGE("Customer No.","Bill-to Customer No.");
+                       IF CustLedgEntry.FINDFIRST THEN
+                         AmountLCY := CustLedgEntry."Sales (LCY)";
+
+                       IF AmountLCY <> 0 THEN
+                         ProfitPct := ROUND(100 * ProfitLCY / AmountLCY,0.1);
+
+                       AdjProfitLCY := AmountLCY - TotalAdjCostLCY;
+                       IF AmountLCY <> 0 THEN
+                         AdjProfitPct := ROUND(100 * AdjProfitLCY / AmountLCY,0.1);
+
+                       IF Cust.GET("Bill-to Customer No.") THEN
+                         Cust.CALCFIELDS("Balance (LCY)")
+                       ELSE
+                         CLEAR(Cust);
+
+                       IF Cust."Credit Limit (LCY)" = 0 THEN
+                         CreditLimitLCYExpendedPct := 0
+                       ELSE
+                         CreditLimitLCYExpendedPct := ROUND(Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" * 10000,1);
+
+                       SalesCrMemoLine.CalcVATAmountLines(Rec,TempVATAmountLine);
+                       CurrForm.Subform.FORM.SetTempVATAmountLine(TempVATAmountLine);
+                       CurrForm.Subform.FORM.InitGlobals("Currency Code",FALSE,FALSE,FALSE,FALSE,"VAT Base Discount %");
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 34  ;CommandButton;11000;10560;2200 ;550  ;HorzGlue=Right;
+                                                 VertGlue=Bottom;
+                                                 PushAction=FormHelp }
+    { 35  ;TabControl   ;220  ;220  ;12980;7480 ;HorzGlue=Both;
+                                                 VertGlue=Top;
+                                                 PageNamesML=[ENU=General,Customer;
+                                                              ESP=General,Cliente] }
+    { 32  ;TextBox      ;3850 ;6490 ;1650 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Profit %;
+                                                            ESP=% Bf§ original];
+                                                 DecimalPlaces=1:1;
+                                                 SourceExpr=ProfitPct }
+    { 33  ;Label        ;440  ;6490 ;3300 ;440  ;ParentControl=32 }
+    { 30  ;TextBox      ;3850 ;5280 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Profit (LCY);
+                                                            ESP=Bf§ original (DL)];
+                                                 SourceExpr=ProfitLCY;
+                                                 AutoFormatType=1 }
+    { 31  ;Label        ;440  ;5280 ;3300 ;440  ;ParentControl=30 }
+    { 28  ;TextBox      ;10230;3850 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Cost (LCY);
+                                                            ESP=Coste original (DL)];
+                                                 SourceExpr=CostLCY;
+                                                 AutoFormatType=1 }
+    { 29  ;Label        ;6820 ;3850 ;3300 ;440  ;ParentControl=28 }
+    { 26  ;TextBox      ;3850 ;4620 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Amount (LCY);
+                                                            ESP=Importe (DL)];
+                                                 SourceExpr=AmountLCY;
+                                                 AutoFormatType=1 }
+    { 27  ;Label        ;440  ;4620 ;3300 ;440  ;ParentControl=26;
+                                                 CaptionML=[ENU=Sales (LCY);
+                                                            ESP=Ventas (DL)] }
+    { 20  ;TextBox      ;3850 ;3960 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Total Incl. VAT;
+                                                            ESP=Total IVA incl.];
+                                                 SourceExpr=AmountInclVAT;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 22  ;Label        ;440  ;3960 ;3300 ;440  ;ParentControl=20 }
+    { 17  ;TextBox      ;10230;3190 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Volume;
+                                                            ESP=Volumen];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalVolume }
+    { 19  ;Label        ;6820 ;3190 ;3300 ;440  ;ParentControl=17 }
+    { 13  ;TextBox      ;10230;1540 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Parcels;
+                                                            ESP=Lotes];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalParcels }
+    { 15  ;Label        ;6820 ;1540 ;3300 ;440  ;ParentControl=13 }
+    { 16  ;TextBox      ;3850 ;3300 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=VAT Amount;
+                                                            ESP=Importe IVA];
+                                                 SourceExpr=VATAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 10  ;TextBox      ;10230;2640 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Gross Weight;
+                                                            ESP=Peso bruto];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalGrossWeight }
+    { 11  ;Label        ;6820 ;2640 ;3300 ;440  ;ParentControl=10 }
+    { 12  ;TextBox      ;3850 ;2750 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Total;
+                                                            ESP=Total];
+                                                 SourceExpr=CustAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 14  ;Label        ;440  ;2750 ;3300 ;440  ;ParentControl=12 }
+    { 6   ;TextBox      ;3850 ;1540 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Inv. Discount Amount;
+                                                            ESP=Importe dto. factura];
+                                                 SourceExpr=InvDiscAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 8   ;Label        ;440  ;1540 ;3300 ;440  ;ParentControl=6 }
+    { 7   ;TextBox      ;10230;2090 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Net Weight;
+                                                            ESP=Peso neto];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalNetWeight }
+    { 9   ;Label        ;6820 ;2090 ;3300 ;440  ;ParentControl=7 }
+    { 2   ;TextBox      ;3850 ;990  ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Amount;
+                                                            ESP=Importe];
+                                                 SourceExpr=CustAmount + InvDiscAmount + PmtDiscAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 4   ;Label        ;440  ;990  ;3300 ;440  ;ParentControl=2 }
+    { 3   ;TextBox      ;10230;990  ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Quantity;
+                                                            ESP=Cantidad];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=LineQty }
+    { 5   ;Label        ;6820 ;990  ;3300 ;440  ;ParentControl=3 }
+    { 37  ;TextBox      ;440  ;3300 ;3300 ;440  ;Editable=No;
+                                                 Focusable=No;
+                                                 ParentControl=16;
+                                                 InPage=0;
+                                                 Border=No;
+                                                 LeaderDots=Yes;
+                                                 CaptionML=[ENU=VAT Amount;
+                                                            ESP=Importe IVA];
+                                                 SourceExpr=VATAmountText }
+    { 36  ;TextBox      ;10230;4400 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Cost (LCY);
+                                                            ESP=Coste actualizado (DL)];
+                                                 SourceExpr=TotalAdjCostLCY;
+                                                 AutoFormatType=1 }
+    { 38  ;Label        ;6820 ;4400 ;3300 ;440  ;ParentControl=36 }
+    { 39  ;TextBox      ;3850 ;5830 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Profit (LCY);
+                                                            ESP=Beneficio actualizado (DL)];
+                                                 SourceExpr=AdjProfitLCY;
+                                                 AutoFormatType=1 }
+    { 40  ;Label        ;440  ;5830 ;3300 ;440  ;ParentControl=39 }
+    { 41  ;TextBox      ;3850 ;7040 ;1650 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Profit %;
+                                                            ESP=% beneficio actualizado];
+                                                 DecimalPlaces=1:1;
+                                                 SourceExpr=AdjProfitPct }
+    { 42  ;Label        ;440  ;7040 ;3300 ;440  ;ParentControl=41 }
+    { 44  ;TextBox      ;10230;4950 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Cost Adjmt. Amount (LCY);
+                                                            ESP=Importe coste ajustado (DL)];
+                                                 SourceExpr=TotalAdjCostLCY - CostLCY;
+                                                 AutoFormatType=1;
+                                                 OnLookup=BEGIN
+                                                            LookupAdjmtValueEntries;
+                                                          END;
+                                                           }
+    { 45  ;Label        ;6820 ;4950 ;3300 ;440  ;ParentControl=44 }
+    { 1100000;TextBox   ;3850 ;2090 ;2750 ;440  ;Editable=Yes;
+                                                 ParentControl=35;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Pmt. Disc. Given Amount;
+                                                            ESP=Dto. P.P.];
+                                                 SourceExpr=PmtDiscAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 1100001;Label     ;440  ;2090 ;3300 ;440  ;ParentControl=1100000 }
+    { 24  ;TextBox      ;3850 ;990  ;2750 ;440  ;ParentControl=35;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Balance (LCY);
+                                                            ESP=Saldo (DL)];
+                                                 SourceExpr=Cust."Balance (LCY)";
+                                                 AutoFormatType=1 }
+    { 25  ;Label        ;440  ;990  ;3300 ;440  ;ParentControl=24 }
+    { 21  ;TextBox      ;3850 ;1540 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Credit Limit (LCY);
+                                                            ESP=Cr‚dito m ximo (DL)];
+                                                 SourceExpr=Cust."Credit Limit (LCY)";
+                                                 AutoFormatType=1 }
+    { 23  ;Label        ;440  ;1540 ;3300 ;440  ;ParentControl=21 }
+    { 1   ;Indicator    ;6710 ;1540 ;2750 ;440  ;ParentControl=35;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Expended % of Credit Limit (LCY);
+                                                            ESP=% L¡mite cr‚dito usado (DL)];
+                                                 ToolTipML=[ENU=Expended % of Credit Limit (LCY);
+                                                            ESP=% L¡mite cr‚dito usado (DL)];
+                                                 SourceExpr=CreditLimitLCYExpendedPct }
+    { 18  ;SubForm      ;220  ;7920 ;12980;2420 ;Name=Subform;
+                                                 HorzGlue=Both;
+                                                 VertGlue=Both;
+                                                 Editable=No;
+                                                 Border=No;
+                                                 SubFormID=Form576 }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=VAT Amount;ESP=Importe IVA';
+      Text001@1001 : TextConst 'ENU=%1% VAT;ESP=%1% IVA';
+      CurrExchRate@1002 : Record 330;
+      SalesCrMemoLine@1003 : Record 115;
+      Cust@1004 : Record 18;
+      TempVATAmountLine@1005 : TEMPORARY Record 290;
+      Currency@1022 : Record 4;
+      TotalAdjCostLCY@1025 : Decimal;
+      CustAmount@1006 : Decimal;
+      AmountInclVAT@1007 : Decimal;
+      InvDiscAmount@1008 : Decimal;
+      VATAmount@1009 : Decimal;
+      CostLCY@1010 : Decimal;
+      ProfitLCY@1011 : Decimal;
+      ProfitPct@1012 : Decimal;
+      AdjProfitLCY@1026 : Decimal;
+      AdjProfitPct@1023 : Decimal;
+      LineQty@1013 : Decimal;
+      TotalNetWeight@1014 : Decimal;
+      TotalGrossWeight@1015 : Decimal;
+      TotalVolume@1016 : Decimal;
+      TotalParcels@1017 : Decimal;
+      AmountLCY@1018 : Decimal;
+      CreditLimitLCYExpendedPct@1019 : Decimal;
+      VATpercentage@1020 : Decimal;
+      VATAmountText@1021 : Text[30];
+      PmtDiscAmount@1100000 : Decimal;
+
+    BEGIN
+    END.
+  }
+}

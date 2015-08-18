@@ -1,0 +1,261 @@
+OBJECT Codeunit 99008514 XML Document-Send
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/05/03;
+    Time=12:00:00;
+    Version List=NAVW13.70;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 110=m,
+                TableData 112=m,
+                TableData 114=m;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CreateXMLDocument@1000 : Codeunit 99008517;
+      XMLDOMDocument@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      OutboundDocument@1002 : Record 99008511;
+      OutboundPurchaseDocumentHeader@1003 : Record 99008508;
+      OutboundSalesDocumentHeader@1004 : Record 99008506;
+      OutboundProductCatalogHeader@1011 : Record 99008534;
+      OutboundProductCatalogLine@1005 : Record 99008510;
+      PurchaseHeader@1006 : Record 38;
+      SalesHeader@1007 : Record 36;
+      SalesInvoiceHeader@1008 : Record 112;
+      SalesShipmentHeader@1009 : Record 110;
+      SalesCrMemoHeader@1010 : Record 114;
+
+    PROCEDURE SendXMLDocument@1(OutboundDocumentNo@1001 : Integer;OutboundDocumentType@1002 : 'Purchase,Sales,Product Catalog,BizTalk Request';PartnerNo@1004 : Code[20]) ReturnCode@1000 : Integer;
+    VAR
+      TrackingID@1003 : Text[50];
+    BEGIN
+      OutboundDocument.SETRANGE("Outbound Document Type",OutboundDocumentType);
+      OutboundDocument.SETRANGE("Outbound Document No.",OutboundDocumentNo);
+      OutboundDocument.SETRANGE("Partner No.",PartnerNo);
+
+      IF NOT OutboundDocument.FIND('-') THEN
+        EXIT(251);
+      WITH OutboundDocument DO BEGIN
+        CASE "Outbound Document Type" OF
+          "Outbound Document Type"::Purchase:
+             ReturnCode := CreateXMLPurchaseDoc("Outbound Document No.");
+          "Outbound Document Type"::Sales:
+             ReturnCode := CreateXMLSalesDoc("Outbound Document No.");
+          "Outbound Document Type"::"Product Catalog":
+             ReturnCode := CreateXMLProductCatalogDoc("Outbound Document No.","Partner No.");
+        END;
+      END;
+      IF ReturnCode > 0 THEN BEGIN
+        SetStatusFailed();
+        EXIT(ReturnCode);
+      END;
+      ReturnCode := CreateXMLDocument.Send(OutboundDocument,TrackingID);
+      IF ReturnCode > 0 THEN BEGIN
+        IF ReturnCode IN [20,98,99] THEN
+          //no contact with BizTalk Server
+          SetStatusUnsent()
+        ELSE
+          SetStatusFailed();
+        EXIT(ReturnCode);
+      END;
+      WITH OutboundDocument DO BEGIN
+        "Tracking ID" := TrackingID;
+        IF "Date Sent" <> 0D THEN
+          "No. Resent" := "No. Resent" +1;
+        "Date Sent" := TODAY;
+        "Time Sent" := TIME;
+        IF "Tracking ID" = '' THEN
+          Status := Status::"Received by CGRS"
+        ELSE
+          Status := Status::"Received by BTS";
+        MODIFY;
+        CASE "Outbound Document Type" OF
+          "Outbound Document Type"::Purchase:
+            BEGIN
+              OutboundPurchaseDocumentHeader."Tracking ID" := TrackingID;
+              IF OutboundPurchaseDocumentHeader."Date Sent" <> 0D THEN
+                OutboundPurchaseDocumentHeader."No. Resent" := OutboundPurchaseDocumentHeader."No. Resent" + 1;
+              OutboundPurchaseDocumentHeader."Date Sent" := "Date Sent";
+              OutboundPurchaseDocumentHeader."Time Sent" := "Time Sent";
+              OutboundPurchaseDocumentHeader.Status := OutboundPurchaseDocumentHeader.Status::Sent;
+              OutboundPurchaseDocumentHeader.MODIFY;
+              PurchaseHeader.SETRANGE("No.",OutboundPurchaseDocumentHeader."No.");
+              PurchaseHeader.SETRANGE("Document Type",OutboundPurchaseDocumentHeader."Document Type");
+              IF PurchaseHeader.FIND('-') THEN BEGIN
+                PurchaseHeader."Date Sent" := "Date Sent";
+                PurchaseHeader."Time Sent" := "Time Sent";
+                PurchaseHeader."BizTalk Document Sent" := TRUE;
+                PurchaseHeader.MODIFY;
+              END;
+            END;
+          "Outbound Document Type"::Sales:
+            BEGIN
+              OutboundSalesDocumentHeader."Tracking ID" := TrackingID;
+              IF OutboundSalesDocumentHeader."Date Sent" <> 0D THEN
+                OutboundSalesDocumentHeader."No. Resent" := OutboundSalesDocumentHeader."No. Resent" + 1;
+              OutboundSalesDocumentHeader."Date Sent" := "Date Sent";
+              OutboundSalesDocumentHeader."Time Sent" := "Time Sent";
+              OutboundSalesDocumentHeader.Status := OutboundSalesDocumentHeader.Status::Sent;
+              OutboundSalesDocumentHeader.MODIFY;
+              CASE OutboundSalesDocumentHeader."BizTalk Document Type" OF
+                OutboundSalesDocumentHeader."BizTalk Document Type"::Quote,
+                OutboundSalesDocumentHeader."BizTalk Document Type"::"Order Confirmation":
+                  BEGIN
+                    SalesHeader.SETRANGE("No.",OutboundSalesDocumentHeader."No.");
+                    SalesHeader.SETRANGE("Document Type",OutboundSalesDocumentHeader."Document Type");
+                    IF SalesHeader.FIND('-') THEN BEGIN
+                      SalesHeader."Date Sent" := "Date Sent";
+                      SalesHeader."Time Sent" := "Time Sent";
+                      SalesHeader."BizTalk Document Sent" := TRUE;
+                      SalesHeader.MODIFY;
+                    END;
+                  END;
+                OutboundSalesDocumentHeader."BizTalk Document Type"::Invoice:
+                  BEGIN
+                    SalesInvoiceHeader.SETRANGE("No.",OutboundSalesDocumentHeader."No.");
+                    IF SalesInvoiceHeader.FIND('-') THEN BEGIN
+                      SalesInvoiceHeader."Date Sent" := "Date Sent";
+                      SalesInvoiceHeader."Time Sent" := "Time Sent";
+                      SalesInvoiceHeader."BizTalk Document Sent" := TRUE;
+                      SalesInvoiceHeader.MODIFY;
+                    END;
+                  END;
+                OutboundSalesDocumentHeader."BizTalk Document Type"::"Shipment Notification":
+                  BEGIN
+                    SalesShipmentHeader.SETRANGE("No.",OutboundSalesDocumentHeader."No.");
+                    IF SalesShipmentHeader.FIND('-') THEN BEGIN
+                      SalesShipmentHeader."Date Sent" := "Date Sent";
+                      SalesShipmentHeader."Time Sent" := "Time Sent";
+                      SalesShipmentHeader."BizTalk Document Sent" := TRUE;
+                      SalesShipmentHeader.MODIFY;
+                    END;
+                  END;
+                OutboundSalesDocumentHeader."BizTalk Document Type"::"Credit Memo":
+                  BEGIN
+                    SalesCrMemoHeader.SETRANGE("No.",OutboundSalesDocumentHeader."No.");
+                    IF SalesCrMemoHeader.FIND('-') THEN BEGIN
+                      SalesCrMemoHeader."Date Sent" := "Date Sent";
+                      SalesCrMemoHeader."Time Sent" := "Time Sent";
+                      SalesCrMemoHeader."BizTalk Document Sent" := TRUE;
+                      SalesCrMemoHeader.MODIFY;
+                    END;
+                  END;
+              END;
+            END;
+          "Outbound Document Type"::"Product Catalog":
+            BEGIN
+              OutboundProductCatalogHeader."Tracking ID" := TrackingID;
+              IF OutboundProductCatalogHeader."Date Sent" <> 0D THEN
+                OutboundProductCatalogHeader."No. Resent" := OutboundProductCatalogHeader."No. Resent" + 1;
+              OutboundProductCatalogHeader."Date Sent" := "Date Sent";
+              OutboundProductCatalogHeader."Time Sent" := "Time Sent";
+              OutboundProductCatalogHeader.Status := OutboundPurchaseDocumentHeader.Status::Sent;
+              OutboundProductCatalogHeader.MODIFY;
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateXMLPurchaseDoc@2(OutboundNo@1001 : Integer) ReturnCode@1000 : Integer;
+    BEGIN
+      IF NOT OutboundPurchaseDocumentHeader.GET(OutboundNo) THEN
+        EXIT(252);
+      WITH OutboundPurchaseDocumentHeader DO BEGIN
+        CASE "BizTalk Document Type" OF
+          "BizTalk Document Type"::"Request for Quote":
+             ReturnCode := CreateXMLDocument.RequestPurchaseQuote(OutboundPurchaseDocumentHeader);
+          "BizTalk Document Type"::Order:
+             ReturnCode := CreateXMLDocument.PurchaseOrder(OutboundPurchaseDocumentHeader);
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateXMLSalesDoc@5(OutboundNo@1001 : Integer) ReturnCode@1000 : Integer;
+    BEGIN
+      IF NOT OutboundSalesDocumentHeader.GET(OutboundNo) THEN
+        EXIT(253);
+      WITH OutboundSalesDocumentHeader DO BEGIN
+        CASE "BizTalk Document Type" OF
+          "BizTalk Document Type"::Quote:
+            ReturnCode := CreateXMLDocument.SalesQuote(OutboundSalesDocumentHeader);
+          "BizTalk Document Type"::"Order Confirmation":
+            ReturnCode := CreateXMLDocument.SalesOrderConfirmation(OutboundSalesDocumentHeader);
+          "BizTalk Document Type"::Invoice:
+            ReturnCode := CreateXMLDocument.SalesInvoice(OutboundSalesDocumentHeader);
+          "BizTalk Document Type"::"Shipment Notification":
+            ReturnCode := CreateXMLDocument.SalesShipmentNote(OutboundSalesDocumentHeader);
+          "BizTalk Document Type"::"Credit Memo":
+            ReturnCode := CreateXMLDocument.SalesCreditMemo(OutboundSalesDocumentHeader);
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateXMLProductCatalogDoc@6(OutboundNo@1001 : Integer;PartnerNo@1002 : Code[20]) ReturnCode@1000 : Integer;
+    BEGIN
+      IF NOT OutboundProductCatalogHeader.GET(OutboundNo,PartnerNo) THEN
+        EXIT(253);
+      ReturnCode := CreateXMLDocument.ProductCatalog(OutboundNo);
+    END;
+
+    PROCEDURE SetStatusFailed@3();
+    BEGIN
+      WITH OutboundDocument DO BEGIN
+        Status := Status::Failed;
+        MODIFY;
+        COMMIT;
+        CASE "Outbound Document Type" OF
+          "Outbound Document Type"::Purchase:
+            BEGIN
+              OutboundPurchaseDocumentHeader.Status := OutboundPurchaseDocumentHeader.Status::Unsent;
+              OutboundPurchaseDocumentHeader.MODIFY;
+            END;
+          "Outbound Document Type"::Sales:
+            BEGIN
+              OutboundSalesDocumentHeader.Status := OutboundSalesDocumentHeader.Status::Unsent;
+              OutboundSalesDocumentHeader.MODIFY;
+            END;
+          "Outbound Document Type"::"Product Catalog":
+            BEGIN
+              OutboundProductCatalogHeader.Status := OutboundProductCatalogHeader.Status::Unsent;
+              OutboundProductCatalogHeader.MODIFY;
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetStatusUnsent@4();
+    BEGIN
+      WITH OutboundDocument DO BEGIN
+        Status := Status::Unsent;
+        MODIFY;
+        COMMIT;
+        CASE "Outbound Document Type" OF
+          "Outbound Document Type"::Purchase:
+            BEGIN
+              OutboundPurchaseDocumentHeader.Status := OutboundPurchaseDocumentHeader.Status::Unsent;
+              OutboundPurchaseDocumentHeader.MODIFY;
+            END;
+          "Outbound Document Type"::Sales:
+            BEGIN
+              OutboundSalesDocumentHeader.Status := OutboundSalesDocumentHeader.Status::Unsent;
+              OutboundSalesDocumentHeader.MODIFY;
+            END;
+          "Outbound Document Type"::"Product Catalog":
+            BEGIN
+              OutboundProductCatalogHeader.Status := OutboundProductCatalogHeader.Status::Unsent;
+              OutboundProductCatalogHeader.MODIFY;
+            END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

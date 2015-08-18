@@ -1,0 +1,1058 @@
+OBJECT Codeunit 7000005 Invoice-Split Payment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/11/11;
+    Time=12:00:00;
+    Version List=NAVES5.00,RegF269949;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100031 : TextConst 'ENU=Sales %1 no. %2 cannot be posted, because the due date field for one or more installments is more than the legal limit of %3 days after the document date %4 for the original document.;ESP=La venta %1 n§ %2 no se puede registrar porque el campo fecha vencimiento de uno o m s de los plazos es superior al l¡mite legal de %3 d¡as posteriores a la fecha de emisi¢n documento %4 del documento original.';
+      Text002@1100033 : TextConst 'ENU=Purchase %1 no. %2 cannot be posted, because the due date field for one or more installments is more than the legal limit of %3 days after the document date %4 for the original document.;ESP=La compra %1 n§ %2 no se puede registrar porque el campo fecha vencimiento de uno o m s de los plazos es superior al l¡mite legal de %3 d¡as posteriores a la fecha de emisi¢n documento %4 del documento original.';
+      Text003@1100032 : TextConst 'ENU=Service %1 no. %2 cannot be posted, because the due date field for one or more installments is more than the legal limit of %3 days after the document date %4 for the original document.;ESP=El servicio %1 n§ %2 no se puede registrar porque el campo fecha vencimiento de uno o m s de los plazos es superior al l¡mite legal de %3 d¡as posteriores a la fecha de emisi¢n documento %4 del documento original.';
+      Text1100000@1000 : TextConst 'ENU=You cannot select a bill-based %1 for a Credit memo.;ESP=Para un abono no se puede seleccionar %1 ya que genera efectos.';
+      Text1100001@1001 : TextConst 'ENU=%1 must be 1 if %2 is True in %3;ESP=%1 debe ser 1 si %2 is S¡ en %3';
+      Text1100002@1002 : TextConst 'ENU=Transfer of Invoice %1 into bills;ESP=Convertir factura %1 en efectos';
+      Text1100003@1003 : TextConst 'ENU=Unrealized VAT Type must be "Percentage" in VAT Posting Setup.;ESP=Tipo IVA no realizado debe ser porcentaje en configuraci¢n grupo registro IVA.';
+      Text1100004@1004 : TextConst 'ENU=Bill %1/%2;ESP=Efecto %1/%2';
+      Text1100005@1005 : TextConst 'ENU=The sum of %1 cannot be greater then 100 in the installments for %2 %3.;ESP=La suma de %1 no puede superar 100 en los plazos de %2 %3.';
+      PaymentMethod@1100000 : Record 289;
+      PaymentTerms@1100001 : Record 3;
+      GenJnlLine@1100002 : Record 81;
+      GenJnlLine2@1100003 : Record 81;
+      GLSetup@1100004 : Record 98;
+      SalesSetup@1100005 : Record 311;
+      PurchSetup@1100006 : Record 312;
+      ServSetup@1100070 : Record 5911;
+      Currency@1100007 : Record 4;
+      TempDocDim@1100027 : Record 357;
+      TempJnlLineDim@1100028 : TEMPORARY Record 356;
+      CurrencyExchRate@1100008 : Record 330;
+      GenJnlPostLine@1100009 : Codeunit 12;
+      DueDateAdjust@1100010 : Codeunit 10700;
+      DocPost@1100011 : Codeunit 7000006;
+      DimMgt@1100026 : Codeunit 408;
+      Installment@1100012 : Record 7000018;
+      Window@1100013 : Dialog;
+      Sales@1100014 : Integer;
+      CurrencyFactor@1100015 : Decimal;
+      VATAmountLCY@1100016 : Decimal;
+      TotalAmount@1100017 : Decimal;
+      TotalAmountLCY@1100018 : Decimal;
+      RemainingAmount@1100019 : Decimal;
+      RemainingAmountLCY@1100020 : Decimal;
+      InstallmentAmount@1100021 : Decimal;
+      InstallmentAmountLCY@1100022 : Decimal;
+      NextDueDate@1100023 : Date;
+      CurrDocNo@1100024 : Integer;
+      TotalPerc@1100025 : Decimal;
+      ExistsVATNoReal@1100029 : Boolean;
+      ErrorMessage@1100030 : Boolean;
+      ServiceHeader@1100050 : Record 5900;
+
+    PROCEDURE SplitSalesInv@1(VAR SalesHeader@1100000 : Record 36;VAR CustLedgEntry@1100001 : Record 21;VAR Window@1100002 : Dialog;SourceCode@1100003 : Code[10];GenJnlLineExtDocNo@1100004 : Code[20];GenJnlLineDocNo@1100005 : Code[20];VATAmount@1100006 : Decimal);
+    VAR
+      VATPostingSetup@1100007 : Record 325;
+      CarteraManagement@1100008 : Codeunit 7000000;
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF (PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo")) THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF SalesHeader."Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := SalesHeader."Currency Factor";
+
+        GLSetup.GET;
+        SalesSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+        CustLedgEntry.FIND('+');
+        CustLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+        IF CustLedgEntry."Remaining Amount" = 0 THEN
+          EXIT;
+        TotalAmount := CustLedgEntry."Remaining Amount";
+        TotalAmountLCY := CustLedgEntry."Remaining Amt. (LCY)";
+        RemainingAmount := TotalAmount;
+        RemainingAmountLCY := TotalAmountLCY;
+
+        // close invoice entry
+        IF PaymentMethod."Create Bills" THEN BEGIN
+          GenJnlLine.INIT;
+          GenJnlLine."Posting Date" := "Posting Date";
+          GenJnlLine."Document Date" := "Document Date";
+          GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+          GenJnlLine.VALIDATE("Account No.","Bill-to Customer No.");
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::" ";
+          GenJnlLine."Document No." := GenJnlLineDocNo;
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100002,GenJnlLineDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+
+          GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+          GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+          GenJnlLine."Reason Code" := "Reason Code";
+          GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+          GenJnlLine.VALIDATE("Currency Code","Currency Code");
+          GenJnlLine.Amount := -TotalAmount;
+          GenJnlLine."Amount (LCY)" := -TotalAmountLCY;
+          GenJnlLine."System-Created Entry" := TRUE;
+          GenJnlLine."On Hold" := "On Hold";
+          GenJnlLine."Applies-to Doc. Type" := GenJnlLine."Applies-to Doc. Type"::Invoice;
+          GenJnlLine."Applies-to Doc. No." := GenJnlLineDocNo;
+          GenJnlLine."Source Code" := SourceCode;
+          GenJnlLine."Currency Factor" := CurrencyFactor;
+          GenJnlLine."Payment Method Code" := "Payment Method Code";
+          GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+          GenJnlLine."Cust./Vendor Bank Acc. Code" := "Cust. Bank Acc. Code";
+
+          GenJnlLine."Salespers./Purch. Code" := "Salesperson Code";
+
+          TempJnlLineDim.DELETEALL;
+          TempDocDim.RESET;
+          TempDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+          TempDocDim.SETRANGE("Document Type",SalesHeader."Document Type");
+          TempDocDim.SETRANGE("Document No.",SalesHeader."No.");
+          DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+          IF GLSetup."Unrealized VAT" THEN BEGIN
+             FindCustVATSetup(VATPostingSetup,SalesHeader);
+             IF ErrorMessage THEN
+               ERROR(Text1100003);
+          END;
+
+          IF (GLSetup."Unrealized VAT") AND ExistsVATNoReal THEN BEGIN
+            GenJnlLine2.COPY(GenJnlLine);
+          END ELSE BEGIN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+          END;
+        END;
+
+        // create bills
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+          IF SalesSetup."Invoice Rounding" THEN
+            GLSetup.TESTFIELD("Inv. Rounding Precision (LCY)")
+          ELSE
+            GLSetup.TESTFIELD("Amount Rounding Precision");
+        END ELSE BEGIN
+          Currency.GET("Currency Code");
+          IF SalesSetup."Invoice Rounding" THEN
+            Currency.TESTFIELD("Invoice Rounding Precision")
+          ELSE
+            Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+        TotalAmount := RoundReceivableAmt(TotalAmount);
+
+        VATAmountLCY := RoundReceivableAmtLCY(VATAmount / CurrencyFactor);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := SalesHeader."Due Date";
+
+        GenJnlLine.INIT;
+        GenJnlLine."Posting Date" := "Posting Date";
+        GenJnlLine."Document Date" := "Document Date";
+        GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+        GenJnlLine.VALIDATE("Account No.","Bill-to Customer No.");
+        GenJnlLine."Document Type" :=  GenJnlLine."Document Type"::Bill;
+        GenJnlLine."Document No." := GenJnlLineDocNo;
+        GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+        GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+        GenJnlLine."Reason Code" := "Reason Code";
+        GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+        GenJnlLine.VALIDATE("Currency Code","Currency Code");
+        GenJnlLine."System-Created Entry" := TRUE;
+        GenJnlLine."On Hold" := "On Hold";
+        GenJnlLine."Source Code" := SourceCode;
+        GenJnlLine."Currency Factor" := CurrencyFactor;
+        GenJnlLine."Payment Method Code" := "Payment Method Code";
+        GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+        GenJnlLine."Cust./Vendor Bank Acc. Code" := "Cust. Bank Acc. Code";
+        GenJnlLine."Salespers./Purch. Code" := SalesHeader."Salesperson Code";
+
+
+
+
+        TempJnlLineDim.DELETEALL;
+        TempDocDim.RESET;
+        TempDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+        TempDocDim.SETRANGE("Document Type",SalesHeader."Document Type");
+        TempDocDim.SETRANGE("Document No.",SalesHeader."No.");
+        DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          Window.UPDATE(6,CurrDocNo);
+          GenJnlLine."Bill No." := FORMAT(CurrDocNo);
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100004,GenJnlLineDocNo,CurrDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+          GenJnlLine."Due Date" := NextDueDate;
+          CheckSalesDueDate(SalesHeader,GenJnlLine."Due Date",PaymentTerms."Max. No. of Days till Due Date");
+          DueDateAdjust.SalesAdjustDueDate(GenJnlLine."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Bill-to Customer No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - GenJnlLine.Amount;
+            RemainingAmountLCY := RemainingAmountLCY - GenJnlLine."Amount (LCY)";
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            GenJnlLine.Amount := RemainingAmount;
+            GenJnlLine."Amount (LCY)" := RemainingAmountLCY;
+          END;
+          IF PaymentMethod."Create Bills" THEN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+        END;
+        IF GLSetup."Unrealized VAT" AND ExistsVATNoReal THEN
+          GenJnlPostLine.RunWithCheck(GenJnlLine2,TempJnlLineDim);
+      END;
+    END;
+
+    PROCEDURE SplitPurchInv@8(VAR PurchHeader@1100000 : Record 38;VAR VendLedgEntry@1100001 : Record 25;VAR Window@1100002 : Dialog;SourceCode@1100003 : Code[10];GenJnlLineExtDocNo@1100004 : Code[20];GenJnlLineDocNo@1100005 : Code[20];VATAmount@1100006 : Decimal);
+    VAR
+      VATPostingSetup@1100007 : Record 325;
+      CarteraManagement@1100008 : Codeunit 7000000;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF (PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo")) THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF PurchHeader."Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := PurchHeader."Currency Factor";
+
+        GLSetup.GET;
+        PurchSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+        VendLedgEntry.FIND('+');
+        VendLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+        IF VendLedgEntry."Remaining Amount" = 0 THEN
+          EXIT;
+        TotalAmount := VendLedgEntry."Remaining Amount";
+        TotalAmountLCY := VendLedgEntry."Remaining Amt. (LCY)";
+        RemainingAmount := VendLedgEntry."Remaining Amount";
+        RemainingAmountLCY := VendLedgEntry."Remaining Amt. (LCY)";
+
+        // close invoice entry
+        IF PaymentMethod."Create Bills" THEN BEGIN
+          GenJnlLine.INIT;
+          GenJnlLine."Posting Date" := "Posting Date";
+          GenJnlLine."Document Date" := "Document Date";
+          GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Vendor);
+          GenJnlLine.VALIDATE("Account No.",PurchHeader."Pay-to Vendor No.");
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::" ";
+          GenJnlLine."Document No." := GenJnlLineDocNo;
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100002,GenJnlLineDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+          GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+          GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+          GenJnlLine."Reason Code" := "Reason Code";
+          GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+          GenJnlLine.VALIDATE("Currency Code","Currency Code");
+          GenJnlLine.Amount := -TotalAmount;
+          GenJnlLine."Amount (LCY)" := -TotalAmountLCY;
+          GenJnlLine."System-Created Entry" := TRUE;
+          GenJnlLine."On Hold" := "On Hold";
+          GenJnlLine."Applies-to Doc. Type" := GenJnlLine."Applies-to Doc. Type"::Invoice;
+          GenJnlLine."Applies-to Doc. No." := GenJnlLineDocNo;
+          GenJnlLine."Source Code" := SourceCode;
+          GenJnlLine."Currency Factor" := CurrencyFactor;
+          GenJnlLine."Payment Method Code" := "Payment Method Code";
+          GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+          GenJnlLine."Cust./Vendor Bank Acc. Code" := "Vendor Bank Acc. Code";
+
+          GenJnlLine."Salespers./Purch. Code" := "Purchaser Code";
+
+
+          TempJnlLineDim.DELETEALL;
+          TempDocDim.RESET;
+          TempDocDim.SETRANGE("Table ID",DATABASE::"Purchase Header");
+          TempDocDim.SETRANGE("Document Type",PurchHeader."Document Type");
+          TempDocDim.SETRANGE("Document No.",PurchHeader."No.");
+          DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+          IF GLSetup."Unrealized VAT" THEN BEGIN
+             FindVendVATSetup(VATPostingSetup,PurchHeader);
+             IF ErrorMessage THEN
+               ERROR(Text1100003);
+          END;
+
+          IF GLSetup."Unrealized VAT" AND ExistsVATNoReal THEN  BEGIN
+            GenJnlLine2.COPY(GenJnlLine);
+          END ELSE BEGIN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+          END;
+        END;
+        // create bills
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+          IF PurchSetup."Invoice Rounding" THEN
+            GLSetup.TESTFIELD("Inv. Rounding Precision (LCY)")
+          ELSE
+            GLSetup.TESTFIELD("Amount Rounding Precision");
+        END ELSE BEGIN
+          Currency.GET("Currency Code");
+          IF SalesSetup."Invoice Rounding" THEN
+            Currency.TESTFIELD("Invoice Rounding Precision")
+          ELSE
+            Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+        TotalAmount := RoundPayableAmt(TotalAmount);
+
+        VATAmountLCY := RoundPayableAmtLCY(VATAmount / CurrencyFactor);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := PurchHeader."Due Date";
+
+
+        GenJnlLine.INIT;
+        GenJnlLine."Posting Date" := "Posting Date";
+        GenJnlLine."Document Date" := "Document Date";
+        GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Vendor);
+        GenJnlLine.VALIDATE("Account No.",PurchHeader."Pay-to Vendor No.");
+        GenJnlLine."Document Type" :=  GenJnlLine."Document Type"::Bill;
+        GenJnlLine."Document No." := GenJnlLineDocNo;
+        GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+        GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+        GenJnlLine."Reason Code" := "Reason Code";
+        GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+        GenJnlLine.VALIDATE("Currency Code","Currency Code");
+        GenJnlLine."System-Created Entry" := TRUE;
+        GenJnlLine."On Hold" := "On Hold";
+        GenJnlLine."Source Code" := SourceCode;
+        GenJnlLine."Currency Factor" := CurrencyFactor;
+        GenJnlLine."Payment Method Code" := "Payment Method Code";
+        GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+        GenJnlLine."Cust./Vendor Bank Acc. Code" := "Vendor Bank Acc. Code";
+
+        GenJnlLine."Salespers./Purch. Code" := "Purchaser Code";
+
+
+        TempJnlLineDim.DELETEALL;
+        TempDocDim.RESET;
+        TempDocDim.SETRANGE("Table ID",DATABASE::"Purchase Header");
+        TempDocDim.SETRANGE("Document Type",PurchHeader."Document Type");
+        TempDocDim.SETRANGE("Document No.",PurchHeader."No.");
+        DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          Window.UPDATE(6,CurrDocNo);
+          GenJnlLine."Bill No." := FORMAT(CurrDocNo);
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100004,GenJnlLineDocNo,CurrDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+          GenJnlLine."Due Date" := NextDueDate;
+          CheckPurchDueDate(PurchHeader,GenJnlLine."Due Date",PaymentTerms."Max. No. of Days till Due Date");
+          DueDateAdjust.PurchAdjustDueDate(GenJnlLine."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Pay-to Vendor No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundPayableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    GenJnlLine."Amount (LCY)" := RoundPayableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundPayableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundPayableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundPayableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundPayableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundPayableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundPayableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundPayableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundPayableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - GenJnlLine.Amount;
+            RemainingAmountLCY := RemainingAmountLCY - GenJnlLine."Amount (LCY)";
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            GenJnlLine.Amount := RemainingAmount;
+            GenJnlLine."Amount (LCY)" := RemainingAmountLCY;
+          END;
+          IF PaymentMethod."Create Bills" THEN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+        END;
+        IF GLSetup."Unrealized VAT" AND ExistsVATNoReal THEN
+        //(VATPostingSetup."Unrealized VAT Type" = VATPostingSetup."Unrealized VAT Type"::Percentage) THEN
+          GenJnlPostLine.RunWithCheck(GenJnlLine2,TempJnlLineDim);
+
+      END;
+    END;
+
+    PROCEDURE RoundReceivableAmt@2(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+          Amount,
+          Currency."Invoice Rounding Precision",
+          SELECTSTR(Currency."Invoice Rounding Type" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+          Amount,
+          Currency."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundReceivableAmtLCY@3(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+          Amount,
+          GLSetup."Inv. Rounding Precision (LCY)",
+          SELECTSTR(GLSetup."Inv. Rounding Type (LCY)" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+          Amount,
+          GLSetup."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundPayableAmt@9(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+          Amount,
+          Currency."Invoice Rounding Precision",
+          SELECTSTR(Currency."Invoice Rounding Type" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+          Amount,
+          Currency."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundPayableAmtLCY@7(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+          Amount,
+          GLSetup."Inv. Rounding Precision (LCY)",
+          SELECTSTR(GLSetup."Inv. Rounding Type (LCY)" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+          Amount,
+          GLSetup."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE FindCustVATSetup@64(VAR VATSetup@1100000 : Record 325;SalesHeader2@1100001 : Record 36);
+    VAR
+      Customer@1100002 : Record 18;
+      PostingGroup@1100009 : Code[10];
+      SalesLine2@1100010 : Record 37;
+    BEGIN
+      Customer.GET(SalesHeader2."Bill-to Customer No.");
+
+      VATSetup.SETCURRENTKEY("VAT Bus. Posting Group","VAT Prod. Posting Group");
+      VATSetup.SETRANGE(VATSetup."VAT Bus. Posting Group",Customer."VAT Bus. Posting Group");
+
+      SalesLine2.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      SalesLine2.SETRANGE("Document Type",SalesHeader2."Document Type");
+      SalesLine2.SETRANGE("Document No.",SalesHeader2."No.");
+      SalesLine2.FIND('-');
+
+      REPEAT
+        CASE SalesLine2.Type OF
+          SalesLine2.Type::Item:
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          SalesLine2.Type::Resource:
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          SalesLine2.Type::"G/L Account":
+            BEGIN
+              PostingGroup := SalesLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+        END;
+      UNTIL SalesLine2.NEXT = 0;
+    END;
+
+    PROCEDURE FindVendVATSetup@62(VAR VATSetup@1100000 : Record 325;PurchHeader2@1100001 : Record 38);
+    VAR
+      Vendor@1100002 : Record 23;
+      PostingGroup@1100009 : Code[10];
+      PurchLine2@1100010 : Record 39;
+    BEGIN
+      Vendor.GET(PurchHeader2."Buy-from Vendor No.");
+
+      VATSetup.SETCURRENTKEY("VAT Bus. Posting Group","VAT Prod. Posting Group");
+      VATSetup.SETRANGE(VATSetup."VAT Bus. Posting Group",Vendor."VAT Bus. Posting Group");
+
+      PurchLine2.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      PurchLine2.SETRANGE("Document Type",PurchHeader2."Document Type");
+      PurchLine2.SETRANGE("Document No.",PurchHeader2."No.");
+      PurchLine2.FIND('-');
+
+      REPEAT
+        CASE PurchLine2.Type OF
+          PurchLine2.Type::Item:
+            BEGIN
+              PostingGroup := PurchLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          PurchLine2.Type::"G/L Account":
+            BEGIN
+              PostingGroup := PurchLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+        END;
+      UNTIL PurchLine2.NEXT = 0;
+    END;
+
+    PROCEDURE SplitServiceInv@1100000(VAR ServiceHeader@1100000 : Record 5900;VAR CustLedgEntry@1100001 : Record 21;VAR Window@1100002 : Dialog;SourceCode@1100003 : Code[10];GenJnlLineExtDocNo@1100004 : Code[20];GenJnlLineDocNo@1100005 : Code[20];VATAmount@1100006 : Decimal);
+    VAR
+      VATPostingSetup@1100007 : Record 325;
+      CarteraManagement@1100008 : Codeunit 7000000;
+    BEGIN
+      WITH ServiceHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF (PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo")) THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF ServiceHeader."Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := ServiceHeader."Currency Factor";
+
+        GLSetup.GET;
+        ServSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+        CustLedgEntry.FIND('+');
+        CustLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+        IF CustLedgEntry."Remaining Amount" = 0 THEN
+          EXIT;
+        TotalAmount := CustLedgEntry."Remaining Amount";
+        TotalAmountLCY := CustLedgEntry."Remaining Amt. (LCY)";
+        RemainingAmount := TotalAmount;
+        RemainingAmountLCY := TotalAmountLCY;
+
+        // close invoice entry
+        IF PaymentMethod."Create Bills" THEN BEGIN
+          GenJnlLine.INIT;
+          GenJnlLine."Posting Date" := "Posting Date";
+          GenJnlLine."Document Date" := "Document Date";
+          GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+          GenJnlLine.VALIDATE("Account No.","Bill-to Customer No.");
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::" ";
+          GenJnlLine."Document No." := GenJnlLineDocNo;
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100002,GenJnlLineDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+
+          GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+          GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+          GenJnlLine."Reason Code" := "Reason Code";
+          GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+          GenJnlLine.VALIDATE("Currency Code","Currency Code");
+          GenJnlLine.Amount := -TotalAmount;
+          GenJnlLine."Amount (LCY)" := -TotalAmountLCY;
+          GenJnlLine."System-Created Entry" := TRUE;
+          GenJnlLine."Applies-to Doc. Type" := GenJnlLine."Applies-to Doc. Type"::Invoice;
+          GenJnlLine."Applies-to Doc. No." := GenJnlLineDocNo;
+          GenJnlLine."Source Code" := SourceCode;
+          GenJnlLine."Currency Factor" := CurrencyFactor;
+          GenJnlLine."Payment Method Code" := "Payment Method Code";
+          GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+          GenJnlLine."Cust./Vendor Bank Acc. Code" := "Cust. Bank Acc. Code";
+
+          GenJnlLine."Salespers./Purch. Code" := "Salesperson Code";
+
+          TempJnlLineDim.DELETEALL;
+          TempDocDim.RESET;
+          TempDocDim.SETRANGE("Table ID",DATABASE::"Service Header");
+          TempDocDim.SETRANGE("Document Type",ServiceHeader."Document Type");
+          TempDocDim.SETRANGE("Document No.",ServiceHeader."No.");
+          DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+          IF GLSetup."Unrealized VAT" THEN BEGIN
+             FindCustVATSetupServ(VATPostingSetup,ServiceHeader);
+             IF ErrorMessage THEN
+               ERROR(Text1100003);
+          END;
+
+          IF (GLSetup."Unrealized VAT") AND ExistsVATNoReal THEN BEGIN
+            GenJnlLine2.COPY(GenJnlLine);
+          END ELSE BEGIN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+          END;
+        END;
+
+        // create bills
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+        END ELSE
+          Currency.GET("Currency Code");
+        TotalAmount := RoundReceivableAmt(TotalAmount);
+
+        VATAmountLCY := RoundReceivableAmtLCY(VATAmount / CurrencyFactor);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := ServiceHeader."Due Date";
+
+        GenJnlLine.INIT;
+        GenJnlLine."Posting Date" := "Posting Date";
+        GenJnlLine."Document Date" := "Document Date";
+        GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+        GenJnlLine.VALIDATE("Account No.","Bill-to Customer No.");
+        GenJnlLine."Document Type" :=  GenJnlLine."Document Type"::Bill;
+        GenJnlLine."Document No." := GenJnlLineDocNo;
+        GenJnlLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+        GenJnlLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+        GenJnlLine."Reason Code" := "Reason Code";
+        GenJnlLine."External Document No." := GenJnlLineExtDocNo;
+        GenJnlLine.VALIDATE("Currency Code","Currency Code");
+        GenJnlLine."System-Created Entry" := TRUE;
+        GenJnlLine."Source Code" := SourceCode;
+        GenJnlLine."Currency Factor" := CurrencyFactor;
+        GenJnlLine."Payment Method Code" := "Payment Method Code";
+        GenJnlLine."Pmt. Address Code" := "Pay-at Code";
+        GenJnlLine."Cust./Vendor Bank Acc. Code" := "Cust. Bank Acc. Code";
+        GenJnlLine."Salespers./Purch. Code" := ServiceHeader."Salesperson Code";
+
+        TempJnlLineDim.DELETEALL;
+        TempDocDim.RESET;
+        TempDocDim.SETRANGE("Table ID",DATABASE::"Service Header");
+        TempDocDim.SETRANGE("Document Type",ServiceHeader."Document Type");
+        TempDocDim.SETRANGE("Document No.",ServiceHeader."No.");
+        DimMgt.CopyDocDimToJnlLineDim(TempDocDim,TempJnlLineDim);
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          Window.UPDATE(6,CurrDocNo);
+          GenJnlLine."Bill No." := FORMAT(CurrDocNo);
+          GenJnlLine.Description :=
+            COPYSTR(
+              STRSUBSTNO(Text1100004,GenJnlLineDocNo,CurrDocNo),
+              1,
+              MAXSTRLEN(GenJnlLine.Description));
+          GenJnlLine."Due Date" := NextDueDate;
+          CheckServiceDueDate(ServiceHeader,GenJnlLine."Due Date",PaymentTerms."Max. No. of Days till Due Date");
+          DueDateAdjust.SalesAdjustDueDate(GenJnlLine."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Bill-to Customer No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    GenJnlLine.Amount :=  RoundReceivableAmt(
+                      TotalAmount * Installment."% of Total" / 100);
+                    GenJnlLine."Amount (LCY)" := RoundReceivableAmtLCY(
+                                                   CurrencyExchRate.ExchangeAmtFCYToLCY(
+                                                     "Posting Date",
+                                                     Currency.Code,
+                                                     GenJnlLine.Amount,
+                                                     CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - GenJnlLine.Amount;
+            RemainingAmountLCY := RemainingAmountLCY - GenJnlLine."Amount (LCY)";
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            GenJnlLine.Amount := RemainingAmount;
+            GenJnlLine."Amount (LCY)" := RemainingAmountLCY;
+          END;
+          IF PaymentMethod."Create Bills" THEN
+            GenJnlPostLine.RunWithCheck(GenJnlLine,TempJnlLineDim);
+        END;
+        IF GLSetup."Unrealized VAT" AND ExistsVATNoReal THEN
+          GenJnlPostLine.RunWithCheck(GenJnlLine2,TempJnlLineDim);
+      END;
+    END;
+
+    PROCEDURE FindCustVATSetupServ@1100001(VAR VATSetup@1100000 : Record 325;ServiceHeader2@1100001 : Record 5900);
+    VAR
+      Customer@1100002 : Record 18;
+      ServiceLine2@1100003 : Record 5902;
+      PostingGroup@1100004 : Code[10];
+    BEGIN
+      Customer.GET(ServiceHeader2."Bill-to Customer No.");
+
+      VATSetup.SETCURRENTKEY("VAT Bus. Posting Group","VAT Prod. Posting Group");
+      VATSetup.SETRANGE(VATSetup."VAT Bus. Posting Group",Customer."VAT Bus. Posting Group");
+
+      ServiceLine2.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      ServiceLine2.SETRANGE("Document Type",ServiceHeader2."Document Type");
+      ServiceLine2.SETRANGE("Document No.",ServiceHeader2."No.");
+      ServiceLine2.FIND('-');
+
+      REPEAT
+        CASE ServiceLine2.Type OF
+          ServiceLine2.Type::Item:
+            BEGIN
+              PostingGroup := ServiceLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          ServiceLine2.Type::Resource:
+            BEGIN
+              PostingGroup := ServiceLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+          ServiceLine2.Type::"G/L Account":
+            BEGIN
+              PostingGroup := ServiceLine2."VAT Prod. Posting Group";
+              VATSetup.SETRANGE(VATSetup."VAT Prod. Posting Group",PostingGroup);
+              IF (VATSetup.FIND('-') AND (VATSetup."Unrealized VAT Type" >= VATSetup."Unrealized VAT Type"::Percentage)) THEN
+                IF VATSetup."Unrealized VAT Type" > VATSetup."Unrealized VAT Type"::Percentage THEN
+                  ErrorMessage := TRUE
+                ELSE
+                  ExistsVATNoReal := TRUE;
+            END;
+        END;
+      UNTIL ServiceLine2.NEXT = 0;
+    END;
+
+    PROCEDURE CheckDueDate@1100002(NewDueDate@1100000 : Date;InitialDocumentDate@1100001 : Date;MaxNoOfDays@1100002 : Integer) : Boolean;
+    VAR
+      MaxAllowedDueDate@1100004 : Date;
+    BEGIN
+      IF MaxNoOfDays > 0 THEN BEGIN
+        MaxAllowedDueDate := InitialDocumentDate + MaxNoOfDays;
+        EXIT(NewDueDate <= MaxAllowedDueDate);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckSalesDueDate@1100004(SalesHeader@1100005 : Record 36;NewDueDate@1100000 : Date;MaxNoOfDays@1100002 : Integer);
+    BEGIN
+      WITH SalesHeader DO
+        IF NOT CheckDueDate(NewDueDate,"Document Date",MaxNoOfDays) THEN
+          ERROR(Text001,"Document Type","No.",MaxNoOfDays,"Document Date");
+    END;
+
+    LOCAL PROCEDURE CheckPurchDueDate@1100011(PurchaseHeader@1100005 : Record 38;NewDueDate@1100000 : Date;MaxNoOfDays@1100002 : Integer);
+    BEGIN
+      WITH PurchaseHeader DO
+        IF NOT CheckDueDate(NewDueDate,"Document Date",MaxNoOfDays) THEN
+          ERROR(Text002,"Document Type","No.",MaxNoOfDays,"Document Date");
+    END;
+
+    LOCAL PROCEDURE CheckServiceDueDate@1100012(ServiceHeader@1100005 : Record 5900;NewDueDate@1100000 : Date;MaxNoOfDays@1100002 : Integer);
+    BEGIN
+      WITH ServiceHeader DO
+        IF NOT CheckDueDate(NewDueDate,"Document Date",MaxNoOfDays) THEN
+          ERROR(Text003,"Document Type","No.",MaxNoOfDays,"Document Date");
+    END;
+
+    BEGIN
+    END.
+  }
+}

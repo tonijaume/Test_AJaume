@@ -1,0 +1,414 @@
+OBJECT Codeunit 5055265 Update Liquidity Analysis View
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=LIQEM5.00;
+  }
+  PROPERTIES
+  {
+    TableNo=5055269;
+    Permissions=TableData 366=rimd,
+                TableData 5055269=rm,
+                TableData 5055270=r,
+                TableData 5055271=rimd;
+    OnRun=BEGIN
+            MaxNumber := 2147483647;
+            IF Code <> '' THEN
+              IF CONFIRM(Text1140000,TRUE,TABLECAPTION,Code) THEN BEGIN
+                Rec.MODIFY;
+                UpdateOne(Rec,TRUE);
+              END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text1140000@1140000 : TextConst 'ENU=Do you want to update %1 %2?;ESP=¨Confirma que desea actualizar %1 %2?';
+      Text1140001@1140001 : TextConst 'ENU=Analysis View     #1############################\\;ESP=Vista an lisis    #1############################\\';
+      Text1140002@1140002 : TextConst 'ENU=Updating table    #2############################\;ESP=Tabla actualiz.   #2############################\';
+      Text1140003@1140003 : TextConst 'ENU=Speed: (Entries/s)#4########\;ESP=Veloc.:  (Movs./s)#4########\';
+      Text1140004@1140004 : TextConst 'ENU=Average Speed     #5########;ESP=Velocidad media   #5########';
+      Text1140005@1140005 : TextConst 'ENU=#6############### @3@@@@@@@@@@@@@@@@@@@@@@@@@@@@\\;ESP=#6############### @3@@@@@@@@@@@@@@@@@@@@@@@@@@@@\\';
+      Text1140006@1140006 : TextConst 'ENU=Summarizing;ESP=Resumiendo';
+      Text1140007@1140007 : TextConst 'ENU=Updating Database;ESP=Actualizando base de datos';
+      AnalysisView@1140008 : Record 5055269;
+      LiqLedgEntry@1140009 : Record 5055257;
+      AnalysisViewEntry@1140010 : Record 5055271;
+      TempAnalysisViewEntry@1140011 : TEMPORARY Record 5055271;
+      TempAnalysisViewFilter@1140012 : TEMPORARY Record 5055270;
+      TempDimBuf@1140013 : TEMPORARY Record 360;
+      FilterIsInitialized@1140014 : Boolean;
+      MaxNumber@1140015 : Integer;
+      LedgEntryDimEntryNo@1140016 : Integer;
+      PrevPostingDate@1140017 : Date;
+      PrevCalculatedPostingDate@1140018 : Date;
+      NoOfEntries@1140019 : Integer;
+      Window@1140020 : Dialog;
+      ShowProgressWindow@1140021 : Boolean;
+      WinLastEntryNo@1140022 : Integer;
+      WinPrevEntryNo@1140023 : Integer;
+      WinUpdateCounter@1140024 : Integer;
+      WinTotalCounter@1140025 : Integer;
+      WinTime0@1140026 : Time;
+      WinTime1@1140027 : Time;
+      WinTime2@1140028 : Time;
+
+    PROCEDURE UpdateAll@1140000(DirectlyFromPosting@1140000 : Boolean);
+    VAR
+      AnalysisView2@1140001 : Record 5055269;
+    BEGIN
+      MaxNumber := 2147483647;
+      AnalysisView2.SETRANGE(Blocked,FALSE);
+      IF DirectlyFromPosting THEN
+        AnalysisView2.SETRANGE("Update on Posting",TRUE);
+
+      AnalysisView2.LOCKTABLE;
+      IF AnalysisView2.FIND('-') THEN
+        REPEAT
+          UpdateOne(AnalysisView2,NOT DirectlyFromPosting);
+        UNTIL AnalysisView2.NEXT = 0;
+    END;
+
+    PROCEDURE Update@1140001(VAR NewAnalysisView@1140000 : Record 5055269;ShowWindow@1140001 : Boolean);
+    BEGIN
+      MaxNumber := 2147483647;
+      NewAnalysisView.TESTFIELD(Blocked,FALSE);
+      UpdateOne(NewAnalysisView,ShowWindow);
+    END;
+
+    LOCAL PROCEDURE UpdateOne@1140002(VAR NewAnalysisView@1140000 : Record 5055269;ShowWindow@1140001 : Boolean);
+    VAR
+      LastEntryNo@1140002 : Integer;
+    BEGIN
+      AnalysisView := NewAnalysisView;
+      AnalysisView.TESTFIELD(Blocked,FALSE);
+      ShowProgressWindow := ShowWindow;
+      IF ShowProgressWindow THEN
+        InitWindow;
+
+      LiqLedgEntry.RESET;
+      LiqLedgEntry.LOCKTABLE;
+      IF LiqLedgEntry.FIND('+') THEN BEGIN
+        IF ShowProgressWindow THEN
+          UpdateWindowHeader(DATABASE::"Liquidity Analysis View Entry",LiqLedgEntry."Entry No.");
+        UpdateEntries;
+      END;
+
+      AnalysisView."Last Date Updated" := TODAY;
+      AnalysisView.MODIFY;
+
+      IF ShowProgressWindow THEN
+        Window.CLOSE;
+    END;
+
+    LOCAL PROCEDURE UpdateEntries@1140003();
+    VAR
+      LedgEntryDim1@1140000 : Record 355;
+      LedgEntryDim2@1140001 : Record 355;
+      LedgEntryDim3@1140002 : Record 355;
+      LedgEntryDim4@1140003 : Record 355;
+    BEGIN
+      AnalysisViewEntry.SETRANGE("Analysis View Code",AnalysisView.Code);
+      AnalysisViewEntry.DELETEALL;
+      AnalysisViewEntry.RESET;
+
+      FilterIsInitialized := FALSE;
+      LiqLedgEntry.FILTERGROUP(2);
+      LiqLedgEntry.SETFILTER("Liquidity Account No.",'<>%1','');
+      LiqLedgEntry.FILTERGROUP(0);
+      IF AnalysisView."Liquidity Account Filter" <> '' THEN
+        LiqLedgEntry.SETFILTER("Liquidity Account No.",AnalysisView."Liquidity Account Filter");
+      IF NOT LiqLedgEntry.FIND('-') THEN
+        EXIT;
+
+      InitDimEntry(LedgEntryDim1,AnalysisView."Dimension 1 Code");
+      InitDimEntry(LedgEntryDim2,AnalysisView."Dimension 2 Code");
+      InitDimEntry(LedgEntryDim3,AnalysisView."Dimension 3 Code");
+      InitDimEntry(LedgEntryDim4,AnalysisView."Dimension 4 Code");
+      REPEAT
+        IF LedgEntryDimEntryNo < LiqLedgEntry."Entry No." THEN
+          FindNextLedgerEntryNo(DATABASE::"Ledger Entry Dimension",LiqLedgEntry."Entry No.");
+        IF (LedgEntryDimEntryNo = LiqLedgEntry."Entry No.") OR (LedgEntryDimEntryNo = MaxNumber) THEN
+          UpdateAnalysisViewEntry(
+            GetDimEntry(LedgEntryDim1),GetDimEntry(LedgEntryDim2),GetDimEntry(LedgEntryDim3),GetDimEntry(LedgEntryDim4));
+        IF ShowProgressWindow THEN
+          UpdateWindowCounter(LiqLedgEntry."Entry No.");
+        IF LedgEntryDimEntryNo < MaxNumber THEN
+          LiqLedgEntry.SETRANGE("Entry No.",LedgEntryDimEntryNo,MaxNumber);
+      UNTIL (LiqLedgEntry.NEXT = 0) OR (LedgEntryDimEntryNo = 0);
+      IF ShowProgressWindow THEN
+        UpdateWindowCounter(LiqLedgEntry."Entry No.");
+      FlushAnalysisViewEntry;
+    END;
+
+    LOCAL PROCEDURE FindNextLedgerEntryNo@1140004(FindInTableID@1140000 : Integer;ActualEntryNo@1140001 : Integer);
+    VAR
+      LedgEntryDim@1140002 : Record 355;
+      AnalysisViewFilter@1140003 : Record 5055270;
+      Found@1140004 : Boolean;
+    BEGIN
+      IF NOT FilterIsInitialized THEN BEGIN
+        LedgEntryDimEntryNo := 0;
+        TempAnalysisViewFilter.DELETEALL;
+        TempDimBuf.DELETEALL;
+        AnalysisViewFilter.SETRANGE("Analysis View Code",AnalysisView.Code);
+        AnalysisViewFilter.SETFILTER("Dimension Value Filter",'<>%1','');
+        IF AnalysisViewFilter.FIND('-') THEN
+          REPEAT
+            TempAnalysisViewFilter.INIT;
+            TempAnalysisViewFilter."Dimension Code" := AnalysisViewFilter."Dimension Code";
+            TempAnalysisViewFilter."Dimension Value Filter" := AnalysisViewFilter."Dimension Value Filter";
+            TempAnalysisViewFilter.INSERT;
+            TempDimBuf.INIT;
+            TempDimBuf."Dimension Code" := AnalysisViewFilter."Dimension Code";
+            IF FilterIncludesBlanks(AnalysisViewFilter."Dimension Value Filter") THEN
+              TempDimBuf."Dimension Value Code" := '*';
+            TempDimBuf.INSERT;
+          UNTIL AnalysisViewFilter.NEXT = 0
+        ELSE
+          LedgEntryDimEntryNo := MaxNumber;  // No filters are set
+        FilterIsInitialized := TRUE;
+      END;
+      // Synchronize TempDimBuf with ActualEntryNo and check for match
+      IF LedgEntryDimEntryNo < ActualEntryNo THEN BEGIN
+        Found := FALSE;
+        LedgEntryDimEntryNo := ActualEntryNo;
+        WHILE (NOT Found) AND (LedgEntryDimEntryNo > 0) DO BEGIN
+          Found := TRUE;
+          IF TempDimBuf.FIND('-') THEN
+            REPEAT
+              IF TempDimBuf."Line No." < LedgEntryDimEntryNo THEN BEGIN
+                TempAnalysisViewFilter.GET('',TempDimBuf."Dimension Code");
+                CASE FindInTableID OF
+                  DATABASE::"Ledger Entry Dimension":
+                    BEGIN
+                      LedgEntryDim.SETRANGE("Table ID",DATABASE::"Liquidity Ledger Entry");
+                      LedgEntryDim.SETRANGE("Entry No.",LedgEntryDimEntryNo,MaxNumber);
+                      LedgEntryDim.SETRANGE("Dimension Code",TempAnalysisViewFilter."Dimension Code");
+                      LedgEntryDim.SETFILTER(
+                        "Dimension Value Code",TempAnalysisViewFilter."Dimension Value Filter");
+                      IF LedgEntryDim.FIND('-') THEN
+                        TempDimBuf."Line No." := LedgEntryDim."Entry No."
+                      ELSE
+                        IF TempDimBuf."Dimension Value Code" = '*' THEN
+                          TempDimBuf."Line No." := MaxNumber
+                        ELSE
+                          TempDimBuf."Line No." := 0;
+                      IF TempDimBuf."Dimension Value Code" = '*' THEN BEGIN
+                        LedgEntryDim.SETRANGE("Dimension Value Code");
+                        IF LedgEntryDim.FIND('-') THEN
+                          IF (LedgEntryDim."Entry No." < TempDimBuf."Line No.") THEN
+                            TempDimBuf."Line No." := LedgEntryDim."Entry No." - 1;
+                      END;
+                    END;
+                END;
+                TempDimBuf.MODIFY;
+              END;
+              Found :=
+                Found AND
+                ((TempDimBuf."Line No." = LedgEntryDimEntryNo) OR
+                (TempDimBuf."Dimension Value Code" = '*') AND
+                (TempDimBuf."Line No." >= LedgEntryDimEntryNo));
+
+              IF TempDimBuf."Dimension Value Code" = '*' THEN BEGIN
+                IF (TempDimBuf."Line No." = MaxNumber) OR
+                   (LedgEntryDimEntryNo > 0) AND (TempDimBuf."Line No." < LedgEntryDimEntryNo)
+                THEN
+                  LedgEntryDimEntryNo := LedgEntryDimEntryNo + 1;
+              END ELSE BEGIN
+                IF (TempDimBuf."Line No." = 0) OR
+                   (LedgEntryDimEntryNo > 0) AND (TempDimBuf."Line No." > LedgEntryDimEntryNo)
+                THEN
+                  LedgEntryDimEntryNo := TempDimBuf."Line No.";
+              END;
+            UNTIL (TempDimBuf.NEXT = 0) OR (LedgEntryDimEntryNo = 0);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitDimEntry@1140005(VAR LedgEntryDim@1140000 : Record 355;DimCode@1140001 : Code[20]);
+    BEGIN
+      IF DimCode = '' THEN
+        EXIT;
+      WITH LedgEntryDim DO BEGIN
+        SETRANGE("Table ID",DATABASE::"Liquidity Ledger Entry");
+        SETRANGE("Dimension Code",DimCode);
+        IF FIND('-') THEN;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateAnalysisViewEntry@1140006(DimValue1@1140000 : Code[20];DimValue2@1140001 : Code[20];DimValue3@1140002 : Code[20];DimValue4@1140003 : Code[20]);
+    VAR
+      PostingDate@1140004 : Date;
+      EntryNo@1140005 : Integer;
+    BEGIN
+      PostingDate := LiqLedgEntry."Liquidity Date";
+      IF PostingDate < AnalysisView."Starting Date" THEN BEGIN
+        PostingDate := AnalysisView."Starting Date" - 1;
+        EntryNo := 0;
+      END ELSE BEGIN
+        PostingDate := CalculatePeriodStart(PostingDate,AnalysisView."Date Compression");
+        IF PostingDate < AnalysisView."Starting Date" THEN
+          PostingDate := AnalysisView."Starting Date";
+        IF AnalysisView."Date Compression" = AnalysisView."Date Compression"::None THEN
+          EntryNo := LiqLedgEntry."Entry No."
+        ELSE
+          EntryNo := 0;
+      END;
+      TempAnalysisViewEntry."Analysis View Code" := AnalysisView.Code;
+      TempAnalysisViewEntry."Liquidity No." := LiqLedgEntry."Liquidity No.";
+      TempAnalysisViewEntry."Liquidity Account No." := LiqLedgEntry."Liquidity Account No.";
+      TempAnalysisViewEntry."Liquidity Date" := PostingDate;
+      TempAnalysisViewEntry."Dimension 1 Value Code" := DimValue1;
+      TempAnalysisViewEntry."Dimension 2 Value Code" := DimValue2;
+      TempAnalysisViewEntry."Dimension 3 Value Code" := DimValue3;
+      TempAnalysisViewEntry."Dimension 4 Value Code" := DimValue4;
+      TempAnalysisViewEntry."Entry No." := EntryNo;
+
+      IF TempAnalysisViewEntry.FIND THEN BEGIN
+        TempAnalysisViewEntry.Amount := TempAnalysisViewEntry.Amount + LiqLedgEntry.Amount;
+        TempAnalysisViewEntry.MODIFY;
+      END ELSE BEGIN
+        TempAnalysisViewEntry.Amount := LiqLedgEntry.Amount;
+        TempAnalysisViewEntry.INSERT;
+        NoOfEntries := NoOfEntries + 1;
+      END;
+      IF NoOfEntries >= 10000 THEN
+        FlushAnalysisViewEntry;
+    END;
+
+    LOCAL PROCEDURE CalculatePeriodStart@1140007(PostingDate@1140000 : Date;DateCompression@1140001 : Integer) : Date;
+    VAR
+      AccountingPeriod@1140002 : Record 50;
+    BEGIN
+      IF PostingDate = CLOSINGDATE(PostingDate) THEN
+        EXIT(PostingDate);
+
+      CASE DateCompression OF
+        AnalysisView."Date Compression"::Week :
+          PostingDate := CALCDATE('<CW+1D-1W>',PostingDate);
+        AnalysisView."Date Compression"::Month :
+          PostingDate := CALCDATE('<CM+1D-1M>',PostingDate);
+        AnalysisView."Date Compression"::Quarter :
+          PostingDate := CALCDATE('<CQ+1D-1Q>',PostingDate);
+        AnalysisView."Date Compression"::Year :
+          PostingDate := CALCDATE('<CY+1D-1Y>',PostingDate);
+        AnalysisView."Date Compression"::Period :
+          BEGIN
+            IF PostingDate <> PrevPostingDate THEN BEGIN
+              PrevPostingDate := PostingDate;
+              AccountingPeriod.SETRANGE("Starting Date",0D,PostingDate);
+              IF AccountingPeriod.FIND('+') THEN BEGIN
+                PrevCalculatedPostingDate := AccountingPeriod."Starting Date"
+              END ELSE
+                PrevCalculatedPostingDate := PostingDate;
+            END;
+            PostingDate := PrevCalculatedPostingDate;
+          END;
+      END;
+      EXIT(PostingDate);
+    END;
+
+    LOCAL PROCEDURE FlushAnalysisViewEntry@114008();
+    BEGIN
+      IF ShowProgressWindow THEN
+        Window.UPDATE(6,Text1140007);
+      IF TempAnalysisViewEntry.FIND('-') THEN
+        REPEAT
+          AnalysisViewEntry.INIT;
+          AnalysisViewEntry := TempAnalysisViewEntry;
+          IF NOT AnalysisViewEntry.INSERT THEN BEGIN
+            AnalysisViewEntry.FIND;
+            AnalysisViewEntry.Amount :=
+              AnalysisViewEntry.Amount + TempAnalysisViewEntry.Amount;
+            AnalysisViewEntry.MODIFY;
+          END;
+        UNTIL TempAnalysisViewEntry.NEXT = 0;
+      TempAnalysisViewEntry.DELETEALL;
+      NoOfEntries := 0;
+      IF ShowProgressWindow THEN
+        Window.UPDATE(6,Text1140006);
+    END;
+
+    LOCAL PROCEDURE GetDimEntry@1140009(VAR LedgEntryDim@1140000 : Record 355) : Code[20];
+    BEGIN
+      IF LedgEntryDim.GETFILTER("Dimension Code") = '' THEN
+        EXIT('');
+      IF LedgEntryDim."Entry No." > LiqLedgEntry."Entry No." THEN
+        EXIT('');
+
+      LedgEntryDim.SETRANGE("Entry No.",LiqLedgEntry."Entry No.",MaxNumber);
+      IF NOT LedgEntryDim.FIND('-') THEN
+        LedgEntryDim."Entry No." := MaxNumber;
+      IF LedgEntryDim."Entry No." = LiqLedgEntry."Entry No." THEN
+        EXIT(LedgEntryDim."Dimension Value Code")
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE InitWindow@1140010();
+    BEGIN
+      Window.OPEN(
+        Text1140001 +
+        Text1140002 +
+        Text1140005 +
+        Text1140003 +
+        Text1140004);
+      Window.UPDATE(6,Text1140006);
+    END;
+
+    LOCAL PROCEDURE UpdateWindowCounter@1140011(EntryNo@1140000 : Integer);
+    BEGIN
+      WinUpdateCounter := WinUpdateCounter + 1;
+      WinTime2 := TIME;
+      IF (WinTime2 > WinTime1 + 1000) OR (EntryNo = WinLastEntryNo) THEN BEGIN
+        IF WinLastEntryNo <> 0 THEN
+          Window.UPDATE(3,100*(100 * EntryNo DIV WinLastEntryNo));
+        WinPrevEntryNo := EntryNo;
+        WinTotalCounter := WinTotalCounter + WinUpdateCounter;
+        IF WinTime2 <> WinTime1 THEN
+          Window.UPDATE(4,ROUND(1000 * WinUpdateCounter / (WinTime2 - WinTime1),1));
+        IF WinTime2 <> WinTime0 THEN
+          Window.UPDATE(5,ROUND(1000 * WinTotalCounter / (WinTime2 - WinTime0),1));
+        WinTime1 := WinTime2;
+        WinUpdateCounter := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateWindowHeader@1140012(TableID@1140000 : Integer;EntryNo@1140001 : Integer);
+    VAR
+      Object@1140002 : Record 2000000001;
+    BEGIN
+      WinLastEntryNo := EntryNo;
+      WinPrevEntryNo := 0;
+      WinTotalCounter := 0;
+      Object.GET(Object.Type::Table,'',TableID);
+      Window.UPDATE(1,AnalysisView.Code);
+      Window.UPDATE(2,Object.Name);
+      Window.UPDATE(3,0);
+      Window.UPDATE(4,0);
+      Window.UPDATE(5,0);
+      WinTime0 := TIME;
+      WinTime1 := WinTime0;
+      WinTime2 := WinTime0;
+    END;
+
+    LOCAL PROCEDURE FilterIncludesBlanks@1140013(VAR TheFilter@1140000 : Code[250]) : Boolean;
+    VAR
+      TempDimBuf2@1140001 : TEMPORARY Record 360;
+    BEGIN
+      WITH TempDimBuf2 DO BEGIN
+        INIT;
+        INSERT;
+        SETFILTER("Dimension Code",TheFilter);
+        EXIT(FIND('-'));
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

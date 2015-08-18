@@ -1,0 +1,984 @@
+OBJECT Codeunit 6816 EP Read Data
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/05/05;
+    Time=12:00:00;
+    Version List=NAVW14.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DecodeXML@1002 : Codeunit 6813;
+      EncodeXML@1001 : Codeunit 6814;
+      SupportFunctions@1000 : Codeunit 6815;
+      HeadOrLine@1000000002 : ' ,Head,Line';
+
+    PROCEDURE GetLists@1000000000(VAR XMLDocIn@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XMLDocOut@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      ListRecordRef@1002 : RecordRef;
+      XMLDocInFilters@1000000004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInData@1000000003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInStatic@1000000002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutData@1000000012 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutLayout@1000000011 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutErrors@1000000015 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNodeDocOut@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLNode@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      UserID@1000000009 : Code[50];
+      GroupCode@1000000007 : Code[20];
+      RequestType@1000000008 : Code[50];
+      TableNo@1000000006 : Integer;
+      StartRecord@1006 : Integer;
+      RecordsToShow@1005 : Integer;
+      FilterdRecordCount@1004 : Integer;
+      RecordCount@1003 : Integer;
+      GUID@1000000014 : Text[50];
+      ErrorOccured@1000000016 : Boolean;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      // Create XML DOM Objects
+      IF ISCLEAR(XMLDocInStatic) THEN
+        CREATE(XMLDocInStatic);
+      IF ISCLEAR(XMLDocInFilters) THEN
+        CREATE(XMLDocInFilters);
+      IF ISCLEAR(XMLDocInData) THEN
+        CREATE(XMLDocInData);
+      IF ISCLEAR(XMLDocOutErrors) THEN
+        CREATE(XMLDocOutErrors);
+
+      // Create an document to store Errors
+      EncodeXML.CreateErrors(XMLDocOutErrors);
+
+      // Split Inbound Document in Filter, Data and Static Data Parts
+      DecodeXML.GetXMLDocuments(XMLDocIn,XMLDocInFilters,XMLDocInData,XMLDocInStatic);
+
+      // Get GUID from inbound document
+      DecodeXML.GetGUIDFromIn(XMLDocIn,GUID);
+
+      // Get User ID from Static Data Part
+      DecodeXML.GetUserID(XMLDocInStatic,UserID);
+
+      // Get Request Type from Static Data Part
+      DecodeXML.GetRequestTypeStatic(XMLDocInStatic,RequestType);
+
+      // Add Current Language to Static
+      EncodeXML.AddCurrentLanguageID(XMLDocInStatic,GLOBALLANGUAGE);
+
+      // Get Group for User
+      IF NOT ErrorOccured THEN BEGIN
+        DecodeXML.GetGroup(XMLDocInStatic,GroupCode);
+        IF GroupCode = '' THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,1,UserID,'','');
+          ErrorOccured := TRUE
+        END;
+      END;
+
+      // Get Table No. for Group and Request Type
+      IF NOT ErrorOccured THEN BEGIN
+        SupportFunctions.GetTableNos(GroupCode,RequestType,HeadOrLine::Line,TableNo);
+        IF TableNo = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,2,RequestType,UserID,'');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Get Filtered Record as Record Reference
+      RecordCount := 0;
+      IF NOT ErrorOccured THEN BEGIN
+        DecodeXML.FilterRecordWithStandard(XMLDocInFilters,TableNo,GroupCode,RequestType,ListRecordRef);
+        IF NOT ErrorOccured THEN
+          RecordCount := ListRecordRef.COUNT;
+      END;
+
+      // Check Number of Records
+      IF NOT ErrorOccured THEN BEGIN
+        IF RecordCount = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,3,'','','');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      IF NOT ErrorOccured THEN BEGIN
+        // Get Start Record and Records to show from Static
+        DecodeXML.GetPagingOptionsFromStatic(XMLDocInStatic,StartRecord,RecordsToShow);
+        IF (StartRecord = 0) AND (RecordsToShow = 0) THEN
+          SupportFunctions.GetPagingOptionsFromConfig(GroupCode,RequestType,TableNo,StartRecord,RecordsToShow,RecordCount);
+      END;
+
+      // Create OutGoing XML
+      IF ISCLEAR(XMLDocOutData) THEN
+        CREATE(XMLDocOutData);
+      IF ISCLEAR(XMLDocOutLayout) THEN
+        CREATE(XMLDocOutLayout);
+
+      IF NOT ErrorOccured THEN BEGIN
+        EncodeXML.CreateLayout(XMLDocOutLayout,GroupCode,RequestType);
+
+        EncodeXML.CreateData(XMLDocOutData,GroupCode,RequestType,RecordsToShow,StartRecord,FilterdRecordCount,ListRecordRef,
+          ListRecordRef);
+
+        // Modify Paging Options in Static
+        EncodeXML.ModifyPagingOptionsInStatic(XMLDocInStatic,StartRecord,RecordsToShow);
+
+        // Add FilterdRecordCount to Static Part
+        EncodeXML.AddRecordCountToStatic(XMLDocInStatic,FilterdRecordCount);
+
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add the inbound Filter Part for reference
+        XMLNode := XMLDocInFilters.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add outgoing Layout Part
+        XMLNode := XMLDocOutLayout.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END ELSE BEGIN
+        // Create outgoing document
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Create the Data Part (without data)
+        XMLDocOutData.loadXML('<DATA/>');
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END;
+
+      // Destroy objects
+      CLEAR(XMLDocOutData);
+      CLEAR(XMLDocOutLayout);
+      CLEAR(XMLDocInFilters);
+      CLEAR(XMLDocInData);
+      CLEAR(XMLDocInStatic);
+      CLEAR(XMLDocOutErrors);
+    END;
+
+    PROCEDURE GetDetail@1000000001(VAR XMLDocIn@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XMLDocOut@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      DetailRecordRef@1002 : RecordRef;
+      XMLDocInFilters@1000000004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInData@1000000003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInStatic@1000000002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutData@1000000012 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutLayout@1000000011 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutErrors@1000000015 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNodeDocOut@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLNode@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      UserID@1000000009 : Code[50];
+      GroupCode@1000000007 : Code[20];
+      RequestType@1000000008 : Code[50];
+      TableNo@1000000006 : Integer;
+      StartRecord@1005 : Integer;
+      RecordsToShow@1004 : Integer;
+      FilterdRecordCount@1003 : Integer;
+      GUID@1000000014 : Text[50];
+      ErrorOccured@1000000016 : Boolean;
+      Editable@1000000017 : Boolean;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      // Create XML DOM Objects
+      IF ISCLEAR(XMLDocInStatic) THEN
+        CREATE(XMLDocInStatic);
+      IF ISCLEAR(XMLDocInFilters) THEN
+        CREATE(XMLDocInFilters);
+      IF ISCLEAR(XMLDocInData) THEN
+        CREATE(XMLDocInData);
+      IF ISCLEAR(XMLDocOutErrors) THEN
+        CREATE(XMLDocOutErrors);
+
+      // Create an document to store Errors
+      EncodeXML.CreateErrors(XMLDocOutErrors);
+
+      // Split Inbound Document in Filter, Data and Static Data Parts
+      DecodeXML.GetXMLDocuments(XMLDocIn,XMLDocInFilters,XMLDocInData,XMLDocInStatic);
+
+      // Get GUID from inbound document
+      DecodeXML.GetGUIDFromIn(XMLDocIn,GUID);
+
+      // Get User ID from Static Data Part
+      DecodeXML.GetUserID(XMLDocInStatic,UserID);
+
+      // Get Request Type from Static Data Part
+      DecodeXML.GetRequestTypeStatic(XMLDocInStatic,RequestType);
+
+      // Add Current Language to Static
+      EncodeXML.AddCurrentLanguageID(XMLDocInStatic,GLOBALLANGUAGE);
+
+      // Get Group for User
+      IF NOT ErrorOccured THEN BEGIN
+        DecodeXML.GetGroup(XMLDocInStatic,GroupCode);
+        IF GroupCode = '' THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,1,UserID,'','');
+          ErrorOccured := TRUE
+        END;
+      END;
+
+      // Get Table No. for Group and Request Type
+      IF NOT ErrorOccured THEN BEGIN
+        SupportFunctions.GetTableNos(GroupCode,RequestType,HeadOrLine::Head,TableNo);
+        IF TableNo = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,2,RequestType,UserID,'');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Get Filterd Record as Record Reference
+      IF NOT ErrorOccured THEN
+        DecodeXML.FilterRecordWithStandard(XMLDocInFilters,TableNo,GroupCode,RequestType,DetailRecordRef);
+
+      // Check Number of Records
+      IF NOT ErrorOccured THEN BEGIN
+        IF DetailRecordRef.COUNT = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,3,'','','');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Process Editable Check
+      IF NOT ErrorOccured THEN
+        Editable := SupportFunctions.CheckGrpRecEditAccess(GroupCode,RequestType,TableNo,DetailRecordRef);
+
+      // Create OutGoing XML
+      IF ISCLEAR(XMLDocOutData) THEN
+        CREATE(XMLDocOutData);
+
+      IF ISCLEAR(XMLDocOutLayout) THEN
+        CREATE(XMLDocOutLayout);
+
+      IF NOT ErrorOccured THEN BEGIN
+        EncodeXML.CreateLayout(XMLDocOutLayout,GroupCode,RequestType);
+        EncodeXML.ModifyEditableTag(XMLDocOutLayout,Editable);
+        EncodeXML.CreateData(XMLDocOutData,GroupCode,RequestType,RecordsToShow,StartRecord,FilterdRecordCount,DetailRecordRef,
+          DetailRecordRef);
+
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add the inbound Filter Part for reference
+        XMLNode := XMLDocInFilters.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add outgoing Layout Part
+        XMLNode := XMLDocOutLayout.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END ELSE BEGIN
+        // Create outgoing document
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Create the Data Part (without data)
+        XMLDocOutData.loadXML('<DATA/>');
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END;
+
+      // Destroy objects
+      CLEAR(XMLDocOutData);
+      CLEAR(XMLDocOutLayout);
+      CLEAR(XMLDocInFilters);
+      CLEAR(XMLDocInData);
+      CLEAR(XMLDocInStatic);
+      CLEAR(XMLDocOutErrors);
+    END;
+
+    PROCEDURE GetHeadLine@1000000002(VAR XMLDocIn@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XMLDocOut@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      HeadRecordRef@1001 : RecordRef;
+      LineRecordRef@1000 : RecordRef;
+      XMLDocInFilters@1000000004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInData@1000000003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocInStatic@1000000002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutData@1000000012 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutLayout@1000000011 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutErrors@1000000015 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocLineFilters@1000000019 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNodeDocOut@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLNode@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      UserID@1000000009 : Code[50];
+      GroupCode@1000000007 : Code[20];
+      RequestType@1000000008 : Code[50];
+      TableNo@1000000006 : Integer;
+      StartRecord@1006 : Integer;
+      RecordsToShow@1005 : Integer;
+      FilterdRecordCount@1004 : Integer;
+      GUID@1000000014 : Text[50];
+      ErrorOccured@1000000016 : Boolean;
+      Editable@1000000017 : Boolean;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      // Create XML DOM Objects
+      IF ISCLEAR(XMLDocInStatic) THEN
+        CREATE(XMLDocInStatic);
+      IF ISCLEAR(XMLDocInFilters) THEN
+        CREATE(XMLDocInFilters);
+      IF ISCLEAR(XMLDocInData) THEN
+        CREATE(XMLDocInData);
+      IF ISCLEAR(XMLDocOutErrors) THEN
+        CREATE(XMLDocOutErrors);
+      IF ISCLEAR(XMLDocLineFilters) THEN
+        CREATE(XMLDocLineFilters);
+
+      // Create an document to store Errors
+      EncodeXML.CreateErrors(XMLDocOutErrors);
+
+      // Split Inbound Document in Filter, Data and Static Data Parts
+      DecodeXML.GetXMLDocuments(XMLDocIn,XMLDocInFilters,XMLDocInData,XMLDocInStatic);
+
+      // Get GUID from inbound document
+      DecodeXML.GetGUIDFromIn(XMLDocIn,GUID);
+
+      // Get User ID from Static Data Part
+      DecodeXML.GetUserID(XMLDocInStatic,UserID);
+
+      // Get Request Type from Static Data Part
+      DecodeXML.GetRequestTypeStatic(XMLDocInStatic,RequestType);
+
+      // Add Current Language to Static
+      EncodeXML.AddCurrentLanguageID(XMLDocInStatic,GLOBALLANGUAGE);
+
+      // Get Group for User
+      IF NOT ErrorOccured THEN BEGIN
+        DecodeXML.GetGroup(XMLDocInStatic,GroupCode);
+        IF GroupCode = '' THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,1,UserID,'','');
+          ErrorOccured := TRUE
+        END;
+      END;
+
+      // HEAD------
+      // Get Head Table No. from Group and Request Type
+      IF NOT ErrorOccured THEN BEGIN
+        SupportFunctions.GetTableNos(GroupCode,RequestType,HeadOrLine::Head,TableNo);
+        IF TableNo = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,2,RequestType,UserID,'');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Get Filterd Head Record as Record Reference
+      IF NOT ErrorOccured THEN
+        DecodeXML.FilterRecordWithStandard(XMLDocInFilters,TableNo,GroupCode,RequestType,HeadRecordRef);
+
+      // Check Number of Records
+      IF NOT ErrorOccured THEN BEGIN
+        IF HeadRecordRef.COUNT = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,3,'','','');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Process Editable Check
+      IF NOT ErrorOccured THEN
+        Editable := SupportFunctions.CheckGrpRecEditAccess(GroupCode,RequestType,TableNo,HeadRecordRef);
+
+      // LINE------
+      // Get Line Table No. from Group and Request Type
+      IF NOT ErrorOccured THEN BEGIN
+        SupportFunctions.GetTableNos(GroupCode,RequestType,HeadOrLine::Line,TableNo);
+        IF TableNo = 0 THEN BEGIN
+          EncodeXML.AddErrors(XMLDocOutErrors,2,RequestType,UserID,'');
+          ErrorOccured := TRUE;
+        END;
+      END;
+
+      // Build New Filter to get Line as RecordReference
+      IF NOT ErrorOccured THEN
+        EncodeXML.CreateFilterHeadLine(XMLDocLineFilters,HeadRecordRef,GroupCode,RequestType);
+
+      // Get Filterd Record as Record Reference
+      IF NOT ErrorOccured THEN
+        DecodeXML.FilterRecord(XMLDocLineFilters,TableNo,LineRecordRef);
+
+      // Create OutGoing XML
+      IF ISCLEAR(XMLDocOutData) THEN
+        CREATE(XMLDocOutData);
+
+      IF ISCLEAR(XMLDocOutLayout) THEN
+        CREATE(XMLDocOutLayout);
+
+      IF NOT ErrorOccured THEN BEGIN
+        EncodeXML.CreateLayout(XMLDocOutLayout,GroupCode,RequestType);
+        EncodeXML.ModifyEditableTag(XMLDocOutLayout,Editable);
+        EncodeXML.CreateData(XMLDocOutData,GroupCode,RequestType,RecordsToShow,StartRecord,FilterdRecordCount,HeadRecordRef,
+          LineRecordRef);
+
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add the inbound Filter Part for reference
+        XMLNode := XMLDocInFilters.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add outgoing Layout Part
+        XMLNode := XMLDocOutLayout.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END ELSE BEGIN
+        // Create outgoing document
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XMLDocInStatic.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Create the Data Part (without data)
+        XMLDocOutData.loadXML('<DATA/>');
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END;
+
+      // Destroy objects
+      CLEAR(XMLDocOutData);
+      CLEAR(XMLDocOutLayout);
+      CLEAR(XMLDocInFilters);
+      CLEAR(XMLDocInData);
+      CLEAR(XMLDocInStatic);
+      CLEAR(XMLDocOutErrors);
+      CLEAR(XMLDocLineFilters);
+    END;
+
+    PROCEDURE GetRequestTypes@1000000003(VAR XMLDocIn@1000000000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XMLDocOut@1000000001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      UserGroups@1007 : Record 6840;
+      XmlDocInDocInfo@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutErrors@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLDocOutData@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNodeDocOut@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLDocOutLayout@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNode@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      GUID@1000000002 : Text[50];
+      UserID@1000000004 : Code[50];
+      RequestType@1000000005 : Code[50];
+      ErrorOccured@1000000007 : Boolean;
+      Type@1002 : Integer;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      // Create XML DOM Object for static document fragment and error fragment
+      IF ISCLEAR(XmlDocInDocInfo) THEN
+        CREATE(XmlDocInDocInfo);
+      IF ISCLEAR(XMLDocOutErrors) THEN
+        CREATE(XMLDocOutErrors);
+      IF ISCLEAR(XMLDocOutData) THEN
+        CREATE(XMLDocOutData);
+      IF ISCLEAR(XMLDocOutLayout) THEN
+        CREATE(XMLDocOutLayout);
+
+      // Create an document to store Errors
+      EncodeXML.CreateErrors(XMLDocOutErrors);
+
+      // Get GUID from inbound document
+      DecodeXML.GetGUIDFromIn(XMLDocIn,GUID);
+
+      // Get Static Data Part
+      DecodeXML.GetStaticXML(XMLDocIn,XmlDocInDocInfo);
+
+      // Get User ID from Static Data Part
+      DecodeXML.GetUserID(XmlDocInDocInfo,UserID);
+
+      // Get Request Type List-Type from Static Data Part (0 == Detail, 1 == List, 2 == Head+Line)
+      DecodeXML.GetRTLType(XmlDocInDocInfo,Type);
+
+      // Get Request Type from Static Data Part
+      DecodeXML.GetRequestTypeStatic(XmlDocInDocInfo,RequestType);
+
+      // Add Current Language to Static
+      EncodeXML.AddCurrentLanguageID(XmlDocInDocInfo,GLOBALLANGUAGE);
+
+      // Get Groups for User
+      IF NOT ErrorOccured THEN BEGIN
+        ErrorOccured := SupportFunctions.GetUserGroups(UserID,UserGroups);
+        IF ErrorOccured THEN
+          EncodeXML.AddErrors(XMLDocOutErrors,1,UserID,'','');
+      END;
+
+      IF NOT ErrorOccured THEN BEGIN
+        EncodeXML.CreateRequestTypeList(XMLDocOutData,UserGroups,Type);
+        EncodeXML.CreateLayoutForWebSetup(XMLDocOutLayout);
+
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XmlDocInDocInfo.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add outgoing Layout Part
+        XMLNode := XMLDocOutLayout.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+      END ELSE BEGIN
+        // Create outgoing document
+        XMLDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XMLNodeDocOut := XMLDocOut.documentElement;
+
+        // Add GUID to OutGoing XML
+        EncodeXML.AddGUID(XMLDocOut,GUID);
+
+        // Add the inbound Static Part for reference
+        XMLNode := XmlDocInDocInfo.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Create the Data Part (without data)
+        XMLDocOutData.loadXML('<DATA/>');
+
+        // Merge Data and Error Part
+        SupportFunctions.MergeErrorsPartToData(XMLDocOutData,XMLDocOutErrors);
+
+        // Create the Layout Part (without data)
+        XMLDocOutLayout.loadXML('<LAYOUT/>');
+
+        // Add outgoing Data Part
+        XMLNode := XMLDocOutData.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+
+        // Add outgoing Layout Part
+        XMLNode := XMLDocOutLayout.documentElement;
+        XMLNodeDocOut.appendChild(XMLNode);
+      END;
+
+      // Destroy objects
+      CLEAR(XMLDocOutData);
+      CLEAR(XmlDocInDocInfo);
+      CLEAR(XMLDocOutErrors);
+      CLEAR(XMLDocOutLayout);
+    END;
+
+    PROCEDURE ShowPicture@1(VAR XmlDocIn@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XmlDocOut@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      FormatFunctions@1011 : Codeunit 6817;
+      RecordRef@1019 : RecordRef;
+      XmlDocDocInfo@1017 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocFilters@1016 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData@1015 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData2@1007 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocErrors@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlNodeOut@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNodePic@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNodePic2@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNode@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      GUID@1014 : Text[50];
+      UserID@1013 : Code[50];
+      RequestType@1012 : Code[50];
+      ErrorOccured@1010 : Boolean;
+      TableNo@1008 : Integer;
+      FieldNo@1009 : Integer;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      IF ISCLEAR(XmlDocDocInfo) THEN
+        CREATE(XmlDocDocInfo);
+      IF ISCLEAR(XmlDocFilters) THEN
+        CREATE(XmlDocFilters);
+      IF ISCLEAR(XmlDocData) THEN
+        CREATE(XmlDocData);
+      IF ISCLEAR(XmlDocErrors) THEN
+        CREATE(XmlDocErrors);
+
+      EncodeXML.CreateErrors(XmlDocErrors);
+      DecodeXML.GetXMLDocuments(XmlDocIn,XmlDocFilters,XmlDocData,XmlDocDocInfo);
+      DecodeXML.GetGUIDFromIn(XmlDocIn,GUID);
+      DecodeXML.GetUserID(XmlDocDocInfo,UserID);
+      DecodeXML.GetRequestTypeStatic(XmlDocDocInfo,RequestType);
+
+      DecodeXML.GetTableNoFromStatic(TableNo,XmlDocDocInfo);
+      IF TableNo = 0 THEN BEGIN
+        EncodeXML.AddErrors(XmlDocErrors,100,'','','');
+        ErrorOccured := TRUE;
+      END;
+
+      DecodeXML.GetFieldNoDocInfo(XmlDocDocInfo,FieldNo);
+      IF FieldNo = 0 THEN BEGIN
+        EncodeXML.AddErrors(XmlDocErrors,101,'','','');
+        ErrorOccured := TRUE;
+      END;
+
+      EncodeXML.AddCurrentLanguageID(XmlDocDocInfo,GLOBALLANGUAGE);
+      IF NOT ErrorOccured THEN
+        DecodeXML.FilterRecord(XmlDocFilters,TableNo,RecordRef);
+
+      IF NOT ErrorOccured THEN
+        IF FormatFunctions.GetValueFromBLOB(RecordRef,FieldNo,100,'BINARYDATA',XmlNodePic) > 0 THEN BEGIN
+          EncodeXML.AddErrors(XmlDocErrors,102,'','','');
+          ErrorOccured := TRUE;
+        END;
+
+      IF NOT ErrorOccured THEN BEGIN
+        XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XmlNodeOut := XmlDocOut.documentElement;
+
+        EncodeXML.AddGUID(XmlDocOut,GUID);
+
+        XmlNode := XmlDocDocInfo.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+
+        CREATE(XmlDocData2);
+        XmlDocData2.loadXML('<DATA/>');
+        XmlNode := XmlDocData2.documentElement;
+
+        SupportFunctions.MergeErrorsPartToData(XmlDocData2,XmlDocErrors);
+
+        XmlNodePic2 := XmlNodePic.selectSingleNode('/BLOB/BINARYDATA');
+        XmlNode.appendChild(XmlNodePic2);
+        XmlNodePic2 := XmlNodePic.selectSingleNode('/BLOB/CONTENTTYPE');
+        XmlNode.appendChild(XmlNodePic2);
+
+        XmlNodeOut.appendChild(XmlNode);
+      END ELSE BEGIN
+        XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XmlNodeOut := XmlDocOut.documentElement;
+
+        EncodeXML.AddGUID(XmlDocOut,GUID);
+
+        XmlNode := XmlDocDocInfo.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+
+        XmlDocData2.loadXML('<DATA/>');
+        SupportFunctions.MergeErrorsPartToData(XmlDocData2,XmlDocErrors);
+
+        // Add outgoing Data Part
+        XmlNode := XmlDocData2.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+      END;
+
+      CLEAR(XmlDocDocInfo);
+      CLEAR(XmlDocFilters);
+      CLEAR(XmlDocData);
+      CLEAR(XmlDocData2);
+      CLEAR(XmlDocErrors);
+    END;
+
+    PROCEDURE GetSearchTables@2(VAR XmlDocIn@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XmlDocOut@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      XmlDocErrors@1009 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocInfo@1008 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData@1007 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocLayout@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlNodeOut@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNode@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      GUID@1006 : Text[50];
+      UserID@1002 : Code[50];
+    BEGIN
+      IF ISCLEAR(XmlDocInfo) THEN
+        CREATE(XmlDocInfo);
+      IF ISCLEAR(XmlDocErrors) THEN
+        CREATE(XmlDocErrors);
+      IF ISCLEAR(XmlDocData) THEN
+        CREATE(XmlDocData);
+      IF ISCLEAR(XmlDocLayout) THEN
+        CREATE(XmlDocLayout);
+
+      EncodeXML.CreateErrors(XmlDocErrors);
+      DecodeXML.GetStaticXML(XmlDocIn,XmlDocInfo);
+      DecodeXML.GetGUIDFromIn(XmlDocIn,GUID);
+      DecodeXML.GetUserID(XmlDocInfo,UserID);
+      EncodeXML.AddCurrentLanguageID(XmlDocInfo,GLOBALLANGUAGE);
+
+      EncodeXML.CreateSearchTableList(XmlDocData);
+      EncodeXML.CreateSearchLayout(XmlDocLayout);
+
+      XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+      XmlNodeOut := XmlDocOut.documentElement;
+
+      EncodeXML.AddGUID(XmlDocOut,GUID);
+
+      XmlNode := XmlDocInfo.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      SupportFunctions.MergeErrorsPartToData(XmlDocData,XmlDocErrors);
+
+      XmlNode := XmlDocData.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      XmlNode := XmlDocLayout.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      CLEAR(XmlDocInfo);
+      CLEAR(XmlDocErrors);
+      CLEAR(XmlDocData);
+      CLEAR(XmlDocLayout);
+    END;
+
+    PROCEDURE GetSearchResult@3(VAR XmlDocIn@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XmlDocOut@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      Setup@1015 : Record 6800;
+      XmlDocErrors@1007 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocInfo@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocLayout@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlNodeOut@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNode@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      GUID@1010 : Text[50];
+      UserID@1009 : Code[50];
+      SearchValue@1008 : Text[80];
+      TableNo@1011 : Integer;
+      ResultSetLimitation@1014 : Integer;
+      Lines@1012 : Integer;
+      ErrorOccured@1013 : Boolean;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      IF ISCLEAR(XmlDocErrors) THEN
+        CREATE(XmlDocErrors);
+      IF ISCLEAR(XmlDocInfo) THEN
+        CREATE(XmlDocInfo);
+      IF ISCLEAR(XmlDocData) THEN
+        CREATE(XmlDocData);
+      IF ISCLEAR(XmlDocLayout) THEN
+        CREATE(XmlDocLayout);
+
+      EncodeXML.CreateErrors(XmlDocErrors);
+      DecodeXML.GetStaticXML(XmlDocIn,XmlDocInfo);
+      DecodeXML.GetGUIDFromIn(XmlDocIn,GUID);
+      DecodeXML.GetUserID(XmlDocInfo,UserID);
+      EncodeXML.AddCurrentLanguageID(XmlDocInfo,GLOBALLANGUAGE);
+
+      SearchValue := DecodeXML.GetSearchValue(XmlDocInfo);
+      TableNo := DecodeXML.GetSearchTable(XmlDocInfo);
+      Lines := DecodeXML.GetSearchLines(XmlDocInfo);
+
+      IF (TableNo = -1) OR (Lines = -1) THEN
+        ErrorOccured := TRUE;
+
+      IF NOT ErrorOccured THEN
+        IF (TableNo = 0) AND (Lines = 1) THEN
+          ErrorOccured := TRUE;
+
+      IF NOT ErrorOccured THEN
+        IF NOT Setup.GET THEN
+          ErrorOccured := TRUE;
+
+      IF NOT ErrorOccured THEN
+        IF Lines = 0 THEN
+          ResultSetLimitation := Setup."Search Limit"
+        ELSE
+          ResultSetLimitation := 0;
+
+      IF NOT ErrorOccured THEN BEGIN
+        SupportFunctions.MakeSearchResult(GUID,UserID,TableNo,ResultSetLimitation,SearchValue);
+        EncodeXML.CreateSearchResult(XmlDocData,GUID,UserID,TableNo);
+        SupportFunctions.DeleteSearchResult(GUID);
+        EncodeXML.CreateSearchResultLayout(XmlDocLayout,UserID,TableNo);
+      END;
+
+      XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+      XmlNodeOut := XmlDocOut.documentElement;
+
+      EncodeXML.AddGUID(XmlDocOut,GUID);
+
+      XmlNode := XmlDocInfo.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      SupportFunctions.MergeErrorsPartToData(XmlDocData,XmlDocErrors);
+
+      XmlNode := XmlDocData.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      XmlNode := XmlDocLayout.documentElement;
+      XmlNodeOut.appendChild(XmlNode);
+
+      CLEAR(XmlDocInfo);
+      CLEAR(XmlDocErrors);
+      CLEAR(XmlDocData);
+      CLEAR(XmlDocLayout);
+    END;
+
+    PROCEDURE ShowReport@4(VAR XmlDocIn@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";VAR XmlDocOut@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument");
+    VAR
+      ReportMgt@1003 : Codeunit 6828;
+      RecordRef@1020 : RecordRef;
+      XmlDocDocInfo@1017 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocFilters@1016 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData@1015 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocData2@1007 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlDocErrors@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XmlNodeOut@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNodeReport@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XmlNode@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      GUID@1014 : Text[50];
+      UserID@1013 : Code[50];
+      RequestType@1012 : Code[50];
+      ErrorOccured@1010 : Boolean;
+      TableNo@1008 : Integer;
+      ReportNo@1009 : Integer;
+    BEGIN
+      ErrorOccured := FALSE;
+
+      IF ISCLEAR(XmlDocDocInfo) THEN
+        CREATE(XmlDocDocInfo);
+      IF ISCLEAR(XmlDocFilters) THEN
+        CREATE(XmlDocFilters);
+      IF ISCLEAR(XmlDocData) THEN
+        CREATE(XmlDocData);
+      IF ISCLEAR(XmlDocErrors) THEN
+        CREATE(XmlDocErrors);
+
+      EncodeXML.CreateErrors(XmlDocErrors);
+      DecodeXML.GetXMLDocuments(XmlDocIn,XmlDocFilters,XmlDocData,XmlDocDocInfo);
+      DecodeXML.GetGUIDFromIn(XmlDocIn,GUID);
+      DecodeXML.GetUserID(XmlDocDocInfo,UserID);
+      DecodeXML.GetRequestTypeStatic(XmlDocDocInfo,RequestType);
+
+      DecodeXML.GetTableNoFromStatic(TableNo,XmlDocDocInfo);
+      IF TableNo = 0 THEN BEGIN
+        EncodeXML.AddErrors(XmlDocErrors,100,'','',''); // ErrorNumber???
+        ErrorOccured := TRUE;
+      END;
+
+      DecodeXML.GetReportIDFromStatic(XmlDocDocInfo,ReportNo);
+      IF ReportNo = 0 THEN BEGIN
+        EncodeXML.AddErrors(XmlDocErrors,101,'','',''); // ErrorNumber???
+        ErrorOccured := TRUE;
+      END;
+
+      EncodeXML.AddCurrentLanguageID(XmlDocDocInfo,GLOBALLANGUAGE);
+
+      IF NOT ErrorOccured THEN
+        DecodeXML.FilterRecord(XmlDocFilters,TableNo,RecordRef);
+
+      IF NOT ErrorOccured THEN
+        IF NOT ReportMgt.CreateReportPreview(ReportNo,RecordRef,XmlNodeReport) THEN BEGIN
+          EncodeXML.AddErrors(XmlDocErrors,102,'','',''); // ErrorNumber???
+          ErrorOccured := TRUE;
+        END;
+
+      IF NOT ErrorOccured THEN BEGIN
+        XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XmlNodeOut := XmlDocOut.documentElement;
+
+        EncodeXML.AddGUID(XmlDocOut,GUID);
+
+        XmlNode := XmlDocDocInfo.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+
+        CREATE(XmlDocData2);
+        XmlDocData2.loadXML('<DATA/>');
+        XmlNode := XmlDocData2.documentElement;
+
+        SupportFunctions.MergeErrorsPartToData(XmlDocData2,XmlDocErrors);
+
+        XmlNode.appendChild(XmlNodeReport);
+
+        XmlNodeOut.appendChild(XmlNode);
+      END ELSE BEGIN
+        XmlDocOut.loadXML('<EMPLOYEEPORTAL/>');
+        XmlNodeOut := XmlDocOut.documentElement;
+
+        EncodeXML.AddGUID(XmlDocOut,GUID);
+
+        XmlNode := XmlDocDocInfo.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+
+        XmlDocData2.loadXML('<DATA/>');
+        SupportFunctions.MergeErrorsPartToData(XmlDocData2,XmlDocErrors);
+
+        // Add outgoing Data Part
+        XmlNode := XmlDocData2.documentElement;
+        XmlNodeOut.appendChild(XmlNode);
+      END;
+
+      CLEAR(XmlDocDocInfo);
+      CLEAR(XmlDocFilters);
+      CLEAR(XmlDocData);
+      CLEAR(XmlDocData2);
+      CLEAR(XmlDocErrors);
+    END;
+
+    BEGIN
+    END.
+  }
+}

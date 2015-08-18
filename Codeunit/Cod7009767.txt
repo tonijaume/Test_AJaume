@@ -1,0 +1,1988 @@
+OBJECT Codeunit 7009767 Vaciado Historicos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/02/14;
+    Time=17:01:23;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            lrRsvHot@1100253000 : Record 7009743;
+            lwTable@1100253001 : RecordRef;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      wVent@1100253000 : Dialog;
+      wTotal@1100253001 : ARRAY [2] OF Integer;
+      wCont@1100253002 : ARRAY [2] OF Integer;
+      Text0001@1100253003 : TextConst 'ENU=Do you really want to  make a  %1 clean of all previous historical records before %2?;ESP=¨Desea Realmente realizar una limpieza %1 de todos los registros hist¢ricos anteriores a %2 ?';
+      Text0002@1100253004 : TextConst 'ENU=Confirm again\;ESP=Confirme de Nuevo\';
+      Text0003@1100253005 : TextConst 'ENU=%1 of %2;ESP=%1 de %2';
+      wBorraEco@1100253006 : Boolean;
+      Text0004@1100217001 : TextConst 'ENU=Counting Records;ESP=Contando Registros';
+      Text0005@1100217000 : TextConst 'ENU=Reservations;ESP=Reservas';
+      Text0006@1100217002 : TextConst 'ENU=Several;ESP=Varios';
+      wHoraIni@1100217003 : DateTime;
+      Text0007@1100217004 : TextConst 'ENU=%1 hours %2 minutes left;ESP=Quedan %1 horas %2 minutos';
+      wHoraIniCab@1100217005 : DateTime;
+
+    PROCEDURE LimpiarTablas@1100253007(pwFecha@1100253001 : Date;pwModo@1100253002 : 'Parcial,Total');
+    VAR
+      lrPeriodo@1100253000 : Record 7009742;
+      lrCabRes@1100253003 : Record 7009741;
+      lwTable@1100253004 : RecordRef;
+      lrCircuito@1100253008 : Record 7010187;
+      lrResCircBK@1100253009 : Record 7009857;
+      lrHist@1100217000 : Record 7010253;
+    BEGIN
+      // LimpiarTablas
+      // El modo Parcial no elimina registros historicos relacionados con la informaci¢n economica.
+      // Basicamente las tablas de Coste/ingreso
+
+      IF pwFecha = 0D THEN
+        EXIT;
+
+      wBorraEco := pwModo = pwModo::Total;
+
+      // Solicitamos una doble confirmaci¢n
+      IF NOT CONFIRM(Text0001, FALSE, pwModo, pwFecha) THEN
+        EXIT;
+
+      IF NOT CONFIRM(Text0002 + STRSUBSTNO(Text0001, pwModo, pwFecha)) THEN
+        EXIT;
+
+      // Creamos una linea de borrado
+      CLEAR(lrHist);
+      lrHist."Fecha Hasta"  := pwFecha;
+      lrHist."Borrado Datos":= pwModo;
+      lrHist.INSERT(TRUE);
+
+
+      // OJO - Si a¤aden tablas debe de indicarse a continuaci¢n el total de tablas afectadas
+      wVent.OPEN('@1@@@@@@@@@@@@@@@@@@@@@@@@\#2############################################\@3@@@@@@@@@@@@@@@@@@@@@@@@'+
+                  '\#4############################################');
+      CLEAR(wTotal);
+      CLEAR(wCont);
+      wTotal[1] := RecuentoRegistros(pwFecha);
+
+      CLEAR(lrPeriodo);
+      lrPeriodo.SETCURRENTKEY("Fecha entrada");
+      lrPeriodo.SETFILTER("Fecha entrada", '<=%1', pwFecha);
+      IF lrPeriodo.FINDSET THEN  BEGIN
+        NewCab(Text0005, lrPeriodo.COUNT);
+        lwTable.GETTABLE(lrPeriodo);
+        REPEAT
+          IF lrCabRes.GET(lrPeriodo.Delegacion, lrPeriodo."N§ Interno") THEN
+            BorraCab(lrCabRes);
+          InfoTabla;
+        UNTIL lrPeriodo.NEXT=0;
+        lrPeriodo.DELETEALL; // Por si quedase alguno por borrar no relacionado con cabecera
+      END;
+
+      // Excursiones
+      BorrarExcursiones(pwFecha);
+      // Transfers
+      BorraTransfers(pwFecha);
+
+      // Circuitos
+      CLEAR(lrCircuito);
+      lrCircuito.SETCURRENTKEY(Circuito,Fecha);
+      lrCircuito.SETFILTER(Fecha,'<=%1', pwFecha);
+      IF lrCircuito.FINDSET THEN BEGIN
+        NewCab(lrCircuito.TABLECAPTION ,lrCircuito.COUNT);
+        REPEAT
+          BorraCircuito(lrCircuito);
+          InfoTabla;
+        UNTIL lrCircuito.NEXT=0;
+        lrCircuito.DELETEALL;
+      END;
+
+      // Reserva Circuito Backup
+      CLEAR(lrResCircBK);
+      lrResCircBK.SETCURRENTKEY("Fecha Entrada");
+      lrResCircBK.SETFILTER("Fecha Entrada",'<=%1', pwFecha);
+      lrResCircBK.DELETEALL;
+
+      BorraVarios(pwFecha);
+
+      BorraInterfases(pwFecha);
+
+      BorraCotizaciones(pwFecha);
+
+      // Contratos
+      BorraContratos(pwFecha);
+
+      wVent.CLOSE;
+    END;
+
+    PROCEDURE LimpiaTabla1@1100253001(pwNumTabla@1100253000 : Integer;pwNoCmpFiltro@1100253001 : Integer;pwFiltro@1100253002 : Text[150];pwNoClave@1100253005 : Integer;pwRunTrigger@1100253006 : Boolean;pwInfotabla@1100253007 : Boolean);
+    VAR
+      lwNoFiltro@1100253004 : ARRAY [5] OF Integer;
+      lwFiltro@1100253003 : ARRAY [5] OF Text[150];
+    BEGIN
+      // LimpiaTabla1
+      // pwNumTabla    --> Numero de la tabla a limpiar
+      // pwNoCmpFiltro --> Numero del campo sobre el que debe de efectuarse el filtro
+      // pwFiltro      --> Filtro sobre el cual se realizara
+      // pwNoClave     --> Si es distinta a 0 determina la clave a utilizar
+      // pwRunTrigger  --> Indica si se lanza el OnDelete
+      // pwInfotabla   --> Muestra la informacion de la tabla en la ventana
+
+      CLEAR(lwNoFiltro);
+      CLEAR(lwFiltro);
+      lwNoFiltro[1] := pwNoCmpFiltro;
+      lwFiltro[1]   := pwFiltro;
+
+      IF (pwNumTabla=0) OR (pwNoCmpFiltro=0) OR (pwFiltro='') THEN
+        EXIT;
+
+      LimpiaTabla(pwNumTabla, lwNoFiltro, lwFiltro, pwNoClave, pwRunTrigger, pwInfotabla);
+    END;
+
+    PROCEDURE LimpiaTabla@1100253006(pwNumTabla@1100253000 : Integer;pwNoFiltro@1100253001 : ARRAY [5] OF Integer;pwFiltro@1100253002 : ARRAY [5] OF Text[150];pwNoClave@1100253005 : Integer;pwRunTrigger@1100253006 : Boolean;pwInfotabla@1100253008 : Boolean);
+    VAR
+      wTable@1100253003 : RecordRef;
+      wFField@1100253004 : FieldRef;
+      lwCnt@1100253007 : Integer;
+    BEGIN
+      // LimpiaTabla
+      // pwNumTabla    --> Numero de la tabla a limpiar
+      // pwNoFiltr     --> Numero del campo sobre el que debe de efectuarse el filtro (ARRAY 5)
+      // pwFiltro      --> Filtro sobre el cual se realizara (ARRAY 5)
+      // pwNoClave     --> Si es distinta a 0 determina la clave a utilizar
+      // pwRunTrigger  --> Indica si se lanza el OnDelete
+      // pwInfotabla   --> Muestra la informacion de la tabla en la ventana
+
+      IF (pwNumTabla=0) THEN
+        EXIT;
+
+      wTable.OPEN(pwNumTabla);
+      IF pwNoClave <> 0 THEN
+        wTable.CURRENTKEYINDEX(pwNoClave);
+
+      FOR lwCnt := 1 TO 5 DO BEGIN
+        IF pwNoFiltro[lwCnt] <> 0 THEN BEGIN
+          wFField := wTable.FIELD(pwNoFiltro[lwCnt]);
+          wFField.SETFILTER(pwFiltro[lwCnt]);
+        END;
+      END;
+
+      // Si no se ha apliado ning£n filtro, sale de la funci¢n
+      IF wTable.GETFILTERS = '' THEN
+        EXIT;
+
+      IF pwInfotabla THEN
+        InfoTabla;
+      wTable.DELETEALL(pwRunTrigger);
+    END;
+
+    PROCEDURE InfoTabla@1100253016();
+    VAR
+      lwOk@1100217000 : Boolean;
+    BEGIN
+      // InfoTabla
+
+      wCont[1] +=1;
+      wCont[2] +=1;
+
+      lwOk := TRUE;
+      {
+      IF wTotal[2] > 1000 THEN
+        lwOk := wCont[2] MOD 100 =0
+      ELSE
+        IF wTotal[2] > 100 THEN
+            lwOk := wCont[2] MOD 10 =0;
+      }
+
+      IF lwOk THEN BEGIN
+        IF wTotal[1] <> 0 THEN
+          wVent.UPDATE(1, ROUND(wCont[1]/wTotal[1]*10000,1));
+        IF wTotal[2] <> 0 THEN
+          wVent.UPDATE(3, ROUND(wCont[2]/wTotal[2]*10000,1));
+        InfoTiempo;
+      END;
+
+
+      // Se lanza un commit para que no se hagan bolas de transacciones enormes.
+      COMMIT;
+    END;
+
+    PROCEDURE InfoTiempo@1100217001();
+    VAR
+      lwHoraAct@1100217000 : DateTime;
+      lwTiemp@1100217001 : BigInteger;
+      lwhoras@1100217002 : Integer;
+      lwmins@1100217003 : Integer;
+    BEGIN
+      // InfoTiempo
+
+      lwHoraAct := CURRENTDATETIME;
+
+      IF wHoraIni = 0DT THEN
+        wHoraIni := lwHoraAct
+      ELSE BEGIN
+        // lwTiemp :=  lwHoraAct - wHoraIni;
+        lwTiemp :=  lwHoraAct - wHoraIniCab;
+        //lwTiemp := lwTiemp DIV wCont[1]; // Media de lo que ha tardado por registro
+        lwTiemp := lwTiemp DIV wCont[2]; // Media de lo que ha tardado por registro (en este grupo)
+        lwTiemp := lwTiemp *  (wTotal[1] - wCont[1]); // Minutos que quedan por terminar
+        lwTiemp := lwTiemp DIV 60000; // Le quitamos los segundos
+        lwhoras := lwTiemp DIV 60;
+        lwmins  := lwTiemp MOD 60;
+        wVent.UPDATE(4, STRSUBSTNO(Text0007, lwhoras, lwmins));
+      END;
+    END;
+
+    PROCEDURE BorraCab@1100253002(VAR prCab@1100253000 : Record 7009741);
+    VAR
+      lrPerio@1100253002 : Record 7009742;
+      lrAco@1100253001 : Record 7009748;
+      lrCom@1100253003 : Record 7009762;
+      lrRsvHot@1100253004 : Record 7009743;
+      lrRsvTra@1100253007 : Record 7009744;
+      lrCargo@1100253005 : Record 7009749;
+      lrCargoBk@1100253017 : Record 7009850;
+      lrExtra@1100253006 : Record 7009750;
+      lrExtraBk@1100253019 : Record 7009851;
+      lrPaxTOcir@1100253009 : Record 7010188;
+      lrResCir@1100253011 : Record 7010186;
+      lrHotCir@1100253010 : Record 7010189;
+      lrBajas@1100253012 : Record 7009770;
+      lrBono@1100253013 : Record 7010013;
+      lrCIBono@1100253014 : Record 7010018;
+      lrCIBonoC@1100253015 : Record 7010019;
+      lrCIBonodDia@1100253016 : Record 7010020;
+      lrHist@1100253018 : Record 7009751;
+      lrExtras@1100253021 : Record 7009864;
+      lrResExc@1100253022 : Record 7010162;
+      lrResum@1100253023 : Record 7009771;
+      lrResumExtra@1100253024 : Record 7009745;
+      lrResumCargo@1100253025 : Record 7009746;
+      lrResDiaC@1100253026 : Record 7009755;
+      lrResDiaV@1100253027 : Record 7009756;
+      lrTempHF@1100253028 : Record 7009817;
+      lrPrepag@1100253008 : Record 7009825;
+      lrRappel@1100253029 : Record 7009890;
+      lrValBono@1100253030 : Record 7010022;
+      lrConcBono@1100253031 : Record 7010070;
+      lrHistBono@1100253032 : Record 7010071;
+    BEGIN
+      // BorraCab
+      // Borra los registros relacionados con la cabecera de reservas
+      // incluida la propia cabecera der reserva
+
+      CLEAR(lrPerio);
+      lrPerio.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrPerio.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrPerio.DELETEALL;
+
+      CLEAR(lrAco);
+      lrAco.SETRANGE(Delegacion    , prCab.Delegacion);
+      lrAco.SETRANGE("N§ Interno"  , prCab."N§ Interno");
+      lrAco.DELETEALL;
+
+      CLEAR(lrCom);
+      lrCom.SETRANGE(Delegacion    , prCab.Delegacion);
+      lrCom.SETRANGE("N§ Interno"  , prCab."N§ Interno");
+      lrCom.DELETEALL;
+
+      CLEAR(lrRsvHot);
+      lrRsvHot.SETCURRENTKEY(Delegacion,"N§ Interno","N§ Periodo");
+      lrRsvHot.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrRsvHot.SETRANGE("N§ Interno", prCab."N§ Interno");
+      IF lrRsvHot.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrCargo);
+          lrCargo.SETRANGE(Delegacion  , lrRsvHot.Delegacion);
+          lrCargo.SETRANGE("N§ Reserva", lrRsvHot."N§ Reserva");
+          lrCargo.DELETEALL;
+
+          CLEAR(lrCargoBk);
+          lrCargoBk.SETRANGE(Delegacion  , lrRsvHot.Delegacion);
+          lrCargoBk.SETRANGE("N§ Reserva", lrRsvHot."N§ Reserva");
+          lrCargoBk.DELETEALL;
+
+          CLEAR(lrExtra);
+          lrExtra.SETRANGE(Delegacion  , lrRsvHot.Delegacion);
+          lrExtra.SETRANGE("N§ Reserva", lrRsvHot."N§ Reserva");
+          lrExtra.DELETEALL;
+
+          CLEAR(lrExtraBk);
+          lrExtraBk.SETRANGE(Delegacion  , lrRsvHot.Delegacion);
+          lrExtraBk.SETRANGE("N§ Reserva", lrRsvHot."N§ Reserva");
+          lrExtraBk.DELETEALL;
+
+          IF lrRsvHot.Responsable THEN BEGIN
+            CLEAR(lrBajas);
+            lrBajas.SETRANGE(Delegacion      , lrRsvHot.Delegacion);
+            lrBajas.SETRANGE("N§ Responsable", lrRsvHot."N§ Reserva");
+            lrBajas.DELETEALL;
+          END;
+
+          CLEAR(lrResum);
+          lrResum.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrResum.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrResum.DELETEALL;
+
+          CLEAR(lrResumExtra);
+          lrResumExtra.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrResumExtra.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrResumExtra.DELETEALL;
+
+          CLEAR(lrResumCargo);
+          lrResumCargo.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrResumCargo.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrResumCargo.DELETEALL;
+
+          CLEAR(lrResDiaC);
+          lrResDiaC.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrResDiaC.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrResDiaC.DELETEALL;
+
+          CLEAR(lrResDiaV);
+          lrResDiaV.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrResDiaV.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrResDiaV.DELETEALL;
+
+          CLEAR(lrPrepag);
+          lrPrepag.SETRANGE(Delegacion    , lrRsvHot.Delegacion);
+          lrPrepag.SETRANGE("Num reserva" , lrRsvHot."N§ Reserva");
+          lrPrepag.DELETEALL;
+
+          CLEAR(lrRappel);
+          lrRappel.SETCURRENTKEY(Delegacion, "N§ Reserva");
+          lrRappel.SETRANGE(Delegacion   , lrRsvHot.Delegacion);
+          lrRappel.SETRANGE("N§ Reserva" , lrRsvHot."N§ Reserva");
+          lrRappel.DELETEALL;
+
+        UNTIL lrRsvHot.NEXT=0;
+        lrRsvHot.DELETEALL;
+      END;
+
+      CLEAR(lrRsvTra);
+      lrRsvTra.SETCURRENTKEY(Delegacion,"N§ Interno", "N§ Periodo");
+      lrRsvTra.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrRsvTra.SETRANGE("N§ Interno", prCab."N§ Interno");
+      BorraReservaTransfer(lrRsvTra);
+
+      CLEAR(lrPaxTOcir);
+      lrPaxTOcir.SETCURRENTKEY("N§ Interno");
+      lrPaxTOcir.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrPaxTOcir.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrPaxTOcir.DELETEALL;
+
+      CLEAR(lrResCir);
+      lrResCir.SETCURRENTKEY(Delegacion,"N§ Interno");
+      lrResCir.SETRANGE(Delegacion   , prCab.Delegacion);
+      lrResCir.SETRANGE("N§ Interno" , prCab."N§ Interno");
+      lrResCir.DELETEALL;
+
+      CLEAR(lrHotCir);
+      lrHotCir.SETCURRENTKEY(Delegacion,"N§ interno",Periodo);
+      lrHotCir.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrHotCir.SETRANGE("N§ interno", prCab."N§ Interno");
+      lrHotCir.DELETEALL;
+
+      CLEAR(lrResExc);
+      lrResExc.SETCURRENTKEY(Delegacion,"N§ Interno","N§ Periodo");
+      lrResExc.SETRANGE(Delegacion   , prCab.Delegacion);
+      lrResExc.SETRANGE("N§ Interno" , prCab."N§ Interno");
+      IF lrResExc.FINDSET THEN BEGIN
+        REPEAT
+          BorraReservaExc(lrResExc);
+        UNTIL lrResExc.NEXT = 0;
+        lrResExc.DELETEALL;
+      END;
+
+      IF wBorraEco THEN BEGIN
+        CLEAR(lrBono);
+        lrBono.SETCURRENTKEY("N§ Interno");
+        lrBono.SETRANGE(Delegacion   , prCab.Delegacion);
+        lrBono.SETRANGE("N§ Interno" , prCab."N§ Interno");
+        IF lrBono.FINDSET THEN BEGIN
+          REPEAT
+            CLEAR(lrCIBono);
+            lrCIBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrCIBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrCIBono.SETRANGE(Bono          , lrBono.Bono);
+            lrCIBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrCIBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrCIBono.DELETEALL;
+
+            CLEAR(lrCIBonoC);
+            lrCIBonoC.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrCIBonoC.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrCIBonoC.SETRANGE(Bono          , lrBono.Bono);
+            lrCIBonoC.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrCIBonoC.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrCIBonoC.DELETEALL;
+
+            CLEAR(lrCIBonodDia);
+            lrCIBonodDia.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrCIBonodDia.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrCIBonodDia.SETRANGE(Bono          , lrBono.Bono);
+            lrCIBonodDia.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrCIBonodDia.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrCIBonodDia.DELETEALL;
+
+            CLEAR(lrValBono);
+            lrValBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrValBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrValBono.SETRANGE(Bono          , lrBono.Bono);
+            lrValBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrValBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrValBono.DELETEALL;
+
+            CLEAR(lrConcBono);
+            lrConcBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrConcBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrConcBono.SETRANGE(Bono          , lrBono.Bono);
+            lrConcBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrConcBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrConcBono.DELETEALL;
+
+            CLEAR(lrHistBono);
+            lrHistBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrHistBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrHistBono.SETRANGE(Bono          , lrBono.Bono);
+            lrHistBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrHistBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            lrHistBono.DELETEALL;
+
+          UNTIL lrBono.NEXT=0;
+          lrBono.DELETEALL;
+        END;
+      END;
+
+      CLEAR(lrHist);
+      lrHist.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrHist.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrHist.DELETEALL;
+
+      CLEAR(lrExtras);
+      lrExtras.SETCURRENTKEY(Delegacion,"N§ Interno","N§ Periodo");
+      lrExtras.SETRANGE(Delegacion  , prCab.Delegacion);
+      lrExtras.SETRANGE("N§ Interno", prCab."N§ Interno");
+      lrExtras.DELETEALL;
+
+      CLEAR(lrTempHF);
+      lrTempHF.SETRANGE(Delegacion   , prCab.Delegacion);
+      lrTempHF.SETRANGE("Num Interno", prCab."N§ Interno");
+      lrTempHF.DELETEALL;
+
+      prCab.DELETE;
+    END;
+
+    PROCEDURE BorrarExcursiones@1100253009(pwFecha@1100253001 : Date);
+    VAR
+      lrServ@1100253000 : Record 7010163;
+      lrSop@1100253004 : Record 7010206;
+      lrPers@1100253003 : Record 7010214;
+      lrZona@1100253002 : Record 7010215;
+      lrZonaSer@1100253005 : Record 7010173;
+      lrRes@1100253006 : Record 7010162;
+      lrErr@1100253007 : Record 7010175;
+      lrPrest@1100253008 : Record 7010170;
+      lrSup@1100253009 : Record 7010171;
+      lrSupGO@1100253010 : Record 7010172;
+      lrCI@1100253011 : Record 7010166;
+      lrMagen@1100253015 : Record 7010174;
+      lrVerMargen@1100253016 : Record 7010176;
+      lrBack@1100253012 : Record 7009854;
+      lrValTrns@1100253013 : Record 7010167;
+      lrValExc@1100217000 : Record 7010181;
+      lrValGO@1100217001 : Record 7010182;
+      lrHoja@1100253014 : Record 7010168;
+      lrCom@1100217002 : Record 7010183;
+      lrDetCal@1100217003 : Record 7010256;
+    BEGIN
+      // BorrarExcursiones
+
+      CLEAR(lrServ);
+      lrServ.SETCURRENTKEY(Estado,Fecha,"Zona Excursion",Excursion);
+      lrServ.SETFILTER(Fecha, '<=%1', pwFecha);
+      IF lrServ.FINDSET THEN BEGIN
+        NewCab(lrServ.TABLECAPTION ,lrServ.COUNT);
+        REPEAT
+          CLEAR(lrZonaSer);
+          lrZonaSer.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrZonaSer.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          lrZonaSer.DELETEALL;
+
+          CLEAR(lrRes);
+          lrRes.SETCURRENTKEY("N§ Servicio");
+          lrRes.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrRes.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          IF lrRes.FINDSET THEN BEGIN
+            REPEAT
+              BorraReservaExc(lrRes);
+            UNTIL lrRes.NEXT=0;
+            lrRes.DELETEALL;
+          END;
+
+          CLEAR(lrErr);
+          lrErr.SETRANGE(Servicio, lrServ."N§ Servicio");
+          lrErr.DELETEALL;
+
+          CLEAR(lrPrest);
+          lrPrest.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrPrest.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          lrPrest.DELETEALL;
+
+          CLEAR(lrSup);
+          lrSup.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrSup.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          lrSup.DELETEALL;
+
+          CLEAR(lrSupGO);
+          lrSupGO.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrSupGO.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          lrSupGO.DELETEALL;
+
+          CLEAR(lrSop);
+          lrSop.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrSop.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          IF NOT lrSop.ISEMPTY THEN
+            lrSop.DELETEALL;
+
+          CLEAR(lrPers);
+          lrPers.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrPers.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          IF NOT lrPers.ISEMPTY THEN
+            lrPers.DELETEALL;
+
+          CLEAR(lrZona);
+          lrZona.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrZona.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          IF NOT lrZona.ISEMPTY THEN
+            lrZona.DELETEALL;
+
+          CLEAR(lrCom);
+          lrCom.SETRANGE(Delegacion   , lrServ.Delegacion);
+          lrCom.SETRANGE("N§ servicio", lrServ."N§ Servicio");
+          IF NOT lrCom.ISEMPTY THEN
+            lrCom.DELETEALL;
+
+          IF wBorraEco  THEN BEGIN
+            CLEAR(lrCI);
+            lrCI.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrCI.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrCI.DELETEALL;
+
+            CLEAR(lrMagen);
+            lrMagen.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrMagen.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrMagen.DELETEALL;
+
+            CLEAR(lrVerMargen);
+            lrVerMargen.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrVerMargen.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrVerMargen.DELETEALL;
+
+            CLEAR(lrValTrns);
+            lrValTrns.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrValTrns.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrValTrns.DELETEALL;
+
+            CLEAR(lrValExc);
+            lrValExc.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrValExc.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrValExc.DELETEALL;
+
+            CLEAR(lrValGO);
+            lrValGO.SETRANGE(Delegacion   , lrServ.Delegacion);
+            lrValGO.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+            lrValGO.DELETEALL;
+
+            CLEAR(lrDetCal);
+            lrDetCal.SETCURRENTKEY(Delegacion, "Num. Servicio");
+            lrDetCal.SETRANGE(Delegacion     , lrServ.Delegacion);
+            lrDetCal.SETRANGE("Num. Servicio", lrServ."N§ Servicio");
+            lrDetCal.DELETEALL;
+
+          END;
+          InfoTabla;
+        UNTIL lrServ.NEXT=0;
+        lrServ.DELETEALL;
+      END;
+
+      CLEAR(lrBack);
+      lrBack.SETFILTER("Fecha Excursion", '<=%1', pwFecha);
+      lrBack.DELETEALL;
+
+      CLEAR(lrHoja);
+      lrHoja.SETFILTER(Fecha, '<=%1', pwFecha);
+      IF lrHoja.FINDSET THEN BEGIN
+        NewCab(lrHoja.TABLECAPTION , lrHoja.COUNT);
+        REPEAT
+          CLEAR(lrRes);
+          lrRes.SETCURRENTKEY(Delegacion,"Fecha Excursion",Producto);
+          lrRes.SETRANGE(Delegacion       , lrHoja.Delegacion);
+          lrRes.SETRANGE("Fecha Excursion", lrHoja.Fecha);
+          lrRes.SETRANGE(Producto         , lrHoja.Producto);
+          IF lrRes.FINDSET THEN BEGIN
+            REPEAT
+              BorraReservaExc(lrRes);
+            UNTIL lrRes.NEXT=0;
+            lrRes.DELETEALL;
+          END;
+          InfoTabla;
+        UNTIL lrHoja.NEXT=0;
+        lrHoja.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE BorraReservaExc@1100253008(VAR prRes@1100253000 : Record 7010162);
+    VAR
+      lrResExcDE@1100253003 : Record 7010245;
+      lrSuplm@1100253002 : Record 7010165;
+      lrSuplmBck@1100253006 : Record 7009856;
+      lrHist@1100253004 : Record 7010255;
+      lrCobro@1100217000 : Record 7010240;
+      lrSuplCom@1100217001 : Record 7010180;
+    BEGIN
+      // BorraReservaExc
+
+      CLEAR(lrSuplm);
+      lrSuplm.SETRANGE(Delegacion  , prRes.Delegacion);
+      lrSuplm.SETRANGE("N§ Reserva", prRes."N§ Reserva");
+      IF lrSuplm.FINDSET(TRUE) THEN
+        lrSuplm.DELETEALL;
+
+      CLEAR(lrSuplCom);
+      lrSuplCom.SETRANGE(Delegacion    , prRes.Delegacion);
+      lrSuplCom.SETRANGE("Num. Reserva", prRes."N§ Reserva");
+      IF lrSuplCom.FINDSET(TRUE) THEN
+        lrSuplCom.DELETEALL;
+
+      CLEAR(lrResExcDE);
+      IF lrResExcDE.GET(prRes.Delegacion, prRes."N§ Reserva")  THEN
+        lrResExcDE.DELETE;
+
+      CLEAR(lrHist);
+      lrHist.SETCURRENTKEY(Delegacion, "Num. Reserva");
+      lrHist.SETRANGE(Delegacion    , prRes.Delegacion);
+      lrHist.SETRANGE("Num. Reserva", prRes."N§ Reserva");
+      IF lrHist.FINDSET(TRUE) THEN
+        lrHist.DELETEALL;
+
+      CLEAR(lrSuplmBck);
+      lrSuplmBck.SETRANGE(Delegacion  , prRes.Delegacion);
+      lrSuplmBck.SETRANGE("N§ Reserva", prRes."N§ Reserva");
+      IF lrSuplmBck.FINDSET(TRUE) THEN
+        lrSuplmBck.DELETEALL;
+
+      IF wBorraEco THEN
+      BEGIN
+        CLEAR(lrCobro);
+        lrCobro.SETRANGE(Delegacion   , prRes.Delegacion);
+        lrCobro.SETRANGE("Num Reserva", prRes."N§ Reserva");
+        IF lrCobro.FINDSET(TRUE) THEN
+          lrCobro.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE BorraTransfers@1100253013(pwFecha@1100253000 : Date);
+    VAR
+      lrAgrup@1100253001 : Record 7009796;
+      lrMaltAgrp@1100253003 : Record 7009903;
+      lrGuias@1100253002 : Record 7009905;
+      lrVuelos@1100253004 : Record 7009797;
+      lrHoteles@1100253005 : Record 7009798;
+      lrZonas@1100253006 : Record 7009799;
+      lrHoras@1100253007 : Record 7009800;
+      lrCI@1100253008 : Record 7009805;
+      lrError@1100253009 : Record 7009807;
+      lrMargen@1100253010 : Record 7009808;
+      lrCom@1100253011 : Record 7009813;
+      lrVerMarg@1100253012 : Record 7009814;
+      lrSup@1100253013 : Record 7009816;
+      lrResT@1100253014 : Record 7009744;
+    BEGIN
+      // BorraTransfers
+
+      CLEAR(lrAgrup);
+      lrAgrup.SETCURRENTKEY(Fecha,Zona,"N§ Agrupacion");
+      lrAgrup.SETFILTER(Fecha, '<=%1', pwFecha);
+      IF lrAgrup.FINDSET THEN BEGIN
+        NewCab(lrAgrup.TABLECAPTION ,lrAgrup.COUNT);
+        REPEAT
+          CLEAR(lrMaltAgrp);
+          lrMaltAgrp.SETRANGE("Num Agrupacion", lrAgrup."N§ Agrupacion");
+          lrMaltAgrp.DELETEALL;
+
+          CLEAR(lrGuias);
+          lrGuias.SETRANGE("Num.Agrupacion", lrAgrup."N§ Agrupacion");
+          lrGuias.DELETEALL;
+
+          CLEAR(lrVuelos);
+          lrVuelos.SETRANGE("N§ Agrupacion", lrAgrup."N§ Agrupacion");
+          lrVuelos.DELETEALL;
+
+          CLEAR(lrHoteles);
+          lrHoteles.SETRANGE("N§ Agrupacion", lrAgrup."N§ Agrupacion");
+          lrHoteles.DELETEALL;
+
+          CLEAR(lrZonas);
+          lrZonas.SETRANGE("N§ Agrupacion", lrAgrup."N§ Agrupacion");
+          lrZonas.DELETEALL;
+
+          CLEAR(lrHoras);
+          lrHoras.SETRANGE("N§ Agrupacion", lrAgrup."N§ Agrupacion");
+          lrHoras.DELETEALL;
+
+          IF wBorraEco THEN BEGIN
+            CLEAR(lrCI);
+            lrCI.SETRANGE(Agrupacion, lrAgrup."N§ Agrupacion");
+            lrCI.DELETEALL;
+          END;
+
+          CLEAR(lrError);
+          lrError.SETRANGE(Agrupacion, lrAgrup."N§ Agrupacion");
+          lrError.DELETEALL;
+
+          CLEAR(lrMargen);
+          lrMargen.SETRANGE(Agrupacion, lrAgrup."N§ Agrupacion");
+          lrMargen.DELETEALL;
+
+          CLEAR(lrCom);
+          lrCom.SETRANGE(Agrupacion, lrAgrup."N§ Agrupacion");
+          lrCom.DELETEALL;
+
+          CLEAR(lrVerMarg);
+          lrVerMarg.SETRANGE("N§ Agrupacion", lrAgrup."N§ Agrupacion");
+          lrVerMarg.DELETEALL;
+
+          CLEAR(lrSup);
+          lrSup.SETRANGE("Num Agrupacion", lrAgrup."N§ Agrupacion");
+          lrSup.DELETEALL;
+
+          CLEAR(lrResT);
+          lrResT.SETCURRENTKEY("Agrupacion entrada");
+          lrResT.SETRANGE("Agrupacion entrada", lrAgrup."N§ Agrupacion");
+          BorraReservaTransfer(lrResT);
+
+          CLEAR(lrResT);
+          lrResT.SETCURRENTKEY("Agrupacion salida");
+          lrResT.SETRANGE("Agrupacion salida", lrAgrup."N§ Agrupacion");
+          BorraReservaTransfer(lrResT);
+
+          InfoTabla;
+        UNTIL lrAgrup.NEXT=0;
+        lrAgrup.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE BorraReservaTransfer@1100253048(VAR prResT@1100253000 : Record 7009744);
+    VAR
+      lrElem@1100253001 : Record 7009792;
+      rElemBck@1100253002 : Record 7009853;
+    BEGIN
+      // BorraReservaTransfer
+      // Tiene que venir debidamente filtrada
+
+      IF prResT.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrElem);
+          lrElem.SETRANGE(Delegacion  , prResT.Delegacion);
+          lrElem.SETRANGE("N§ Reserva", prResT."N§ Reserva");
+          lrElem.DELETEALL;
+        UNTIL prResT.NEXT=0;
+
+      IF prResT.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(rElemBck);
+          rElemBck.SETRANGE(Delegacion  , prResT.Delegacion);
+          rElemBck.SETRANGE("N§ Reserva", prResT."N§ Reserva");
+          rElemBck.DELETEALL;
+        UNTIL rElemBck.NEXT=0;
+      END;
+
+        prResT.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE BorraCircuito@1100253000(prCirc@1100253000 : Record 7010187);
+    VAR
+      lrPaxTO@1100253007 : Record 7010188;
+      lrCosCir@1100253006 : Record 7010190;
+      lrResCir@1100253005 : Record 7010186;
+      lrHotCir@1100253003 : Record 7010189;
+      lrPresXcir@1100253002 : Record 7010211;
+      lrExtCir@1100253001 : Record 7010213;
+      lrErrCir@1100253004 : Record 7010202;
+      lrComCir@1100253008 : Record 7010203;
+      lrPreResCir@1100253009 : Record 7010204;
+      lrAcomResCir@1100253010 : Record 7010210;
+    BEGIN
+      // BorraCircuito
+      // Borra las tablas relacionadas con el registor de circuito
+      // No la propia tabla de circuitos tabla
+
+      CLEAR(lrPaxTO);
+      lrPaxTO.SETRANGE(Delegacion, prCirc.Delegacion);
+      lrPaxTO.SETRANGE(Circuito  , prCirc.Circuito);
+      lrPaxTO.SETRANGE(Orden     , prCirc.Orden);
+      lrPaxTO.DELETEALL;
+
+      CLEAR(lrResCir);
+      lrResCir.SETCURRENTKEY(Delegacion, Circuito, Orden, "N§ linea");
+      lrResCir.SETRANGE(Delegacion, prCirc.Delegacion);
+      lrResCir.SETRANGE(Circuito  , prCirc.Circuito);
+      lrResCir.SETRANGE(Orden     , prCirc.Orden);
+
+      NewCab(lrResCir.TABLECAPTION ,lrResCir.COUNT);
+      REPEAT
+        CLEAR(lrPreResCir);
+        IF lrPreResCir.GET(lrResCir."N§ Prereserva") THEN
+          lrPreResCir.DELETE;
+
+        CLEAR(lrAcomResCir);
+        IF lrAcomResCir.GET(lrResCir.Delegacion, lrResCir."N§ Reserva") THEN
+          lrAcomResCir.DELETE;
+        InfoTabla;
+      UNTIL lrResCir.NEXT=0;
+      lrResCir.DELETEALL;
+
+      CLEAR(lrHotCir);
+      lrHotCir.SETRANGE(Delegacion, prCirc.Delegacion);
+      lrHotCir.SETRANGE(Circuito  , prCirc.Circuito);
+      lrHotCir.SETRANGE(Orden     , prCirc.Orden);
+      lrHotCir.DELETEALL;
+
+      CLEAR(lrPresXcir);
+      lrPresXcir.SETRANGE(Circuito, prCirc.Circuito);
+      lrPresXcir.SETRANGE(Orden   , prCirc.Orden);
+      lrPresXcir.DELETEALL;
+
+      IF wBorraEco  THEN BEGIN
+        CLEAR(lrCosCir);
+        lrCosCir.SETRANGE(Delegacion, prCirc.Delegacion);
+        lrCosCir.SETRANGE(Circuito  , prCirc.Circuito);
+        lrCosCir.SETRANGE(Orden     , prCirc.Orden);
+        lrCosCir.DELETEALL;
+      END;
+
+      CLEAR(lrExtCir);
+      lrExtCir.SETRANGE(Delegacion, prCirc.Delegacion);
+      lrExtCir.SETRANGE(Circuito  , prCirc.Circuito);
+      lrExtCir.SETRANGE(Orden     , prCirc.Orden);
+      lrExtCir.DELETEALL;
+
+      CLEAR(lrErrCir);
+      lrErrCir.SETRANGE(Delegacion, prCirc.Delegacion);
+      lrErrCir.SETRANGE(Circuito  , prCirc.Circuito);
+      lrErrCir.SETRANGE(Orden     , prCirc.Orden);
+      lrErrCir.DELETEALL;
+
+      CLEAR(lrComCir);
+      lrComCir.SETRANGE(Circuito  , prCirc.Circuito);
+      lrComCir.SETRANGE(Orden     , prCirc.Orden);
+      lrComCir.DELETEALL;
+    END;
+
+    PROCEDURE BorraVarios@1100253025(pwFecha@1100253001 : Date);
+    VAR
+      lrTarCnpt@1100253003 : Record 7009898;
+      lrEnv@1100217000 : Record 7009761;
+      lrHstEnv@1100217001 : Record 7009823;
+      lrConfEnv@1100217002 : Record 7009832;
+      lwFiltroFecha@1100253004 : Text[30];
+    BEGIN
+      // BorraVarios
+      // Tablas que no est n ligadas a otras
+
+      NewCab(Text0006 ,27);
+
+      lwFiltroFecha := STRSUBSTNO('<=%1', pwFecha);
+
+      CLEAR(lrTarCnpt);
+      lrTarCnpt.SETCURRENTKEY(Touroperador,"Fecha Inicial","Fecha Final");
+      lrTarCnpt.SETFILTER("Fecha Inicial",'<=%1', pwFecha);
+      lrTarCnpt.SETFILTER("Fecha Final"  ,'<=%1', pwFecha);
+      lrTarCnpt.DELETEALL;
+
+      CLEAR(lrEnv);
+      lrEnv.SETFILTER(Fecha, lwFiltroFecha);
+      IF lrEnv.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrHstEnv);
+          lrHstEnv.SETRANGE("Num. Envio", lrEnv."Num. Envio");
+          lrHstEnv.SETRANGE(Hotel       , lrHstEnv.Hotel);
+          lrHstEnv.DELETEALL;
+
+          CLEAR(lrConfEnv);
+          lrConfEnv.SETRANGE("Num. Envio", lrEnv."Num. Envio");
+          lrConfEnv.DELETEALL;
+
+        UNTIL lrEnv.NEXT=0;
+        lrEnv.DELETEALL;
+      END;
+      InfoTabla;
+
+      LimpiaTabla1(7009763, 25, lwFiltroFecha, 4, FALSE, TRUE); // Buzon Anulacion
+      LimpiaTabla1(7009751, 17, lwFiltroFecha, 2, FALSE, TRUE); // Historico Reserva
+      LimpiaTabla1(7010204, 5, lwFiltroFecha, 2, FALSE, TRUE); // Prereserva Circuito
+      LimpiaTabla1(7009780, 5, lwFiltroFecha, 0, FALSE, TRUE); //Hotel Overbooking
+      LimpiaTabla1(7009781, 7, lwFiltroFecha, 0, FALSE, TRUE); // Paro ventas hotel
+      LimpiaTabla1(7009782, 3, lwFiltroFecha, 0, FALSE, TRUE); // Exportacion Hotel
+      LimpiaTabla1(7009793, 1, lwFiltroFecha, 0, FALSE, TRUE); // Acumulado x Zona
+      LimpiaTabla1(7009794, 1, lwFiltroFecha, 0, FALSE, TRUE); // Acumulado x Vuelo
+      LimpiaTabla1(7009795, 1, lwFiltroFecha, 0, FALSE, TRUE); // Acumulado x Hotel x Vuelo
+      LimpiaTabla1(7009819, 4, lwFiltroFecha, 3, FALSE, TRUE); // Registro variacion cupo
+      LimpiaTabla1(7009821, 3, lwFiltroFecha, 0, FALSE, TRUE); // Aumento cupo diario
+      LimpiaTabla1(7009826, 1, lwFiltroFecha, 0, FALSE, TRUE); // Detalle TTOO x Plan Vuelo
+      LimpiaTabla1(7009845, 27, lwFiltroFecha, 0, FALSE, TRUE); // Cabecera reserva Backup
+      LimpiaTabla1(7009846, 9, lwFiltroFecha, 2, FALSE, TRUE); // Periodo reserva Backup
+      LimpiaTabla1(7009847, 21, lwFiltroFecha, 14, FALSE, TRUE); // Reserva Hotel Backup
+      LimpiaTabla1(7009848, 21, lwFiltroFecha, 9, FALSE, TRUE); // Reserva Transfer Backup
+      LimpiaTabla1(7009849, 23, lwFiltroFecha, 0, FALSE, TRUE); // Acompa¤ante reserva Backup
+      LimpiaTabla1(7009851, 11, lwFiltroFecha, 0, FALSE, TRUE); // Extra reserva Backup
+      LimpiaTabla1(7009852, 9, lwFiltroFecha, 0, FALSE, TRUE); // Comentarios Backup
+      LimpiaTabla1(7010004, 13, lwFiltroFecha, 5, FALSE, TRUE); // Datos Blank
+      LimpiaTabla1(7010011, 17, lwFiltroFecha, 0, FALSE, TRUE); // Reclamacion cliente
+      LimpiaTabla1(7010017, 3, lwFiltroFecha, 0, FALSE, TRUE); // Diario ABR
+      LimpiaTabla1(7010246, 10, lwFiltroFecha, 2, FALSE, TRUE); // Prevision Hora Recogida
+      LimpiaTabla1(7009815, 3, lwFiltroFecha, 0, FALSE, TRUE); // Error Importacion vuelo
+
+      IF wBorraEco THEN BEGIN
+        LimpiaTabla1(7010177, 5, lwFiltroFecha, 2, FALSE, TRUE); // Movimientos Guia Venta
+        LimpiaTabla1(7010178, 3, lwFiltroFecha, 2, FALSE, TRUE); // Liquidaciones
+      END;
+    END;
+
+    PROCEDURE BorraInterfases@1100217029(pwFecha@1100217000 : Date);
+    VAR
+      lrCabInt@1100217003 : Record 7010076;
+      lrVuelInt@1100217004 : Record 7010077;
+      lrHotInt@1100217005 : Record 7010078;
+      lrPaxInt@1100217006 : Record 7010079;
+      lrServint@1100217007 : Record 7010080;
+      lrComInt@1100217010 : Record 7009858;
+      lrCabMWR@1100217008 : Record 7009992;
+      lrLinMWR@1100217009 : Record 7009993;
+      lrLinMWR_FL@1100217011 : Record 7009869;
+      lrFichResImp@1100217012 : Record 7010082;
+      lwFiltroFecha@1100217002 : Text[30];
+    BEGIN
+      // BorraInterfases
+      lwFiltroFecha := STRSUBSTNO('<=%1', pwFecha);
+
+      CLEAR(lrCabInt);
+      lrCabInt.SETFILTER("Fecha Entrada", lwFiltroFecha);
+      IF lrCabInt.FINDSET THEN BEGIN
+        NewCab(lrCabInt.TABLECAPTION ,lrCabInt.COUNT);
+        REPEAT
+          CLEAR(lrVuelInt);
+          lrVuelInt.SETCURRENTKEY(Fichero,TourOperador,Bono,Temporada);
+          lrVuelInt.SETRANGE(Fichero     , lrCabInt.Fichero);
+          lrVuelInt.SETRANGE(TourOperador, lrCabInt.TourOperador);
+          lrVuelInt.SETRANGE(Bono        , lrCabInt.Bono);
+          lrVuelInt.SETRANGE(Temporada   , lrCabInt.Temporada);
+          lrVuelInt.DELETEALL;
+
+          CLEAR(lrHotInt);
+          lrHotInt.SETCURRENTKEY(Fichero,Touroperador,Bono,Temporada);
+          lrHotInt.SETRANGE(Fichero     , lrCabInt.Fichero);
+          lrHotInt.SETRANGE(Touroperador, lrCabInt.TourOperador);
+          lrHotInt.SETRANGE(Bono        , lrCabInt.Bono);
+          lrHotInt.SETRANGE(Temporada   , lrCabInt.Temporada);
+          lrHotInt.DELETEALL;
+
+          CLEAR(lrPaxInt);
+          lrPaxInt.SETCURRENTKEY(Fichero,TourOperador,Bono,Temporada);
+          lrPaxInt.SETRANGE(Fichero     , lrCabInt.Fichero);
+          lrPaxInt.SETRANGE(TourOperador, lrCabInt.TourOperador);
+          lrPaxInt.SETRANGE(Bono        , lrCabInt.Bono);
+          lrPaxInt.SETRANGE(Temporada   , lrCabInt.Temporada);
+          lrPaxInt.DELETEALL;
+
+          CLEAR(lrServint);
+          lrServint.SETCURRENTKEY(Fichero,Touroperador,Bono,Temporada);
+          lrServint.SETRANGE(Fichero     , lrCabInt.Fichero);
+          lrServint.SETRANGE(Touroperador, lrCabInt.TourOperador);
+          lrServint.SETRANGE(Bono        , lrCabInt.Bono);
+          lrServint.SETRANGE(Temporada   , lrCabInt.Temporada);
+          lrServint.DELETEALL;
+
+          CLEAR(lrComInt);
+          lrComInt.SETRANGE(Fichero , lrCabInt.Fichero);
+          lrComInt.DELETEALL;
+
+          IF lrFichResImp.GET(lrCabInt.Fichero) THEN
+            lrFichResImp.DELETE;
+
+          InfoTabla;
+        UNTIL lrCabInt.NEXT=0;
+        lrCabInt.DELETEALL;
+      END;
+
+      CLEAR(lrCabMWR);
+      lrCabMWR.SETFILTER("Fecha Desde", lwFiltroFecha);
+      IF lrCabMWR.FINDSET THEN BEGIN
+        NewCab(lrCabMWR.TABLECAPTION ,lrCabMWR.COUNT);
+        REPEAT
+          CLEAR(lrLinMWR);
+          lrLinMWR.SETRANGE("No Importacion", lrCabMWR.Num);
+          lrLinMWR.DELETEALL;
+
+          CLEAR(lrLinMWR_FL);
+          lrLinMWR_FL.SETRANGE("No Importacion", lrCabMWR.Num);
+          lrLinMWR_FL.DELETEALL;
+
+          InfoTabla;
+        UNTIL lrCabMWR.NEXT=0;
+        lrCabMWR.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE BorraCotizaciones@1100217003(pwFecha@1100217000 : Date);
+    VAR
+      lwFiltroFecha@1100217001 : Text[30];
+      lrCabCot@1100217002 : Record 7009871;
+      lrLinCalcCot@1100217003 : Record 7009872;
+      lrHotelCot@1100217004 : Record 7009873;
+      lrErrorCot@1100217005 : Record 7009876;
+      lrTransfCot@1100217006 : Record 7009881;
+      lrComCot@1100217007 : Record 7009882;
+      lrExcCot@1100217008 : Record 7009883;
+      lrVincCot@1100217009 : Record 7009884;
+    BEGIN
+      // BorraCotizaciones
+
+      lwFiltroFecha := STRSUBSTNO('<=%1', pwFecha);
+
+      CLEAR(lrCabCot);
+      lrCabCot.SETFILTER("Fecha entrada", lwFiltroFecha);
+      IF lrCabCot.FINDSET THEN BEGIN
+        NewCab(lrCabCot.TABLECAPTION ,lrCabCot.COUNT);
+        REPEAT
+          lrLinCalcCot.SETCURRENTKEY("Id Cotizacion","Id Producto",Hotel);
+          lrLinCalcCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrLinCalcCot.DELETEALL;
+
+          CLEAR(lrHotelCot);
+          lrHotelCot.SETCURRENTKEY("Id cotizacion");
+          lrHotelCot.SETRANGE("Id cotizacion", lrCabCot.Id);
+          lrHotelCot.DELETEALL;
+
+          CLEAR(lrErrorCot);
+          lrErrorCot.SETCURRENTKEY("Id Cotizacion","Id Hotel",Tipo);
+          lrErrorCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrErrorCot.DELETEALL;
+
+          CLEAR(lrTransfCot);
+          lrTransfCot.SETCURRENTKEY("Id Cotizacion");
+          lrTransfCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrTransfCot.DELETEALL;
+
+          CLEAR(lrComCot);
+          lrComCot.SETCURRENTKEY("Id Cotizacion");
+          lrComCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrComCot.DELETEALL;
+
+          CLEAR(lrExcCot);
+          lrExcCot.SETCURRENTKEY("Id Cotizacion");
+          lrExcCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrExcCot.DELETEALL;
+
+          CLEAR(lrVincCot);
+          lrVincCot.SETCURRENTKEY("Id Cotizacion");
+          lrVincCot.SETRANGE("Id Cotizacion", lrCabCot.Id);
+          lrVincCot.DELETEALL;
+
+          InfoTabla;
+        UNTIL lrCabCot.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE BorraContratos@1100253012(pwFecha@1100253001 : Date);
+    VAR
+      lrCCHotel@1100253000 : Record 7009723;
+      lrCVHotel@1100253002 : Record 7009727;
+      lrCCTRans@1100253003 : Record 7009787;
+      lrCVTRans@1100253004 : Record 7009788;
+      lrCCEXC@1100253005 : Record 7010142;
+      lrPrecVexc@1100253006 : Record 7010148;
+      lrTarExc@1100253007 : Record 7010147;
+      lrTarCCircuito@1100253008 : Record 7010196;
+      lrTarVCircuito@1100253009 : Record 7010191;
+      lrCabImpCC@1100253010 : Record 7009888;
+      lrLinImpCC@1100253011 : Record 7009889;
+      lrTarConcept@1100253012 : Record 7009898;
+      lrDetTarConcept@1100253013 : Record 7010091;
+      lrHistPrec@1100253014 : Record 7009765;
+      lrTarAdTransfer@1100253015 : Record 7009901;
+      lrPredTarAdTransf@1100253016 : Record 7009902;
+      lrHistCnt@1100253017 : Record 7009764;
+    BEGIN
+      // BorraContratos
+
+      CLEAR(lrCCHotel);
+      lrCCHotel.SETCURRENTKEY(Hotel,TourOperador,"Fecha inicio contrato");
+      lrCCHotel.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCHotel.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      IF lrCCHotel.FINDSET THEN BEGIN
+        NewCab(lrCCHotel.TABLECAPTION ,lrCCHotel.COUNT);
+        REPEAT
+          VaciarContratoComHotel(lrCCHotel);
+          InfoTabla;
+        UNTIL lrCCHotel.NEXT=0;
+        lrCCHotel.DELETEALL;
+      END;
+
+      CLEAR(lrCVHotel);
+      lrCVHotel.SETCURRENTKEY(Hotel,TourOperador,"Fecha inicio contrato");
+      lrCVHotel.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCVHotel.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      IF lrCVHotel.FINDSET THEN BEGIN
+        NewCab(lrCVHotel.TABLECAPTION , lrCVHotel.COUNT);
+        REPEAT
+          VaciarContratoVentHotel(lrCVHotel);
+          InfoTabla;
+        UNTIL lrCVHotel.NEXT=0;
+        lrCVHotel.DELETEALL;
+      END;
+
+      CLEAR(lrCCTRans);
+      lrCCTRans.SETCURRENTKEY(Proveedor,"Fecha inicio contrato","Fecha final contrato");
+      lrCCTRans.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCTRans.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      IF lrCCTRans.FINDSET THEN BEGIN
+        NewCab(lrCCTRans.TABLECAPTION ,lrCCTRans.COUNT);
+        REPEAT
+          VaciarContratoComTrans(lrCCTRans);
+          InfoTabla;
+        UNTIL lrCCTRans.NEXT=0;
+        lrCCTRans.DELETEALL;
+      END;
+
+      CLEAR(lrCVTRans);
+      lrCVTRans.SETCURRENTKEY(TourOperador,"Fecha inicio contrato","Fecha final contrato");
+      lrCVTRans.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCVTRans.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      IF lrCVTRans.FINDSET THEN BEGIN
+        NewCab(lrCVTRans.TABLECAPTION ,lrCVTRans.COUNT);
+        REPEAT
+          VaciarContratoVentTrans(lrCVTRans);
+          InfoTabla;
+        UNTIL lrCVTRans.NEXT=0;
+        lrCVTRans.DELETEALL;
+      END;
+
+      CLEAR(lrCCEXC);
+      lrCCEXC.SETCURRENTKEY("Fecha inicio contrato","Fecha final contrato");
+      lrCCEXC.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCEXC.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      IF lrCCEXC.FINDSET THEN BEGIN
+        NewCab(lrCCEXC.TABLECAPTION ,lrCCEXC.COUNT);
+        REPEAT
+          VaciarContratoCompExc(lrCCEXC);
+          InfoTabla;
+        UNTIL lrCCEXC.NEXT=0;
+        lrCCEXC.DELETEALL;
+      END;
+
+      CLEAR(lrTarExc);
+      lrTarExc.SETCURRENTKEY(Excursion,"Fecha Inicio","Fecha Final");
+      lrTarExc.SETFILTER("Fecha Inicio", '<=%1', pwFecha);
+      lrTarExc.SETFILTER("Fecha Final" , '<=%1', pwFecha);
+      IF lrTarExc.FINDSET THEN BEGIN
+        NewCab(lrTarExc.TABLECAPTION ,lrTarExc.COUNT);
+        REPEAT
+          VaciaTarifaExcursion(lrTarExc);
+          InfoTabla;
+        UNTIL lrTarExc.NEXT=0;
+        lrTarExc.DELETEALL;
+      END;
+
+      CLEAR(lrTarCCircuito);
+      lrTarCCircuito.SETCURRENTKEY(Proveedor,"Fecha inicio","Fecha final");
+      lrTarCCircuito.SETFILTER("Fecha inicio", '<=%1', pwFecha);
+      lrTarCCircuito.SETFILTER("Fecha final" , '<=%1', pwFecha);
+      IF lrTarCCircuito.FINDSET THEN BEGIN
+        NewCab(lrTarCCircuito.TABLECAPTION ,lrTarCCircuito.COUNT);
+        REPEAT
+          VaciaTarifaComCircuito(lrTarCCircuito);
+          InfoTabla;
+        UNTIL lrTarCCircuito.NEXT=0;
+        lrTarCCircuito.DELETEALL;
+      END;
+
+      CLEAR(lrTarVCircuito);
+      lrTarVCircuito.SETCURRENTKEY("Fecha inicio","Fecha final");
+      lrTarVCircuito.SETFILTER("Fecha inicio", '<=%1', pwFecha);
+      lrTarVCircuito.SETFILTER("Fecha final" , '<=%1', pwFecha);
+      IF lrTarVCircuito.FINDSET THEN BEGIN
+        NewCab(lrTarVCircuito.TABLECAPTION ,lrTarVCircuito.COUNT);
+        REPEAT
+          VaciaTarifaVentaCircuito(lrTarVCircuito);
+          InfoTabla;
+        UNTIL lrTarVCircuito.NEXT=0;
+        lrTarVCircuito.DELETEALL;
+      END;
+
+      CLEAR(lrCabImpCC);
+      lrCabImpCC.SETFILTER("Fecha fin contrato", '<=%1', pwFecha);
+      IF lrCabImpCC.FINDSET THEN BEGIN
+        NewCab(lrCabImpCC.TABLECAPTION ,lrCabImpCC.COUNT);
+        REPEAT
+          CLEAR(lrLinImpCC);
+          lrLinImpCC.SETRANGE("No Importacion", lrCabImpCC.No);
+          lrLinImpCC.DELETEALL;
+
+          InfoTabla;
+        UNTIL lrCabImpCC.NEXT=0;
+        lrCabImpCC.DELETEALL;
+      END;
+
+      CLEAR(lrTarConcept);
+      lrTarConcept.SETCURRENTKEY(Touroperador,"Fecha Inicial","Fecha Final");
+      lrTarConcept.SETFILTER("Fecha Final", '<=%1', pwFecha);
+      IF lrTarConcept.FINDSET THEN BEGIN
+        NewCab(lrTarConcept.TABLECAPTION ,lrTarConcept.COUNT);
+        REPEAT
+          CLEAR(lrDetTarConcept);
+          lrDetTarConcept.SETRANGE("ID Tarifa", lrTarConcept."ID Tarifa");
+          lrDetTarConcept.DELETEALL;
+
+          CLEAR(lrHistPrec);
+          lrHistPrec.SETRANGE(Tipo         , lrHistPrec.Tipo::"Tarifa Concepto");
+          lrHistPrec.SETRANGE("N§ Contrato", lrTarConcept."ID Tarifa");
+          lrHistPrec.SETRANGE(Delegacion   , lrTarConcept.Delegacion);
+          lrHistPrec.DELETEALL;
+
+          InfoTabla;
+        UNTIL lrTarConcept.NEXT=0;
+        lrTarConcept.DELETEALL;
+      END;
+
+      CLEAR(lrTarAdTransfer);
+      lrTarAdTransfer.SETFILTER("Fecha Final" , '<=%1', pwFecha);
+      IF lrTarAdTransfer.FINDSET THEN BEGIN
+        NewCab(lrTarAdTransfer.TABLECAPTION ,lrTarAdTransfer.COUNT);
+        REPEAT
+          CLEAR(lrPredTarAdTransf);
+          lrPredTarAdTransf.SETRANGE("ID Tarifa", lrTarAdTransfer.ID);
+          lrPredTarAdTransf.DELETEALL;
+
+          CLEAR(lrHistCnt);
+          lrHistCnt.SETRANGE(Delegacion    , lrTarAdTransfer.Delegacion);
+          lrHistCnt.SETRANGE("N§ Contrato" , FORMAT(lrTarAdTransfer.ID));
+          lrHistCnt.SETRANGE(Tipo          , lrHistCnt.Tipo::"Adicional Transfer");
+          lrHistCnt.DELETEALL;
+
+          InfoTabla;
+        UNTIL lrTarAdTransfer.NEXT=0;
+        lrTarAdTransfer.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE VaciarContratoComHotel@1103355003(prCon@1103355000 : Record 7009723);
+    VAR
+      lrCom@1100253000 : Record 7009784;
+      rPre@1100253016 : Record 7009738;
+      rCupo@1100253015 : Record 7009739;
+      rGar@1100253014 : Record 7009729;
+      rPagGar@1100253013 : Record 7009726;
+      rCupoDia@1100253012 : Record 7009757;
+      rBooking@1100253011 : Record 7009766;
+      rHandling@1100253010 : Record 7009733;
+      rAport@1100253009 : Record 7010007;
+      rHis@1100253008 : Record 7009764;
+      rHisP@1100253007 : Record 7009765;
+      rConHab@1100253006 : Record 7009731;
+      rPrev@1100253005 : Record 7009747;
+      lrSeg@1100253001 : Record 7009995;
+      lrImcpt@1100253002 : Record 7009829;
+      lrGarDia@1100253003 : Record 7009779;
+      lrPreDia@1100253017 : Record 7009783;
+      lrDocs@1100253018 : Record 7009870;
+    BEGIN
+      // VaciarContratoComHotel
+
+      CLEAR(rPre);
+      rPre.SETRANGE(Delegacion   , prCon.Delegacion);
+      rPre.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      rPre.DELETEALL;
+
+      CLEAR(rCupo);
+      rCupo.SETRANGE(Delegacion          , prCon.Delegacion);
+      rCupo.SETRANGE("N§ Contrato compra", prCon."N§ Contrato compra");
+      rCupo.DELETEALL;
+
+      CLEAR(rGar);
+      rGar.SETRANGE(Delegacion   , prCon.Delegacion);
+      rGar.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      rGar.DELETEALL;
+
+      CLEAR(rPagGar);
+      rPagGar.SETRANGE(Delegacion   , prCon.Delegacion);
+      rPagGar.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      rPagGar.DELETEALL;
+
+      CLEAR(rCupoDia);
+      rCupoDia.SETRANGE(Delegacion       , prCon.Delegacion);
+      rCupoDia.SETRANGE("Contrato compra", prCon."N§ Contrato compra");
+      rCupoDia.DELETEALL;
+
+      CLEAR(rHandling);
+      rHandling.SETRANGE(Delegacion     , prCon.Delegacion);
+      rHandling.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rHandling.SETRANGE("Tipo contrato", rHandling."Tipo contrato"::Compra);
+      rHandling.DELETEALL;
+
+      CLEAR(rAport);
+      rAport.SETRANGE(Delegacion   , prCon.Delegacion);
+      rAport.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      rAport.DELETEALL;
+
+      CLEAR(rConHab);
+      rConHab.SETRANGE(Delegacion     , prCon.Delegacion);
+      rConHab.SETRANGE("Tipo contrato", rConHab."Tipo contrato"::Compra);
+      rConHab.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rConHab.DELETEALL;
+
+      CLEAR(rPrev);
+      rPrev.SETRANGE(Delegacion     , prCon.Delegacion);
+      rPrev.SETRANGE("Tipo Contrato", rPrev."Tipo Contrato"::Compra);
+      rPrev.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rPrev.DELETEALL;
+
+      CLEAR(lrCom);
+      lrCom.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrCom.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrCom.SETRANGE("Tipo Contrato", lrCom."Tipo Contrato"::"C Hotel");
+      lrCom.DELETEALL;
+
+      CLEAR(rHis);
+      rHis.SETRANGE(Delegacion     , prCon.Delegacion);
+      rHis.SETRANGE(Tipo           , rHis.Tipo::"Hotel Compra");
+      rHis.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rHis.DELETEALL;
+
+      CLEAR(rHisP);
+      rHisP.SETRANGE(Delegacion     , prCon.Delegacion);
+      rHisP.SETRANGE(Tipo           , rHisP.Tipo::"Hotel Compra");
+      rHisP.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rHisP.DELETEALL;
+
+      CLEAR(lrSeg);
+      lrSeg.SETCURRENTKEY(Delegacion,"No Contrato");
+      lrSeg.SETRANGE(Delegacion   , prCon.Delegacion);
+      lrSeg.SETRANGE("No Contrato", prCon."N§ Contrato compra");
+      lrSeg.DELETEALL;
+
+      CLEAR(lrImcpt);
+      lrImcpt.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrImcpt.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrImcpt.DELETEALL;
+
+      CLEAR(lrGarDia);
+      lrGarDia.SETRANGE(Delegacion          , prCon.Delegacion);
+      lrGarDia.SETRANGE("N§ Contrato compra", prCon."N§ Contrato compra");
+      lrGarDia.DELETEALL;
+
+      CLEAR(lrPreDia);
+      lrPreDia.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrPreDia.SETRANGE("Tipo Contrato", lrPreDia."Tipo Contrato"::Compra);
+      lrPreDia.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrPreDia.DELETEALL;
+
+      CLEAR(lrDocs);
+      lrDocs.SETCURRENTKEY(Delegacion,"Contrato Compra");
+      lrDocs.SETRANGE(Delegacion          , prCon.Delegacion);
+      lrDocs.SETRANGE("Contrato Compra"   , prCon."N§ Contrato compra");
+      lrDocs.DELETEALL;
+    END;
+
+    PROCEDURE VaciarContratoVentHotel@2(prCon@1100253001 : Record 7009727);
+    VAR
+      lrCom@1100253000 : Record 7009784;
+      lrPre@1100253015 : Record 7009732;
+      lrGar@1100253013 : Record 7009729;
+      lrCupo@1100253011 : Record 7009730;
+      lrCupoDia@1100253010 : Record 7009758;
+      lrHandling@1100253009 : Record 7009733;
+      lrHis@1100253008 : Record 7009764;
+      lrHisP@1100253007 : Record 7009765;
+      lrConHab@1100253006 : Record 7009731;
+      lrPreDia@1100253002 : Record 7009783;
+      lrPrev@1100253005 : Record 7009747;
+    BEGIN
+      // VaciarContratoVentHotel
+
+      CLEAR(lrPre);
+      lrPre.SETRANGE(Delegacion   , prCon.Delegacion);
+      lrPre.SETRANGE("N§ Contrato", prCon."N§ Contrato venta");
+      lrPre.DELETEALL;
+
+      CLEAR(lrCupo);
+      lrCupo.SETRANGE(Delegacion         , prCon.Delegacion);
+      lrCupo.SETRANGE("N§ Contrato venta", prCon."N§ Contrato venta");
+      lrCupo.DELETEALL;
+
+      CLEAR(lrCupoDia);
+      lrCupoDia.SETRANGE(Delegacion      , prCon.Delegacion);
+      lrCupoDia.SETRANGE("Contrato venta", prCon."N§ Contrato venta");
+      lrCupoDia.DELETEALL;
+
+      CLEAR(lrGar);
+      lrGar.SETRANGE(Delegacion   , prCon.Delegacion);
+      lrGar.SETRANGE("N§ Contrato", prCon."N§ Contrato venta");
+      lrGar.DELETEALL;
+
+      CLEAR(lrHandling);
+      lrHandling.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHandling.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrHandling.SETRANGE("Tipo contrato", lrHandling."Tipo contrato"::Venta);
+      lrHandling.DELETEALL;
+
+      CLEAR(lrConHab);
+      lrConHab.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrConHab.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrConHab.SETRANGE("Tipo contrato", lrConHab."Tipo contrato"::Venta);
+      lrConHab.DELETEALL;
+
+      CLEAR(lrPrev);
+      lrPrev.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrPrev.SETRANGE("Tipo Contrato", lrPrev."Tipo Contrato"::Venta);
+      lrPrev.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrPrev.DELETEALL;
+
+      CLEAR(lrCom);
+      lrCom.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrCom.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrCom.SETRANGE("Tipo Contrato", lrCom."Tipo Contrato"::"V Hotel");
+      lrCom.DELETEALL;
+
+      CLEAR(lrHis);
+      lrHis.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHis.SETRANGE(Tipo           , lrHis.Tipo::"Hotel Venta");
+      lrHis.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrHis.DELETEALL;
+
+      CLEAR(lrHisP);
+      lrHisP.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHisP.SETRANGE(Tipo           , lrHisP.Tipo::"Hotel Venta");
+      lrHisP.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrHisP.DELETEALL;
+
+      CLEAR(lrPreDia);
+      lrPreDia.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrPreDia.SETRANGE("Tipo Contrato", lrPreDia."Tipo Contrato"::Venta);
+      lrPreDia.SETRANGE("N§ Contrato"  , prCon."N§ Contrato venta");
+      lrPreDia.DELETEALL;
+    END;
+
+    PROCEDURE VaciarContratoComTrans@1100253024(prCon@1100253000 : Record 7009787);
+    VAR
+      lrCom@1100253001 : Record 7009784;
+      lrPre@1100253002 : Record 7009789;
+      lrZona@1100253003 : Record 7009791;
+      lrHis@1100253005 : Record 7009764;
+      lrHistPre@1100253004 : Record 7009803;
+    BEGIN
+      // VaciarContratoComTrans
+
+      lrPre.RESET;
+      lrPre.SETRANGE(Delegacion   , prCon.Delegacion);
+      lrPre.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      lrPre.DELETEALL;
+
+      lrZona.RESET;
+      lrZona.SETRANGE(Contrato       , prCon."N§ Contrato compra");
+      lrZona.SETRANGE("Tipo contrato", lrZona."Tipo contrato"::Compra);
+      lrZona.DELETEALL;
+
+      lrCom.RESET;
+      lrCom.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrCom.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrCom.SETRANGE("Tipo Contrato", lrCom."Tipo Contrato"::"C Transfer");
+      lrCom.DELETEALL;
+
+      CLEAR(lrHis);
+      lrHis.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHis.SETRANGE(Tipo           , lrHis.Tipo::"Transfer Compra");
+      lrHis.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrHis.DELETEALL;
+
+      CLEAR(lrHistPre);
+      lrHistPre.SETRANGE(Delegacion    , prCon.Delegacion);
+      lrHistPre.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+      lrHistPre.SETRANGE(Tipo          , lrHistPre.Tipo::Compra);
+      lrHistPre.DELETEALL;
+    END;
+
+    PROCEDURE VaciarContratoVentTrans@1100253030(prCon@1100253003 : Record 7009788);
+    VAR
+      lrCom@1100253000 : Record 7009784;
+      lrPRe@1100253001 : Record 7009790;
+      lrZona@1100253002 : Record 7009791;
+      lrHis@1100253004 : Record 7009764;
+      lrHistPre@1100253005 : Record 7009803;
+    BEGIN
+      // VaciarContratoVentTrans
+
+      CLEAR(lrPRe);
+      lrPRe.SETRANGE(Delegacion   , prCon.Delegacion);
+      lrPRe.SETRANGE("N§ Contrato", prCon."N§ Contrato Venta");
+      lrPRe.DELETEALL;
+
+      CLEAR(lrZona);
+      lrZona.SETRANGE(Contrato       , prCon."N§ Contrato Venta");
+      lrZona.SETRANGE("Tipo contrato", lrZona."Tipo contrato"::Venta);
+      lrZona.DELETEALL;
+
+      CLEAR(lrCom);
+      lrCom.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrCom.SETRANGE("N§ Contrato"  , prCon."N§ Contrato Venta");
+      lrCom.SETRANGE("Tipo Contrato", lrCom."Tipo Contrato"::"V Transfer");
+      lrCom.DELETEALL;
+
+      CLEAR(lrHis);
+      lrHis.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHis.SETRANGE(Tipo           , lrHis.Tipo::"Transfer Venta");
+      lrHis.SETRANGE("N§ Contrato"  , prCon."N§ Contrato Venta");
+      lrHis.DELETEALL;
+
+      CLEAR(lrHistPre);
+      lrHistPre.SETRANGE(Delegacion    , prCon.Delegacion);
+      lrHistPre.SETRANGE("N§ Contrato" , prCon."N§ Contrato Venta");
+      lrHistPre.SETRANGE(Tipo          , lrHistPre.Tipo::Venta);
+      lrHistPre.DELETEALL;
+    END;
+
+    PROCEDURE VaciarContratoCompExc@1100253004(prCon@1100253000 : Record 7010142);
+    VAR
+      lrPrecio_Exc@1100253006 : Record 7010151;
+      lrPrecio_Trans@1100253005 : Record 7010150;
+      lrPrecio_GuiaOf@1100253004 : Record 7010154;
+      lrPrecio_GuiaVta@1100253003 : Record 7010152;
+      lrPrecio_TO@1100253002 : Record 7010153;
+      lrZona@1100253001 : Record 7010149;
+      lrHis@1100253007 : Record 7009764;
+      lrPrest@1100253008 : Record 7010141;
+      lrHistPreTransp@1100253009 : Record 7010155;
+      lrHistPreExc@1100253010 : Record 7010156;
+      lrHistPreGV@1100253011 : Record 7010157;
+      lrHistPreTO@1100253012 : Record 7010158;
+      lrHistPreGO@1100253013 : Record 7010159;
+    BEGIN
+      // VaciarContratoCompExc
+
+      CASE prCon."Tipo Contrato" OF
+        prCon."Tipo Contrato"::Excursion: BEGIN
+          CLEAR(lrPrecio_Exc);
+          lrPrecio_Exc.SETRANGE(Delegacion   , prCon.Delegacion);
+          lrPrecio_Exc.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+          lrPrecio_Exc.DELETEALL;
+
+          CLEAR(lrHistPreExc);
+          lrHistPreExc.SETRANGE(Tipo, lrHistPreExc.Tipo::Compra);
+          lrHistPreExc.SETRANGE(Delegacion    , prCon.Delegacion);
+          lrHistPreExc.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+          lrHistPreExc.DELETEALL;
+
+        END;
+        prCon."Tipo Contrato"::Transportista: BEGIN
+          CLEAR(lrZona);
+          lrZona.SETRANGE("Codigo Contrato", prCon."N§ Contrato compra");
+          lrZona.DELETEALL;
+          CLEAR(lrPrecio_Trans);
+          lrPrecio_Trans.SETRANGE(Delegacion   , prCon.Delegacion);
+          lrPrecio_Trans.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+          lrPrecio_Trans.DELETEALL;
+
+          CLEAR(lrHistPreTransp);
+          lrHistPreTransp.SETRANGE(Tipo, lrHistPreTransp.Tipo::Compra);
+          lrHistPreTransp.SETRANGE(Delegacion    , prCon.Delegacion);
+          lrHistPreTransp.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+          lrHistPreTransp.DELETEALL;
+        END;
+        prCon."Tipo Contrato"::"Guia Oficial": BEGIN
+          CLEAR(lrPrecio_GuiaOf);
+          lrPrecio_GuiaOf.SETRANGE(Delegacion   , prCon.Delegacion);
+          lrPrecio_GuiaOf.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+          lrPrecio_GuiaOf.DELETEALL;
+
+          CLEAR(lrHistPreGO);
+          lrHistPreGO.SETRANGE(Tipo, lrHistPreGO.Tipo::Compra);
+          lrHistPreGO.SETRANGE(Delegacion    , prCon.Delegacion);
+          lrHistPreGO.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+          lrHistPreGO.DELETEALL;
+        END;
+        prCon."Tipo Contrato"::"Guia Venta": BEGIN
+          CLEAR(lrPrecio_GuiaVta);
+          lrPrecio_GuiaVta.SETRANGE(Delegacion   , prCon.Delegacion);
+          lrPrecio_GuiaVta.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+          lrPrecio_GuiaVta.DELETEALL;
+
+          CLEAR(lrHistPreGV);
+          lrHistPreGV.SETRANGE(Tipo, lrHistPreGV.Tipo::Compra);
+          lrHistPreGV.SETRANGE(Delegacion    , prCon.Delegacion);
+          lrHistPreGV.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+          lrHistPreGV.DELETEALL;
+        END;
+        prCon."Tipo Contrato"::TourOperador: BEGIN
+          CLEAR(lrPrecio_TO);
+          lrPrecio_TO.SETRANGE(Delegacion   , prCon.Delegacion);
+          lrPrecio_TO.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+          lrPrecio_TO.DELETEALL;
+
+          CLEAR(lrHistPreTO);
+          lrHistPreTO.SETRANGE(Tipo, lrHistPreTO.Tipo::Compra);
+          lrHistPreTO.SETRANGE(Delegacion    , prCon.Delegacion);
+          lrHistPreTO.SETRANGE("N§ Contrato" , prCon."N§ Contrato compra");
+          lrHistPreTO.DELETEALL;
+        END;
+      END;
+
+      CLEAR(lrHis);
+      lrHis.SETRANGE(Delegacion     , prCon.Delegacion);
+      lrHis.SETRANGE(Tipo           , lrHis.Tipo::"Excursion Compra");
+      lrHis.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      lrHis.DELETEALL;
+
+      CLEAR(lrPrest);
+      lrPrest.SETRANGE("Tipo Contrato", prCon."Tipo Contrato");
+      lrPrest.SETRANGE(Contrato       , prCon."N§ Contrato compra");
+      lrPrest.DELETEALL;
+    END;
+
+    PROCEDURE VaciaTarifaExcursion@1100253005(prTarExc@1100253000 : Record 7010147);
+    VAR
+      lrPrecioVta@1100253002 : Record 7010148;
+      lrZona@1100253001 : Record 7010149;
+      lrHistP@1100253003 : Record 7010160;
+      lrHistC@1100253004 : Record 7009764;
+    BEGIN
+      // VaciaTarifaExcursion
+
+      lrPrecioVta.RESET;
+      lrPrecioVta.SETRANGE(Delegacion        , prTarExc.Delegacion);
+      lrPrecioVta.SETRANGE(Excursion         , prTarExc.Excursion);
+      lrPrecioVta.SETRANGE("Temporada Tarifa", prTarExc.Temporada);
+      lrPrecioVta.SETRANGE("ID Tarifa"       , prTarExc."ID Tarifa"); //+$001
+      lrPrecioVta.DELETEALL;
+
+      CLEAR(lrZona);
+      lrZona.SETRANGE(Excursion        , prTarExc.Excursion);
+      lrZona.SETRANGE("Codigo Contrato", prTarExc.Temporada);
+      lrZona.SETRANGE("Tipo Contrato"  , lrZona."Tipo Contrato"::Venta);
+      lrZona.SETRANGE("ID Tarifa"      , prTarExc."ID Tarifa"); //+$001
+      lrZona.DELETEALL;
+
+      CLEAR(lrHistP);
+      lrHistP.SETRANGE(Producto   , prTarExc.Excursion);
+      lrHistP.SETRANGE(Temporada  , prTarExc.Temporada);
+      lrHistP.SETRANGE("ID Tarifa", prTarExc."ID Tarifa"); //+$001
+      lrHistP.DELETEALL;
+
+      CLEAR(lrHistC);
+      lrHistC.SETRANGE(Delegacion   , prTarExc.Excursion);
+      lrHistC.SETRANGE("N§ Contrato", prTarExc.Temporada);
+      lrHistC.SETRANGE(Tipo         , lrHistC.Tipo::"Excursion Venta");
+      lrHistC.DELETEALL;
+    END;
+
+    PROCEDURE VaciaTarifaComCircuito@1100253020(prTarCCirc@1100253000 : Record 7010196);
+    VAR
+      lrPreTra@1100253005 : Record 7010197;
+      lrPreRes@1100253004 : Record 7010198;
+      lrPreGui@1100253003 : Record 7010199;
+      lrPreExt@1100253002 : Record 7010200;
+      lrPreVis@1100253001 : Record 7010201;
+      lrHist@1100253006 : Record 7010208;
+    BEGIN
+      // VaciaTarifaComCircuito
+
+      CASE prTarCCirc."Tipo Tarifa" OF
+        prTarCCirc."Tipo Tarifa"::Transportista: BEGIN
+          CLEAR(lrPreTra);
+          lrPreTra.SETRANGE(Delegacion , prTarCCirc.Delegacion);
+          lrPreTra.SETRANGE("N§ Tarifa", prTarCCirc."N§ Tarifa");
+          lrPreTra.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::Restaurante: BEGIN
+          CLEAR(lrPreRes);
+          lrPreRes.SETRANGE(Delegacion , prTarCCirc.Delegacion);
+          lrPreRes.SETRANGE("N§ Tarifa", prTarCCirc."N§ Tarifa");
+          lrPreRes.DELETEALL;
+
+          CLEAR(lrPreExt);
+          lrPreExt.SETRANGE(Delegacion  , prTarCCirc.Delegacion);
+          lrPreExt.SETRANGE("Tipo Extra", lrPreExt."Tipo Extra"::Restaurante);
+          lrPreExt.SETRANGE("N§ Tarifa" , prTarCCirc."N§ Tarifa");
+          lrPreExt.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::"Guia Acompa¤ante": BEGIN
+          CLEAR(lrPreGui);
+          lrPreGui.SETRANGE(Delegacion , prTarCCirc.Delegacion);
+          lrPreGui.SETRANGE("N§ Tarifa", prTarCCirc."N§ Tarifa");
+          lrPreGui.SETRANGE("Tipo Guia", lrPreGui."Tipo Guia"::Acompa¤ante);
+          lrPreGui.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::"Guia Oficial": BEGIN
+          CLEAR(lrPreGui);
+          lrPreGui.SETRANGE(Delegacion , prTarCCirc.Delegacion);
+          lrPreGui.SETRANGE("N§ Tarifa", prTarCCirc."N§ Tarifa");
+          lrPreGui.SETRANGE("Tipo Guia", lrPreGui."Tipo Guia"::Oficial);
+          lrPreGui.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::Extra: BEGIN
+          CLEAR(lrPreExt);
+          lrPreExt.SETRANGE(Delegacion  , prTarCCirc.Delegacion);
+          lrPreExt.SETRANGE("Tipo Extra", lrPreExt."Tipo Extra"::Varios);
+          lrPreExt.SETRANGE("N§ Tarifa" , prTarCCirc."N§ Tarifa");
+          lrPreExt.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::Visita: BEGIN
+          CLEAR(lrPreVis);
+          lrPreVis.SETRANGE(Delegacion , prTarCCirc.Delegacion);
+          lrPreVis.SETRANGE("N§ Tarifa", prTarCCirc."N§ Tarifa");
+          lrPreVis.DELETEALL;
+
+          CLEAR(lrPreExt);
+          lrPreExt.SETRANGE(Delegacion  , prTarCCirc.Delegacion);
+          lrPreExt.SETRANGE("Tipo Extra", lrPreExt."Tipo Extra"::Visita);
+          lrPreExt.SETRANGE("N§ Tarifa" , prTarCCirc."N§ Tarifa");
+          lrPreExt.DELETEALL;
+        END;
+        prTarCCirc."Tipo Tarifa"::Hotel: BEGIN
+          CLEAR(lrPreExt);
+          lrPreExt.SETRANGE(Delegacion  , prTarCCirc.Delegacion);
+          lrPreExt.SETRANGE("Tipo Extra", lrPreExt."Tipo Extra"::Hotel);
+          lrPreExt.SETRANGE("N§ Tarifa" , prTarCCirc."N§ Tarifa");
+          lrPreExt.DELETEALL;
+        END;
+      END;
+
+      CLEAR(lrHist);
+      lrHist.SETRANGE(Delegacion   , prTarCCirc.Delegacion);
+      lrHist.SETRANGE(Tipo         , prTarCCirc."Tipo Tarifa");
+      lrHist.SETRANGE("N§ Contrato", prTarCCirc."N§ Tarifa");
+      lrHist.DELETEALL;
+    END;
+
+    PROCEDURE VaciaTarifaVentaCircuito@1100253037(prTarVCirc@1100253000 : Record 7010191);
+    VAR
+      lrExtVta@1100253004 : Record 7010212;
+      lrPreVta@1100253003 : Record 7010192;
+      lrHot@1100253002 : Record 7010193;
+      lrConvHab@1100253001 : Record 7009731;
+      lrHist@1100253005 : Record 7010208;
+      lrHistPrec@1100217000 : Record 7010209;
+    BEGIN
+      // VaciaTarifaVentaCircuito
+
+      CLEAR(lrPreVta);
+      lrPreVta.SETRANGE(Delegacion , prTarVCirc.Delegacion);
+      lrPreVta.SETRANGE("N§ Tarifa", prTarVCirc."N§ Tarifa");
+      lrPreVta.DELETEALL;
+
+      CLEAR(lrHot);
+      lrHot.SETRANGE(Delegacion, prTarVCirc.Delegacion);
+      lrHot.SETRANGE("N§ Tarifa", prTarVCirc."N§ Tarifa");
+      lrHot.DELETEALL;
+
+      CLEAR(lrConvHab);
+      lrConvHab.SETRANGE(Delegacion, prTarVCirc.Delegacion);
+      lrConvHab.SETRANGE("N§ Contrato", prTarVCirc."N§ Tarifa");
+      lrConvHab.SETRANGE("Tipo contrato", lrConvHab."Tipo contrato"::Circuito);
+      lrConvHab.DELETEALL;
+
+      CLEAR(lrExtVta);
+      lrExtVta.SETRANGE(Delegacion , prTarVCirc.Delegacion);
+      lrExtVta.SETRANGE("N§ Tarifa", prTarVCirc."N§ Tarifa");
+      lrExtVta.DELETEALL;
+
+      CLEAR(lrHist);
+      lrHist.SETRANGE(Delegacion   , prTarVCirc.Delegacion);
+      lrHist.SETRANGE(Tipo         , lrHist.Tipo::Venta);
+      lrHist.SETRANGE("N§ Contrato", prTarVCirc."N§ Tarifa");
+      lrHist.DELETEALL;
+
+      CLEAR(lrHist);
+      lrHist.SETRANGE(Delegacion   , prTarVCirc.Delegacion);
+      lrHist.SETRANGE(Tipo         , lrHist.Tipo::Venta);
+      lrHist.SETRANGE("N§ Contrato", prTarVCirc."N§ Tarifa");
+      lrHist.DELETEALL;
+
+      CLEAR(lrHistPrec);
+      lrHistPrec.SETRANGE(Delegacion   , prTarVCirc.Delegacion);
+      lrHistPrec.SETRANGE("N§ Contrato", prTarVCirc."N§ Tarifa");
+      lrHistPrec.DELETEALL;
+    END;
+
+    PROCEDURE RecuentoRegistros@1100217000(pwFecha@1100217001 : Date) : Integer;
+    VAR
+      lwTotal@1100217000 : Integer;
+      lrServ@1100217002 : Record 7010163;
+      lrPeriodo@1100217003 : Record 7009742;
+      lrAgrup@1100217004 : Record 7009796;
+      lrCircuito@1100217005 : Record 7010187;
+      lrCabInt@1100217006 : Record 7010076;
+      lrCabMWR@1100217008 : Record 7009992;
+      lrCCHotel@1100217025 : Record 7009723;
+      lrCVHotel@1100217024 : Record 7009727;
+      lrCCTRans@1100217023 : Record 7009787;
+      lrCVTRans@1100217022 : Record 7009788;
+      lrCCEXC@1100217021 : Record 7010142;
+      lrPrecVexc@1100217020 : Record 7010148;
+      lrTarExc@1100217019 : Record 7010147;
+      lrTarCCircuito@1100217018 : Record 7010196;
+      lrTarVCircuito@1100217017 : Record 7010191;
+      lrCabImpCC@1100217016 : Record 7009888;
+      lrLinImpCC@1100217015 : Record 7009889;
+      lrTarConcept@1100217014 : Record 7009898;
+      lrTarAdTransfer@1100217011 : Record 7009901;
+      lrHoja@1100217009 : Record 7010168;
+      lrCabCot@1100217010 : Record 7009871;
+      lwFiltroFecha@1100217007 : Text[30];
+    BEGIN
+      // RecuentoRegistros
+      // Devuelve el total a borrar (solo de las tablas base)
+
+      wVent.UPDATE(2, Text0004);
+
+      lwFiltroFecha := STRSUBSTNO('<=%1', pwFecha);
+
+      CLEAR(lwTotal);
+
+      CLEAR(lrPeriodo);
+      lrPeriodo.SETCURRENTKEY("Fecha entrada");
+      lrPeriodo.SETFILTER("Fecha entrada", '<=%1', pwFecha);
+      lwTotal += lrPeriodo.COUNT;
+
+      CLEAR(lrServ);
+      lrServ.SETCURRENTKEY(Estado,Fecha,"Zona Excursion",Excursion);
+      lrServ.SETFILTER(Fecha, '<=%1', pwFecha);
+      lwTotal += lrServ.COUNT;
+
+      CLEAR(lrHoja);
+      lrHoja.SETFILTER(Fecha, '<=%1', pwFecha);
+      lwTotal += lrHoja.COUNT;
+
+      CLEAR(lrAgrup);
+      lrAgrup.SETCURRENTKEY(Fecha,Zona,"N§ Agrupacion");
+      lrAgrup.SETFILTER(Fecha, '<=%1', pwFecha);
+      lwTotal += lrAgrup.COUNT;
+
+      CLEAR(lrCircuito);
+      lrCircuito.SETCURRENTKEY(Circuito,Fecha);
+      lrCircuito.SETFILTER(Fecha,'<=%1', pwFecha);
+      lwTotal += lrCircuito.COUNT;
+
+      // Varios
+      lwTotal += 27;
+
+      CLEAR(lrCabInt);
+      lrCabInt.SETFILTER("Fecha Entrada", lwFiltroFecha);
+      lwTotal += lrCabInt.COUNT;
+
+      CLEAR(lrCabMWR);
+      lrCabMWR.SETFILTER("Fecha Desde", lwFiltroFecha);
+      lwTotal += lrCabMWR.COUNT;
+
+      CLEAR(lrCCHotel);
+      lrCCHotel.SETCURRENTKEY(Hotel,TourOperador,"Fecha inicio contrato");
+      lrCCHotel.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCHotel.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      lwTotal += lrCCHotel.COUNT;
+
+      CLEAR(lrCVHotel);
+      lrCVHotel.SETCURRENTKEY(Hotel,TourOperador,"Fecha inicio contrato");
+      lrCVHotel.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCVHotel.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      lwTotal += lrCVHotel.COUNT;
+
+      CLEAR(lrCCTRans);
+      lrCCTRans.SETCURRENTKEY(Proveedor,"Fecha inicio contrato","Fecha final contrato");
+      lrCCTRans.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCTRans.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      lwTotal += lrCCTRans.COUNT;
+
+      CLEAR(lrCVTRans);
+      lrCVTRans.SETCURRENTKEY(TourOperador,"Fecha inicio contrato","Fecha final contrato");
+      lrCVTRans.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCVTRans.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      lwTotal += lrCVTRans.COUNT;
+
+      CLEAR(lrCCEXC);
+      lrCCEXC.SETCURRENTKEY("Fecha inicio contrato","Fecha final contrato");
+      lrCCEXC.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      lrCCEXC.SETFILTER("Fecha final contrato" , '<=%1', pwFecha);
+      lwTotal += lrCCEXC.COUNT;
+
+      CLEAR(lrTarExc);
+      lrTarExc.SETCURRENTKEY(Excursion,"Fecha Inicio","Fecha Final");
+      lrTarExc.SETFILTER("Fecha Inicio", '<=%1', pwFecha);
+      lrTarExc.SETFILTER("Fecha Final" , '<=%1', pwFecha);
+      lwTotal += lrTarExc.COUNT;
+
+      CLEAR(lrTarCCircuito);
+      lrTarCCircuito.SETCURRENTKEY(Proveedor,"Fecha inicio","Fecha final");
+      lrTarCCircuito.SETFILTER("Fecha inicio", '<=%1', pwFecha);
+      lrTarCCircuito.SETFILTER("Fecha final" , '<=%1', pwFecha);
+      lwTotal += lrTarCCircuito.COUNT;
+
+      CLEAR(lrTarVCircuito);
+      lrTarVCircuito.SETCURRENTKEY("Fecha inicio","Fecha final");
+      lrTarVCircuito.SETFILTER("Fecha inicio", '<=%1', pwFecha);
+      lrTarVCircuito.SETFILTER("Fecha final" , '<=%1', pwFecha);
+      lwTotal += lrTarVCircuito.COUNT;
+
+      CLEAR(lrCabImpCC);
+      lrCabImpCC.SETFILTER("Fecha fin contrato", '<=%1', pwFecha);
+      lwTotal += lrCabImpCC.COUNT;
+
+      CLEAR(lrTarConcept);
+      lrTarConcept.SETCURRENTKEY(Touroperador,"Fecha Inicial","Fecha Final");
+      lrTarConcept.SETFILTER("Fecha Final", '<=%1', pwFecha);
+      lwTotal += lrTarConcept.COUNT;
+
+      CLEAR(lrTarAdTransfer);
+      lrTarAdTransfer.SETFILTER("Fecha Final" , '<=%1', pwFecha);
+      lwTotal += lrTarAdTransfer.COUNT;
+
+      CLEAR(lrCabCot);
+      lrCabCot.SETFILTER("Fecha entrada", lwFiltroFecha);
+      lwTotal += lrCabCot.COUNT;
+
+      EXIT(lwTotal);
+    END;
+
+    PROCEDURE NewCab@1100217005(pwTexto@1100217000 : Text[250];pwTotalCab@1100217001 : Integer);
+    BEGIN
+      // NewCab
+
+      wVent.UPDATE(2, pwTexto);
+      wTotal[2] := pwTotalCab;
+      wCont[2]  := 0;
+
+      wHoraIniCab := CURRENTDATETIME;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 28122012 Cambio en la clave primaria de las tarifas de venta de excursiones
+
+      $002 AJS 30082013 Elimino la tabla Elemento Transportar excursion porque ya no se utiliza
+
+      $003 AJS 26022014 Elimino la tabla Bloqueo porque ya no se utiliza
+
+      $004 AJS 26022014 Elimino la tabla Emision EBB porque ya no se utiliza
+
+      $005 AJS 26022014 Elimino la tabla Interfase vuelos ITS porque es obsoleta
+    }
+    END.
+  }
+}

@@ -1,0 +1,211 @@
+OBJECT Codeunit 370 Bank Acc. Reconciliation Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009,NAVW15.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=273;
+    Permissions=TableData 271=rm,
+                TableData 272=rm,
+                TableData 275=ri,
+                TableData 276=ri;
+    OnRun=BEGIN
+            Window.OPEN(
+              '#1#################################\\' +
+              Text000);
+            Window.UPDATE(1,STRSUBSTNO('%1 %2',"Bank Account No.","Statement No."));
+
+            TESTFIELD("Statement Date");
+
+            BankAccReconLine2.RESET;
+            BankAccReconLine2.SETRANGE("Bank Account No.","Bank Account No.");
+            BankAccReconLine2.SETRANGE("Statement No.","Statement No.");
+            BankAccReconLine2.CALCSUMS("Statement Amount",Difference);
+
+            IF BankAccReconLine2."Statement Amount" <> "Statement Ending Balance" - "Balance Last Statement" THEN
+              ERROR(Text001,FIELDCAPTION("Statement Ending Balance"));
+
+            // $001 AJS, Escaneo documentos
+
+            cFunVar.AlmacenaExtractoBancario(Rec);
+
+            // Run through lines
+            BankAccReconLine.RESET;
+            BankAccReconLine.SETRANGE("Bank Account No.","Bank Account No.");
+            BankAccReconLine.SETRANGE("Statement No.","Statement No.");
+            TotalAmount := 0;
+            TotalAppliedAmount := 0;
+            TotalDiff := 0;
+            Lines := 0;
+            IF BankAccReconLine.FIND('-') THEN BEGIN
+              BankAccLedgEntry.LOCKTABLE;
+              CheckLedgEntry.LOCKTABLE;
+              REPEAT
+                Lines := Lines + 1;
+                Window.UPDATE(2,Lines);
+                AppliedAmount := 0;
+                // Adjust entries
+                // Test amount and settled amount
+                CASE BankAccReconLine.Type OF
+                  BankAccReconLine.Type::"Bank Account Ledger Entry":
+                    BEGIN
+                      BankAccLedgEntry.RESET;
+                      BankAccLedgEntry.SETCURRENTKEY("Bank Account No.",Open);
+                      BankAccLedgEntry.SETRANGE("Bank Account No.",BankAccReconLine."Bank Account No.");
+                      BankAccLedgEntry.SETRANGE(Open,TRUE);
+                      BankAccLedgEntry.SETRANGE(
+                        "Statement Status",BankAccLedgEntry."Statement Status"::"Bank Acc. Entry Applied");
+                      BankAccLedgEntry.SETRANGE("Statement No.",BankAccReconLine."Statement No.");
+                      BankAccLedgEntry.SETRANGE("Statement Line No.",BankAccReconLine."Statement Line No.");
+                      IF BankAccLedgEntry.FIND('-') THEN
+                        REPEAT
+                          AppliedAmount := AppliedAmount + BankAccLedgEntry."Remaining Amount";
+                          BankAccLedgEntry."Remaining Amount" := 0;
+                          BankAccLedgEntry.Open := FALSE;
+                          BankAccLedgEntry."Statement Status" := BankAccLedgEntry."Statement Status"::Closed;
+                          BankAccLedgEntry.MODIFY;
+
+                          CheckLedgEntry.RESET;
+                          CheckLedgEntry.SETCURRENTKEY("Bank Account Ledger Entry No.");
+                          CheckLedgEntry.SETRANGE(
+                            "Bank Account Ledger Entry No.",BankAccLedgEntry."Entry No.");
+                          CheckLedgEntry.SETRANGE(CheckLedgEntry.Open,TRUE);
+                          IF CheckLedgEntry.FIND('-') THEN
+                            REPEAT
+                              CheckLedgEntry.TESTFIELD(Open,TRUE);
+                              CheckLedgEntry.TESTFIELD(
+                                "Statement Status",
+                                CheckLedgEntry."Statement Status"::"Bank Acc. Entry Applied");
+                              CheckLedgEntry.TESTFIELD("Statement No.",'');
+                              CheckLedgEntry.TESTFIELD("Statement Line No.",0);
+                              CheckLedgEntry.Open := FALSE;
+                              CheckLedgEntry."Statement Status" := CheckLedgEntry."Statement Status"::Closed;
+                              CheckLedgEntry.MODIFY;
+                            UNTIL CheckLedgEntry.NEXT = 0;
+                        UNTIL BankAccLedgEntry.NEXT = 0;
+                    END;
+                  BankAccReconLine.Type::"Check Ledger Entry":
+                    BEGIN
+                      CheckLedgEntry.RESET;
+                      CheckLedgEntry.SETCURRENTKEY("Bank Account No.",Open);
+                      CheckLedgEntry.SETRANGE("Bank Account No.",BankAccReconLine."Bank Account No.");
+                      CheckLedgEntry.SETRANGE(Open,TRUE);
+                      CheckLedgEntry.SETRANGE(
+                        "Statement Status",CheckLedgEntry."Statement Status"::"Check Entry Applied");
+                      CheckLedgEntry.SETRANGE("Statement No.",BankAccReconLine."Statement No.");
+                      CheckLedgEntry.SETRANGE("Statement Line No.",BankAccReconLine."Statement Line No.");
+                      IF CheckLedgEntry.FIND('-') THEN
+                        REPEAT
+                          AppliedAmount := AppliedAmount - CheckLedgEntry.Amount;
+                          CheckLedgEntry.Open := FALSE;
+                          CheckLedgEntry."Statement Status" := CheckLedgEntry."Statement Status"::Closed;
+                          CheckLedgEntry.MODIFY;
+
+                          BankAccLedgEntry.GET(CheckLedgEntry."Bank Account Ledger Entry No.");
+                          BankAccLedgEntry.TESTFIELD(Open,TRUE);
+                          BankAccLedgEntry.TESTFIELD(
+                          "Statement Status",BankAccLedgEntry."Statement Status"::"Check Entry Applied");
+                          BankAccLedgEntry.TESTFIELD("Statement No.",'');
+                          BankAccLedgEntry.TESTFIELD("Statement Line No.",0);
+                          BankAccLedgEntry."Remaining Amount" :=
+                            BankAccLedgEntry."Remaining Amount" + CheckLedgEntry.Amount;
+                          IF BankAccLedgEntry."Remaining Amount" = 0 THEN BEGIN
+                            BankAccLedgEntry.Open := FALSE;
+                            BankAccLedgEntry."Statement Status" := BankAccLedgEntry."Statement Status"::Closed;
+                            BankAccLedgEntry."Statement No." := "Statement No.";
+                            BankAccLedgEntry."Statement Line No." := CheckLedgEntry."Statement Line No.";
+                          END ELSE BEGIN
+                            CheckLedgEntry2.RESET;
+                            CheckLedgEntry2.SETCURRENTKEY("Bank Account Ledger Entry No.");
+                            CheckLedgEntry2.SETRANGE("Bank Account Ledger Entry No.",BankAccLedgEntry."Entry No.");
+                            CheckLedgEntry2.SETRANGE(Open,TRUE);
+                            CheckLedgEntry2.SETRANGE("Check Type",CheckLedgEntry2."Check Type"::"Partial Check");
+                            CheckLedgEntry2.SETRANGE(
+                              "Statement Status",CheckLedgEntry2."Statement Status"::"Check Entry Applied");
+                            IF NOT CheckLedgEntry2.FIND('-') THEN
+                              BankAccLedgEntry."Statement Status" := BankAccLedgEntry."Statement Status"::Open;
+                          END;
+                          BankAccLedgEntry.MODIFY;
+                        UNTIL CheckLedgEntry.NEXT = 0;
+                    END;
+                  BankAccReconLine.Type::Difference:
+                    TotalDiff := TotalDiff + BankAccReconLine."Statement Amount";
+                END;
+                BankAccReconLine.TESTFIELD("Applied Amount",AppliedAmount);
+                TotalAmount := TotalAmount + BankAccReconLine."Statement Amount";
+                TotalAppliedAmount := TotalAppliedAmount + AppliedAmount;
+              UNTIL BankAccReconLine.NEXT = 0;
+            END ELSE
+              ERROR(Text002);
+
+            // Test amount
+            IF TotalAmount <> TotalAppliedAmount + TotalDiff THEN
+              ERROR(
+                Text003,
+                TotalAppliedAmount + TotalDiff,TotalAmount);
+
+            IF BankAccReconLine2.Difference <> TotalDiff THEN
+              ERROR(Text004,BankAccReconLine2.Difference,TotalDiff);
+
+            // Get bank
+            BankAcc.LOCKTABLE;
+            BankAcc.GET("Bank Account No.");
+            BankAcc.TESTFIELD(BankAcc.Blocked,FALSE);
+            BankAcc."Last Statement No." := "Statement No.";
+            BankAcc."Balance Last Statement" := "Balance Last Statement" + TotalAmount;
+            BankAcc.MODIFY;
+
+            // Copy and delete statement
+            BankAccReconLine.RESET;
+            BankAccReconLine.SETRANGE("Bank Account No.","Bank Account No.");
+            BankAccReconLine.SETRANGE("Statement No.","Statement No.");
+            IF BankAccReconLine.FIND('-') THEN
+              REPEAT
+                BankAccStmtLine.TRANSFERFIELDS(BankAccReconLine);
+                BankAccStmtLine.INSERT;
+              UNTIL BankAccReconLine.NEXT = 0;
+            BankAccReconLine.DELETEALL;
+
+            BankAccStmt.TRANSFERFIELDS(Rec);
+            BankAccStmt.INSERT;
+            DELETE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Posting lines              #2######;ESP=Registrando l¡neas         #2######';
+      Text001@1001 : TextConst 'ENU=%1 is not equal to Total Balance;ESP=%1 no corresponde con el saldo total.';
+      Text002@1002 : TextConst 'ENU=Nothing to post;ESP=No hay nada para registrar';
+      Text003@1003 : TextConst 'ENU="The application is not correct. The total amount applied is %1; it should be %2.";ESP="No es correcta la liquidaci¢n. El importe total liquidado es %1; deber¡a ser %2."';
+      Text004@1004 : TextConst 'ENU=The total difference is %1. It must be %2.;ESP=La diferencia total es %1, deber¡a ser %2.';
+      BankAccReconLine@1005 : Record 274;
+      BankAccReconLine2@1006 : Record 274;
+      BankAcc@1007 : Record 270;
+      BankAccLedgEntry@1008 : Record 271;
+      CheckLedgEntry@1009 : Record 272;
+      CheckLedgEntry2@1010 : Record 272;
+      BankAccStmt@1011 : Record 275;
+      BankAccStmtLine@1012 : Record 276;
+      cFunVar@1103355000 : Codeunit 7009720;
+      AppliedAmount@1013 : Decimal;
+      TotalAmount@1014 : Decimal;
+      TotalAppliedAmount@1015 : Decimal;
+      TotalDiff@1016 : Decimal;
+      Lines@1017 : Integer;
+      Window@1018 : Dialog;
+
+    BEGIN
+    {
+      $001 AJS 16.04.2007, Escaneo documentos
+         Control de que el extracto tenga asignado un documento escaneado
+    }
+    END.
+  }
+}

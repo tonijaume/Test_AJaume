@@ -1,0 +1,377 @@
+OBJECT Codeunit 7009726 Funciones Dividir Periodo
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/04/14;
+    Time=20:32:28;
+    Modified=Yes;
+    Version List=AIC2009,CNT-OC-14035;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355006 : TextConst 'ENU=Unable to divide a term which is not generated;ESP=No se puede dividir un per¡odo que no est  generado';
+      Text001@1103355007 : TextConst 'ENU=Must indicate a date of division;ESP=Debe indicar una fecha de divisi¢n';
+      Text002@1103355008 : TextConst 'ENU=Division date must be lower than the check-out date;ESP=La fecha de divisi¢n tiene que ser inferior a la fecha de salida';
+      Text003@1103355009 : TextConst 'ENU=Division date must be higher than the check-in date;ESP=La fecha de divisi¢n tiene que ser superior a la fecha de entrada';
+      Text004@1103355010 : TextConst 'ENU=Must specify a new hotel;ESP=Debe especificar una hotel nuevo';
+      Text005@1103355011 : TextConst 'ENU=Must specify a type of room;ESP=Debe especificar un tipo de habitaci¢n';
+      Text006@1103355012 : TextConst 'ENU=Must specify a type of board;ESP=Debe especificar un tipo de r‚gimen';
+      Text007@1103355013 : TextConst 'ENU=Must indicate a number of rooms;ESP=Debe indicar un n£mero de habitaciones';
+      Text008@1103355014 : TextConst 'ENU=previous booked hotel %1;ESP=hotel reservado anterior %1.';
+      Text009@1103355015 : TextConst 'ENU=Term header does not exist.;ESP=No existe la cabecera del periodo.';
+      rCondiciones@1103355000 : Record 7010085;
+      rConC@1103355001 : Record 7009723;
+      NuevoPeriodo@1103355002 : Integer;
+      cCon@1103355003 : Codeunit 7009701;
+      aux_contrato_compra@1103355004 : Code[10];
+      aux_contrato_venta@1103355005 : Code[10];
+
+    PROCEDURE Dividir_Periodo@1(VAR rPeriodo@1103355000 : Record 7009742);
+    VAR
+      rRsvHot@1103355001 : Record 7009743;
+    BEGIN
+      IF NOT rPeriodo.Generada THEN
+        ERROR(Text000);
+
+      IF NOT rCondiciones.GET(USERID) THEN
+      BEGIN
+        rCondiciones.INIT;
+        rCondiciones.Usuario := USERID;
+        rCondiciones.INSERT;
+      END;
+
+      rCondiciones.INIT;
+      rCondiciones.Correcto               := FALSE;
+      rCondiciones."Fecha Division"       := 0D;
+      rCondiciones.Hotel                  := '';
+      rCondiciones.Habitacion             := rPeriodo.Habitacion;
+      rCondiciones."Habitacion actual"    := rPeriodo.Habitacion;
+      rCondiciones.Regimen                := rPeriodo.Regimen;
+      rCondiciones."N§ Habitaciones"      := rPeriodo."N§ Habitaciones";
+      rCondiciones."Precio Manual Venta"  := 0;
+      rCondiciones."Precio Manual Compra" := 0;
+      rCondiciones."Tipo precio"          := rPeriodo."Tipo precio manual";
+      rCondiciones."Calculo Unico"        := FALSE;
+      rCondiciones."Cambia booking"       := TRUE;
+
+      rRsvHot.RESET;
+      rRsvHot.SETCURRENTKEY(Delegacion,
+                            "N§ Interno",
+                            "N§ Periodo");
+      rRsvHot.SETRANGE(Delegacion  , rPeriodo.Delegacion);
+      rRsvHot.SETRANGE("N§ Interno", rPeriodo."N§ Interno");
+      rRsvHot.SETRANGE("N§ Periodo", rPeriodo."N§ Periodo");
+      rRsvHot.SETRANGE(Responsable , TRUE);
+      IF rRsvHot.FINDFIRST THEN
+      BEGIN
+        rCondiciones.Delegacion    := rRsvHot.Delegacion;
+        rCondiciones."N§ Reserva"  := rRsvHot."N§ Reserva";
+        rCondiciones."Fecha hasta" := rRsvHot."Fecha salida";
+      END;
+
+      rCondiciones.MODIFY;
+      COMMIT;
+
+      rCondiciones.SETRANGE(Usuario, USERID);
+      FORM.RUNMODAL(7010115, rCondiciones);
+      IF rCondiciones.GET(USERID()) THEN
+        IF NOT rCondiciones.Correcto THEN
+          EXIT;
+
+      IF rCondiciones."Fecha Division" = 0D THEN
+        ERROR(Text001);
+      IF rCondiciones."Fecha Division" >= rPeriodo."Fecha salida" THEN
+        ERROR(Text002);
+      IF rCondiciones."Fecha Division" <= rPeriodo."Fecha entrada" THEN
+        ERROR(Text003);
+      IF rCondiciones.Hotel = '' THEN
+        ERROR(Text004);
+      IF rCondiciones.Habitacion = '' THEN
+        ERROR(Text005);
+      IF rCondiciones.Regimen = '' THEN
+        ERROR(Text006);
+      IF rCondiciones."N§ Habitaciones" = 0 THEN
+        ERROR(Text007);
+
+      Modificar_Periodos(rPeriodo);
+      Modificar_Rsv_Hotel(rPeriodo);
+      Modificar_Rsv_Transfer(rPeriodo);
+      Grabar_Comentario(rPeriodo);
+    END;
+
+    PROCEDURE Modificar_Periodos@3(VAR rPeriodo@1103355000 : Record 7009742);
+    VAR
+      rPeriodo2@1103355001 : Record 7009742;
+    BEGIN
+      //. Modificar_Periodos
+      //. Buscamos cupos para habitaci¢n y r‚gimen antes de insertar registro
+
+      aux_contrato_compra := comprobar_contrato_compra(rPeriodo);
+      IF (rConC.GET(rPeriodo.Delegacion, aux_contrato_compra)) AND
+         (rConC."Tipo de Contrato" = rConC."Tipo de Contrato"::"En nombre propio") THEN
+        aux_contrato_venta := comprobar_contrato_venta(rPeriodo);
+      Buscar_Cupo(rPeriodo);
+
+      //. Creamos un nuevo per¡odo, borrando los datos del vuelo de entrada
+
+      rPeriodo2.INIT;
+      rPeriodo2.TRANSFERFIELDS(rPeriodo);
+      NuevoPeriodo := Buscar_Siguiente_Periodo(rPeriodo);
+      rPeriodo2."N§ Periodo" := NuevoPeriodo;
+      rPeriodo2."Fecha creacion" := CURRENTDATETIME; //+$001
+      rPeriodo2.LOCKTABLE;
+      rPeriodo2.INSERT;
+      rPeriodo2.LOCKTABLE;
+      rPeriodo2."Compa¤ia entrada"     := '';
+      rPeriodo2."Vuelo entrada"        := '';
+      rPeriodo2."Fecha entrada"        := rCondiciones."Fecha Division";
+      rPeriodo2."Terminal entrada"     := '';
+      rPeriodo2."Hora entrada"         := 0T;
+      rPeriodo2."IATA origen entrada"  := '';
+      rPeriodo2."IATA destino entrada" := '';
+      rPeriodo2.Habitacion             := '';
+      rPeriodo2.Regimen                := '';
+      rPeriodo2."Hotel reservado"      := rPeriodo."Hotel reservado";
+
+      IF rPeriodo2."Hotel Booking" <> rCondiciones.Hotel THEN
+        rPeriodo2.VALIDATE("Hotel Booking", rCondiciones.Hotel);
+      IF rPeriodo2."Hotel venta" <> rCondiciones.Hotel THEN
+        rPeriodo2.VALIDATE("Hotel venta", rCondiciones.Hotel);
+      IF rPeriodo2."Hotel origen precios" <> rCondiciones.Hotel THEN
+        rPeriodo2.VALIDATE("Hotel origen precios", rCondiciones.Hotel);
+      IF rPeriodo2."Hotel Factura" <> rCondiciones.Hotel THEN
+        rPeriodo2.VALIDATE("Hotel Factura", rCondiciones.Hotel);
+      IF NOT rCondiciones."Cambiar Hotel Origen Precios" THEN
+      BEGIN
+        rPeriodo2.VALIDATE("Hotel origen precios", rPeriodo."Hotel origen precios");
+        rPeriodo2.VALIDATE("Hotel venta", rPeriodo."Hotel venta");
+      END;
+
+      rPeriodo2.VALIDATE(Habitacion           , rCondiciones.Habitacion);
+      rPeriodo2.VALIDATE(Regimen              , rCondiciones.Regimen);
+      rPeriodo2.VALIDATE("N§ Habitaciones"    , rCondiciones."N§ Habitaciones");
+      rPeriodo2.VALIDATE("Precio manual venta", rCondiciones."Precio Manual Venta");
+      rPeriodo2.VALIDATE("Precio manual"      , rCondiciones."Precio Manual Compra");
+      rPeriodo2.VALIDATE("Tipo precio manual" , rCondiciones."Tipo precio");
+
+      rPeriodo2."Calculo anulado" := rCondiciones."Calculo Unico";
+      rPeriodo2."Calculo unico"   := rCondiciones."Calculo Unico";
+      rPeriodo2.Generada          := FALSE;
+      rPeriodo2.Estancia          := rPeriodo2."Fecha salida" - rPeriodo2."Fecha entrada";
+      rPeriodo2.MODIFY;
+
+      //. Borramos los datos del vuelo salida del per¡odo modificado
+
+      rPeriodo."Compa¤ia salida"     := '';
+      rPeriodo."Vuelo salida"        := '';
+      rPeriodo."Fecha salida"        := rCondiciones."Fecha Division";
+      rPeriodo."Terminal salida"     := '';
+      rPeriodo."Hora salida"         := 0T;
+      rPeriodo."IATA origen salida"  := '';
+      rPeriodo."IATA destino salida" := '';
+      rPeriodo.Estancia              := rCondiciones."Fecha Division" - rPeriodo."Fecha entrada";
+      rPeriodo.VALIDATE("Calculo anulado", FALSE);
+      rPeriodo.VALIDATE("Calculo unico", rCondiciones."Calculo Unico");
+      rPeriodo.CheckEnvioConfirmacion(FALSE); //+$002
+      rPeriodo.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE Buscar_Siguiente_Periodo@6(VAR rPeriodo@1103355000 : Record 7009742) : Integer;
+    VAR
+      rPeriodo2@1103355001 : Record 7009742;
+    BEGIN
+      // Buscar_Siguiente_Periodo
+
+      rPeriodo2.SETRANGE(Delegacion  , rPeriodo.Delegacion);
+      rPeriodo2.SETRANGE("N§ Interno", rPeriodo."N§ Interno");
+      IF rPeriodo2.FINDLAST THEN
+        EXIT(rPeriodo2."N§ Periodo" + 10000);
+    END;
+
+    PROCEDURE Modificar_Rsv_Hotel@2(VAR rPeriodo@1103355000 : Record 7009742);
+    VAR
+      rRsvHotel@1103355001 : Record 7009743;
+    BEGIN
+      // Modificar_Rsv_Hotel
+
+      rRsvHotel.RESET;
+      rRsvHotel.SETCURRENTKEY(Delegacion,
+                              "N§ Interno",
+                              "N§ Periodo",
+                              "N§ Reserva");
+      rRsvHotel.SETRANGE(Delegacion  , rPeriodo.Delegacion);
+      rRsvHotel.SETRANGE("N§ Interno", rPeriodo."N§ Interno");
+      rRsvHotel.SETRANGE("N§ Periodo", rPeriodo."N§ Periodo");
+      IF rRsvHotel.FINDSET THEN
+        REPEAT
+          rRsvHotel."Compa¤ia salida"      := '';
+          rRsvHotel."Vuelo salida"         := '';
+          rRsvHotel."Fecha salida"         := rCondiciones."Fecha Division";
+          rRsvHotel."Terminal salida"      := '';
+          rRsvHotel."Hora salida"          := 0T;
+          rRsvHotel."IATA origen salida"   := '';
+          rRsvHotel."IATA destino salida"  := '';
+          rRsvHotel.Estancia               := rCondiciones."Fecha Division" - rRsvHotel."Fecha entrada";
+          rRsvHotel."Modificacion critica" := TRUE;
+          rRsvHotel.MODIFY(TRUE);
+        UNTIL rRsvHotel.NEXT = 0;
+    END;
+
+    PROCEDURE Modificar_Rsv_Transfer@5(VAR rPeriodo@1103355000 : Record 7009742);
+    VAR
+      rRsvTransfer@1103355001 : Record 7009744;
+    BEGIN
+      // Modificar_Rsv_Transfer
+
+      rRsvTransfer.SETCURRENTKEY(Delegacion,
+                                 "N§ Interno",
+                                 "N§ Periodo");
+      rRsvTransfer.SETRANGE(Delegacion  , rPeriodo.Delegacion);
+      rRsvTransfer.SETRANGE("N§ Interno", rPeriodo."N§ Interno");
+      rRsvTransfer.SETRANGE("N§ Periodo", rPeriodo."N§ Periodo");
+      IF rRsvTransfer.FINDSET THEN
+        REPEAT
+          rRsvTransfer."Compa¤ia salida"     := '';
+          rRsvTransfer."Vuelo salida"        := '';
+          rRsvTransfer."Fecha salida"        := rCondiciones."Fecha Division";
+          rRsvTransfer."Terminal salida"     := '';
+          rRsvTransfer."Hora salida"         := 0T;
+          rRsvTransfer."IATA origen salida"  := '';
+          rRsvTransfer."IATA destino salida" := '';
+          rRsvTransfer."Hotel salida"        := '';
+          rRsvTransfer."Zona salida"         := '';
+          rRsvTransfer.Salida                := 0;
+          rRsvTransfer.MODIFY;
+        UNTIL rRsvTransfer.NEXT = 0;
+    END;
+
+    PROCEDURE Grabar_Comentario@17(VAR rPeriodo@1103355000 : Record 7009742);
+    VAR
+      rComentario@1103355001 : Record 7009762;
+    BEGIN
+      // Grabar_comentario
+
+      rComentario.INIT;
+      rComentario.Delegacion     := rPeriodo.Delegacion;
+      rComentario."N§ Interno"   := rPeriodo."N§ Interno";
+      rComentario."N§ Periodo"   := NuevoPeriodo;
+      rComentario."N§ Orden"     := 10000;
+      rComentario."Tipo Reserva" := rComentario."Tipo Reserva"::Periodo;
+      rComentario.Fecha          := rCondiciones."Fecha Division";
+      rComentario.Texto          := STRSUBSTNO(Text008, rPeriodo."Hotel reservado");
+      rComentario.INSERT;
+    END;
+
+    PROCEDURE Buscar_Cupo@4(rPer@1103355000 : Record 7009742);
+    VAR
+      rCab@1103355001 : Record 7009741;
+      w_hotel@1103355002 : Code[20];
+    BEGIN
+      // Busca_cupo
+
+      IF NOT rCab.GET(rPer.Delegacion, rPer."N§ Interno") THEN
+        ERROR(Text009);
+
+      // Cupo Compra
+
+      IF rCondiciones."Cambiar Hotel Origen Precios" THEN
+        w_hotel := rCondiciones.Hotel
+      ELSE
+        w_hotel := rPer."Hotel origen precios";
+
+      cCon.busca_cupo_habitacion(rCab.TourOperador,
+                                 rPer.Delegacion,
+                                 rCondiciones.Hotel,
+                                 rCondiciones."Fecha Division",
+                                 rPer."Fecha salida",
+                                 rCondiciones.Habitacion,
+                                 w_hotel,
+                                 TRUE);
+      // Regimen Compra
+
+      cCon.busca_precio_regimen(rCab.TourOperador,
+                                rPer.Delegacion,
+                                w_hotel,
+                                rCondiciones."Fecha Division",
+                                rPer."Fecha salida",
+                                rCondiciones.Regimen);
+      // Cupo Venta
+
+      IF rCondiciones."Cambiar Hotel Origen Precios" THEN
+        w_hotel := rCondiciones.Hotel
+      ELSE
+        w_hotel := rPer."Hotel venta";
+
+      IF aux_contrato_venta <> '' THEN
+      BEGIN
+        cCon.busca_cupo_habitacion_venta(rCab."TourOperador Venta",
+                                   rPer.Delegacion,
+                                   rCondiciones.Hotel,
+                                   rCondiciones."Fecha Division",
+                                   rPer."Fecha salida",
+                                   rCondiciones.Habitacion,
+                                   w_hotel,
+                                   TRUE);
+
+        cCon.busca_precio_regimen_venta(rCab."TourOperador Venta",
+                                        rPer.Delegacion,
+                                        w_hotel,
+                                        rCondiciones."Fecha Division",
+                                        rPer."Fecha salida",
+                                        rCondiciones.Regimen);
+      END;
+    END;
+
+    PROCEDURE comprobar_contrato_compra@7(rPer@1103355000 : Record 7009742) : Code[10];
+    VAR
+      rPaquete@1103355001 : Record 7009752;
+      rCab@1103355002 : Record 7009741;
+    BEGIN
+      IF NOT rCab.GET(rPer.Delegacion, rPer."N§ Interno") THEN
+        ERROR(Text009);
+
+      IF NOT rPaquete.FINDFIRST THEN
+        EXIT;
+
+      EXIT(cCon.busca_contrato_compra(rCab.TourOperador,
+                                      rCab.Delegacion,
+                                      rPer."Hotel origen precios",
+                                      rCondiciones."Fecha Division",
+                                      rPer."Fecha salida"));
+    END;
+
+    PROCEDURE comprobar_contrato_venta@14(rPer@1103355000 : Record 7009742) : Code[10];
+    VAR
+      rCab@1103355001 : Record 7009741;
+    BEGIN
+      IF NOT rCab.GET(rPer.Delegacion, rPer."N§ Interno") THEN
+        ERROR(Text009);
+
+      EXIT(cCon.busca_contrato_venta(rCab."TourOperador Venta",
+                                            rCab.Delegacion,
+                                            rPer."Hotel venta",
+                                            rCondiciones."Fecha Division",
+                                            rPer."Fecha salida"));
+    END;
+
+    BEGIN
+    {
+      ## AJF 29/06/09
+
+        .- (09/00319) Cambio variable local de w_hotel de funci¢n Busca_cupo de code10 a code20.
+
+      $001 AJS 15022014 Rellenar la fecha de creacion del periodo
+
+      $002 AJS 17032014 CNT-OC-14035, Al crear los nuevos periodos comprobamos si hay que marcar la reserva para enviarla al Touroperador
+    }
+    END.
+  }
+}

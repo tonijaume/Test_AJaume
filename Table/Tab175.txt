@@ -1,0 +1,180 @@
+OBJECT Table 175 Standard Vendor Purchase Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Standard Vendor Purchase Code;
+               ESP=C¢digo compras proveedor est ndar];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   CaptionML=[ENU=Vendor No.;
+                                                              ESP=N§ proveedor];
+                                                   NotBlank=Yes }
+    { 2   ;   ;Code                ;Code10        ;TableRelation="Standard Purchase Code";
+                                                   OnValidate=VAR
+                                                                StdPurchCode@1000 : Record 173;
+                                                              BEGIN
+                                                                IF Code = '' THEN
+                                                                  EXIT;
+                                                                StdPurchCode.GET(Code);
+                                                                Description := StdPurchCode.Description;
+                                                              END;
+
+                                                   CaptionML=[ENU=Code;
+                                                              ESP=C¢digo];
+                                                   NotBlank=Yes }
+    { 3   ;   ;Description         ;Text50        ;CaptionML=[ENU=Description;
+                                                              ESP=Descripci¢n] }
+  }
+  KEYS
+  {
+    {    ;Vendor No.,Code                         ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    PROCEDURE InsertPurchLines@1(PurchHeader@1000 : Record 38);
+    VAR
+      Currency@1008 : Record 4;
+      PurchLine@1002 : Record 39;
+      StdVendPurchCode@1001 : Record 175;
+      StdPurchLine@1003 : Record 174;
+      StdPurchCode@1006 : Record 173;
+      DimDoc@1009 : Record 357;
+      Factor@1007 : Integer;
+    BEGIN
+      PurchHeader.TESTFIELD("No.");
+      PurchHeader.TESTFIELD("Buy-from Vendor No.");
+      IF PurchHeader."Currency Code" = '' THEN
+        Currency.InitRoundingPrecision
+      ELSE
+        Currency.GET(PurchHeader."Currency Code");
+
+      StdVendPurchCode.FILTERGROUP := 2;
+      StdVendPurchCode.SETRANGE("Vendor No.",PurchHeader."Buy-from Vendor No.");
+      StdVendPurchCode.FILTERGROUP := 0;
+      IF FORM.RUNMODAL(FORM::"Standard Vendor Purchase Codes",StdVendPurchCode) = ACTION::LookupOK THEN BEGIN
+        StdVendPurchCode.TESTFIELD(Code);
+        StdVendPurchCode.TESTFIELD("Vendor No.",PurchHeader."Buy-from Vendor No.");
+        StdPurchCode.GET(StdVendPurchCode.Code);
+        StdPurchCode.TESTFIELD("Currency Code",PurchHeader."Currency Code");
+        StdPurchLine.SETRANGE("Standard Purchase Code",StdVendPurchCode.Code);
+        PurchLine."Document Type" := PurchHeader."Document Type";
+        PurchLine."Document No." := PurchHeader."No.";
+        PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+        PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+        IF PurchHeader."Prices Including VAT" THEN
+          Factor := 1
+        ELSE
+          Factor := 0;
+        DimDoc.LOCKTABLE;
+        PurchLine.LOCKTABLE;
+        StdPurchLine.LOCKTABLE;
+        IF StdPurchLine.FIND('-') THEN
+          REPEAT
+            PurchLine.INIT;
+            PurchLine."Line No." := 0;
+            PurchLine.VALIDATE(Type,StdPurchLine.Type);
+            IF StdPurchLine.Type = StdPurchLine.Type::" " THEN BEGIN
+              PurchLine.VALIDATE("No.",StdPurchLine."No.");
+              PurchLine.Description := StdPurchLine.Description
+            END ELSE BEGIN
+              IF NOT StdPurchLine.EmptyLine THEN BEGIN
+                StdPurchLine.TESTFIELD("No.");
+                PurchLine.VALIDATE("No.",StdPurchLine."No.");
+                IF StdPurchLine."Variant Code" <> '' THEN
+                  PurchLine.VALIDATE("Variant Code",StdPurchLine."Variant Code");
+                PurchLine.VALIDATE(Quantity,StdPurchLine.Quantity);
+                IF StdPurchLine."Unit of Measure Code" <> '' THEN
+                  PurchLine.VALIDATE("Unit of Measure Code",StdPurchLine."Unit of Measure Code");
+                PurchLine.Description := StdPurchLine.Description;
+                IF (StdPurchLine.Type = StdPurchLine.Type::"G/L Account") OR
+                   (StdPurchLine.Type = StdPurchLine.Type::"Charge (Item)")
+                THEN
+                  PurchLine.VALIDATE(
+                    "Direct Unit Cost",
+                     ROUND(StdPurchLine."Amount Excl. VAT" *
+                     (PurchLine."VAT %" / 100 * Factor + 1),Currency."Unit-Amount Rounding Precision"));
+              END;
+            END;
+            IF StdPurchLine.InsertLine THEN BEGIN
+              PurchLine."Line No." := GetNextLineNo(PurchLine);
+              PurchLine.INSERT(TRUE);
+              UpDateDim(PurchLine,StdPurchLine);
+              InsertExtendedText(PurchLine);
+            END;
+          UNTIL StdPurchLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpDateDim@2(PurchLine@1000 : Record 39;StdPurchLine@1001 : Record 174);
+    VAR
+      DimDoc@1002 : Record 357;
+      DimDoc2@1003 : Record 357;
+    BEGIN
+      DimDoc."Table ID" := DATABASE::"Purchase Line";
+      DimDoc."Document Type" := PurchLine."Document Type";
+      DimDoc."Document No." := PurchLine."Document No.";
+      DimDoc."Line No." := PurchLine."Line No.";
+      DimDoc2."Table ID" := DATABASE::"Standard Purchase Line";
+      DimDoc2."Document Type" := DimDoc2."Document Type"::" ";
+      DimDoc2."Document No." := StdPurchLine."Standard Purchase Code";
+      DimDoc2."Line No." := StdPurchLine."Line No.";
+
+      DimDoc.SETRANGE("Table ID",DATABASE::"Purchase Line");
+      DimDoc.SETRANGE("Document Type",PurchLine."Document Type");
+      DimDoc.SETRANGE("Document No.",PurchLine."Document No.");
+      DimDoc.SETRANGE("Line No.",PurchLine."Line No.");
+      DimDoc2.SETRANGE("Table ID",DATABASE::"Standard Purchase Line");
+      DimDoc2.SETRANGE("Document Type",DimDoc2."Document Type"::" ");
+      DimDoc2.SETRANGE("Document No.",StdPurchLine."Standard Purchase Code");
+      DimDoc2.SETRANGE("Line No.",StdPurchLine."Line No.");
+
+      IF DimDoc2.FIND('-') THEN
+        REPEAT
+          DimDoc."Dimension Code" := DimDoc2."Dimension Code";
+          DimDoc."Dimension Value Code" := '';
+          IF DimDoc.FIND THEN BEGIN
+            IF DimDoc."Dimension Value Code" <> DimDoc2."Dimension Value Code" THEN BEGIN
+              DimDoc."Dimension Value Code" := DimDoc2."Dimension Value Code";
+              DimDoc.MODIFY(TRUE);
+            END;
+          END ELSE BEGIN
+            DimDoc."Dimension Value Code" := DimDoc2."Dimension Value Code";
+            DimDoc.INSERT(TRUE);
+          END;
+        UNTIL DimDoc2.NEXT = 0;
+    END;
+
+    PROCEDURE InsertExtendedText@3(PurchLine@1000 : Record 39);
+    VAR
+      TransferExtendedText@1001 : Codeunit 378;
+    BEGIN
+      IF TransferExtendedText.PurchCheckIfAnyExtText(PurchLine,FALSE) THEN
+        TransferExtendedText.InsertPurchExtText(PurchLine);
+    END;
+
+    PROCEDURE GetNextLineNo@4(PurchLine@1001 : Record 39) : Integer;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",PurchLine."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchLine."Document No.");
+      IF PurchLine.FIND('+') THEN
+        EXIT(PurchLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,2222 @@
+OBJECT Report 5055250 Fill Liquidity Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/11/11;
+    Time=12:00:00;
+    Version List=LIQEM6.00.01,NAVES6.00,RegF269949;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 355=rimd,
+                TableData 5055257=rimd;
+    CaptionML=[ENU=Fill Liquidity Journal;
+               ESP=Completar Diario liquidez];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF LiquidityNo = '' THEN
+                    ERROR(Text1140000)
+                  ELSE
+                    IF NOT SelectionLiquidity.GET(LiquidityNo) THEN
+                      ERROR(Text1140001);
+
+                  LiqSetup.GET;
+
+                  IF NOT ConsiderLiqFunds AND
+                     NOT ConsiderCustLedgEntry AND
+                     NOT ConsiderVendLedgEntry AND
+                     NOT ConsiderPurchOrders AND
+                     NOT ConsiderSalesOrders AND
+                     NOT ConsiderBudgFixedAssets AND
+                     NOT ConsiderSaleFixedAssets AND
+                     NOT ConsiderNeutrExpenses AND
+                     NOT ConsiderNeutrRevenues AND
+                     NOT ConsiderGLBudget AND
+                     NOT ConsiderServiceOrders THEN
+                     ERROR(Text1140002,LiquidityNo);
+
+                  LiqPreTemplate.GET(LiqPreLine."Journal Template Name");
+                  LiqPreName.GET(LiqPreLine."Journal Template Name",LiqPreLine."Journal Batch Name");
+                  LiqLine.RESET;
+                  LiqLine.SETRANGE("Journal Template Name",LiqPreLine."Journal Template Name");
+                  LiqLine.SETRANGE("Journal Batch Name",LiqPreLine."Journal Batch Name");
+                  LiqLine.DELETEALL(TRUE);
+
+                  Window.OPEN(
+                    Text1140003 +
+                    Text1140033 +
+                    Text1140034);
+
+                  Window.UPDATE(1,Liquidity."No.");
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table5055250;
+        DataItemTableView=SORTING(No.)
+                          ORDER(Ascending);
+        OnPreDataItem=BEGIN
+                        Liquidity.SETRANGE("No.",LiquidityNo);
+                        LineNo := 0;
+                        LiqLine.INIT;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Window.UPDATE(1,"No.");
+
+                           NoLedgEntriesInserted := FALSE;
+
+                           LiqLedgEntry.RESET;
+                           LiqLedgEntry.SETCURRENTKEY("Liquidity No.");
+                           LiqLedgEntry.SETRANGE("Liquidity No.",Liquidity."No.");
+                           IF LiqLedgEntry.FIND('-') THEN
+                             IF NOT CONFIRM(Text1140035 + Text1140036 + Text1140037) THEN
+                               CurrReport.SKIP;
+                             REPEAT
+                               LedgEntryDim.SETRANGE("Table ID",DATABASE::"Liquidity Ledger Entry");
+                               LedgEntryDim.SETRANGE("Entry No.",LiqLedgEntry."Entry No.");
+                               LedgEntryDim.DELETEALL;
+                             UNTIL LiqLedgEntry.NEXT = 0;
+                           LiqLedgEntry.DELETEALL;
+
+                           GLSetup.GET;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table15;
+        DataItemTableView=SORTING(No.)
+                          ORDER(Ascending)
+                          WHERE(Liquid Account No.=FILTER(<>''));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderLiqFunds THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "G/L Account".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           LiqAcc.GET("G/L Account"."Liquid Account No.");
+                           IF LiqAcc."G/L Integration" IN [LiqAcc."G/L Integration"::Balance,LiqAcc."G/L Integration"::Both] THEN BEGIN
+                             "G/L Account".CALCFIELDS(Balance);
+
+                             Window.UPDATE(2,Text1140004);
+                             Window.UPDATE(3,"G/L Account"."No.");
+
+                             WITH LiqLine2 DO BEGIN
+                               INIT;
+                               "Source Type" := "Source Type"::"Liquid Funds";
+                               "Account Type" := "Account Type"::"G/L Account";
+                               "Account Number" := "G/L Account"."No.";
+                               "Document No." := "G/L Account"."No.";
+                               "Liquidity Account No." := "G/L Account"."Liquid Account No.";
+                               Description := COPYSTR(STRSUBSTNO(Text1140013,"G/L Account".Name,FORMAT("G/L Account".Balance)),
+                                                      1,MAXSTRLEN(LiqLine2.Description));
+                               "Due Date" := WORKDATE;
+                               "Liquidity Date" := WORKDATE;
+                               Amount := "G/L Account".Balance;
+                               "Amount (Currency)" := "G/L Account".Balance;
+                               "Shortcut Dimension 2 Code" := "G/L Account"."Global Dimension 2 Code";
+                               "Shortcut Dimension 1 Code" := "G/L Account"."Global Dimension 1 Code";
+                               "Gen. Bus. Posting Group" := "G/L Account"."Gen. Bus. Posting Group";
+                               "Gen. Prod. Posting Group" := "G/L Account"."Gen. Prod. Posting Group";
+                               IF Amount <> 0 THEN BEGIN
+                                 InsertLiqLine();
+                                 // Transfer Dimensions
+                                 DefaultDim.RESET;
+                                 DefaultDim.SETRANGE("Table ID",DATABASE::"G/L Account");
+                                 DefaultDim.SETRANGE("No.","G/L Account"."No.");
+                                 LiqDimMgt.MoveDefaultDimToJnlLineDim(DefaultDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                    LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table21;
+        DataItemTableView=SORTING(Open,Due Date)
+                          ORDER(Ascending)
+                          WHERE(Open=CONST(Yes),
+                                Remaining Amount=FILTER(<>0));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderCustLedgEntry THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "Cust. Ledger Entry".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Window.UPDATE(2,Text1140005);
+                           Window.UPDATE(3,"Cust. Ledger Entry"."Entry No.");
+
+                           IF "Cust. Ledger Entry"."Customer No." <> '' THEN
+                             Customer.GET("Cust. Ledger Entry"."Customer No.")
+                           ELSE
+                             Customer.INIT;
+
+                           CASE "Cust. Ledger Entry"."Document Type" OF
+                             "Cust. Ledger Entry"."Document Type"::Payment:
+                               EntryType := Text1140014;
+                             "Cust. Ledger Entry"."Document Type"::Invoice:
+                               EntryType := Text1140015;
+                             "Cust. Ledger Entry"."Document Type"::"Credit Memo":
+                               EntryType := Text1140016;
+                             "Cust. Ledger Entry"."Document Type"::"Finance Charge Memo":
+                               EntryType := Text1140017;
+                             "Cust. Ledger Entry"."Document Type"::Reminder:
+                               EntryType := Text1140018;
+                             "Cust. Ledger Entry"."Document Type"::Bill:
+                               EntryType := Text1140100;
+                             ELSE
+                               EntryType := '';
+                           END;
+
+                           "Cust. Ledger Entry".CALCFIELDS("Remaining Amt. (LCY)","Remaining Amount");
+
+                           WITH LiqLine2 DO BEGIN
+                             INIT;
+                             "Source Type" := LiqLine2."Source Type"::Customer;
+                             "Shortcut Dimension 2 Code" := "Cust. Ledger Entry"."Global Dimension 2 Code";
+                             "Shortcut Dimension 1 Code" := "Cust. Ledger Entry"."Global Dimension 1 Code";
+                             "Gen. Bus. Posting Group" := Customer."Gen. Bus. Posting Group";
+                             "Reason Code" := "Cust. Ledger Entry"."Reason Code";
+                             "Source Code" := "Cust. Ledger Entry"."Source Code";
+                             "Account Type" := LiqLine2."Account Type"::Customer;
+                             "Account Number" := "Cust. Ledger Entry"."Customer No.";
+                             "Liquidity Account No." := LiqSetup."Receivables Liq. Account No.";
+                             Description := COPYSTR(STRSUBSTNO(Text1140019,EntryType,
+                                                                FORMAT("Cust. Ledger Entry"."Due Date"),
+                                                                Customer.Name),1,MAXSTRLEN(LiqLine2.Description));
+                             "Due Date" := "Cust. Ledger Entry"."Due Date";
+                             "Liquidity Date" := "Cust. Ledger Entry"."Due Date";
+                             IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                               IF Customer."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                 PaymentTerms.GET(Customer."Liq. Payment Terms Code");
+                                 "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation","Document Date");
+                               END;
+                             END;
+                             "Document No." := "Cust. Ledger Entry"."Document No.";
+
+                             IF Liquidity."Consider Discount" THEN BEGIN
+                               IF "Cust. Ledger Entry"."Currency Code" <> '' THEN
+                                 "Payment Discount" := ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Cust. Ledger Entry"."Posting Date",
+                                                      "Cust. Ledger Entry"."Currency Code","Cust. Ledger Entry"."Original Pmt. Disc. Possible",
+                                                      "Cust. Ledger Entry"."Original Currency Factor"))
+                               ELSE
+                                 "Payment Discount" := "Cust. Ledger Entry"."Original Pmt. Disc. Possible";
+                               Amount := "Cust. Ledger Entry"."Remaining Amt. (LCY)" - "Payment Discount";
+                               "Amount (Currency)" := "Cust. Ledger Entry"."Remaining Amount" - "Cust. Ledger Entry"."Original Pmt. Disc. Possible";
+                               IF "Cust. Ledger Entry"."Pmt. Discount Date" <> 0D THEN BEGIN
+                                 "Liquidity Date" := "Cust. Ledger Entry"."Pmt. Discount Date";
+                               IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                 "Liquidity Date" := "Cust. Ledger Entry"."Pmt. Disc. Tolerance Date";
+                               END;
+                               IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                                 IF Customer."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                   PaymentTerms.GET(Customer."Liq. Payment Terms Code");
+                                   "Liquidity Date" := CALCDATE(PaymentTerms."Discount Date Calculation","Document Date");
+                                   IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                     "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                   IF "Cust. Ledger Entry"."Currency Code" <> '' THEN BEGIN
+                                     "Payment Discount" := ROUND("Cust. Ledger Entry"."Remaining Amount" * PaymentTerms."Discount %" / 100);
+                                     "Amount (Currency)" := "Cust. Ledger Entry"."Remaining Amount" - "Payment Discount";
+                                   END ELSE BEGIN
+                                     "Payment Discount" := ROUND("Cust. Ledger Entry"."Remaining Amt. (LCY)" * PaymentTerms."Discount %" / 100);
+                                     Amount := "Cust. Ledger Entry"."Remaining Amt. (LCY)" - "Payment Discount";
+                                   END;
+                                 END;
+                               END;
+                             END ELSE BEGIN
+                               Amount := "Cust. Ledger Entry"."Remaining Amt. (LCY)";
+                               "Amount (Currency)" := "Cust. Ledger Entry"."Remaining Amount";
+                             END;
+
+                             IF Liquidity."Consider Pmt. Tol. Amount" THEN BEGIN
+                               Amount := Amount - "Cust. Ledger Entry"."Max. Payment Tolerance";
+                               "Amount (Currency)" := "Amount (Currency)" -
+                                                      ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Cust. Ledger Entry"."Posting Date",
+                                                      "Cust. Ledger Entry"."Currency Code","Cust. Ledger Entry"."Max. Payment Tolerance",
+                                                      "Cust. Ledger Entry"."Original Currency Factor"))
+                             END;
+
+                             "Currency Code" := "Cust. Ledger Entry"."Currency Code";
+                             IF Amount <> 0 THEN BEGIN
+                               InsertLiqLine();
+                               // Transfer Dimensions
+                               LedgEntryDim.RESET;
+                               LedgEntryDim.SETRANGE("Table ID",DATABASE::"Cust. Ledger Entry");
+                               LedgEntryDim.SETRANGE("Entry No.","Cust. Ledger Entry"."Entry No.");
+                               DimMgt.MoveLedgEntryDimToJnlLineDim(LedgEntryDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                            LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table25;
+        DataItemTableView=SORTING(Open,Due Date)
+                          ORDER(Ascending)
+                          WHERE(Open=CONST(Yes),
+                                Remaining Amount=FILTER(<>0));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderVendLedgEntry THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "Vendor Ledger Entry".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Window.UPDATE(2,Text1140006);
+                           Window.UPDATE(3,"Vendor Ledger Entry"."Entry No.");
+
+                           IF "Vendor Ledger Entry"."Vendor No." <> '' THEN
+                             Vendor.GET("Vendor Ledger Entry"."Vendor No.")
+                           ELSE
+                             Vendor.INIT;
+
+                           CASE "Vendor Ledger Entry"."Document Type" OF
+                             "Vendor Ledger Entry"."Document Type"::Payment:
+                               EntryType := Text1140020;
+                             "Vendor Ledger Entry"."Document Type"::Invoice:
+                               EntryType := Text1140021;
+                             "Vendor Ledger Entry"."Document Type"::"Credit Memo":
+                               EntryType := Text1140022;
+                             "Vendor Ledger Entry"."Document Type"::"Finance Charge Memo":
+                               EntryType := Text1140023;
+                             "Vendor Ledger Entry"."Document Type"::Reminder:
+                               EntryType := Text1140024;
+                             "Vendor Ledger Entry"."Document Type"::Bill:
+                               EntryType := Text1140101;
+                             ELSE
+                               EntryType := '';
+                           END;
+
+                           "Vendor Ledger Entry".CALCFIELDS("Remaining Amt. (LCY)","Remaining Amount");
+
+                           WITH LiqLine2 DO BEGIN
+                             INIT;
+                             "Source Type" := LiqLine2."Source Type"::Vendor;
+                             "Shortcut Dimension 2 Code" := "Vendor Ledger Entry"."Global Dimension 2 Code";
+                             "Shortcut Dimension 1 Code" := "Vendor Ledger Entry"."Global Dimension 1 Code";
+                             "Gen. Bus. Posting Group" := Vendor."Gen. Bus. Posting Group";
+                             "Reason Code" := "Vendor Ledger Entry"."Reason Code";
+                             "Source Code" := "Vendor Ledger Entry"."Source Code";
+                             "Account Type" := LiqLine2."Account Type"::Vendor;
+                             "Account Number" := "Vendor Ledger Entry"."Vendor No.";
+                             "Liquidity Account No." := LiqSetup."Payables Liq. Account No.";
+                             Description := COPYSTR(STRSUBSTNO(Text1140019,EntryType,
+                                                                FORMAT("Vendor Ledger Entry"."Due Date"),
+                                                                Vendor.Name),1,MAXSTRLEN(LiqLine2.Description));
+                             "Due Date" := "Vendor Ledger Entry"."Due Date";
+                             "Liquidity Date" := "Vendor Ledger Entry"."Due Date";
+                             IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                               IF Vendor."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                 PaymentTerms.GET(Vendor."Liq. Payment Terms Code");
+                                 "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation","Document Date");
+                               END;
+                             END;
+                             "Document No." := "Vendor Ledger Entry"."Document No.";
+
+                             IF Liquidity."Consider Discount" THEN BEGIN
+                               IF "Vendor Ledger Entry"."Currency Code" <> '' THEN
+                                 "Payment Discount" := ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Vendor Ledger Entry"."Posting Date",
+                                                      "Vendor Ledger Entry"."Currency Code","Vendor Ledger Entry"."Original Pmt. Disc. Possible",
+                                                      "Vendor Ledger Entry"."Original Currency Factor"))
+                               ELSE
+                                 "Payment Discount" := "Vendor Ledger Entry"."Original Pmt. Disc. Possible";
+                               Amount := "Vendor Ledger Entry"."Remaining Amt. (LCY)" - "Payment Discount";
+                               "Amount (Currency)" := "Vendor Ledger Entry"."Remaining Amount" - "Vendor Ledger Entry"."Original Pmt. Disc. Possible";
+                               IF "Vendor Ledger Entry"."Pmt. Discount Date" <> 0D THEN BEGIN
+                                 "Liquidity Date" := "Vendor Ledger Entry"."Pmt. Discount Date";
+                               IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                 "Liquidity Date" := "Vendor Ledger Entry"."Pmt. Disc. Tolerance Date";
+                               END;
+                               IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                                 IF Vendor."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                   PaymentTerms.GET(Vendor."Liq. Payment Terms Code");
+                                   "Liquidity Date" := CALCDATE(PaymentTerms."Discount Date Calculation","Document Date");
+                                   IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                     "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                   IF "Vendor Ledger Entry"."Currency Code" <> '' THEN BEGIN
+                                     "Payment Discount" := ROUND("Vendor Ledger Entry"."Remaining Amount" * PaymentTerms."Discount %" / 100);
+                                     "Amount (Currency)" := "Vendor Ledger Entry"."Remaining Amount" - "Payment Discount";
+                                   END ELSE BEGIN
+                                     "Payment Discount" := ROUND("Vendor Ledger Entry"."Remaining Amt. (LCY)" * PaymentTerms."Discount %" / 100);
+                                     Amount := "Vendor Ledger Entry"."Remaining Amt. (LCY)" - "Payment Discount";
+                                   END;
+                                 END;
+                               END;
+                             END ELSE BEGIN
+                               Amount := "Vendor Ledger Entry"."Remaining Amt. (LCY)";
+                               "Amount (Currency)" :=  "Vendor Ledger Entry"."Remaining Amount";
+                             END;
+
+                             IF Liquidity."Consider Pmt. Tol. Amount" THEN BEGIN
+                               Amount := Amount - "Vendor Ledger Entry"."Max. Payment Tolerance";
+                               "Amount (Currency)" := "Amount (Currency)" -
+                                                      ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Vendor Ledger Entry"."Posting Date",
+                                                      "Vendor Ledger Entry"."Currency Code","Vendor Ledger Entry"."Max. Payment Tolerance",
+                                                      "Vendor Ledger Entry"."Original Currency Factor"))
+                             END;
+
+                             "Currency Code" := "Vendor Ledger Entry"."Currency Code";
+                             IF Amount <> 0 THEN BEGIN
+                               InsertLiqLine();
+                               // Transfer Dimensions
+                               LedgEntryDim.RESET;
+                               LedgEntryDim.SETRANGE("Table ID",DATABASE::"Vendor Ledger Entry");
+                               LedgEntryDim.SETRANGE("Entry No.","Vendor Ledger Entry"."Entry No.");
+                               DimMgt.MoveLedgEntryDimToJnlLineDim(LedgEntryDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                            LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table39;
+        DataItemTableView=SORTING(Document Type,Document No.,Line No.)
+                          ORDER(Ascending)
+                          WHERE(Document Type=CONST(Order));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderPurchOrders THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "Purchase Line".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           PurchLine2@1100000 : Record 39;
+                           PurchInvHeader@1140000 : Record 122;
+                           VendorLedgerEntry@1140001 : Record 25;
+                         BEGIN
+                           Window.UPDATE(2,Text1140007);
+                           Window.UPDATE(3,"Purchase Line"."Document No.");
+
+                           PurchHeader.GET("Purchase Line"."Document Type","Purchase Line"."Document No.");
+
+                           PurchLine2 := "Purchase Line";
+                           IF Summarized AND (PurchLine2.NEXT <> 0) AND (PurchLine2."Document No." = "Purchase Line"."Document No.") THEN BEGIN
+                             TotalAmt := TotalAmt - ("Purchase Line"."Outstanding Amount (LCY)" + "Purchase Line"."Amt. Rcd. Not Invoiced (LCY)");
+                             TotalAmtCurrency := TotalAmtCurrency - ("Purchase Line"."Outstanding Amount" + "Purchase Line"."Amt. Rcd. Not Invoiced");
+                             TotalLineAmount := TotalLineAmount + "Purchase Line"."Line Amount";
+                             MultiSalesLines := TRUE;
+                           END ELSE BEGIN
+
+                             WITH LiqLine2 DO BEGIN
+                               INIT;
+                               "Source Type" := LiqLine2."Source Type"::"Purchase Orders";
+                               "Shortcut Dimension 2 Code" := "Purchase Line"."Shortcut Dimension 2 Code";
+                               "Shortcut Dimension 1 Code" := "Purchase Line"."Shortcut Dimension 1 Code";
+                               "Gen. Bus. Posting Group" := "Purchase Line"."Gen. Bus. Posting Group";
+                               "Reason Code" := PurchHeader."Reason Code";
+                               "Account Type" := LiqLine2."Account Type"::Vendor;
+                               "Account Number" := "Purchase Line"."Buy-from Vendor No.";
+                               "Liquidity Account No." := LiqSetup."Purch. Order Liq. Account No.";
+                               Description := COPYSTR(STRSUBSTNO(Text1140025,PurchHeader."Buy-from Vendor Name",
+                                                       FORMAT(PurchHeader."Order Date")),1,MAXSTRLEN(LiqLine2.Description));
+                               "Due Date" := PurchHeader."Due Date";
+                               "Document No." := "Purchase Line"."Document No.";
+
+                               IF (PurchHeader."Pmt. Discount Date" <> 0D) AND (Liquidity."Consider Discount") THEN BEGIN
+                                 "Liquidity Date" := PurchHeader."Pmt. Discount Date";
+                                 IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                   "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                               END ELSE
+                                 "Liquidity Date" := PurchHeader."Due Date";
+
+                               Amount := - ("Purchase Line"."Outstanding Amount (LCY)" + "Purchase Line"."Amt. Rcd. Not Invoiced (LCY)");
+                               "Amount (Currency)" := - ("Purchase Line"."Outstanding Amount" + "Purchase Line"."Amt. Rcd. Not Invoiced");
+
+                               IF "Purchase Line"."Prepmt. Amt. Inv." <> 0 THEN BEGIN
+                                 PurchInvHeader.RESET;
+                                 PurchInvHeader.SETCURRENTKEY("Prepayment Order No.");
+                                 PurchInvHeader.SETRANGE("Prepayment Order No.","Purchase Line"."Document No.");
+                                 IF PurchInvHeader.FIND('-') THEN REPEAT
+                                   VendorLedgerEntry.RESET;
+                                   VendorLedgerEntry.SETCURRENTKEY("Document No.");
+                                   VendorLedgerEntry.SETRANGE("Document No.",PurchInvHeader."No.");
+                                   VendorLedgerEntry.SETRANGE("Posting Date",PurchInvHeader."Posting Date");
+                                   IF VendorLedgerEntry.FIND('-') THEN REPEAT
+                                     VendorLedgerEntry.CALCFIELDS("Remaining Amt. (LCY)","Remaining Amount");
+                                     "Amount (Currency)" := "Amount (Currency)" - VendorLedgerEntry."Remaining Amount";
+                                     Amount := Amount - VendorLedgerEntry."Remaining Amt. (LCY)";
+                                   UNTIL VendorLedgerEntry.NEXT = 0;
+                                 UNTIL PurchInvHeader.NEXT = 0;
+                               END;
+
+                               IF Summarized AND MultiSalesLines THEN BEGIN
+                                 Amount := Amount + TotalAmt;
+                                 "Amount (Currency)" := "Amount (Currency)" + TotalAmtCurrency;
+                                 "Purchase Line"."Line Amount" := "Purchase Line"."Line Amount" + TotalLineAmount;
+                                 MultiSalesLines := FALSE;
+                                 TotalAmt := 0;
+                                 TotalAmtCurrency := 0;
+                                 TotalLineAmount := 0;
+                               END;
+
+                               IF PaymentMethod.GET(PurchHeader."Payment Method Code") THEN
+                                 IF (PaymentMethod."Create Bills" OR PaymentMethod."Invoices to Cartera") AND
+                                    (NOT AppManagement.AccessToCartera) THEN
+                                   ERROR(Text1100002 +
+                                     Text1100003,PaymentMethod.TABLECAPTION);
+
+                               IF NOT ("Document Type" IN ["Document Type"::"Credit Memo","Document Type"::"Return Order"]) AND
+                                  AppManagement.AccessToCartera AND PaymentMethod."Create Bills"
+                               THEN BEGIN
+                                 SplitPurchInv(
+                                   PurchHeader,
+                                   "Purchase Line",
+                                   LiqLine2,
+                                   Amount,
+                                   -(-Amount - "Purchase Line"."Line Amount"));
+                               END;
+
+                             IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                               IF PurchHeader."Pay-to Vendor No." <> '' THEN BEGIN
+                                 Vendor.GET(PurchHeader."Pay-to Vendor No.");
+                                 IF Vendor."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                   PaymentTerms.GET(Vendor."Liq. Payment Terms Code");
+                                   IF Liquidity."Consider Discount" THEN BEGIN
+                                     "Liquidity Date" := CALCDATE(PaymentTerms."Discount Date Calculation",PurchHeader."Document Date");
+                                     IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                       "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                   END ELSE
+                                     "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation",PurchHeader."Document Date");
+                                   "Payment Discount" := ROUND(Amount * PaymentTerms."Discount %" / 100);
+                                   "Amount (Currency)" := ROUND("Amount (Currency)" - "Amount (Currency)" * PaymentTerms."Discount %" / 100);
+                                   Amount := ROUND(Amount - Amount * PaymentTerms."Discount %" / 100);
+                                 END;
+                               END;
+                             END ELSE IF Liquidity."Consider Discount" THEN BEGIN
+                               "Payment Discount" := ROUND(Amount * PurchHeader."Payment Discount %" / 100);
+                               "Amount (Currency)" := ROUND("Amount (Currency)" - "Amount (Currency)" * PurchHeader."Payment Discount %" / 100);
+                               Amount := ROUND(Amount - Amount * PurchHeader."Payment Discount %" / 100);
+                             END;
+
+                               IF Liquidity."Consider Pmt. Tol. Amount" THEN BEGIN
+                                 MaxPmtTolerance := 0;
+                                 IF GLSetup."Payment Tolerance %" <> 0 THEN
+                                   MaxPmtTolerance :=
+                                       ROUND((GLSetup."Payment Tolerance %" * Amount / 100),0.01);
+                                 IF (MaxPmtTolerance = 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0) OR
+                                    ((ABS(MaxPmtTolerance) > GLSetup."Max. Payment Tolerance Amount") AND
+                                    (MaxPmtTolerance <> 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0))
+                                    THEN
+                                      MaxPmtTolerance :=
+                                          ROUND(GLSetup."Max. Payment Tolerance Amount",0.01);
+                                    IF ABS(Amount) < ABS(MaxPmtTolerance) THEN
+                                      MaxPmtTolerance := Amount;
+                                 Amount := Amount + MaxPmtTolerance;
+                                 "Amount (Currency)" := "Amount (Currency)" +
+                                                        ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Liquidity Date",
+                                                        PurchHeader."Currency Code",MaxPmtTolerance,
+                                                        PurchHeader."Currency Factor"))
+                               END;
+
+                               "Currency Code" := "Purchase Line"."Currency Code";
+                               IF (Amount <> 0) AND NOT PaymentMethod."Create Bills" THEN BEGIN
+                                 InsertLiqLine();
+                                 // Transfer Dimensions
+                                 DocDim.RESET;
+                                 DocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+                                 DocDim.SETRANGE("Document Type","Purchase Line"."Document Type");
+                                 DocDim.SETRANGE("Document No.","Purchase Line"."Document No.");
+                                 DocDim.SETRANGE("Line No.","Purchase Line"."Line No.");
+                                 LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                  LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table37;
+        DataItemTableView=SORTING(Document Type,Document No.,Line No.)
+                          ORDER(Ascending)
+                          WHERE(Document Type=CONST(Order));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderSalesOrders THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "Sales Line".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           SalesLine2@1100000 : Record 37;
+                           SalesInvoiceHeader@1140000 : Record 112;
+                           CustLedgerEntry@1140001 : Record 21;
+                         BEGIN
+                           Window.UPDATE(2,Text1140008);
+                           Window.UPDATE(3,"Sales Line"."Document No.");
+
+                           SalesHeader.GET("Sales Line"."Document Type","Sales Line"."Document No.");
+
+                           SalesLine2 := "Sales Line";
+                           IF Summarized AND (SalesLine2.NEXT <> 0) AND (SalesLine2."Document No." = "Sales Line"."Document No.") THEN BEGIN
+                             TotalAmt := TotalAmt + "Sales Line"."Outstanding Amount (LCY)" + "Sales Line"."Shipped Not Invoiced (LCY)";
+                             TotalAmtCurrency := TotalAmtCurrency + "Sales Line"."Outstanding Amount" + "Sales Line"."Shipped Not Invoiced";
+                             TotalLineAmount := TotalLineAmount + "Sales Line"."Line Amount";
+                             MultiSalesLines := TRUE;
+                           END ELSE BEGIN
+
+                             WITH LiqLine2 DO BEGIN
+                               INIT;
+                               "Source Type" := LiqLine2."Source Type"::"Sales Orders";
+                               "Shortcut Dimension 2 Code" := "Sales Line"."Shortcut Dimension 2 Code";
+                               "Shortcut Dimension 1 Code" := "Sales Line"."Shortcut Dimension 1 Code";
+                               "Gen. Bus. Posting Group" := "Sales Line"."Gen. Bus. Posting Group";
+                               "Reason Code" := SalesHeader."Reason Code";
+                               "Account Type" := LiqLine2."Account Type"::Customer;
+                               "Account Number" := "Sales Line"."Sell-to Customer No.";
+                               "Liquidity Account No." := LiqSetup."Sales Order Liq. Account No.";
+                               Description := COPYSTR(STRSUBSTNO(Text1140026,SalesHeader."Sell-to Customer Name",
+                                                       FORMAT(SalesHeader."Order Date")),1,MAXSTRLEN(LiqLine2.Description));
+                               "Due Date" := SalesHeader."Due Date";
+                               "Document No." := "Sales Line"."Document No.";
+
+                               IF (SalesHeader."Pmt. Discount Date" <> 0D) AND (Liquidity."Consider Discount") THEN BEGIN
+                                 "Liquidity Date" := SalesHeader."Pmt. Discount Date";
+                                 IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                   "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                               END ELSE
+                                 "Liquidity Date" := SalesHeader."Due Date";
+
+                               "Amount (Currency)" := "Sales Line"."Outstanding Amount" + "Sales Line"."Shipped Not Invoiced";
+                               Amount := "Sales Line"."Outstanding Amount (LCY)" + "Sales Line"."Shipped Not Invoiced (LCY)";
+
+                               IF "Sales Line"."Prepmt. Amt. Inv." <> 0 THEN BEGIN
+                                 SalesInvoiceHeader.RESET;
+                                 SalesInvoiceHeader.SETCURRENTKEY("Prepayment Order No.");
+                                 SalesInvoiceHeader.SETRANGE("Prepayment Order No.","Sales Line"."Document No.");
+                                 IF SalesInvoiceHeader.FIND('-') THEN REPEAT
+                                   CustLedgerEntry.RESET;
+                                   CustLedgerEntry.SETCURRENTKEY("Document No.");
+                                   CustLedgerEntry.SETRANGE("Document No.",SalesInvoiceHeader."No.");
+                                   CustLedgerEntry.SETRANGE("Posting Date",SalesInvoiceHeader."Posting Date");
+                                   IF CustLedgerEntry.FIND('-') THEN REPEAT
+                                     CustLedgerEntry.CALCFIELDS("Remaining Amt. (LCY)","Remaining Amount");
+                                     "Amount (Currency)" := "Amount (Currency)" - CustLedgerEntry."Remaining Amount";
+                                     Amount := Amount - CustLedgerEntry."Remaining Amt. (LCY)";
+                                   UNTIL CustLedgerEntry.NEXT = 0;
+                                 UNTIL SalesInvoiceHeader.NEXT = 0;
+                               END;
+
+                               IF Summarized AND MultiSalesLines THEN BEGIN
+                                 Amount := Amount + TotalAmt;
+                                 "Amount (Currency)" := "Amount (Currency)" + TotalAmtCurrency;
+                                 "Sales Line"."Line Amount" := "Sales Line"."Line Amount" + TotalLineAmount;
+                                 MultiSalesLines := FALSE;
+                                 TotalAmt := 0;
+                                 TotalAmtCurrency := 0;
+                                 TotalLineAmount := 0;
+                               END;
+
+                               IF PaymentMethod.GET(SalesHeader."Payment Method Code") THEN
+                                 IF (PaymentMethod."Create Bills" OR PaymentMethod."Invoices to Cartera") AND
+                                    (NOT AppManagement.AccessToCartera) THEN
+                                   ERROR(Text1100002 +
+                                     Text1100003,PaymentMethod.TABLECAPTION);
+
+                               IF NOT ("Document Type" IN ["Document Type"::"Credit Memo","Document Type"::"Return Order"]) AND
+                                  AppManagement.AccessToCartera AND PaymentMethod."Create Bills"
+                               THEN BEGIN
+                                 SplitSalesInv(
+                                   SalesHeader,
+                                   "Sales Line",
+                                   LiqLine2,
+                                   Amount,
+                                   Amount - "Sales Line"."Line Amount");
+                               END;
+
+                             IF Liquidity."Consider Discount" THEN BEGIN
+                               "Payment Discount" := ROUND(Amount * SalesHeader."Payment Discount %" / 100);
+                               Amount := ROUND(Amount - Amount * SalesHeader."Payment Discount %" / 100);
+                               "Amount (Currency)" := ROUND("Amount (Currency)" - "Amount (Currency)" * SalesHeader."Payment Discount %" / 100);
+                             END;
+
+                             IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                               IF SalesHeader."Bill-to Customer No." <> '' THEN BEGIN
+                                 Customer.GET(SalesHeader."Bill-to Customer No.");
+                                 IF Customer."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                   PaymentTerms.GET(Customer."Liq. Payment Terms Code");
+                                   IF Liquidity."Consider Discount" THEN BEGIN
+                                     "Liquidity Date" := CALCDATE(PaymentTerms."Discount Date Calculation",SalesHeader."Document Date");
+                                     IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                       "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                   END ELSE
+                                     "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation",SalesHeader."Document Date");
+                                 END;
+                               END;
+                             END;
+
+                               IF Liquidity."Consider Pmt. Tol. Amount" THEN BEGIN
+                                 MaxPmtTolerance := 0;
+                                 IF GLSetup."Payment Tolerance %" <> 0 THEN
+                                   MaxPmtTolerance :=
+                                       ROUND((GLSetup."Payment Tolerance %" * Amount / 100),0.01);
+                                 IF (MaxPmtTolerance = 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0) OR
+                                    ((ABS(MaxPmtTolerance) > GLSetup."Max. Payment Tolerance Amount") AND
+                                    (MaxPmtTolerance <> 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0))
+                                    THEN
+                                      MaxPmtTolerance :=
+                                          ROUND(GLSetup."Max. Payment Tolerance Amount",0.01);
+                                    IF ABS(Amount) < ABS(MaxPmtTolerance) THEN
+                                      MaxPmtTolerance := Amount;
+                                 Amount := Amount - MaxPmtTolerance;
+                                 "Amount (Currency)" := "Amount (Currency)" -
+                                                        ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Liquidity Date",
+                                                        SalesHeader."Currency Code",MaxPmtTolerance,
+                                                        SalesHeader."Currency Factor"))
+                               END;
+
+                               "Currency Code" := "Sales Line"."Currency Code";
+
+                               IF (Amount <> 0) AND NOT PaymentMethod."Create Bills" THEN BEGIN
+                                 InsertLiqLine();
+                                 // Transfer Dimensions
+                                 DocDim.RESET;
+                                 DocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+                                 DocDim.SETRANGE("Document Type","Sales Line"."Document Type");
+                                 DocDim.SETRANGE("Document No.","Sales Line"."Document No.");
+                                 DocDim.SETRANGE("Line No.","Sales Line"."Line No.");
+                                 LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                  LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table5600;
+        DataItemTableView=SORTING(No.)
+                          WHERE(Budgeted Asset=CONST(Yes));
+        DataItemVarName=InvestmentFixedAsset;
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderBudgFixedAssets THEN
+                          CurrReport.BREAK;
+
+                        IF NOT InvestmentFixedAsset.READPERMISSION THEN
+                          CurrReport.BREAK;
+
+                        FASetup.GET;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF FADeprBook.GET("No.",FASetup."Default Depr. Book") THEN
+                           BEGIN
+                             FADeprBook.CALCFIELDS("Acquisition Cost");
+
+                             Window.UPDATE(2,Text1140009);
+                             Window.UPDATE(3,"No.");
+
+                             WITH LiqLine2 DO BEGIN
+                               INIT;
+                               "Source Type" := "Source Type"::"Budgeted Fixed Assets";
+                               "Account Type" := "Account Type"::"Fixed Asset";
+                               "Account Number" := InvestmentFixedAsset."No.";
+                               "Document No." := InvestmentFixedAsset."No.";
+                               "Liquidity Account No." := LiqSetup."FA Investment Liq. Account No.";
+                               Description := COPYSTR(STRSUBSTNO(Text1140027,InvestmentFixedAsset."No.",
+                                 FORMAT(-FADeprBook."Acquisition Cost")),1,MAXSTRLEN(LiqLine2.Description));
+                               "Due Date" := FADeprBook."Acquisition Date";
+                               "Liquidity Date" := FADeprBook."Acquisition Date";
+                               Amount := - FADeprBook."Acquisition Cost";
+                               "Amount (Currency)" := - FADeprBook."Acquisition Cost";
+                               "Shortcut Dimension 2 Code" := InvestmentFixedAsset."Global Dimension 2 Code";
+                               "Shortcut Dimension 1 Code" := InvestmentFixedAsset."Global Dimension 1 Code";
+                               IF Amount <> 0 THEN BEGIN
+                                 InsertLiqLine;
+                                 // Transfer Dimensions
+                                 DefaultDim.RESET;
+                                 DefaultDim.SETRANGE("Table ID",DATABASE::"Fixed Asset");
+                                 DefaultDim.SETRANGE("No.",InvestmentFixedAsset."No.");
+                                 LiqDimMgt.MoveDefaultDimToJnlLineDim(DefaultDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                   LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table5600;
+        DataItemTableView=SORTING(No.)
+                          WHERE(Budgeted Asset=CONST(No));
+        DataItemVarName=SaleFixedAsset;
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderSaleFixedAssets THEN
+                          CurrReport.BREAK;
+
+                        IF NOT SaleFixedAsset.READPERMISSION THEN
+                          CurrReport.BREAK;
+
+                        FASetup.GET;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF FADeprBook.GET("No.",FASetup."Default Depr. Book") THEN
+                           BEGIN
+                             IF (FADeprBook."Disposal Date" = 0D) AND
+                                (FADeprBook."Projected Disposal Date" <> 0D) AND
+                                (FADeprBook."Projected Proceeds on Disposal" <> 0) THEN BEGIN
+
+                               Window.UPDATE(2,Text1140010);
+                               Window.UPDATE(3,"No.");
+
+                               WITH LiqLine2 DO BEGIN
+                                 INIT;
+                                 "Source Type" := "Source Type"::"Sale of Fixed Assets";
+                                 "Account Type" := "Account Type"::"Fixed Asset";
+                                 "Account Number" := SaleFixedAsset."No.";
+                                 "Document No." := SaleFixedAsset."No.";
+                                 "Liquidity Account No." := LiqSetup."FA Sales Liq. Account No.";
+                                 Description := COPYSTR(STRSUBSTNO(Text1140027,SaleFixedAsset."No.",
+                                                 FORMAT(FADeprBook."Projected Proceeds on Disposal")),1,MAXSTRLEN(LiqLine2.Description));
+                                 "Due Date" := FADeprBook."Projected Disposal Date";
+                                 "Liquidity Date" := FADeprBook."Projected Disposal Date";
+                                 Amount := FADeprBook."Projected Proceeds on Disposal" ;
+                                 "Amount (Currency)" := FADeprBook."Projected Proceeds on Disposal";
+                                 "Shortcut Dimension 2 Code" := SaleFixedAsset."Global Dimension 2 Code";
+                                 "Shortcut Dimension 1 Code" := SaleFixedAsset."Global Dimension 1 Code";
+                                 IF Amount <> 0 THEN BEGIN
+                                   InsertLiqLine();
+                                   // Transfer Dimensions
+                                   DefaultDim.RESET;
+                                   DefaultDim.SETRANGE("Table ID",DATABASE::"Fixed Asset");
+                                   DefaultDim.SETRANGE("No.",SaleFixedAsset."No.");
+                                   LiqDimMgt.MoveDefaultDimToJnlLineDim(DefaultDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                        LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                                 END;
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table5055260;
+        DataItemTableView=SORTING(Revenue/Expense,Code)
+                          ORDER(Ascending)
+                          WHERE(Revenue/Expense=CONST(Expense));
+        DataItemVarName=NeutrPayExpenses;
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderNeutrExpenses THEN
+                          CurrReport.BREAK;
+
+                        IF NOT NeutrPayExpenses.READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Window.UPDATE(2,Text1140011);
+                           Window.UPDATE(3,NeutrPayExpenses.Code);
+
+                           WITH LiqLine2 DO BEGIN
+                             NeutrPayExpenses.TESTFIELD("First Execution");
+                             NeutrPayExpenses.TESTFIELD("Recurring Frequency");
+                             INIT;
+                             "Source Type" := "Source Type"::"Neutral Expenses";
+                             "Document No." := NeutrPayExpenses.Code;
+                             "Liquidity Account No." := NeutrPayExpenses."Liquidity Account No.";
+                             "Shortcut Dimension 1 Code" := NeutrPayExpenses."Global Dimension 1 Code";
+                             "Shortcut Dimension 2 Code" := NeutrPayExpenses."Global Dimension 2 Code";
+                             Description := COPYSTR(STRSUBSTNO(Text1140028,NeutrPayExpenses.Description),1,MAXSTRLEN(LiqLine2.Description));
+                             DateLastExecution := Liquidity."Neutral Payments To";
+                             IF (NeutrPayExpenses."Expiration Date" <> 0D) AND (NeutrPayExpenses."Expiration Date" < Liquidity."Neutral Payments To") THEN
+                               DateLastExecution := NeutrPayExpenses."Expiration Date";
+                             ExecutionDate := NeutrPayExpenses."First Execution";
+                             WHILE ExecutionDate <= DateLastExecution DO BEGIN
+                               IF ExecutionDate >= Liquidity."Neutral Payments From" THEN BEGIN
+                                 "Due Date" := ExecutionDate;
+                                 "Liquidity Date" := ExecutionDate;
+                                 Amount := -NeutrPayExpenses.Amount;
+                                 "Amount (Currency)" := -NeutrPayExpenses.Amount;
+                                 IF Amount <> 0 THEN BEGIN
+                                   InsertLiqLine();
+                                   LiqDefaultDim.RESET;
+                                   LiqDefaultDim.SETRANGE("Table ID",DATABASE::"Neutral Payments");
+                                   LiqDefaultDim.SETRANGE(Type,NeutrPayExpenses."Revenue/Expense");
+                                   LiqDefaultDim.SETRANGE("No.",NeutrPayExpenses.Code);
+                                   LiqDimMgt.MoveLiqDefaultDimToJnlLineDim(LiqDefaultDim,JnlLineDim,
+                                                                           DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                           LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                                 END;
+                               END;
+                               ExecutionDate := CALCDATE(NeutrPayExpenses."Recurring Frequency",ExecutionDate);
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table5055260;
+        DataItemTableView=SORTING(Revenue/Expense,Code)
+                          ORDER(Ascending)
+                          WHERE(Revenue/Expense=CONST(Revenue));
+        DataItemVarName=NeutrPayRevenues;
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderNeutrRevenues THEN
+                          CurrReport.BREAK;
+
+                        IF NOT NeutrPayRevenues.READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Window.UPDATE(2,Text1140012);
+                           Window.UPDATE(3,NeutrPayRevenues.Code);
+
+                           WITH LiqLine2 DO BEGIN
+                             NeutrPayRevenues.TESTFIELD("First Execution");
+                             NeutrPayRevenues.TESTFIELD("Recurring Frequency");
+                             INIT;
+                             "Source Type" := "Source Type"::"Neutral Revenues";
+                             "Document No." := NeutrPayRevenues.Code;
+                             "Liquidity Account No." := NeutrPayRevenues."Liquidity Account No.";
+                             "Shortcut Dimension 1 Code" := NeutrPayRevenues."Global Dimension 1 Code";
+                             "Shortcut Dimension 2 Code" := NeutrPayRevenues."Global Dimension 2 Code";
+                             Description := COPYSTR(STRSUBSTNO(Text1140029,NeutrPayRevenues.Description),1,MAXSTRLEN(LiqLine2.Description));
+                             DateLastExecution := Liquidity."Neutral Payments To";
+                             IF (NeutrPayRevenues."Expiration Date" <> 0D) AND (NeutrPayRevenues."Expiration Date" < Liquidity."Neutral Payments To") THEN
+                               DateLastExecution := NeutrPayRevenues."Expiration Date";
+                             ExecutionDate := NeutrPayRevenues."First Execution";
+                             WHILE ExecutionDate <= DateLastExecution DO BEGIN
+                               IF ExecutionDate >= Liquidity."Neutral Payments From" THEN BEGIN
+                                 "Due Date" := ExecutionDate;
+                                 "Liquidity Date" := ExecutionDate;
+                                 Amount := NeutrPayRevenues.Amount;
+                                 "Amount (Currency)" := NeutrPayRevenues.Amount;
+                                 IF Amount <> 0 THEN BEGIN
+                                   InsertLiqLine();
+                                   LiqDefaultDim.RESET;
+                                   LiqDefaultDim.SETRANGE("Table ID",DATABASE::"Neutral Payments");
+                                   LiqDefaultDim.SETRANGE(Type,NeutrPayRevenues."Revenue/Expense");
+                                   LiqDefaultDim.SETRANGE("No.",NeutrPayRevenues.Code);
+                                   LiqDimMgt.MoveLiqDefaultDimToJnlLineDim(LiqDefaultDim,JnlLineDim,
+                                                                           DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                           LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                                 END;
+                               END;
+                               ExecutionDate := CALCDATE(NeutrPayRevenues."Recurring Frequency",ExecutionDate);
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table15;
+        DataItemTableView=SORTING(No.)
+                          ORDER(Ascending)
+                          WHERE(Liquid Account No.=FILTER(<>''));
+        DataItemVarName=GLBudget;
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderGLBudget THEN
+                          CurrReport.BREAK;
+
+                        IF NOT GLBudget.READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           LiqAcc.GET(GLBudget."Liquid Account No.");
+                           IF LiqAcc."G/L Integration" IN [LiqAcc."G/L Integration"::Budget,LiqAcc."G/L Integration"::Both] THEN BEGIN
+                             Window.UPDATE(2,Text1140031);
+                             Window.UPDATE(3,GLBudget."No.");
+
+                             GLBudgEntry.SETRANGE("Budget Name",GLBudgName);
+                             GLBudgEntry.SETRANGE("G/L Account No.",GLBudget."No.");
+                             GLBudgEntry.SETRANGE(Date,Liquidity."G/L Budget From",Liquidity."G/L Budget To");
+                             IF GLBudgEntry.FIND('-') THEN
+                               REPEAT
+
+                                 WITH LiqLine2 DO BEGIN
+                                   INIT;
+                                   "Source Type" := LiqAcc."Source Type";
+                                   "Account Type" := "Account Type"::"G/L Account";
+                                   "Account Number" := GLBudget."No.";
+                                   "Document No." := FORMAT(GLBudgEntry."Entry No.");
+                                   "Liquidity Account No." := GLBudget."Liquid Account No.";
+                                   Description := COPYSTR(STRSUBSTNO(Text1140030,GLBudget.Name,
+                                                            FORMAT(GLBudgEntry.Description)),1,MAXSTRLEN(LiqLine2.Description));
+                                   "Due Date" := GLBudgEntry.Date;
+                                   "Liquidity Date" := GLBudgEntry.Date;
+                                   Amount := - GLBudgEntry.Amount;
+                                   "Amount (Currency)" := - GLBudgEntry.Amount;
+                                   "Shortcut Dimension 1 Code" := GLBudgEntry."Global Dimension 1 Code";
+                                   "Shortcut Dimension 2 Code" := GLBudgEntry."Global Dimension 2 Code";
+                                   IF Amount <> 0 THEN BEGIN
+                                     InsertLiqLine();
+                                     // Transfer Dimensions
+                                     GLBudgDim.RESET;
+                                     GLBudgDim.SETRANGE("Entry No.",GLBudgEntry."Entry No.");
+                                     LiqDimMgt.MoveGLBudgDimToJnlLineDim(GLBudgDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                         LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                                   END;
+                                 END;
+                               UNTIL GLBudgEntry.NEXT = 0;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table5902;
+        DataItemTableView=SORTING(Document Type,Document No.,Line No.)
+                          WHERE(Document Type=CONST(Order));
+        OnPreDataItem=BEGIN
+                        IF NOT ConsiderServiceOrders THEN
+                          CurrReport.BREAK;
+
+                        IF NOT "Service Line".READPERMISSION THEN
+                          CurrReport.BREAK;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           ServiceLine2@1100001 : Record 5902;
+                         BEGIN
+                           Window.UPDATE(2,Text1140032);
+                           Window.UPDATE(3,"Service Line"."Document No.");
+
+                           ServiceHeader.GET("Service Line"."Document Type","Service Line"."Document No.");
+
+                           ServiceLine2 := "Service Line";
+                           IF Summarized AND (ServiceLine2.NEXT <> 0) AND (ServiceLine2."Document No." = "Service Line"."Document No.") THEN BEGIN
+                             Conversion.SETRANGE("Currency Code","Service Line"."Currency Code");
+                             Conversion.SETRANGE("Starting Date",0D,ServiceHeader."Posting Date");
+                             IF Conversion.FIND('+') THEN
+                               Factor := Conversion."Exchange Rate Amount"
+                             ELSE
+                               Factor := 1;
+                             TotalAmt := TotalAmt + ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt(ServiceHeader."Posting Date",
+                                                    "Service Line"."Currency Code","Service Line"."Amount Including VAT",Factor));
+                             TotalAmtCurrency := TotalAmtCurrency + "Service Line"."Amount Including VAT";
+                             TotalLineAmount := TotalLineAmount + "Service Line"."Line Amount";
+                             MultiSalesLines := TRUE;
+                           END ELSE BEGIN
+
+                             WITH LiqLine2 DO BEGIN
+                               INIT;
+                               "Source Type" := LiqLine2."Source Type"::"Sales Orders";
+                               "Shortcut Dimension 2 Code" := "Service Line"."Shortcut Dimension 2 Code";
+                               "Shortcut Dimension 1 Code" := "Service Line"."Shortcut Dimension 1 Code";
+                               "Gen. Bus. Posting Group" := "Service Line"."Gen. Bus. Posting Group";
+                               "Account Type" := LiqLine2."Account Type"::Customer;
+                               "Account Number" := "Service Line"."Customer No.";
+                               "Liquidity Account No." := LiqSetup."Service Liq. Account No.";
+                               Description := COPYSTR(STRSUBSTNO(Text1140026,ServiceHeader.Name,
+                                                       FORMAT(ServiceHeader."Order Date")),1,MAXSTRLEN(LiqLine2.Description));
+                             "Due Date" := ServiceHeader."Due Date";
+                             "Liquidity Date" := ServiceHeader."Due Date";
+                               "Document No." := "Service Line"."Document No.";
+
+                               IF ServiceHeader."Bill-to Customer No." <> '' THEN BEGIN
+                                 Customer.GET(ServiceHeader."Bill-to Customer No.");
+                                 IF Customer."Payment Terms Code" <> '' THEN BEGIN
+                                   PaymentTerms.GET(Customer."Payment Terms Code");
+                                   IF Liquidity."Consider Discount" THEN BEGIN
+                                   "Liquidity Date" := ServiceHeader."Pmt. Discount Date";
+                                     IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                       "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                   END ELSE
+                                     "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation",ServiceHeader."Document Date");
+                                   "Discount %" := PaymentTerms."Discount %";
+                                 END;
+                                 IF Liquidity."Consider Liq. Payment Terms" THEN BEGIN
+                                   IF Customer."Liq. Payment Terms Code" <> '' THEN BEGIN
+                                     PaymentTerms.GET(Customer."Liq. Payment Terms Code");
+                                     IF Liquidity."Consider Discount" THEN BEGIN
+                                       "Liquidity Date" := CALCDATE(PaymentTerms."Discount Date Calculation",ServiceHeader."Document Date");
+                                       IF Liquidity."Consider Pmt. Disc. Tol. Date" THEN
+                                         "Liquidity Date" := CALCDATE(GLSetup."Payment Discount Grace Period","Liquidity Date");
+                                     END ELSE
+                                       "Liquidity Date" := CALCDATE(PaymentTerms."Due Date Calculation",ServiceHeader."Document Date");
+                                     "Discount %" := PaymentTerms."Discount %";
+                                   END;
+                                 END;
+                               END;
+
+                               "Amount (Currency)" := "Service Line"."Amount Including VAT";
+                               Conversion.SETRANGE("Currency Code","Service Line"."Currency Code");
+                               Conversion.SETRANGE("Starting Date",0D,ServiceHeader."Posting Date");
+                               IF Conversion.FIND('+') THEN
+                                 Factor := Conversion."Exchange Rate Amount"
+                               ELSE
+                                 Factor := 1;
+                               Amount := ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt(ServiceHeader."Posting Date",
+                                         "Service Line"."Currency Code","Service Line"."Amount Including VAT",Factor));
+                               "Payment Discount" := Amount * "Discount %" / 100;
+                               IF Liquidity."Consider Discount" THEN BEGIN
+                                 Amount := ROUND(Amount - Amount * "Payment Discount");
+                                 "Amount (Currency)" := ROUND("Amount (Currency)" - "Amount (Currency)" * "Payment Discount");
+                               END;
+
+                               IF Summarized AND MultiSalesLines THEN BEGIN
+                                 Amount := Amount + TotalAmt;
+                                 "Amount (Currency)" := "Amount (Currency)" + TotalAmtCurrency;
+                                 "Service Line"."Line Amount" := "Service Line"."Line Amount" + TotalLineAmount;
+                                 MultiSalesLines := FALSE;
+                                 TotalAmt := 0;
+                                 TotalAmtCurrency := 0;
+                                 TotalLineAmount := 0;
+                               END;
+
+                               IF PaymentMethod.GET(ServiceHeader."Payment Method Code") THEN
+                                 IF (PaymentMethod."Create Bills" OR PaymentMethod."Invoices to Cartera") AND
+                                    (NOT AppManagement.AccessToCartera) THEN
+                                   ERROR(Text1100002 +
+                                     Text1100003,PaymentMethod.TABLECAPTION);
+
+                               IF ("Document Type" <> "Document Type"::"Credit Memo") AND
+                                  AppManagement.AccessToCartera AND PaymentMethod."Create Bills"
+                               THEN BEGIN
+                                 SplitServInv(
+                                   ServiceHeader,
+                                   "Service Line",
+                                   LiqLine2,
+                                   "Amount (Currency)",
+                                   "Amount (Currency)" - "Service Line"."Line Amount");
+                               END;
+
+                               IF Liquidity."Consider Pmt. Tol. Amount" THEN BEGIN
+                                 MaxPmtTolerance := 0;
+                                 IF GLSetup."Payment Tolerance %" <> 0 THEN
+                                   MaxPmtTolerance :=
+                                       ROUND((GLSetup."Payment Tolerance %" * Amount / 100),0.01);
+                                 IF (MaxPmtTolerance = 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0) OR
+                                    ((ABS(MaxPmtTolerance) > GLSetup."Max. Payment Tolerance Amount") AND
+                                    (MaxPmtTolerance <> 0) AND
+                                    (GLSetup."Max. Payment Tolerance Amount" <> 0))
+                                    THEN
+                                      MaxPmtTolerance :=
+                                          ROUND(GLSetup."Max. Payment Tolerance Amount",0.01);
+                                    IF ABS(Amount) < ABS(MaxPmtTolerance) THEN
+                                      MaxPmtTolerance := Amount;
+                                 Amount := Amount - MaxPmtTolerance;
+                                 "Amount (Currency)" := "Amount (Currency)" -
+                                                        ROUND(Conversion.ExchangeAmtFCYToLCYAdjmt("Liquidity Date",
+                                                        ServiceHeader."Currency Code",MaxPmtTolerance,
+                                                        ServiceHeader."Currency Factor"))
+                               END;
+
+                               "Currency Code" := "Service Line"."Currency Code";
+                               IF (Amount <> 0) AND NOT PaymentMethod."Create Bills" THEN BEGIN
+                                 InsertLiqLine();
+                                 DocDim.RESET;
+                                 DocDim.SETRANGE("Table ID",DATABASE::"Service Line");
+                                 DocDim.SETRANGE("Document Type","Service Line"."Document Type");
+                                 DocDim.SETRANGE("Document No.","Service Line"."Document No.");
+                                 DocDim.SETRANGE("Line No.","Service Line"."Line No.");
+                                 LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+                                                                  LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=7200;
+      Height=9790;
+      SaveValues=Yes;
+      OnInit=VAR
+               NeutralPayments@1140000 : Record 5055260;
+               GLBudgetEntry@1140001 : Record 96;
+             BEGIN
+               IF "G/L Account".READPERMISSION THEN
+                 ConsiderLiqFunds  := TRUE;
+               IF "Cust. Ledger Entry".READPERMISSION THEN
+                 ConsiderCustLedgEntry  := TRUE;
+               IF "Vendor Ledger Entry".READPERMISSION THEN
+                 ConsiderVendLedgEntry := TRUE;
+               IF "Purchase Line".READPERMISSION THEN
+                 ConsiderPurchOrders := TRUE;
+               IF "Sales Line".READPERMISSION THEN
+                 ConsiderSalesOrders := TRUE;
+               IF NeutralPayments.READPERMISSION THEN BEGIN
+                 ConsiderNeutrExpenses := TRUE;
+                 ConsiderNeutrRevenues := TRUE;
+               END;
+               IF InvestmentFixedAsset.READPERMISSION THEN
+                 ConsiderBudgFixedAssets := TRUE;
+               IF SaleFixedAsset.READPERMISSION THEN
+                 ConsiderSaleFixedAssets := TRUE;
+               IF GLBudgetEntry.READPERMISSION THEN
+                 ConsiderGLBudget := TRUE;
+               IF "Service Line".READPERMISSION THEN
+                 ConsiderServiceOrders := TRUE;
+             END;
+
+    }
+    CONTROLS
+    {
+      { 1140025;TextBox   ;3630 ;8470 ;1700 ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   CaptionML=[ENU=G/L Budget Name;
+                                                              ESP=Nombre ppto. contable];
+                                                   SourceExpr=GLBudgName;
+                                                   TableRelation="G/L Budget Name" }
+      { 1140026;Label     ;220  ;8470 ;3300 ;440  ;ParentControl=1140025 }
+      { 1140023;CheckBox  ;3630 ;7920 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=G/L Budget;
+                                                              ESP=Ppto. contable];
+                                                   SourceExpr=ConsiderGLBudget }
+      { 1140024;Label     ;220  ;7920 ;3300 ;440  ;ParentControl=1140023 }
+      { 1140013;CheckBox  ;3630 ;7370 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Neutral Revenues;
+                                                              ESP=Ingresos neutros];
+                                                   SourceExpr=ConsiderNeutrRevenues }
+      { 1140012;Label     ;220  ;7370 ;3300 ;440  ;ParentControl=1140013 }
+      { 1140011;CheckBox  ;3630 ;6820 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Neutral Expenses;
+                                                              ESP=Gastos neutros];
+                                                   SourceExpr=ConsiderNeutrExpenses }
+      { 1140010;Label     ;220  ;6820 ;3300 ;440  ;ParentControl=1140011 }
+      { 1140022;CheckBox  ;3630 ;6270 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Planned Sale of Fixed Asset;
+                                                              ESP=Venta planif. activo fijo];
+                                                   SourceExpr=ConsiderSaleFixedAssets }
+      { 1140021;Label     ;220  ;6270 ;3300 ;440  ;ParentControl=1140022 }
+      { 1140020;CheckBox  ;3630 ;5720 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Budgeted Fixed Assets;
+                                                              ESP=Activos fijos pptdos.];
+                                                   SourceExpr=ConsiderBudgFixedAssets }
+      { 1140019;Label     ;220  ;5720 ;3300 ;440  ;ParentControl=1140020 }
+      { 1140028;CheckBox  ;3630 ;5170 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Service Orders;
+                                                              ESP=Pedidos servicio];
+                                                   SourceExpr=ConsiderServiceOrders }
+      { 1140027;Label     ;220  ;5170 ;3300 ;440  ;ParentControl=1140028 }
+      { 1140009;CheckBox  ;3630 ;4620 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Sales Orders;
+                                                              ESP=Pedidos venta];
+                                                   SourceExpr=ConsiderSalesOrders }
+      { 1140008;Label     ;220  ;4620 ;3300 ;440  ;ParentControl=1140009 }
+      { 1140007;CheckBox  ;3630 ;4070 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Purchase Orders;
+                                                              ESP=Pedidos compra];
+                                                   SourceExpr=ConsiderPurchOrders }
+      { 1140006;Label     ;220  ;4070 ;3300 ;440  ;ParentControl=1140007 }
+      { 1140005;CheckBox  ;3630 ;3520 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Vendor Ledger Entry;
+                                                              ESP=Mov. proveedor];
+                                                   SourceExpr=ConsiderVendLedgEntry }
+      { 114004;Label      ;220  ;3520 ;3300 ;440  ;ParentControl=1140005 }
+      { 1140002;CheckBox  ;3630 ;2970 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Customer Ledger Entry;
+                                                              ESP=Mov. cliente];
+                                                   SourceExpr=ConsiderCustLedgEntry }
+      { 1140003;Label     ;220  ;2970 ;3300 ;440  ;ParentControl=1140002 }
+      { 1140000;CheckBox  ;3630 ;2420 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Liquid Funds;
+                                                              ESP=Fondos corrientes];
+                                                   SourceExpr=ConsiderLiqFunds }
+      { 1140001;Label     ;220  ;2420 ;3300 ;440  ;ParentControl=1140000 }
+      { 1100000;CheckBox  ;3630 ;1870 ;440  ;440  ;ParentControl=1140018;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Group by Order;
+                                                              ESP=Agrupar por pedido];
+                                                   SourceExpr=Summarized }
+      { 1100001;Label     ;220  ;1870 ;3300 ;440  ;ParentControl=1100000 }
+      { 1140014;TextBox   ;3410 ;0    ;2750 ;440  ;CaptionML=[ENU=Liquidity;
+                                                              ESP=Liquidez];
+                                                   SourceExpr=LiquidityNo;
+                                                   TableRelation=Liquidity;
+                                                   OnAfterValidate=BEGIN
+                                                                     IF LiquidityNo <> '' THEN
+                                                                       SelectionLiquidity.GET(LiquidityNo)
+                                                                     ELSE
+                                                                       SelectionLiquidity.INIT;
+                                                                   END;
+                                                                    }
+      { 1140015;Label     ;0    ;0    ;3300 ;440  ;ParentControl=1140014 }
+      { 1140029;TextBox   ;3410 ;660  ;1700 ;440  ;CaptionML=[ENU=Posting Date;
+                                                              ESP=Fecha registro];
+                                                   SourceExpr=PostDate }
+      { 1140030;Label     ;0    ;660  ;3300 ;440  ;ParentControl=1140029 }
+      { 1140018;Frame     ;0    ;1320 ;5610 ;7810 ;CaptionML=[ENU=Consideration of:;
+                                                              ESP=Consideraci¢n de:] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=VAR
+               NeutralPayments@1140000 : Record 5055260;
+               GLBudgetEntry@1140001 : Record 96;
+             BEGIN
+               IF "G/L Account".READPERMISSION THEN
+                 ConsiderLiqFunds  := TRUE;
+               IF "Cust. Ledger Entry".READPERMISSION THEN
+                 ConsiderCustLedgEntry  := TRUE;
+               IF "Vendor Ledger Entry".READPERMISSION THEN
+                 ConsiderVendLedgEntry := TRUE;
+               IF "Purchase Line".READPERMISSION THEN
+                 ConsiderPurchOrders := TRUE;
+               IF "Sales Line".READPERMISSION THEN
+                 ConsiderSalesOrders := TRUE;
+               IF NeutralPayments.READPERMISSION THEN BEGIN
+                 ConsiderNeutrExpenses := TRUE;
+                 ConsiderNeutrRevenues := TRUE;
+               END;
+               IF InvestmentFixedAsset.READPERMISSION THEN
+                 ConsiderBudgFixedAssets := TRUE;
+               IF SaleFixedAsset.READPERMISSION THEN
+                 ConsiderSaleFixedAssets := TRUE;
+               IF GLBudgetEntry.READPERMISSION THEN
+                 ConsiderGLBudget := TRUE;
+               IF "Service Line".READPERMISSION THEN
+                 ConsiderServiceOrders := TRUE;
+             END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1140014;2;Field     ;
+                  CaptionML=[ENU=Liquidity;
+                             ESP=Liquidez];
+                  SourceExpr=LiquidityNo;
+                  TableRelation=Liquidity;
+                  OnValidate=BEGIN
+                               LiquidityNoOnAfterValidate;
+                             END;
+                              }
+
+      { 1140029;2;Field     ;
+                  CaptionML=[ENU=Posting Date;
+                             ESP=Fecha registro];
+                  SourceExpr=PostDate }
+
+      { 1140018;2;Group     ;
+                  CaptionML=[ENU=Consideration of:;
+                             ESP=Consideraci¢n de:] }
+
+      { 1100000;3;Field     ;
+                  CaptionML=[ENU=Group by Order;
+                             ESP=Agrupar por pedido];
+                  SourceExpr=Summarized }
+
+      { 1140000;3;Field     ;
+                  CaptionML=[ENU=Liquid Funds;
+                             ESP=Fondos corrientes];
+                  SourceExpr=ConsiderLiqFunds }
+
+      { 1140002;3;Field     ;
+                  CaptionML=[ENU=Customer Ledger Entry;
+                             ESP=Mov. cliente];
+                  SourceExpr=ConsiderCustLedgEntry }
+
+      { 1140005;3;Field     ;
+                  CaptionML=[ENU=Vendor Ledger Entry;
+                             ESP=Mov. proveedor];
+                  SourceExpr=ConsiderVendLedgEntry }
+
+      { 1140007;3;Field     ;
+                  CaptionML=[ENU=Purchase Orders;
+                             ESP=Pedidos compra];
+                  SourceExpr=ConsiderPurchOrders }
+
+      { 1140009;3;Field     ;
+                  CaptionML=[ENU=Sales Orders;
+                             ESP=Pedidos venta];
+                  SourceExpr=ConsiderSalesOrders }
+
+      { 1140028;3;Field     ;
+                  CaptionML=[ENU=Service Orders;
+                             ESP=Pedidos servicio];
+                  SourceExpr=ConsiderServiceOrders }
+
+      { 1140020;3;Field     ;
+                  CaptionML=[ENU=Budgeted Fixed Assets;
+                             ESP=Activos fijos pptdos.];
+                  SourceExpr=ConsiderBudgFixedAssets }
+
+      { 1140022;3;Field     ;
+                  CaptionML=[ENU=Planned Sale of Fixed Asset;
+                             ESP=Venta planif. activo fijo];
+                  SourceExpr=ConsiderSaleFixedAssets }
+
+      { 1140011;3;Field     ;
+                  CaptionML=[ENU=Neutral Expenses;
+                             ESP=Gastos neutros];
+                  SourceExpr=ConsiderNeutrExpenses }
+
+      { 1140013;3;Field     ;
+                  CaptionML=[ENU=Neutral Revenues;
+                             ESP=Ingresos neutros];
+                  SourceExpr=ConsiderNeutrRevenues }
+
+      { 1140023;3;Field     ;
+                  CaptionML=[ENU=G/L Budget;
+                             ESP=Ppto. contable];
+                  SourceExpr=ConsiderGLBudget }
+
+      { 1140025;3;Field     ;
+                  CaptionML=[ENU=G/L Budget Name;
+                             ESP=Nombre ppto. contable];
+                  SourceExpr=GLBudgName;
+                  TableRelation="G/L Budget Name" }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text1140000@1140000 : TextConst 'ENU=You have to choose a Liquidity.;ESP=Debe elegir una liquidez.';
+      Text1140001@1140001 : TextConst 'ENU=Please choose a valid Liquidity.;ESP=Elija una liquidez v lida.';
+      Text1140002@1140002 : TextConst 'ENU=Please choose at least one option for filling the Liquidity no. %1.;ESP=Elija al menos una opci¢n para rellenar N§ liquidez %1.';
+      Text1140003@1140003 : TextConst 'ENU=Liquidity No.       #1##########\\;ESP=N§ liquidez         #1##########\\';
+      Text1140004@1140004 : TextConst 'ENU=Liquid Funds;ESP=Fondos corrientes';
+      Text1140005@1140005 : TextConst 'ENU=Customer Ledger Entries;ESP=Movs. clientes';
+      Text1140006@1140006 : TextConst 'ENU=Vendor Ledger Entries;ESP=Movs. proveedores';
+      Text1140007@1140007 : TextConst 'ENU=Purchase Orders;ESP=Pedidos compra';
+      Text1140008@1140008 : TextConst 'ENU=Sales Orders;ESP=Pedidos venta';
+      Text1140009@1140009 : TextConst 'ENU=Investment of Fixed Assets;ESP=Inversi¢n de activos fijos';
+      Text1140010@1140010 : TextConst 'ENU=Sale of Fixed Assets;ESP=Venta activos fijos';
+      Text1140011@1140011 : TextConst 'ENU=Neutral Expenses;ESP=Gastos neutros';
+      Text1140012@1140012 : TextConst 'ENU=Neutral Revenues;ESP=Ingresos neutros';
+      Text1140013@1140013 : TextConst 'ENU="%1 Balance=%2";ESP="Saldo %1=%2"';
+      Text1140014@1140014 : TextConst 'ENU=Cust.Payment;ESP=Pago clte.';
+      Text1140015@1140015 : TextConst 'ENU=Cust.Invoice;ESP=Factura clte.';
+      Text1140016@1140016 : TextConst 'ENU=Cust.Credit Memo;ESP=Abono clte.';
+      Text1140017@1140017 : TextConst 'ENU=Cust. Fin. Ch. Memo;ESP=Doc. int. cliente';
+      Text1140018@1140018 : TextConst 'ENU=Cust.Reminder;ESP=Recordatorio clte.';
+      Text1140019@1140019 : TextConst 'ENU=%1 of %2 %3;ESP=%1 de %2 %3';
+      Text1140020@1140020 : TextConst 'ENU=Vend.Payment;ESP=Pago prov.';
+      Text1140021@1140021 : TextConst 'ENU=Vend.Invoice;ESP=Factura prov.';
+      Text1140022@1140022 : TextConst 'ENU=Vend.Credit Memo;ESP=Abono prov.';
+      Text1140023@1140023 : TextConst 'ENU=Vend. Fin. Ch. Memo;ESP=Doc. int. proveedor';
+      Text1140024@1140024 : TextConst 'ENU=Vend.Reminder;ESP=Recordatorio prov.';
+      Text1140025@1140025 : TextConst 'ENU=Purchase Order %1 %2;ESP=Pedido compra %1 %2';
+      Text1140026@1140026 : TextConst 'ENU=Sales Order %1 %2;ESP=Pedido venta %1 %2';
+      Text1140027@1140027 : TextConst 'ENU="%1 AC= %2";ESP="%1 AC= %2"';
+      Text1140028@1140028 : TextConst 'ENU=Neutr.Expenses %1;ESP=%1 gastos neutr.';
+      Text1140029@1140029 : TextConst 'ENU=Neutr.Revenues %1;ESP=%1 ingresos neutr.';
+      Text1140030@1140030 : TextConst 'ENU="%1 Budget %2 ";ESP="%1 presupuesto %2 "';
+      Text1140031@1140031 : TextConst 'ENU=G/L Budget;ESP=Ppto. contable';
+      Text1140032@1140032 : TextConst 'ENU=Service Orders;ESP=Pedidos servicio';
+      Text1140033@1140033 : TextConst 'ENU=Search for          #2####################\;ESP=Buscar              #2####################\';
+      Text1140034@1140034 : TextConst 'ENU=Record found        #3####################;ESP=Registro encontrado #3####################';
+      Text1140035@1140035 : TextConst 'ENU=There exist ledger entries for this Liquidity. \;ESP=Existen movs. contables para esta liquidez. \';
+      Text1140036@1140036 : TextConst 'ENU=All existing ledger entries will be deleted. \;ESP=Se eliminar n todos los movs. contables existentes. \';
+      Text1140037@1140037 : TextConst 'ENU=Do you want to continue?;ESP=¨Confirma que desea continuar?';
+      LiqPreTemplate@1140038 : Record 5055254;
+      LiqPreName@1140039 : Record 5055255;
+      LiqPreLine@1140040 : Record 5055256;
+      LiqSetup@1140041 : Record 5055253;
+      SelectionLiquidity@1140042 : Record 5055250;
+      LiqLine@1140043 : Record 5055256;
+      LiqLine2@1140044 : Record 5055256;
+      Customer@1140045 : Record 18;
+      Vendor@1140046 : Record 23;
+      Conversion@1140047 : Record 330;
+      PurchHeader@1140048 : Record 38;
+      SalesHeader@1140049 : Record 36;
+      ServiceHeader@1140050 : Record 5900;
+      LiqLedgEntry@1140051 : Record 5055257;
+      FASetup@1140052 : Record 5603;
+      FADeprBook@1140053 : Record 5612;
+      JnlLineDim@1140054 : Record 356;
+      DocDim@1140055 : Record 357;
+      LedgEntryDim@1140056 : Record 355;
+      DefaultDim@1140057 : Record 352;
+      GLBudgDim@1140058 : Record 361;
+      LiqDefaultDim@1140059 : Record 5055268;
+      LiqAcc@11400609 : Record 5055251;
+      GLBudgEntry@1140061 : Record 96;
+      PaymentTerms@1140062 : Record 3;
+      GLSetup@1140063 : Record 98;
+      DimMgt@1140064 : Codeunit 408;
+      LiqDimMgt@1140065 : Codeunit 5055264;
+      Window@1140066 : Dialog;
+      ConsiderLiqFunds@1140071 : Boolean;
+      ConsiderCustLedgEntry@1140072 : Boolean;
+      ConsiderVendLedgEntry@1140073 : Boolean;
+      ConsiderPurchOrders@1140074 : Boolean;
+      ConsiderSalesOrders@1140075 : Boolean;
+      ConsiderBudgFixedAssets@1140076 : Boolean;
+      ConsiderSaleFixedAssets@1140077 : Boolean;
+      ConsiderNeutrExpenses@1140078 : Boolean;
+      ConsiderNeutrRevenues@1140079 : Boolean;
+      ConsiderGLBudget@1140080 : Boolean;
+      ConsiderServiceOrders@1140081 : Boolean;
+      LiquidityNo@1140082 : Code[20];
+      NoLedgEntriesInserted@1140083 : Boolean;
+      EntryType@1140084 : Text[30];
+      LineNo@1140086 : Integer;
+      DateLastExecution@1140087 : Date;
+      ExecutionDate@1140088 : Date;
+      GLBudgName@1140089 : Code[10];
+      PostDate@1140090 : Date;
+      Factor@1140091 : Decimal;
+      MaxPmtTolerance@1140092 : Decimal;
+      Text1140100@1140100 : TextConst 'ENU=Cust. Bill;ESP=Efecto clte.';
+      Text1140101@1140101 : TextConst 'ENU=Vend. Bill;ESP=Efecto prov.';
+      PaymentMethod@1100000 : Record 289;
+      Installment@1100001 : Record 7000018;
+      SalesSetup@1100002 : Record 311;
+      Currency@1100003 : Record 4;
+      CurrencyExchRate@1100004 : Record 330;
+      PurchSetup@1100005 : Record 312;
+      ServSetup@1100006 : Record 5911;
+      AppManagement@1100007 : Codeunit 1;
+      Text1100000@1100020 : TextConst 'ENU=You cannot select a bill-based %1 for a Credit memo.;ESP=Para un abono no se puede seleccionar %1 ya que genera efectos.';
+      Text1100001@1100021 : TextConst 'ENU=%1 must be 1 if %2 is True in %3;ESP=%1 debe ser 1 si %2 is S¡ en %3';
+      DueDateAdjust@1100008 : Codeunit 10700;
+      TotalPerc@1100009 : Decimal;
+      RemainingAmount@1100010 : Decimal;
+      RemainingAmountCurrency@1100011 : Decimal;
+      TotalAmt@1100012 : Decimal;
+      TotalAmtCurrency@1100013 : Decimal;
+      TotalLineAmount@1100014 : Decimal;
+      CurrencyFactor@1100015 : Decimal;
+      CurrDocNo@1100016 : Integer;
+      NextDueDate@1100017 : Date;
+      Text1100002@1100022 : TextConst 'ENU=You do not have permissions to create Documents in Cartera.\;ESP=No tiene permisos para crear Documentos en Cartera.\';
+      Text1100003@1100023 : TextConst 'ENU=Please, change the %1.;ESP=Por favor, cambie el %1.';
+      Text1100004@1100024 : TextConst 'ENU=Sales Order Bill of %1 %2;ESP=Factura de pedido venta de %1 %2';
+      Text1100005@1100025 : TextConst 'ENU=The sum of %1 cannot be greater than 100 in the installments for %2 %3.;ESP=La suma de %1 no puede superar 100 en los plazos de %2 %3.';
+      Text1100006@1100026 : TextConst 'ENU=Purchase Order Bill of %1 %2;ESP=Factura de pedido compra de %1 %2';
+      Text1100007@1100027 : TextConst 'ENU=Service Order Bill of %1 %2;ESP=Factura de pedido servicio de %1 %2';
+      Summarized@1100018 : Boolean;
+      MultiSalesLines@1100019 : Boolean;
+
+    PROCEDURE SetLiqPreLine@1140000(NewLiqLine@1140000 : Record 5055256);
+    BEGIN
+      LiqPreLine := NewLiqLine;
+    END;
+
+    PROCEDURE SetLiqPreName@1140001(NewLiqPreName@1140000 : Record 5055255);
+    BEGIN
+      LiqPreLine."Journal Template Name" := NewLiqPreName."Journal Template Name";
+      LiqPreLine."Journal Batch Name" := NewLiqPreName.Name;
+    END;
+
+    LOCAL PROCEDURE InsertLiqLine@1140002();
+    BEGIN
+      WITH LiqLine DO BEGIN
+        LineNo := LineNo + 8;
+        TRANSFERFIELDS(LiqLine2);
+        LiqLine."Liquidity No." := Liquidity."No.";
+        "Journal Template Name" :=  LiqPreLine."Journal Template Name";
+        "Journal Batch Name" := LiqPreLine."Journal Batch Name";
+        "Source Code" := LiqPreTemplate."Source Code";
+        "Reason Code" :=  LiqPreName."Reason Code";
+        "Line No." := LineNo;
+        "Posting Date" := PostDate;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE SplitSalesInv@1100000(VAR SalesHeader@1100000 : Record 36;SalesLine@1100001 : Record 37;VAR LiqLine3@1100002 : Record 5055256;TotalAmount@1100003 : Decimal;VATAmount@1100004 : Decimal);
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo") THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF "Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := "Currency Factor";
+
+        GLSetup.GET;
+        SalesSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+
+        RemainingAmount := TotalAmount;
+        RemainingAmountCurrency := RoundReceivableAmtLCY(
+            CurrencyExchRate.ExchangeAmtLCYToFCY(
+              "Posting Date",
+              Currency.Code,
+              RemainingAmount,
+              CurrencyFactor));
+
+
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+          IF SalesSetup."Invoice Rounding" THEN
+            GLSetup.TESTFIELD("Inv. Rounding Precision (LCY)")
+          ELSE
+            GLSetup.TESTFIELD("Amount Rounding Precision");
+        END ELSE BEGIN
+          Currency.GET("Currency Code");
+          IF SalesSetup."Invoice Rounding" THEN
+            Currency.TESTFIELD("Invoice Rounding Precision")
+          ELSE
+            Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+        TotalAmount := RoundReceivableAmt(TotalAmount);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := "Due Date";
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          LiqLine3."Due Date" := NextDueDate;
+          LiqLine3.Description :=
+            COPYSTR(STRSUBSTNO(Text1100004,FORMAT(LiqLine3."Due Date"),
+                SalesHeader."Sell-to Customer Name"),1,MAXSTRLEN(LiqLine2.Description));
+          DueDateAdjust.SalesAdjustDueDate(LiqLine3."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Bill-to Customer No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    LiqLine3.Amount := RoundReceivableAmt(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := RoundReceivableAmt(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := RoundReceivableAmt(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := RoundReceivableAmt(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := RoundReceivableAmt(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - LiqLine3.Amount;
+            RemainingAmountCurrency := RoundReceivableAmtLCY(
+                CurrencyExchRate.ExchangeAmtLCYToFCY(
+                  "Posting Date",
+                  Currency.Code,
+                  RemainingAmount,
+                  CurrencyFactor));
+
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            LiqLine3.Amount := RemainingAmount;
+            LiqLine3."Amount (Currency)" := RemainingAmountCurrency;
+          END;
+
+          LiqLine3."Currency Code" := "Sales Line"."Currency Code";
+
+          IF PaymentMethod."Create Bills" AND (LiqLine3.Amount <> 0) THEN BEGIN
+            InsertLiqLine;
+            DocDim.RESET;
+            DocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+            DocDim.SETRANGE("Document Type",SalesLine."Document Type");
+            DocDim.SETRANGE("Document No.",SalesLine."Document No.");
+            DocDim.SETRANGE("Line No.",SalesLine."Line No.");
+            LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+              LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE SplitPurchInv@1100001(VAR PurchHeader@1100000 : Record 38;PurchLine@1100001 : Record 39;VAR LiqLine3@1100002 : Record 5055256;TotalAmount@1100003 : Decimal;VATAmount@1100004 : Decimal);
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo") THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF "Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := "Currency Factor";
+
+        GLSetup.GET;
+        PurchSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+
+        RemainingAmount := TotalAmount;
+        RemainingAmountCurrency := RoundPayableAmtLCY(
+            CurrencyExchRate.ExchangeAmtLCYToFCY(
+              "Posting Date",
+              Currency.Code,
+              RemainingAmount,
+              CurrencyFactor));
+
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+          IF PurchSetup."Invoice Rounding" THEN
+            GLSetup.TESTFIELD("Inv. Rounding Precision (LCY)")
+          ELSE
+            GLSetup.TESTFIELD("Amount Rounding Precision");
+        END ELSE BEGIN
+          Currency.GET("Currency Code");
+          IF SalesSetup."Invoice Rounding" THEN
+            Currency.TESTFIELD("Invoice Rounding Precision")
+          ELSE
+            Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+        TotalAmount := RoundPayableAmt(TotalAmount);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := "Due Date";
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          LiqLine3."Due Date" := NextDueDate;
+          LiqLine3.Description :=
+            COPYSTR(STRSUBSTNO(Text1100006,FORMAT(LiqLine3."Due Date"),
+                PurchHeader."Buy-from Vendor Name"),1,MAXSTRLEN(LiqLine2.Description));
+          DueDateAdjust.PurchAdjustDueDate(LiqLine3."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Pay-to Vendor No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    LiqLine3."Amount (Currency)" := RoundPayableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundPayableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundPayableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundPayableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundPayableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - LiqLine3.Amount;
+            RemainingAmountCurrency := RoundPayableAmtLCY(
+                CurrencyExchRate.ExchangeAmtLCYToFCY(
+                  "Posting Date",
+                  Currency.Code,
+                  RemainingAmount,
+                  CurrencyFactor));
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            LiqLine3.Amount := RemainingAmount;
+            LiqLine3."Amount (Currency)" := RemainingAmountCurrency;
+          END;
+
+          LiqLine3."Currency Code" := "Purchase Line"."Currency Code";
+
+          IF PaymentMethod."Create Bills" AND (LiqLine3.Amount <> 0) THEN BEGIN
+            InsertLiqLine;
+            DocDim.RESET;
+            DocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+            DocDim.SETRANGE("Document Type",PurchLine."Document Type");
+            DocDim.SETRANGE("Document No.",PurchLine."Document No.");
+            DocDim.SETRANGE("Line No.",PurchLine."Line No.");
+            LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+              LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE SplitServInv@1100002(VAR ServHeader@1100000 : Record 5900;ServLine@1100002 : Record 5902;VAR LiqLine3@1100003 : Record 5055256;TotalAmount@1100004 : Decimal;VATAmount@1100005 : Decimal);
+    BEGIN
+      WITH ServHeader DO BEGIN
+        IF NOT PaymentMethod.GET("Payment Method Code") THEN
+          EXIT;
+        IF (NOT PaymentMethod."Create Bills") AND (NOT PaymentMethod."Invoices to Cartera") THEN
+          EXIT;
+        IF PaymentMethod."Create Bills" AND ("Document Type" = "Document Type"::"Credit Memo") THEN
+          ERROR(
+            Text1100000,
+            FIELDCAPTION("Payment Method Code"));
+
+        IF ServiceHeader."Currency Code" = '' THEN
+          CurrencyFactor := 1
+        ELSE
+          CurrencyFactor := ServiceHeader."Currency Factor";
+
+        GLSetup.GET;
+        ServSetup.GET;
+        TESTFIELD("Payment Terms Code");
+        PaymentTerms.GET("Payment Terms Code");
+        PaymentTerms.CALCFIELDS("No. of Installments");
+        IF PaymentTerms."No. of Installments" = 0 THEN
+          PaymentTerms."No. of Installments" := 1;
+        IF PaymentMethod."Invoices to Cartera" AND (PaymentTerms."No. of Installments" > 1) THEN
+          ERROR(
+            Text1100001,
+            PaymentTerms.FIELDCAPTION("No. of Installments"),
+            PaymentMethod.FIELDCAPTION("Invoices to Cartera"),
+            PaymentMethod.TABLECAPTION);
+
+        RemainingAmount := TotalAmount;
+        RemainingAmountCurrency := RoundReceivableAmtLCY(
+            CurrencyExchRate.ExchangeAmtLCYToFCY(
+              "Posting Date",
+              Currency.Code,
+              RemainingAmount,
+              CurrencyFactor));
+
+        IF "Currency Code" = '' THEN BEGIN
+          Currency."Invoice Rounding Precision" := GLSetup."Inv. Rounding Precision (LCY)";
+          Currency."Invoice Rounding Type" := GLSetup."Inv. Rounding Type (LCY)";
+          Currency."Amount Rounding Precision" := GLSetup."Amount Rounding Precision";
+        END ELSE
+          Currency.GET("Currency Code");
+        TotalAmount := RoundReceivableAmt(TotalAmount);
+
+        IF PaymentTerms."No. of Installments" > 0 THEN BEGIN
+          Installment.SETRANGE("Payment Terms Code",PaymentTerms.Code);
+          IF Installment.FIND('-') THEN;
+        END;
+
+        NextDueDate := "Due Date";
+
+        FOR CurrDocNo := 1 TO PaymentTerms."No. of Installments" DO BEGIN
+          LiqLine3."Due Date" := NextDueDate;
+          LiqLine3.Description :=
+            COPYSTR(STRSUBSTNO(Text1100007,FORMAT(LiqLine3."Due Date"),
+                ServHeader.Name),1,MAXSTRLEN(LiqLine2.Description));
+          DueDateAdjust.SalesAdjustDueDate(LiqLine3."Due Date","Document Date",PaymentTerms.CalculateMaxDueDate("Document Date"),
+      "Bill-to Customer No.");
+          IF CurrDocNo < PaymentTerms."No. of Installments" THEN BEGIN
+            Installment.TESTFIELD("% of Total");
+            IF CurrDocNo = 1 THEN BEGIN
+              TotalPerc := Installment."% of Total";
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100 + VATAmount);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END ELSE BEGIN
+              TotalPerc := TotalPerc + Installment."% of Total";
+              IF TotalPerc >= 100 THEN
+                ERROR(
+                  Text1100005,
+                  Installment.FIELDCAPTION("% of Total"),
+                  PaymentTerms.TABLECAPTION,
+                  PaymentTerms.Code);
+              CASE PaymentTerms."VAT distribution" OF
+                PaymentTerms."VAT distribution"::"First Installment",
+                PaymentTerms."VAT distribution"::"Last Installment":
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        (TotalAmount - VATAmount) * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+                PaymentTerms."VAT distribution"::Proportional:
+                  BEGIN
+                    LiqLine3.Amount := ROUND(
+                        TotalAmount * Installment."% of Total" / 100);
+                    LiqLine3."Amount (Currency)" := RoundReceivableAmtLCY(
+                        CurrencyExchRate.ExchangeAmtLCYToFCY(
+                          "Posting Date",
+                          Currency.Code,
+                          LiqLine3.Amount,
+                          CurrencyFactor));
+                  END;
+              END;
+            END;
+            RemainingAmount := RemainingAmount - LiqLine3.Amount;
+            RemainingAmountCurrency := RoundReceivableAmtLCY(
+                CurrencyExchRate.ExchangeAmtLCYToFCY(
+                  "Posting Date",
+                  Currency.Code,
+                  RemainingAmount,
+                  CurrencyFactor));
+            Installment.TESTFIELD("Gap between Installments");
+            NextDueDate := CALCDATE(Installment."Gap between Installments",NextDueDate);
+            Installment.NEXT;
+          END ELSE BEGIN
+            LiqLine3.Amount := RemainingAmount;
+            LiqLine3."Amount (Currency)" := RemainingAmountCurrency;
+          END;
+
+          LiqLine3."Currency Code" := "Service Line"."Currency Code";
+
+          IF PaymentMethod."Create Bills" AND (LiqLine3.Amount <> 0) THEN BEGIN
+            InsertLiqLine;
+            DocDim.RESET;
+            DocDim.SETRANGE("Table ID",DATABASE::"Service Line");
+            DocDim.SETRANGE("Document Type",ServLine."Document Type");
+            DocDim.SETRANGE("Document No.",ServLine."Document No.");
+            DocDim.SETRANGE("Line No.",ServLine."Line No.");
+            LiqDimMgt.MoveDocDimToJnlLineDim(DocDim,JnlLineDim,DATABASE::"Liq. Journal Line",LiqLine."Journal Template Name",
+              LiqLine."Journal Batch Name",LiqLine."Line No.",0);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE RoundReceivableAmt@1100003(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+            Amount,
+            Currency."Invoice Rounding Precision",
+            SELECTSTR(Currency."Invoice Rounding Type" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+            Amount,
+            Currency."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundReceivableAmtLCY@1100004(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+            Amount,
+            GLSetup."Inv. Rounding Precision (LCY)",
+            SELECTSTR(GLSetup."Inv. Rounding Type (LCY)" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+            Amount,
+            GLSetup."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundPayableAmt@1100005(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+            Amount,
+            Currency."Invoice Rounding Precision",
+            SELECTSTR(Currency."Invoice Rounding Type" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+            Amount,
+            Currency."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    PROCEDURE RoundPayableAmtLCY@1100006(Amount@1100000 : Decimal) : Decimal;
+    BEGIN
+      IF SalesSetup."Invoice Rounding" THEN
+        Amount := ROUND(
+            Amount,
+            GLSetup."Inv. Rounding Precision (LCY)",
+            SELECTSTR(GLSetup."Inv. Rounding Type (LCY)" + 1,'=,>,<'))
+      ELSE
+        Amount := ROUND(
+            Amount,
+            GLSetup."Amount Rounding Precision");
+
+      EXIT(Amount);
+    END;
+
+    LOCAL PROCEDURE LiquidityNoOnAfterValidate@19049317();
+    BEGIN
+      IF LiquidityNo <> '' THEN
+        SelectionLiquidity.GET(LiquidityNo)
+      ELSE
+        SelectionLiquidity.INIT;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

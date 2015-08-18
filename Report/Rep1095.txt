@@ -1,0 +1,239 @@
+OBJECT Report 1095 Update Job Item Cost
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 169=rm;
+    CaptionML=[ENU=Update Job Item Cost;
+               ESP=Actualizar coste productos proyecto];
+    ProcessingOnly=Yes;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table167;
+        DataItemTableView=WHERE(Status=FILTER(<>Completed));
+        OnPreDataItem=BEGIN
+                        NoOfJobLedgEntry := 0;
+                        Job.LOCKTABLE;
+                      END;
+
+        OnPostDataItem=BEGIN
+                         IF HideResult = FALSE THEN BEGIN
+                           IF NoOfJobLedgEntry <> 0 THEN
+                             MESSAGE(Text001 + STRSUBSTNO(Text002,NoOfJobLedgEntry))
+                           ELSE
+                             MESSAGE(Text003);
+                         END;
+                       END;
+
+        ReqFilterFields=No.;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table169;
+        DataItemTableView=SORTING(Type,Entry Type,Country/Region Code,Source Code,Posting Date)
+                          WHERE(Type=FILTER(=Item),
+                                Entry Type=FILTER(=Usage));
+        OnPreDataItem=BEGIN
+                        "Job Ledger Entry".LOCKTABLE;
+                      END;
+
+        ReqFilterFields=Posting Date;
+        DataItemLink=Job No.=FIELD(No.);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table32;
+        OnPreDataItem=BEGIN
+                        "Item Ledger Entry".LOCKTABLE;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           AddCurrencyFactor@1000 : Decimal;
+                           JobLedgerEntryCostValue@1001 : Decimal;
+                           JobLedgerEntryCostValueACY@1002 : Decimal;
+                           ValueEntry@1003 : Record 5802;
+                           ValueEntry2@1004 : Record 5802;
+                         BEGIN
+                           ValueEntry.SETCURRENTKEY("Job No.","Job Task No.","Document No.");
+                           ValueEntry.SETRANGE("Job No.","Job Ledger Entry"."Job No.");
+                           ValueEntry.SETRANGE("Job Task No.","Job Ledger Entry"."Job Task No.");
+                           ValueEntry.SETRANGE("Job Ledger Entry No.","Job Ledger Entry"."Entry No.");
+                           ValueEntry.SETRANGE("Item Ledger Entry No.","Item Ledger Entry"."Entry No.");
+                           ValueEntry.SETRANGE("Item Ledger Entry Type",ValueEntry."Item Ledger Entry Type"::"Negative Adjmt.");
+                           ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Purchase Invoice");
+
+                           IF NOT ValueEntry.FINDFIRST THEN BEGIN
+                             "Item Ledger Entry".CALCFIELDS("Cost Amount (Expected)","Cost Amount (Expected) (ACY)",
+                               "Cost Amount (Actual)", "Cost Amount (Actual) (ACY)");
+                             JobLedgerEntryCostValue := "Cost Amount (Expected)" + "Cost Amount (Actual)";
+                             JobLedgerEntryCostValueACY := "Cost Amount (Expected) (ACY)" + "Cost Amount (Actual) (ACY)";
+                             IF "Job Ledger Entry"."Total Cost (LCY)" <> -JobLedgerEntryCostValue THEN BEGIN
+
+                               //Update Total Costs
+                               "Job Ledger Entry"."Total Cost (LCY)" := -JobLedgerEntryCostValue;
+                               IF "Job Ledger Entry"."Currency Code" = '' THEN
+                                 "Job Ledger Entry"."Total Cost" := -JobLedgerEntryCostValue
+                               ELSE
+                                 "Job Ledger Entry"."Total Cost" := -JobLedgerEntryCostValue *
+                                 "Job Ledger Entry"."Currency Factor";
+                               IF JobLedgerEntryCostValueACY <> 0 THEN
+                                 "Job Ledger Entry"."Additional-Currency Total Cost" := -JobLedgerEntryCostValueACY;
+
+                               //Update Unit Costs
+                               "Job Ledger Entry"."Unit Cost (LCY)" :=
+                                 "Job Ledger Entry"."Total Cost (LCY)"/"Job Ledger Entry".Quantity;
+                               "Job Ledger Entry"."Unit Cost" :=
+                                 "Job Ledger Entry"."Total Cost"/"Job Ledger Entry".Quantity;
+
+                               "Job Ledger Entry".Adjusted := TRUE;
+                               "Job Ledger Entry"."DateTime Adjusted" := CURRENTDATETIME;
+                               "Job Ledger Entry".MODIFY;
+                               NoOfJobLedgEntry := NoOfJobLedgEntry + 1;
+                             END;
+                           END ELSE BEGIN
+                             ValueEntry.SETRANGE(Adjustment,FALSE);
+                             IF ValueEntry.FINDFIRST THEN BEGIN
+                               JobLedgerEntryCostValue := ValueEntry."Cost Amount (Actual)";
+                               JobLedgerEntryCostValueACY := ValueEntry."Cost Amount (Actual) (ACY)";
+
+                               ValueEntry2.SETCURRENTKEY("Item Ledger Entry No.","Entry Type");
+                               ValueEntry2.SETRANGE("Item Ledger Entry No.","Item Ledger Entry"."Entry No.");
+                               ValueEntry2.SETRANGE("Document No.",ValueEntry."Document No.");
+                               ValueEntry2.SETRANGE("Item Ledger Entry Type",ValueEntry."Item Ledger Entry Type"::"Negative Adjmt.");
+                               ValueEntry2.SETRANGE("Document Type",ValueEntry."Document Type"::"Purchase Invoice");
+                               ValueEntry2.SETRANGE(Adjustment,TRUE);
+                               IF ValueEntry2.FINDSET THEN BEGIN
+                                 REPEAT
+                                   JobLedgerEntryCostValue := JobLedgerEntryCostValue + ValueEntry2."Cost Amount (Actual)";
+                                   JobLedgerEntryCostValueACY := JobLedgerEntryCostValueACY + ValueEntry2."Cost Amount (Actual) (ACY)";
+                                   IF ValueEntry2."Job Ledger Entry No." = 0 THEN BEGIN
+                                     ValueEntry2."Job No." := ValueEntry."Job No.";
+                                     ValueEntry2."Job Task No." := ValueEntry."Job Task No.";
+                                     ValueEntry2."Job Ledger Entry No." := ValueEntry."Job Ledger Entry No.";
+                                     ValueEntry2.MODIFY;
+                                   END;
+                                 UNTIL ValueEntry2.NEXT = 0;
+
+                                 IF "Job Ledger Entry"."Total Cost (LCY)" <> -JobLedgerEntryCostValue THEN BEGIN
+                                   //Update Total Costs
+                                   "Job Ledger Entry"."Total Cost (LCY)" := -JobLedgerEntryCostValue;
+                                   IF "Job Ledger Entry"."Currency Code" = '' THEN
+                                     "Job Ledger Entry"."Total Cost" := -JobLedgerEntryCostValue
+                                   ELSE
+                                     "Job Ledger Entry"."Total Cost" := -JobLedgerEntryCostValue *
+                                     "Job Ledger Entry"."Currency Factor";
+                                   IF JobLedgerEntryCostValueACY <> 0 THEN
+                                     "Job Ledger Entry"."Additional-Currency Total Cost" := -JobLedgerEntryCostValueACY;
+
+                                   //Update Unit Costs
+                                   "Job Ledger Entry"."Unit Cost (LCY)" :=
+                                     "Job Ledger Entry"."Total Cost (LCY)"/"Job Ledger Entry".Quantity;
+                                   "Job Ledger Entry"."Unit Cost" :=
+                                     "Job Ledger Entry"."Total Cost"/"Job Ledger Entry".Quantity;
+
+                                   "Job Ledger Entry".Adjusted := TRUE;
+                                   "Job Ledger Entry"."DateTime Adjusted" := CURRENTDATETIME;
+                                   "Job Ledger Entry".MODIFY;
+                                   NoOfJobLedgEntry := NoOfJobLedgEntry + 1;
+                                 END;
+                               END;
+                             END;
+                           END;
+                         END;
+
+        DataItemLink=Entry No.=FIELD(Ledger Entry No.);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=9020;
+      Height=3410;
+    }
+    CONTROLS
+    {
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text001@1000 : TextConst 'ENU=The Job Ledger Entry item costs have now been updated to equal the related item ledger entry actual costs.;ESP=Los costes de productos de mov. proyecto ya se han actualizado para igualar los costes reales del mov. producto relacionado.';
+      NoOfJobLedgEntry@1002 : Integer;
+      Text002@1003 : TextConst 'ENU="\\Number of Job Ledger Entries modified = %1.";ESP="\\N£mero de movs. proyecto modificados = %1."';
+      Text003@1001 : TextConst 'ENU=There were no job ledger entries that needed to be updated.;ESP=No se encontraron movimientos de proyecto que actualizar.';
+      HideResult@1004 : Boolean;
+
+    PROCEDURE SetProperties@1(SuppressSummary@1000 : Boolean);
+    BEGIN
+      HideResult := SuppressSummary;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

@@ -1,0 +1,670 @@
+OBJECT Table 7010327 Conductor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/07/15;
+    Time=22:48:46;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               rGaraje@1100244000 : Record 7010310;
+               rPar@1100244001 : Record 7010311;
+               rUser@1100244002 : Record 7010420;
+             BEGIN
+               IF Conductor = '' THEN BEGIN
+                 rPar.FINDFIRST;
+                 rPar.TESTFIELD("Serie Conductores");
+                 GestNoSerie.InitSeries(rPar."Serie Conductores", rPar."Serie Conductores", TODAY,
+                                        Conductor, rPar."Serie Conductores");
+               END;
+
+               "Nombre Abreviado":= Conductor;
+               IF (Garaje='') AND rUser.GET(USERID) AND (rUser."Garaje por defecto" <> '') THEN
+                 Garaje := rUser."Garaje por defecto";
+             END;
+
+    OnDelete=VAR
+               rParte@1100244000 : Record 7010360;
+               rHoras@1100244002 : Record 7010332;
+               ERROR1@1100244004 : TextConst 'ESP=Se han encontrado partes con este conductor asignado';
+               ERROR2@1100244005 : TextConst 'ESP=Se han encontrado registros de horas realizadas para este conductor';
+               rIng@1100244006 : Record 7010339;
+               ERROR3@1100244007 : TextConst 'ESP=Se han encontrato datos sobre ingresos para este conductor.';
+               rDiasLibres@1100244008 : Record 7035340;
+             BEGIN
+               //Comprobaremos que no exista este conductor ni en la tabla partes ni en la tabla de horas
+               //realizadas, ni en la de Ingresos Conductor.
+               rParte.RESET;
+               rParte.SETCURRENTKEY("Cod Conductor");
+               rParte.SETRANGE("Cod Conductor",Conductor);
+               IF rParte.FINDFIRST THEN
+                  ERROR(ERROR1);
+
+               rHoras.SETCURRENTKEY(Conductor);
+               rHoras.SETRANGE(Conductor,Conductor);
+               IF rHoras.FINDFIRST THEN
+                  ERROR(ERROR2);
+
+               rIng.SETCURRENTKEY(Conductor);
+               rIng.SETRANGE(Conductor,Conductor);
+               IF rIng.FINDFIRST THEN
+                  ERROR(ERROR3);
+
+               //Borramos todas las incidencias y contratos relacionados.
+               rIncid.RESET;
+               rIncid.SETCURRENTKEY(Conductor);
+               rIncid.SETRANGE(Conductor,Conductor);
+               rIncid.DELETEALL(FALSE);
+
+               rContrato.RESET;
+               rContrato.SETCURRENTKEY(Conductor);
+               rContrato.SETRANGE(Conductor,Conductor);
+               rContrato.DELETEALL(FALSE);
+
+               // AML 121102
+               // Se borran los dias libres que pudiera tener ese conductor.
+               rDiasLibres.RESET;
+               IF rDiasLibres.GET(Conductor) THEN
+                 rDiasLibres.DELETE;
+             END;
+
+    CaptionML=ESP=Conductor;
+    LookupFormID=Form7010358;
+    DrillDownFormID=Form7010358;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Conductor           ;Code10        ;AltSearchField=Nombre Abreviado;
+                                                   OnValidate=VAR
+                                                                cFunBas@1100244000 : Codeunit 7010310;
+                                                              BEGIN
+                                                                cFunBas.TestGarajeTodos(Garaje);
+                                                                cFunBas.TestRestringido(Garaje);
+                                                              END;
+
+                                                   ValidateTableRelation=Yes;
+                                                   TestTableRelation=Yes;
+                                                   CaptionML=ESP=Conductor;
+                                                   NotBlank=Yes;
+                                                   Description=PK }
+    { 2   ;   ;Garaje              ;Code10        ;TableRelation=Garaje.Garaje;
+                                                   OnValidate=BEGIN
+                                                                // AJS 13.04.2004
+                                                                // Si se cambia el garaje de un conductor hay que cambiar el garaje de las incidencias futuras y los dias libres
+
+                                                                IF Garaje <> xRec.Garaje THEN BEGIN
+
+                                                                  rIncid.RESET;
+                                                                  rIncid.SETCURRENTKEY(Conductor);
+                                                                  rIncid.SETRANGE(Conductor, Conductor);
+                                                                  rIncid.SETFILTER("Fecha Hasta", '>=%1|%2', TODAY, 0D);
+                                                                  IF rIncid.FINDSET(TRUE) THEN BEGIN
+                                                                    REPEAT
+                                                                      rIncidDia.RESET;
+                                                                      rIncidDia.SETCURRENTKEY(id,
+                                                                                              Conductor);
+                                                                      rIncidDia.SETRANGE(Conductor, rIncid.Conductor );
+                                                                      rIncidDia.SETRANGE(id       , rIncid.ID);
+                                                                      IF rIncidDia.FINDFIRST THEN
+                                                                        rIncidDia.MODIFYALL(Garage, Garaje);
+
+                                                                      rIncid.Garaje := Garaje;
+                                                                      rIncid.MODIFY;
+                                                                    UNTIL rIncid.NEXT = 0;
+                                                                  END;
+
+                                                                  rContrato.RESET;
+                                                                  rContrato.SETCURRENTKEY(Conductor);
+                                                                  rContrato.SETRANGE (Conductor,Conductor);
+                                                                  rContrato.SETFILTER("Fecha Baja", '>=%1|%2', TODAY, 0D);
+                                                                  IF rContrato.FINDFIRST THEN
+                                                                    rContrato.MODIFYALL(Garaje, Garaje);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Garaje;
+                                                   NotBlank=Yes;
+                                                   Description=FK Garaje }
+    { 3   ;   ;Nombre              ;Text30        ;CaptionML=ESP=Nombre }
+    { 4   ;   ;DNI                 ;Text20        ;CaptionML=ESP=DNI }
+    { 5   ;   ;Domicilio           ;Text60        ;CaptionML=ESP=Domicilio }
+    { 6   ;   ;Telefono            ;Text20        ;CaptionML=ESP=Telefono }
+    { 10  ;   ;Externo             ;Boolean       ;OnValidate=BEGIN
+                                                                IF NOT Externo THEN
+                                                                  VALIDATE("Empresa Conductor", '');
+                                                              END;
+
+                                                   CaptionML=ESP=Externo;
+                                                   Description=Para indicar si es de la empresa o externo. }
+    { 11  ;   ;Bloqueado           ;Boolean       ;CaptionML=ESP=Bloqueado;
+                                                   Description=Se usa para no permitir asignar el conductor a un parte. }
+    { 14  ;   ;Vehiculo habitual   ;Code10        ;TableRelation=Vehiculo.Matricula;
+                                                   OnValidate=VAR
+                                                                rVeh@1100244000 : Record 7010346;
+                                                              BEGIN
+                                                                IF "Vehiculo habitual" <> xRec."Vehiculo habitual" THEN
+                                                                BEGIN
+                                                                  IF "Vehiculo habitual" = '' THEN
+                                                                  BEGIN
+                                                                    "Grupo Vehiculo" := '';
+                                                                  END
+                                                                  ELSE
+                                                                  BEGIN
+                                                                    IF "Grupo Vehiculo" = '' THEN
+                                                                    BEGIN
+                                                                      CLEAR(rVeh);
+                                                                      IF rVeh.GET("Vehiculo habitual") THEN
+                                                                        "Grupo Vehiculo" := rVeh."Tipo vehiculo";
+                                                                    END;
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Vehiculo habitual;
+                                                   Description=FK Vehiculo }
+    { 15  ;   ;Fecha 1er viaje anual;Date         ;CaptionML=ESP=Fecha 1er viaje anual;
+                                                   Description=Fecha Primer Viaje del A¤o en Curso }
+    { 16  ;   ;Grupo Vehiculo      ;Code10        ;TableRelation="Tipo Vehiculo".Codigo;
+                                                   CaptionML=ESP=Grupo Vehiculo }
+    { 17  ;   ;Fecha ultimo viaje  ;Date          ;CaptionML=ESP=Fecha ultimo viaje;
+                                                   Description=Fecha Ultimo Viaje del A¤o en Curso }
+    { 18  ;   ;Horas Servicio Realizadas;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Registro Actividad Conductor"."Horas Servicio" WHERE (Conductor=FIELD(Conductor),
+                                                                                                                          Fecha=FIELD(Filtro Fechas),
+                                                                                                                          Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=Horas Servicio Realizadas;
+                                                   Description=FlowField }
+    { 19  ;   ;Filtro Fechas       ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro Fechas;
+                                                   Description=FlowFilter }
+    { 20  ;   ;Horas Extra Realizadas;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Registro Actividad Conductor"."Horas Extra" WHERE (Conductor=FIELD(Conductor),
+                                                                                                                       Fecha=FIELD(Filtro Fechas),
+                                                                                                                       Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=Horas Extra Realizadas;
+                                                   Description=FlowField }
+    { 21  ;   ;N§ Viajes           ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Registro Actividad x Parte".Cantidad WHERE (Conductor=FIELD(Conductor),
+                                                                                                                Fecha=FIELD(Filtro Fechas),
+                                                                                                                Garaje=FIELD(Filtro Garaje Resultados),
+                                                                                                                Indicador Viajes=CONST(Yes)));
+                                                   CaptionML=ESP=N§ Viajes;
+                                                   Description=FlowField }
+    { 22  ;   ;Maletas             ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Registro Actividad x Parte".Cantidad WHERE (Conductor=FIELD(Conductor),
+                                                                                                                Fecha=FIELD(Filtro Fechas),
+                                                                                                                Garaje=FIELD(Filtro Garaje Resultados),
+                                                                                                                Indicador Maletas=CONST(Yes)));
+                                                   CaptionML=ESP=Maletas;
+                                                   Description=FlowField }
+    { 24  ;   ;Retribuci¢n         ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Ingresos Conductor x Periodo".Cantidad WHERE (Conductor=FIELD(Conductor),
+                                                                                                                  Fecha Inicio=FIELD(Filtro Fechas),
+                                                                                                                  Concepto Variable=FIELD(Filtro Concepto variable)));
+                                                   CaptionML=ESP=Retribuci¢n;
+                                                   Description=flowfield }
+    { 26  ;   ;Ingresos            ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Ingresos Conductor x Periodo"."Importe DL" WHERE (Conductor=FIELD(Conductor),
+                                                                                                                      Fecha Inicio=FIELD(Filtro Fechas),
+                                                                                                                      Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=Ingresos;
+                                                   Description=FlowField }
+    { 27  ;   ;Dietas              ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Registro Actividad Conductor".Dietas WHERE (Conductor=FIELD(Conductor),
+                                                                                                                Fecha=FIELD(Filtro Fechas),
+                                                                                                                Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=Dietas;
+                                                   Description=FlowField }
+    { 28  ;   ;Filtro Concepto variable;Code10    ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro Concepto variable;
+                                                   Description=flowfilter }
+    { 29  ;   ;Filtro Vehiculo     ;Code10        ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro Vehiculo;
+                                                   Description=FlowFilter }
+    { 30  ;   ;Apellidos           ;Text30        ;CaptionML=ESP=Apellidos }
+    { 31  ;   ;Nombre Abreviado    ;Code20        ;OnValidate=VAR
+                                                                rCond@1100244000 : Record 7010327;
+                                                                YA_EXISTE@1100244001 : TextConst 'ESP=Ya existe el conductor con nombre abreviado  %1';
+                                                                CONFORMIDAD@1100244002 : TextConst 'ESP=¨ Est  seguro que quiere cambiar el nombre abreviado?';
+                                                                rHorasCond@1100244003 : Record 7010332;
+                                                                rIng@1100244004 : Record 7010339;
+                                                                AVISO_RETROCESO@1100244005 : TextConst 'ESP=No se efectu¢ el cambio';
+                                                                rParte@1100244006 : Record 7010360;
+                                                              BEGIN
+                                                                rCond.RESET;
+                                                                rCond.SETCURRENTKEY("Nombre Abreviado");
+                                                                rCond.SETRANGE("Nombre Abreviado","Nombre Abreviado");
+                                                                IF rCond.FINDFIRST THEN
+                                                                  ERROR(YA_EXISTE,"Nombre Abreviado");
+
+                                                                IF CONFIRM(CONFORMIDAD) THEN
+                                                                BEGIN
+                                                                  //Cambiaremos el nombre de las horas realizadas.
+                                                                  rHorasCond.SETCURRENTKEY(Conductor);
+                                                                  rHorasCond.SETRANGE(Conductor, Conductor);
+                                                                  IF rHorasCond.FINDSET(TRUE) THEN REPEAT
+                                                                    rHorasCond."Nombre Abreviado" := "Nombre Abreviado";
+                                                                    rHorasCond.MODIFY;
+                                                                  UNTIL rHorasCond.NEXT=0;
+
+                                                                  //Cambiaremos el nombre en los partes.
+                                                                  rParte.SETCURRENTKEY("Cod Conductor",Fecha);
+                                                                  rParte.SETRANGE("Cod Conductor",Conductor);
+                                                                  IF rParte.FINDSET(TRUE) THEN REPEAT
+                                                                    rParte.Conductor := "Nombre Abreviado";
+                                                                    rParte.MODIFY;
+                                                                  UNTIL rParte.NEXT=0;
+
+                                                                  //Y tambien para los ingresos.
+                                                                  rIng.SETCURRENTKEY(Conductor);
+                                                                  rIng.SETRANGE(Conductor,Conductor);
+                                                                  IF rIng.FINDSET(TRUE) THEN REPEAT
+                                                                    rIng."Nombre Abreviado" := "Nombre Abreviado";
+                                                                    rIng.MODIFY;
+                                                                  UNTIL rIng.NEXT=0;
+
+                                                                END
+                                                                ELSE
+                                                                  ERROR(AVISO_RETROCESO);
+                                                              END;
+
+                                                   CaptionML=ESP=Nombre Abreviado;
+                                                   NotBlank=Yes }
+    { 32  ;   ;Fecha Antiguedad    ;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha Antiguedad" >= TODAY THEN
+                                                                  IF NOT CONFIRM(Text002) THEN
+                                                                  ERROR(fecha_antiguedad_mayor_que_hoy);
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha Antiguedad }
+    { 33  ;   ;AD Transportados (Estadist);Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum(Parte."Adultos trans. soporte" WHERE (Confirmado=CONST(Yes),
+                                                                                                         Cod Conductor=FIELD(Conductor),
+                                                                                                         Fecha facturacion=FIELD(Filtro Fechas),
+                                                                                                         Tipo Servicio=FIELD(Filtro Tipo Servicio),
+                                                                                                         Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=AD Transportados (Estadist);
+                                                   DecimalPlaces=0:2;
+                                                   Description=FlowField -> Se usara para el listado de estadisticas de conductores }
+    { 34  ;   ;NI Transportados (Estadist);Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum(Parte."Ni¤os trans. soporte" WHERE (Confirmado=CONST(Yes),
+                                                                                                       Cod Conductor=FIELD(Conductor),
+                                                                                                       Fecha facturacion=FIELD(Filtro Fechas),
+                                                                                                       Tipo Servicio=FIELD(Filtro Tipo Servicio),
+                                                                                                       Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=NI Transportados (Estadist);
+                                                   DecimalPlaces=0:2;
+                                                   Description=FlowField -> Se usara para el listado de estadisticas de conductores }
+    { 35  ;   ;N§ Viajes (Estadist);Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum(Parte."N§ viajes" WHERE (Confirmado=CONST(Yes),
+                                                                                            Cod Conductor=FIELD(Conductor),
+                                                                                            Fecha facturacion=FIELD(Filtro Fechas),
+                                                                                            Tipo Vehiculo=FIELD(Filtro Vehiculo),
+                                                                                            Tipo Servicio=FIELD(Filtro Tipo Servicio),
+                                                                                            Codigo Servicio=FIELD(Filtro Cod Servicio),
+                                                                                            Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=N§ Viajes (Estadist);
+                                                   Description=FlowField -> Se usara para el listado de estadisticas de conductores }
+    { 36  ;   ;N§ Incidencias      ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Incidencias Conductor x Dia" WHERE (Conductor=FIELD(Conductor),
+                                                                                                          Fecha=FIELD(Filtro Fechas),
+                                                                                                          Garage=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=N§ Incidencias;
+                                                   Description=FlowField-> Contador de registros de incidencias }
+    { 37  ;   ;Filtro Garaje Resultados;Code10    ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro Garaje Resultados;
+                                                   Description=Filtro para considerar en los resultados un(os) determinados(s) garaje(s). }
+    { 38  ;   ;Filtro Tipo Servicio;Code10        ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro Tipo Servicio;
+                                                   Description=FlowFilter }
+    { 39  ;   ;Tipo Acuerdo        ;Code10        ;TableRelation="Tipo Acuerdo Conductor"."Tipo Acuerdo";
+                                                   CaptionML=ESP=Tipo Acuerdo;
+                                                   Editable=No }
+    { 40  ;   ;Tipo Contrato       ;Code10        ;TableRelation="Tipo Contrato"."Tipo Contrato";
+                                                   CaptionML=ESP=Tipo Contrato;
+                                                   Editable=No }
+    { 41  ;   ;Orden Contrato      ;Integer       ;FieldClass=Normal;
+                                                   CaptionML=ESP=Orden Contrato;
+                                                   Editable=No }
+    { 43  ;   ;Sexo                ;Option        ;CaptionML=ESP=Sexo;
+                                                   OptionCaptionML=ESP=Hombre,Mujer;
+                                                   OptionString=Hombre,Mujer }
+    { 45  ;   ;Estado civil        ;Option        ;CaptionML=ESP=Estado civil;
+                                                   OptionCaptionML=ESP=Soltero,Casado,Separado,Divorciado,Viudo;
+                                                   OptionString=Soltero,Casado,Separado,Divorciado,Viudo }
+    { 47  ;   ;Fecha nacimiento    ;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha nacimiento" >= TODAY THEN
+                                                                  ERROR(fecha_nacimiento_mayor_que_hoy);
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha nacimiento }
+    { 48  ;   ;Cod Postal          ;Code10        ;TableRelation="Post Code".Code;
+                                                   OnValidate=BEGIN
+                                                                rCodPos.RESET;
+                                                                IF rCodPos.GET("Cod Postal") THEN BEGIN
+                                                                  Poblacion := rCodPos.City;
+                                                                  Provincia := rCodPos."County Code";
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Cod Postal;
+                                                   Description=FK Cod. Postal }
+    { 49  ;   ;Poblacion           ;Text50        ;CaptionML=ESP=Poblacion }
+    { 51  ;   ;Provincia           ;Text50        ;CaptionML=ESP=Provincia }
+    { 53  ;   ;N§ Seguridad social ;Code30        ;CaptionML=ESP=N§ Seguridad social }
+    { 55  ;   ;Fecha alta SS       ;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha alta SS" >= TODAY THEN BEGIN
+                                                                  IF NOT CONFIRM(Text001, FALSE) THEN BEGIN
+                                                                    "Fecha alta SS" := xRec."Fecha alta SS";
+                                                                    ERROR(fecha_alta_mayor_que_hoy);
+                                                                  END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha alta SS }
+    { 57  ;   ;Banco ingreso       ;Text30        ;CaptionML=ESP=Banco ingreso }
+    { 59  ;   ;Cuenta ingreso      ;Code20        ;CaptionML=ESP=Cuenta ingreso }
+    { 61  ;   ;N§ Tarjeta gasolina ;Code20        ;CaptionML=ESP=N§ Tarjeta gasolina }
+    { 63  ;   ;Observaciones       ;Text80        ;CaptionML=ESP=Observaciones }
+    { 64  ;   ;Actividad           ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist(Parte WHERE (Cod Conductor=FIELD(Conductor),
+                                                                                  Fecha=FIELD(Filtro Fechas)));
+                                                   CaptionML=ESP=Actividad;
+                                                   Description=Calculado;
+                                                   Editable=No }
+    { 65  ;   ;Filtro fecha inicio ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro fecha inicio }
+    { 66  ;   ;Filtro fecha fin    ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ESP=Filtro fecha fin }
+    { 67  ;   ;Incidencias para informe;Code10    ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Hist. Incidencia Conductor"."Cod Motivo" WHERE (Fecha Desde=FIELD(Filtro fecha inicio),
+                                                                                                                       Fecha Hasta=FIELD(Filtro fecha fin),
+                                                                                                                       Conductor=FIELD(Conductor)));
+                                                   CaptionML=ESP=Incidencias para informe }
+    { 68  ;   ;No Imprimir estadisticas;Boolean   ;CaptionML=ESP=No Imprimir estadisticas }
+    { 70  ;   ;C.T.P.              ;Code10        ;CaptionML=ESP=C.T.P. }
+    { 71  ;   ;Telefono Movil      ;Text20        ;CaptionML=ESP=Telefono Movil }
+    { 73  ;   ;Fecha inicio carnet ;Date          ;CaptionML=ESP=Fecha inicio carnet }
+    { 74  ;   ;Fecha caducidad carnet;Date        ;CaptionML=ESP=Fecha caducidad carnet }
+    { 75  ;   ;Telefono 2          ;Text20        ;CaptionML=ESP=Telefono 2 }
+    { 76  ;   ;Telefono Movil 2    ;Text20        ;CaptionML=ESP=Telefono Movil 2 }
+    { 77  ;   ;Numero hijos        ;Integer       ;CaptionML=ESP=Numero hijos }
+    { 78  ;   ;Turno               ;Option        ;CaptionML=ESP=Turno;
+                                                   OptionCaptionML=ESP=Ma¤ana,Tarde,Todo el dia;
+                                                   OptionString=Ma¤ana,Tarde,Todo el dia }
+    { 79  ;   ;Hora ultimo trabajo ;Time          ;CaptionML=ESP=Hora ultimo trabajo }
+    { 80  ;   ;Hora proximo inicio ;Time          ;CaptionML=ESP=Hora proximo inicio }
+    { 81  ;   ;Fecha ultimo trabajo;Date          ;CaptionML=ESP=Fecha ultimo trabajo }
+    { 82  ;   ;Cod. Empleado       ;Code20        ;TableRelation=Employee;
+                                                   OnValidate=BEGIN
+                                                                // Comprobamos que este codigo no est‚ ligado a otro conductor
+                                                                IF "Cod. Empleado" <> '' THEN BEGIN
+                                                                  CLEAR(rCond);
+                                                                  rCond.SETCURRENTKEY("Cod. Empleado");
+                                                                  rCond.SETRANGE("Cod. Empleado"     , "Cod. Empleado");
+                                                                  rCond.SETFILTER(Conductor          ,'<>%1', Conductor);
+                                                                  IF rCond.FINDFIRST THEN
+                                                                    ERROR(Text005,"Cod. Empleado", rCond.Conductor);
+
+                                                                  IF CONFIRM(Text003,FALSE,"Nombre Abreviado","Cod. Empleado" ) THEN
+                                                                    CargarDatosEmpleado;
+                                                                END;
+
+                                                                IF "Cod. Empleado" <> xRec."Cod. Empleado" THEN BEGIN
+                                                                  ActulizaIncidencias;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Cod. Empleado }
+    { 83  ;   ;Tarjeta Vial        ;Code20        ;CaptionML=ESP=Tarjeta Vial }
+    { 84  ;   ;Filtro Cod Servicio ;Code10        ;FieldClass=FlowFilter;
+                                                   TableRelation="Codigo servicio".Codigo;
+                                                   CaptionML=ESP=Filtro Cod Servicio;
+                                                   Description=Flowfilter }
+    { 100 ;   ;Empresa Conductor   ;Code20        ;TableRelation=Vendor.No.;
+                                                   CaptionML=ESP=Empresa propietaria;
+                                                   Description=FK Proveedores }
+    { 101 ;   ;Campa               ;Code10        ;TableRelation=Campas.Codigo;
+                                                   CaptionML=ESP=Campa }
+    { 103 ;   ;Partes              ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count(Parte WHERE (Cod Conductor=FIELD(Conductor),
+                                                                                  Fecha facturacion=FIELD(Filtro Fechas),
+                                                                                  Tipo Vehiculo=FIELD(Filtro Vehiculo),
+                                                                                  Tipo Servicio=FIELD(Filtro Tipo Servicio),
+                                                                                  Codigo Servicio=FIELD(Filtro Cod Servicio),
+                                                                                  Garaje=FIELD(Filtro Garaje Resultados)));
+                                                   CaptionML=ESP=Partes (Estadisticas);
+                                                   Description=FlowField -> Se usara para el listado de estadisticas de conductores }
+  }
+  KEYS
+  {
+    {    ;Conductor                               ;Clustered=Yes }
+    {    ;Garaje,Conductor                         }
+    {    ;Nombre Abreviado,Garaje                  }
+    {    ;Garaje,Nombre,Apellidos                  }
+    {    ;Garaje,Nombre Abreviado                  }
+    {    ;Garaje,Tipo Acuerdo,Nombre Abreviado     }
+    {    ;Garaje,Tipo Acuerdo,Orden Contrato,Fecha Antiguedad,Nombre Abreviado }
+    {    ;Garaje,Grupo Vehiculo,Tipo Acuerdo,Orden Contrato,Fecha Antiguedad,Nombre Abreviado }
+    {    ;Garaje,Apellidos,Nombre                  }
+    {    ;Externo,Bloqueado                        }
+    {    ;Vehiculo habitual                        }
+    {    ;Garaje,Tipo Acuerdo,Apellidos,Nombre     }
+    {    ;Cod. Empleado                            }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      rCond@1103350002 : Record 7010327;
+      rPar@1100244000 : Record 7010311;
+      rCodPos@1100244001 : Record 225;
+      rIncid@1100244008 : Record 7010333;
+      rIncidDia@1100244010 : Record 7010342;
+      rContrato@1100244009 : Record 7010331;
+      GestNoSerie@1100244002 : Codeunit 396;
+      fecha_nacimiento_mayor_que_hoy@1100244003 : TextConst 'ESP=La fecha de nacimiento debe ser anterior al dia de hoy.';
+      fecha_alta_mayor_que_hoy@1100244004 : TextConst 'ESP=La fecha de alta debe ser anterior al dia de hoy.';
+      fecha_antiguedad_mayor_que_hoy@1100244005 : TextConst 'ESP=La fecha de antiguedad debe ser anterior al dia de hoy.';
+      Text001@1100244006 : TextConst 'ESP=La fecha alta en la S.S. es posterior a hoy, ¨desea continuar?';
+      Text002@1100244007 : TextConst 'ESP=La fecha de antiguedad. es posterior a hoy, ¨desea continuar?';
+      Text003@1103350000 : TextConst 'ESP=¨Desea sustituir los datos personales del conductor %1 por los del empleado %2?';
+      Text004@1103350001 : TextConst 'ESP=¨Desea Conservar los datos bancarios?';
+      Text005@1103350003 : TextConst 'ESP=El c¢digo de Empleado %1 ya est  asignado al Conductor %2';
+      wVentana@1103350004 : Dialog;
+      Text006@1103350005 : TextConst 'ESP=Sincroniza Incidencias @1@@@@@@@@@@@';
+      Text007@1103355000 : TextConst 'ESP=No existe el usuario %1.';
+
+    PROCEDURE calcula_edad@1() : Integer;
+    VAR
+      w_edad@1100244000 : Integer;
+      w_dia_nacimiento@1100244001 : Integer;
+      w_mes_nacimiento@1100244002 : Integer;
+      w_a¤o_nacimiento@1100244003 : Integer;
+      w_dia_hoy@1100244004 : Integer;
+      w_mes_hoy@1100244005 : Integer;
+      w_a¤o_hoy@1100244006 : Integer;
+    BEGIN
+      // calcula_edad
+      //
+      IF "Fecha nacimiento" = 0D THEN
+        EXIT(0);
+      w_dia_nacimiento := DATE2DMY("Fecha nacimiento", 1);
+      w_mes_nacimiento := DATE2DMY("Fecha nacimiento", 2);
+      w_a¤o_nacimiento := DATE2DMY("Fecha nacimiento", 3);
+
+      w_dia_hoy := DATE2DMY(TODAY, 1);
+      w_mes_hoy := DATE2DMY(TODAY, 2);
+      w_a¤o_hoy := DATE2DMY(TODAY, 3);
+
+      w_edad := w_a¤o_hoy - w_a¤o_nacimiento;
+
+      IF w_mes_hoy < w_mes_nacimiento THEN BEGIN
+        w_edad -= 1;
+      END
+      ELSE BEGIN
+        IF w_mes_hoy = w_mes_nacimiento THEN BEGIN
+          IF w_dia_hoy < w_dia_nacimiento THEN
+            w_edad -= 1;
+        END;
+      END;
+      EXIT(w_edad);
+    END;
+
+    PROCEDURE MotivoIncidenciaInformes@1100244001() : Integer;
+    VAR
+      lrCodMotInci@1100244000 : Record 7035345;
+    BEGIN
+      // MotivoIncidenciaInformes
+      // Devuelve el entero del Option Motivo Incidencia Conductor
+      // Si no encuentra el codigo devuelve 0
+
+      // Previamente a esta funci¢n tiene que hacerse un calcfields a "Incidencias para informe"
+
+      IF lrCodMotInci.GET("Incidencias para informe") THEN
+        EXIT(lrCodMotInci."Motivo incidencia conductor")
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE TextoMotivo@1100244000() : Text[30];
+    VAR
+      lrCodMotInci@1100244000 : Record 7035345;
+      lwText@1100244001 : Text[30];
+    BEGIN
+      // TextoMotivo
+      // Devuelve la descripcion del motivo de incidencia
+      // Previamente a esta funci¢n tiene que hacerse un calcfields a "Incidencias para informe"
+      // Si no tiene descripcion devuelve el codigo
+
+      CLEAR(lwText);
+      CLEAR(lrCodMotInci);
+      IF lrCodMotInci.GET("Incidencias para informe") THEN BEGIN
+        lwText := lrCodMotInci.Descripcion;
+      END;
+      IF lwText='' THEN
+        lwText := "Incidencias para informe";
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE CargarDatosEmpleado@1103350000();
+    VAR
+      lrEmp@1103350000 : Record 5200;
+      lwApell@1103350001 : Text[100];
+    BEGIN
+      // CargarDatosEmpleado
+      // Pasa la informaci¢n de la ficha de empleado a la ficha de conductor
+      // Determinado campos los dejamos en blanco para evitar errores
+
+      // En principio solo para Terramar
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TER]) THEN
+        EXIT;
+
+      IF lrEmp.GET("Cod. Empleado") THEN
+      BEGIN
+        VALIDATE(Nombre               , lrEmp.Name);
+        VALIDATE(DNI                  , '');
+        VALIDATE(Domicilio            , lrEmp.Address);
+        VALIDATE(Telefono             , lrEmp."Phone No.");
+        lwApell := lrEmp."First Family Name" + ' ' + lrEmp."Second Family Name";
+        VALIDATE(Apellidos            , COPYSTR(lwApell,1,MAXSTRLEN(Apellidos)));
+        IF lrEmp."Search Name" <> '' THEN
+          VALIDATE("Nombre Abreviado"   , COPYSTR(lrEmp."Search Name",1,MAXSTRLEN("Nombre Abreviado")));
+        VALIDATE("Fecha Antiguedad"   , lrEmp."Employment Date");
+        VALIDATE(Sexo                 , 2 - lrEmp.Gender); // JPT 26/07/05 Es una conversi¢n
+        VALIDATE("Estado civil"       , 0); // No tiene nada que ver con el campo Status
+
+        VALIDATE("Fecha nacimiento"   , lrEmp."Birth Date");
+        VALIDATE("Cod Postal"         , lrEmp."Post Code");
+        VALIDATE(Poblacion            , lrEmp.City);
+        VALIDATE(Provincia            , lrEmp.County);
+        VALIDATE("N§ Seguridad social", lrEmp."CURP/Cedula/Pasaporte");
+        VALIDATE("Fecha alta SS"      , 0D);
+        IF ("Banco ingreso"<>'') OR ("Cuenta ingreso"<>'') THEN
+          IF NOT CONFIRM(Text004) THEN BEGIN
+            VALIDATE("Banco ingreso"      , '');
+            VALIDATE("Cuenta ingreso"     , '');
+          END;
+        VALIDATE("Telefono Movil"     ,  lrEmp."Mobile Phone No.");
+        VALIDATE("Telefono 2"         , '');
+        VALIDATE( "Telefono Movil 2"  , '');
+        VALIDATE("Numero hijos"       , 0);
+      END;
+    END;
+
+    PROCEDURE ActulizaIncidencias@1103350001();
+    VAR
+      lrIncid@1103350000 : Record 7010333;
+      lwCont@1103350001 : Integer;
+      lwTotal@1103350002 : Integer;
+    BEGIN
+      // ActulizaIncidencias
+      // Sincroniza las incidencias del conductor con las "Ausencias Empleado" del Codigo de Empleado modificado
+
+      // En principio solo para Terramar
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TER]) THEN
+        EXIT;
+
+      CLEAR(lrIncid);
+      lrIncid.SETCURRENTKEY(Conductor, "Fecha Desde");
+      lrIncid.SETRANGE(Conductor, Conductor);
+      IF lrIncid.FINDSET(TRUE) THEN BEGIN
+        wVentana.OPEN(Text006);
+        lwTotal:= lrIncid.COUNT;
+        CLEAR(lwCont);
+        REPEAT
+          lrIncid.SincronizaRRHH(FALSE,Rec);
+          lrIncid.MODIFY;
+          lwCont +=1;
+          wVentana.UPDATE(1,ROUND(lwCont/lwTotal*10000,1));
+        UNTIL lrIncid.NEXT=0;
+        wVentana.CLOSE;
+      END;
+    END;
+
+    PROCEDURE FiltrarGarajeUsuario@1103355000();
+    VAR
+      lrParGenerales@1103355000 : Record 7010311;
+      lrUsuario@1103355001 : Record 7010420;
+    BEGIN
+      // FiltrarGarajeUsuario.
+      // Filtramos los conductores por garaje dependiendo de la configuraci¢n del usuario.
+
+      lrParGenerales.FINDFIRST;
+
+      IF NOT lrUsuario.GET(USERID) THEN
+        ERROR(Text007, USERID);
+
+      SETCURRENTKEY(Garaje, Conductor);
+
+      IF (lrUsuario."Garaje de trabajo" <> '') AND (lrUsuario."Garaje de trabajo" <> lrParGenerales."Todos los garajes") THEN BEGIN
+        FILTERGROUP(2);
+        SETRANGE(Garaje, lrUsuario."Garaje de trabajo");
+        FILTERGROUP(0);
+      END;
+    END;
+
+    BEGIN
+    {
+      //NOTA sobre las relaciones de esta tabla con la de contratos,incidencias, partes,...
+      //..............
+      //Cuando se crea un registro nuevo, se asociar  un garaje.
+      //De momento este garaje no podr  ser cambiado.
+      //En realidad no creo que haya ning£n problema en cambiarlo, ya que las relaciones de dichas
+      //tablas son en realidad con el conductor y no con el garaje.
+      //En la ficha de conductor, se aprecia que en el LINK no aparece el garaje.
+
+      $001 AJS 02072015 Nuevo campo calculado Partes para mostrar en estadisticas
+    }
+    END.
+  }
+}

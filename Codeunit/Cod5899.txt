@@ -1,0 +1,227 @@
+OBJECT Codeunit 5899 Calc. Inventory Value-Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 5804=r;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1022 : TextConst 'ENU=You must not enter a %1.;ESP=No debe introducir un %1.';
+      Text001@1021 : TextConst 'ENU=You must enter a posting date.;ESP=Debe introducir fecha registro';
+      Text002@1020 : TextConst 'ENU=You must not enter a %1, if Calculate Per is Item.;ESP=No debe introducir un %1, si el c lculo es por prod.';
+      Text004@1000 : TextConst 'ENU=Checking items #1##########;ESP=Comprob. prods.#1##########';
+      InvtSetup@1017 : Record 313;
+      ItemLedgEntryErrBuf@1024 : TEMPORARY Record 32;
+      ObjTransl@1005 : Record 377;
+      PostingDate@1008 : Date;
+      CalculatePer@1001 : 'Item Ledger Entry,Item';
+      ByLocation@1019 : Boolean;
+      ByVariant@1018 : Boolean;
+      Text007@1006 : TextConst 'ENU=You have to run the %1 batch job, before you can revalue the inventory.;ESP=Debe ejecutar el proceso %1, antes de revalorizar el inventario.';
+      Text009@1009 : TextConst 'ENU=You must not revalue items with %1 %2, if Calculate Per is Item Ledger Entry.;ESP=No debe revalorizar prods. con %1 %2, si  el c lculo es por mov. producto.';
+      Text011@1016 : TextConst 'ENU=You must not enter a %1 if you revalue items with %2 %3, and if %4 is %5 in %6.;ESP=No debe introducir %1 al revalorizar prods. con %2 %3, y si %4 es %5 en %6.';
+      Text012@1015 : TextConst 'ENU=The By Location field must not be filled in if you revalue items \;ESP=El campo por alm. no se debe rellenar cuando se revaluan prods. \';
+      Text013@1014 : TextConst 'ENU=with %1 %2, and if %3 is %4 in %5.;ESP=con %1 %2, y si %3 es %4 en %5.';
+      Text014@1013 : TextConst 'ENU=The By Variant field must not be filled in if you revalue items \;ESP=El campo por variante no se debe rellenar cuando se ha reval. prods. \';
+      Text015@1012 : TextConst 'ENU="You must fill in a %1 and a %2 or place check marks ";ESP="No debe rellenar un %1 y un %2 o poner marcas "';
+      Text016@1011 : TextConst 'ENU="in the By Location field and the By Variant field, ";ESP="en el campo por almac‚n y el campo por variante, "';
+      Text017@1010 : TextConst 'ENU=if you revalue items with %3 %4, and if %5 is %6 in %7.;ESP=si revalua productos con %3 %4, y si %5 es %6 en %7.';
+      LogErrors@1023 : Boolean;
+      ShowDialog@1002 : Boolean;
+      Text018@1102601000 : TextConst 'ENU=The Item %1 cannot be revalued because there is at least one open Outbound %2.;ESP=El producto %1 no se puede revalorizar porque hay al menos una salida abierta %2.';
+
+    PROCEDURE SetProperties@1(NewPostingDate@1000 : Date;NewCalculatePer@1003 : Option;NewByLocation@1002 : Boolean;NewByVariant@1001 : Boolean;NewLogErrors@1004 : Boolean;NewShowDialog@1005 : Boolean);
+    BEGIN
+      ItemLedgEntryErrBuf.DELETEALL;
+      CLEARALL;
+
+      PostingDate := NewPostingDate;
+      CalculatePer := NewCalculatePer;
+      ByLocation := NewByLocation;
+      ByVariant := NewByVariant;
+      LogErrors := NewLogErrors;
+      ShowDialog := NewShowDialog;
+
+      InvtSetup.GET;
+    END;
+
+    PROCEDURE RunCheck@3(VAR Item@1000 : Record 27;VAR NewItemLedgEntryErrBuf@1003 : Record 32);
+    VAR
+      Item2@1004 : Record 27;
+      Window@1001 : Dialog;
+    BEGIN
+      WITH Item2 DO BEGIN
+        COPY(Item);
+
+        IF GETFILTER("Date Filter") <> '' THEN
+          ERROR(Text000,FIELDCAPTION("Date Filter"));
+
+        IF PostingDate = 0D THEN
+          ERROR(Text001);
+
+        IF (CalculatePer = CalculatePer::Item) AND (GETFILTER("Bin Filter") <> '') THEN
+          ERROR(Text002,FIELDCAPTION("Bin Filter"));
+
+        CheckCalculatePer(Item2);
+
+        IF FIND('-') THEN BEGIN
+          IF ShowDialog THEN
+            Window.OPEN(Text004,"No.");
+          REPEAT
+            IF ShowDialog THEN
+              Window.UPDATE(1,"No.");
+            IF FindOpenOutboundEntry(Item2,GETFILTER("Location Filter"),GETFILTER("Variant Filter")) THEN
+              ERROR(Text018,"No.",ItemLedgEntryErrBuf.TABLECAPTION);
+            IF NOT Adjusted(Item2) THEN
+              ERROR(
+                Text007,
+                ObjTransl.TranslateObject(ObjTransl."Object Type"::Report,REPORT::"Adjust Cost - Item Entries"));
+          UNTIL NEXT = 0;
+          IF ShowDialog THEN
+            Window.CLOSE;
+        END;
+      END;
+
+      ItemLedgEntryErrBuf.RESET;
+      IF ItemLedgEntryErrBuf.FIND('-') THEN
+        REPEAT
+          NewItemLedgEntryErrBuf := ItemLedgEntryErrBuf;
+          NewItemLedgEntryErrBuf.INSERT;
+        UNTIL ItemLedgEntryErrBuf.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE Adjusted@10(Item@1000 : Record 27) : Boolean;
+    VAR
+      AvgCostAdjmt@1002 : Record 5804;
+    BEGIN
+      IF Item."Costing Method" = Item."Costing Method"::Average THEN BEGIN
+        AvgCostAdjmt.SETCURRENTKEY("Item No.","Cost Is Adjusted");
+        AvgCostAdjmt.SETFILTER("Item No.",Item."No.");
+        AvgCostAdjmt.SETRANGE("Cost Is Adjusted",FALSE);
+        AvgCostAdjmt.SETRANGE("Valuation Date",0D,PostingDate);
+        IF AvgCostAdjmt.FIND('-') THEN
+          EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckCompletelyInvoiced@12(ItemNo@1000 : Code[20]) : Boolean;
+    VAR
+      ItemLedgEntry@1001 : Record 32;
+    BEGIN
+      WITH ItemLedgEntry DO BEGIN
+        SETCURRENTKEY("Item No.",Positive);
+        SETRANGE("Item No.",ItemNo);
+        SETRANGE(Positive,FALSE);
+        IF FIND('-') THEN
+          REPEAT
+            IF NOT "Completely Invoiced" AND ("Posting Date" IN [0D..PostingDate]) THEN
+              InsertInErrBuf(ItemLedgEntry);
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckCalculatePer@6(VAR Item@1000 : Record 27);
+    VAR
+      Item2@1001 : Record 27;
+    BEGIN
+      WITH Item2 DO BEGIN
+        COPYFILTERS(Item);
+
+        IF GETFILTER("Costing Method") <> '' THEN
+          SETFILTER("Costing Method",STRSUBSTNO('%1&%2',GETFILTER("Costing Method"),"Costing Method"::Average))
+        ELSE
+          SETRANGE("Costing Method","Costing Method"::Average);
+
+        IF FIND('-') THEN
+          CASE CalculatePer OF
+            CalculatePer::"Item Ledger Entry":
+              ERROR(
+                Text009,
+                FIELDCAPTION("Costing Method"),"Costing Method");
+            CalculatePer::Item:
+              BEGIN
+                IF InvtSetup."Average Cost Calc. Type" = InvtSetup."Average Cost Calc. Type"::Item THEN BEGIN
+                  IF GETFILTER("Location Filter") <> '' THEN
+                    ERROR(
+                      Text011,
+                      FIELDCAPTION("Location Filter"),FIELDCAPTION("Costing Method"),"Costing Method",
+                      InvtSetup.FIELDCAPTION("Average Cost Calc. Type"),
+                      InvtSetup."Average Cost Calc. Type",InvtSetup.TABLECAPTION);
+                  IF GETFILTER("Variant Filter") <> '' THEN
+                    ERROR(
+                      Text011,
+                      FIELDCAPTION("Variant Filter"),FIELDCAPTION("Costing Method"),"Costing Method",
+                      InvtSetup.FIELDCAPTION("Average Cost Calc. Type"),
+                      InvtSetup."Average Cost Calc. Type",InvtSetup.TABLECAPTION);
+                  IF ByLocation THEN
+                    ERROR(
+                      Text012 +
+                      Text013,
+                      FIELDCAPTION("Costing Method"),"Costing Method",
+                      InvtSetup.FIELDCAPTION("Average Cost Calc. Type"),
+                      InvtSetup."Average Cost Calc. Type",InvtSetup.TABLECAPTION);
+                  IF ByVariant THEN
+                    ERROR(
+                      Text014 +
+                      Text013,
+                      FIELDCAPTION("Costing Method"),"Costing Method",
+                      InvtSetup.FIELDCAPTION("Average Cost Calc. Type"),
+                      InvtSetup."Average Cost Calc. Type",InvtSetup.TABLECAPTION);
+                END ELSE
+                  IF ((GETFILTER("Location Filter") = '') AND (NOT ByLocation)) OR
+                     ((GETFILTER("Variant Filter") = '') AND (NOT ByVariant))
+                  THEN
+                    ERROR(
+                      Text015 +
+                      Text016 +
+                      Text017,
+                      FIELDCAPTION("Location Filter"),FIELDCAPTION("Variant Filter"),FIELDCAPTION("Costing Method"),
+                      "Costing Method",InvtSetup.FIELDCAPTION("Average Cost Calc. Type"),
+                      InvtSetup."Average Cost Calc. Type",InvtSetup.TABLECAPTION);
+              END;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertInErrBuf@2(VAR ItemLedgEntry@1000 : Record 32);
+    BEGIN
+      WITH ItemLedgEntry DO BEGIN
+        IF NOT LogErrors THEN
+          TESTFIELD("Completely Invoiced",TRUE);
+        ItemLedgEntryErrBuf := ItemLedgEntry;
+        IF ItemLedgEntryErrBuf.INSERT THEN;
+      END;
+    END;
+
+    PROCEDURE FindOpenOutboundEntry@1102601000(Item@1102601001 : Record 27;LocationCode@1102601002 : Code[10];VariantCode@1102601003 : Code[10]) : Boolean;
+    VAR
+      ItemLedgEntry@1102601000 : Record 32;
+    BEGIN
+      ItemLedgEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+      ItemLedgEntry.SETRANGE("Item No.",Item."No.");
+      ItemLedgEntry.SETRANGE(Open,TRUE);
+      IF (VariantCode <> '') THEN
+        ItemLedgEntry.SETRANGE("Variant Code",VariantCode);
+      ItemLedgEntry.SETRANGE(Positive,FALSE);
+      IF (LocationCode <> '') THEN
+        ItemLedgEntry.SETRANGE("Location Code",LocationCode);
+      ItemLedgEntry.SETRANGE("Posting Date",0D,PostingDate);
+      IF NOT ItemLedgEntry.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}

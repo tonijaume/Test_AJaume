@@ -1,0 +1,364 @@
+OBJECT Report 593 Intrastat - Make Declaration
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01,NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Intrastat - Make Declaration;
+               ESP=Intrastat - Crear declaraci¢n];
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  RBMgt@1000 : Codeunit 419;
+                BEGIN
+                  IF ISSERVICETIER THEN
+                    FileName := RBMgt.EnvironFileName('','');
+
+                  IntrastatJnlLine4.COPYFILTERS("Intrastat Jnl. Line");
+                  IF FileName = '' THEN
+                    ERROR(Text000);
+                  IntraFile.TEXTMODE := TRUE;
+                  IntraFile.WRITEMODE := TRUE;
+                  IF NOT ISSERVICETIER THEN IntraFile.QUERYREPLACE := TRUE;
+                  IntraFile.CREATE(FileName);
+                END;
+
+    OnPostReport=VAR
+                   ToFile@1001 : Text[1024];
+                 BEGIN
+                   IF ISSERVICETIER THEN BEGIN
+                     ToFile := Text1100006;
+                     DOWNLOAD(FileName,Text004,'',Text1100005,ToFile);
+                   END;
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table262;
+        DataItemTableView=SORTING(Journal Template Name,Name);
+        OnPreDataItem=BEGIN
+                        IntrastatJnlLine4.COPYFILTER("Journal Template Name","Journal Template Name");
+                        IntrastatJnlLine4.COPYFILTER("Journal Batch Name",Name);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           TESTFIELD(Reported,FALSE);
+                           IntraReferenceNo := "Statistics Period" + '000000';
+                         END;
+
+        ReqFilterFields=Journal Template Name,Name;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table263;
+        OnPreDataItem=BEGIN
+                        Window.OPEN(
+                          '#1###################################################\\' +
+                          '@2@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\');
+                        TotalRecNo := "Intrastat Jnl. Line".COUNT;
+
+                        Window.UPDATE(1,STRSUBSTNO(Text1100001,FileName));
+
+                        IF NOT ISSERVICETIER THEN BEGIN
+                          FileName := CONVERTSTR(FileName, '.', ',');
+                          FileName := SELECTSTR(1, FileName);
+                          IntrastatJnlLine.COPYFILTERS("Intrastat Jnl. Line");
+                          IF IntrastatJnlLine.COUNT > 1000 THEN BEGIN
+                            FileName := FileName + '0' + '.csv';
+                            IF NOT CONFIRM(
+                              Text1100002 +
+                              Text1100003,TRUE)
+                            THEN BEGIN
+                              MESSAGE(Text1100004);
+                              CLEAR(FileName);
+                              RequestOptionsForm.UPDATE;
+                            END;
+                          END ELSE
+                            FileName := FileName + '.csv';
+                        END;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF LineCounter > 1000 THEN BEGIN
+                             LineCounter := 0;
+                             IntraFile.CLOSE;
+                             CLEAR(IntraFile);
+                             IF NOT ISSERVICETIER THEN
+                               FileName := INCSTR(FileName)
+                             ELSE BEGIN
+                               ToFile := Text1100006;
+                               DOWNLOAD(FileName,Text004,'',Text1100005,ToFile);
+                               FileName := RBMgt.EnvironFileName('','');
+                             END;
+                             IntraFile.TEXTMODE := TRUE;
+                             IntraFile.WRITEMODE := TRUE;
+                             IF NOT ISSERVICETIER THEN IntraFile.QUERYREPLACE := TRUE;
+                             IntraFile.CREATE(FileName);
+                             Window.UPDATE(1,STRSUBSTNO(Text1100001,FileName));
+                           END;
+
+                           RecNo := RecNo + 1;
+                           LineCounter := LineCounter + 1;
+
+                           Window.UPDATE(2,ROUND(RecNo / TotalRecNo * 10000,1));
+
+                           JournalBatch.GET("Journal Template Name","Journal Batch Name");
+                           JournalBatch.TESTFIELD(JournalBatch.Reported,FALSE);
+
+                           IF ("Tariff No." = '') AND
+                              ("Country/Region Code" = '') AND
+                              ("Transaction Type" = '') AND
+                              ("Transport Method" = '') AND
+                              ("Total Weight" = 0)
+                           THEN
+                              CurrReport.SKIP;
+
+                           "Tariff No." := DELCHR("Tariff No.");
+                           TESTFIELD("Tariff No.");
+                           TESTFIELD("Country/Region Code");
+                           TESTFIELD("Transaction Type");
+                           TESTFIELD("Total Weight");
+                           TESTFIELD(Amount);
+
+                           IF ("Total Weight" > 9999999999999.0) THEN
+                             ERROR(Text1100000,FIELDCAPTION("Total Weight"),"Total Weight");
+
+                           IF (Amount > 9999999999999.0) THEN
+                             ERROR(Text1100000,FIELDCAPTION(Amount),Amount);
+
+                           IF (Quantity > 9999999999999.0) THEN
+                             ERROR(Text1100000,FIELDCAPTION(Quantity),Quantity);
+
+                           IF ("Statistical Value" > 9999999999999.0) THEN
+                             ERROR(Text1100000,FIELDCAPTION("Statistical Value"),"Statistical Value");
+
+                           IF Country.GET("Country/Region Code") THEN
+                             CountryCode := Country."EU Country/Region Code"
+                           ELSE
+                             CountryCode := '';
+                           IF Country.GET("Country/Region of Origin Code") THEN
+                             CountryOfOriginCode := Country."EU Country/Region Code"
+                           ELSE
+                             CountryOfOriginCode := '';
+                           CASE "Statistical System" OF
+                             0:
+                               StatSystem := '';
+                             "Statistical System"::"1-Final Destination":
+                               StatSystem := '1';
+                             "Statistical System"::"2-Temporary Destination":
+                               StatSystem := '2';
+                             "Statistical System"::"3-Temporary Destination+Transformation":
+                               StatSystem := '3';
+                             "Statistical System"::"4-Return":
+                               StatSystem := '4';
+                             "Statistical System"::"5-Return+Transformation":
+                               StatSystem := '5';
+                           END;
+
+                           IntraFile.WRITE(
+                             COPYSTR(CountryCode,1,2) + ';' +                                             //1
+                             COPYSTR(Area,1,2) + ';' +                                                    //2
+                             COPYSTR("Shipment Method Code #1",1,3) + ';' +                               //3
+                             COPYSTR("Transaction Type",1,2) + ';' +                                      //4
+                             COPYSTR("Transport Method",1,1) + ';' +                                      //5
+                             COPYSTR("Entry/Exit Point",1,4) + ';' +                                      //6
+                             PADSTR("Tariff No.",8) + ';' +                                               //7
+                             COPYSTR(CountryOfOriginCode,1,2) + ';' +                                     //8
+                             StatSystem + ';' +                                                           //9
+                             FORMAT("Total Weight",0,'<Precision,2:><Integer><Decimal>') + ';' +            //10
+                             FORMAT(Quantity,0,'<Precision,2:><Integer><Decimal>') + ';' +                //11
+                             FORMAT(Amount,0,'<Precision,2:><Integer><Decimal>') + ';' +                  //12
+                             FORMAT("Statistical Value",0,'<Precision,2:><Integer><Decimal>')             //13
+                             );
+                         END;
+
+        OnPostDataItem=VAR
+                         ToFile@1000 : Text[1024];
+                       BEGIN
+                         "Intrastat Jnl. Batch".Reported := TRUE;
+                         "Intrastat Jnl. Batch".MODIFY;
+
+                         IntraFile.CLOSE;
+                       END;
+
+        ReqFilterFields=Type;
+        DataItemLink=Journal Template Name=FIELD(Journal Template Name),
+                     Journal Batch Name=FIELD(Name);
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8910;
+      Height=440;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF ISSERVICETIER THEN
+                     RequestOptionsForm.FileName.VISIBLE := FALSE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;5500 ;440  ;Name=FileName;
+                                                   CaptionML=[ENU=Save As;
+                                                              ESP=Guardar como];
+                                                   SourceExpr=FileName;
+                                                   OnAfterValidate=BEGIN
+                                                                     FileName := CONVERTSTR(FileName, '.', ',');
+                                                                     FileName := SELECTSTR(1, FileName);
+                                                                     FileName := FileName + '.csv';
+                                                                   END;
+                                                                    }
+      { 21  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=BEGIN
+               FileNameVisible := TRUE;
+             END;
+
+      OnOpenPage=BEGIN
+                   IF ISSERVICETIER THEN
+                     FileNameVisible := FALSE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  Name=FileName;
+                  CaptionML=[ENU=Save As;
+                             ESP=Guardar como];
+                  SourceExpr=FileName;
+                  Visible=FileNameVisible;
+                  OnValidate=BEGIN
+                               FileNameOnAfterValidate;
+                             END;
+                              }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Please enter the file name.;ESP=Introduzca el nombre del archivo.';
+      Text001@1001 : TextConst 'ENU=WwWw;ESP=WwWw';
+      Text002@1002 : TextConst 'ENU=INTRASTAT;ESP=INTRASTAT';
+      Text003@1003 : TextConst 'ENU=It is not possible to display %1 in a field with a length of %2.;ESP=No es posible mostrar %1 en un campo con una longitud de %2.';
+      IntrastatJnlLine3@1004 : Record 263;
+      IntrastatJnlLine4@1005 : Record 263;
+      IntrastatJnlLine5@1026 : Record 263;
+      CompanyInfo@1006 : Record 79;
+      Country@1007 : Record 9;
+      QuantityAmt@1023 : Decimal;
+      StatisticalValueAmt@1024 : Decimal;
+      StatisticalValueTotalAmt@1028 : Decimal;
+      TotalWeightAmt@1025 : Decimal;
+      IntraFile@1008 : File;
+      FileName@1009 : Text[1024];
+      IntraReferenceNo@1010 : Text[10];
+      CompoundField@1011 : Text[40];
+      TempCompoundField@1012 : Text[40];
+      TempType@1013 : Integer;
+      NoOfEntries@1014 : Text[3];
+      Receipt@1015 : Boolean;
+      Shipment@1016 : Boolean;
+      VATRegNo@1017 : Code[20];
+      ImportExport@1018 : Code[1];
+      OK@1019 : Boolean;
+      Text004@1020 : TextConst 'ENU=Export;ESP=Exportar';
+      Text005@1021 : TextConst 'ENU=All Files (*.*)|*.*;ESP=Todos los archivos (*.*)|*.*';
+      Text006@1022 : TextConst 'ENU=Default.txt;ESP=Default.txt';
+      GroupTotal@1027 : Boolean;
+      Text1100000@1100000 : TextConst 'ENU=The value of %1 %2  is bigger than maximum value allowed (9.999.999.999.999).;ESP=El valor de %1 %2  es mayor que el m ximo valor permitido (9.999.999.999.999).';
+      LineCounter@1100001 : Integer;
+      IntrastatJnlLine@1100002 : Record 263;
+      StatSystem@1100003 : Code[1];
+      CountryCode@1100004 : Code[3];
+      CountryOfOriginCode@1100005 : Code[3];
+      JournalBatch@1100006 : Record 262;
+      Text1100002@1100007 : TextConst 'ENU=The number of records to be exported exceeds the maximum allowed (1.000).\\;ESP=El n£mero de registros a exportar excede del m ximo permitido (1.000).\\';
+      Text1100003@1100008 : TextConst 'ENU=Your export will be split into separate numbered files.;ESP=Su exportaci¢n ser  separada en diferentes archivos numerados.';
+      Text1100004@1100009 : TextConst 'ENU=The export has been interrupted to respect the warning.;ESP=Se ha interrumpido la exportaci¢n para respetar la advertencia.';
+      Text1100001@1100013 : TextConst 'ENU=Exporting to file %1;ESP=Exportar a archivo %1';
+      TotalRecNo@1100014 : Integer;
+      RecNo@1100015 : Integer;
+      Window@1100016 : Dialog;
+      RBMgt@1100010 : Codeunit 419;
+      ToFile@1100011 : Text[1024];
+      Text1100005@1100017 : TextConst 'ENU=CSV Files (*.csv)|*.csv;ESP=Archivos CSV (*.csv)|*.csv';
+      Text1100006@1100018 : TextConst 'ENU=Default.csv;ESP=Default.csv';
+      FileNameVisible@19066691 : Boolean INDATASET;
+
+    LOCAL PROCEDURE DecimalNumeralZeroFormat@1(DecimalNumeral@1000 : Decimal;Length@1001 : Integer) : Text[250];
+    BEGIN
+      EXIT(TextZeroFormat(DELCHR(FORMAT(ROUND(ABS(DecimalNumeral),1,'<'),0,1)),Length));
+    END;
+
+    LOCAL PROCEDURE TextZeroFormat@2(Text@1000 : Text[250];Length@1001 : Integer) : Text[250];
+    BEGIN
+      IF STRLEN(Text) > Length THEN
+        ERROR(
+          Text003,
+          Text,Length);
+      EXIT(PADSTR('',Length - STRLEN(Text),'0') + Text);
+    END;
+
+    PROCEDURE WriteGrTotalsToFile@3(TotalWeightAmt@1000 : Decimal;QuantityAmt@1001 : Decimal;StatisticalValueAmt@1002 : Decimal);
+    BEGIN
+      // W1 code referenced DataItemVarName not present in ES; removed (as this function is not called in the ES localization)
+    END;
+
+    PROCEDURE FormatTextAmt@1100100(Amount@1100100 : Decimal) : Text[13];
+    VAR
+      AmtText@1100101 : Text[13];
+    BEGIN
+      AmtText := CONVERTSTR(FORMAT(Amount),' ','0');
+      AmtText := DELCHR(AmtText,'=',',');
+      WHILE STRLEN(AmtText) < 13 DO
+        AmtText := '0' + AmtText;
+      EXIT(AmtText);
+    END;
+
+    LOCAL PROCEDURE FileNameOnAfterValidate@19040090();
+    BEGIN
+      FileName := CONVERTSTR(FileName, '.', ',');
+      FileName := SELECTSTR(1, FileName);
+      FileName := FileName + '.csv';
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

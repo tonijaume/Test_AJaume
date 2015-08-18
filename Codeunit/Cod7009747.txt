@@ -1,0 +1,1279 @@
+OBJECT Codeunit 7009747 Funciones Conciliacion BLANK
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/12/13;
+    Time=[ 9:56:15];
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            conciliacion_blank;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355027 : TextConst 'ENU=CONCILIACION BLANK\;ESP=CONCILIACION BLANK\';
+      Text001@1103355028 : TextConst 'ENU=HPL No    #1########\;ESP=N§ HPL     #1########\';
+      Text002@1103355029 : TextConst 'ENU=From      #2######\;ESP=Desde      #2######\';
+      Text003@1103355030 : TextConst 'ENU=To      #3######\;ESP=Hasta      #3######\';
+      Text004@1103355031 : TextConst 'ENU=Local Office #4########;ESP=Delegacion #4########';
+      Text005@1103355032 : TextConst 'ENU=Must indicate a HPL No.;ESP=Debe indicar un n§ de HPL.';
+      Text006@1103355033 : TextConst 'ENU=Must indicate an initial date;ESP=Debe indicar una fecha de inicio.';
+      Text007@1103355034 : TextConst 'ENU=VOUCHERS CONCILIATIONS\;ESP=CONCILIACION BONOS\';
+      Text008@1103355035 : TextConst 'ENU=Voucher #1########;ESP=Bono #1########';
+      Text009@1103355036 : TextConst 'ENU=UPDATING AMOUNTS\;ESP=ACTUALIZANDO IMPORTES\';
+      Text011@1103355038 : TextConst 'ENU=Conciliating blank;ESP=Conciliando blank\';
+      Text012@1103355039 : TextConst 'ENU=1F385202;ESP=1F385202';
+      rBlank@1103355000 : Record 7010004;
+      rBlank2@1103355001 : Record 7010004;
+      rBlank3@1103355002 : Record 7010004;
+      rBono@1103355003 : Record 7010013;
+      rBono2@1103355004 : Record 7010013;
+      rBono3@1103355005 : Record 7010013;
+      rBono4@1103355006 : Record 7010013;
+      rConc@1103355007 : Record 7010070;
+      rConc2@1103355008 : Record 7010070;
+      rConc3@1103355009 : Record 7010070;
+      rActBono@1103355010 : Record 7010013;
+      rCon@1103355011 : Record 7009723;
+      rRes@1103355012 : Record 7009771;
+      rHotDir@1103355013 : Record 7010075;
+      rCondUsr@1103355040 : Record 7010003;
+      ventana@1103355014 : Dialog;
+      w_importe_blank@1103355019 : Decimal;
+      w_importe_bono@1103355020 : Decimal;
+      w_ultima_conciliacion@1103355021 : Integer;
+      sw_blank@1103355022 : Boolean;
+      sw_bono@1103355023 : Boolean;
+      sw_directo@1103355024 : Boolean;
+      ok@1103355025 : Boolean;
+      w_tipo_conciliacion@1103355026 : 'No concil,No Blank,No Bono,Iguales,Blank mayor,Blank menor,Agencia 0,Blank 0,Pago Directo,Ya concil,Inf. distinta,Ya reclam,Prolon';
+      Text013@1103355015 : TextConst 'ENU=Must apply a filter to the field "Agency arrival date" in the conciliations to reconciliate;ESP=Debe aplicar un filtro al campo "Fecha llegada agencia" en las conciliaciones para poder reconciliar.';
+      Text014@1103355016 : TextConst 'ENU=Conciliations to reconciliate must fulfill the next conditions:\-Same local office\-Same HPL No.\-Same Purchase Touroperator\-Same touroperator\-Same value in final conciliation;ESP=Las conciliaciones a reconciliar deben cumplir las siguientes condiciones:\-Misma delegacion\-Mismo Num. HPL\-Mismo Touroperador Compra\-Mismo Touroperador\-Mismo valor en Conciliaci¢n definitiva';
+      cBlank@1103355017 : Codeunit 7009728;
+      Text015@1103355018 : TextConst 'ENU=Would you like to reconciliate all conciliations with then next data?:\local office: %1\HPL No: %2\TO Purchase: %3\TO: %4\Final conciliation: %5\Check-in date:%6..%7;ESP=¨Desea reconciliar las conciliaciones con los siguientes datos?:\delegacion: %1\N§ HPL: %2\TO Compra: %3\TO: %4\Conc. Definitiva: %5\Fecha entrada: %6..%7';
+
+    PROCEDURE conciliacion_blank@1();
+    BEGIN
+      IF NOT PedirDatosFiltro THEN
+        EXIT;
+
+      Conciliar;
+    END;
+
+    PROCEDURE ReconciliarBlank@1103355005(VAR prConcils@1103355000 : Record 7010070);
+    BEGIN
+      // ReconciliarBlank
+      //: Desconciliamos y reconciliamos los bonos filtrados.
+
+      IF NOT rCondUsr.GET(USERID) THEN BEGIN
+        CLEAR(rCondUsr);
+        rCondUsr.Usuario := USERID;
+        rCondUsr.INSERT;
+      END
+      ELSE BEGIN
+        rCondUsr.INIT;
+        rCondUsr.MODIFY;
+      END;
+
+      ComprobarValidoReconciliacion(prConcils, rCondUsr);
+
+      IF NOT CONFIRM(Text015,FALSE, rCondUsr.Delegacion, rCondUsr."Num. HPL", rCondUsr."Touroperador Compra",
+                                    rCondUsr.Touroperador, rCondUsr."Marcar Conciliacion Definitiva",
+                                    rCondUsr."Fecha desde", rCondUsr."Fecha hasta")
+      THEN
+        EXIT;
+
+      cBlank.RetrocedeConciliacion(prConcils,FALSE);
+      Conciliar;
+    END;
+
+    LOCAL PROCEDURE Conciliar@1103355001();
+    BEGIN
+      // Conciliar.
+      //: Lanza la conciliaci¢n desde esta funci¢n.
+      //: Se supone que el registro de rCondUsr ha sido rellenado previamente.
+
+      rBlank.SETCURRENTKEY("N§ HPL",
+                           TourOperador,
+                           Bono,
+                           "Hotel Agencia",
+                           "Fecha Llegada");
+
+      // Guardamos una copia del campo "Importe Coste"
+
+      actualiza_bonos(rBono);
+
+      // Comprobamos los registros de Blank no conciliados
+
+      BLANK_no_conciliados;
+
+      // Tomamos los bonos "No Conciliados" y los marcamos como No Blank
+
+      ventana.OPEN(Text007+
+                   '\'+
+                   Text008);
+
+      rBono.RESET;
+      rBono.SETFILTER(Delegacion         , rCondUsr.Delegacion);
+      rBono.SETRANGE ("Tipo conciliacion", rBono."Tipo conciliacion"::"No concil");
+
+      CASE rCondUsr."Tipo fecha" OF
+        rCondUsr."Tipo fecha"::Llegada:
+        BEGIN
+          rBono.SETCURRENTKEY(Delegacion,
+                              "Tipo conciliacion",
+                              "Fecha llegada");
+          rBono.SETRANGE("Fecha llegada", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+        END;
+        rCondUsr."Tipo fecha"::Salida:
+        BEGIN
+          rBono.SETCURRENTKEY(Delegacion,
+                              "Tipo conciliacion",
+                              "Fecha salida");
+          rBono.SETRANGE("Fecha salida", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+        END;
+      END;
+
+      rBono.SETRANGE(TourOperador, rCondUsr.Touroperador);
+      IF rBono.FIND('-') THEN BEGIN
+        REPEAT
+          ventana.UPDATE(1, rBono.Bono);
+          rBono2 := rBono;
+
+          // AJS 24.03.2008
+          // Antes de marcar como No Blank comprobamos que no sea un hotel de pago directo
+
+          sw_directo := FALSE;
+
+          // AJS 16.06.2008
+          // Pasamos la variable rBono2 a la funcion en lugar de pasar rBono, para que asi
+          // el apuntador que hace el recorrido no se pierda
+
+          hotel_directo(rBono2);
+          IF NOT sw_directo THEN
+            no_blank(rBono2);
+        UNTIL rBono.NEXT = 0;
+      END;
+
+      ventana.CLOSE;
+    END;
+
+    PROCEDURE actualiza_bonos@2(VAR par_bono@1103355000 : Record 7010013);
+    BEGIN
+      // actualiza_bonos
+
+      ventana.OPEN(Text009+
+                   '\'+
+                   Text008);
+
+      rBono2.RESET;
+      rBono2.SETRANGE(Delegacion         , rCondUsr.Delegacion);
+      rBono2.SETRANGE("Tipo conciliacion", par_bono."Tipo conciliacion"::"No concil");
+
+      IF rCondUsr."Tipo fecha" = rCondUsr."Tipo fecha"::Llegada THEN BEGIN
+        rBono2.SETCURRENTKEY(Delegacion,
+                             "Tipo conciliacion",
+                             "Fecha llegada");
+        rBono2.SETRANGE("Fecha llegada", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+      END
+      ELSE BEGIN
+        rBono2.SETCURRENTKEY(Delegacion,
+                             "Tipo conciliacion",
+                             "Fecha salida");
+        rBono2.SETRANGE("Fecha salida", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+      END;
+
+      rBono2.SETRANGE(TourOperador, rCondUsr.Touroperador);
+
+      IF rBono2.FIND('-') THEN BEGIN
+        REPEAT
+          ventana.UPDATE(1, rBono2.Bono);
+          rBono2.CALCFIELDS("Importe coste");
+          rBono2."Conciliacion BLANK" := rBono2."Importe coste";
+          rBono2."Validacion Autorizada" := rCondUsr."Marcar Conciliacion Definitiva";
+          rBono2.MODIFY(TRUE);
+        UNTIL rBono2.NEXT = 0;
+      END;
+
+      rBono2.SETRANGE("Tipo conciliacion");
+      rBono2.SETCURRENTKEY("Modificado tras conciliar",
+                           "Fecha llegada",
+                           Delegacion);
+      rBono2.SETRANGE("Modificado tras conciliar", TRUE);
+      IF rBono2.FIND('-') THEN BEGIN
+        REPEAT
+          ventana.UPDATE(1, rBono2.Bono);
+          rBono2.CALCFIELDS("Importe coste");
+          rBono2."Conciliacion BLANK" := rBono2."Importe coste";
+          rBono2."Validacion Autorizada" := rCondUsr."Marcar Conciliacion Definitiva";
+          rBono2.MODIFY(TRUE);
+        UNTIL rBono2.NEXT = 0;
+      END;
+      ventana.CLOSE;
+    END;
+
+    PROCEDURE BLANK_no_conciliados@4();
+    BEGIN
+      // BLANK_no_conciliados
+      //
+
+      w_importe_blank := 0;
+      sw_blank := FALSE;
+
+      rBlank.RESET;
+      rBlank.SETCURRENTKEY("N§ HPL",
+                           TourOperador,
+                           "Fecha Llegada",
+                           Delegacion,
+                           Conciliado);
+      rBlank.SETRANGE("N§ HPL"       , rCondUsr."Num. HPL");
+      rBlank.SETRANGE(TourOperador   , rCondUsr."Touroperador Compra");
+
+      IF rCondUsr."Tipo fecha" = rCondUsr."Tipo fecha"::Llegada THEN
+        rBlank.SETRANGE("Fecha Llegada", rCondUsr."Fecha desde", rCondUsr."Fecha hasta")
+      ELSE
+        rBlank.SETRANGE("Fecha Llegada", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+
+      rBlank.SETFILTER(Delegacion          , rCondUsr.Delegacion);
+      rBlank.SETRANGE ("Touroperador Venta", rCondUsr.Touroperador);
+      rBlank.SETRANGE (Conciliado          , FALSE);
+      IF rBlank.FIND('-') THEN BEGIN
+        ventana.OPEN(Text011 + '\'+ Text008);
+        REPEAT
+
+          ventana.UPDATE(1, rBlank.Bono);
+
+          // AJS
+          // Este es un codigo de control que tengo para hacer que el debugger se pare aqui
+
+          IF rBlank.Bono = Text012 THEN BEGIN
+            rBlank := rBlank;
+            rBlank := rBlank;
+          END;
+
+          rBlank2 := rBlank;
+
+          sw_bono := FALSE;
+
+          rBono.SETCURRENTKEY(Delegacion,
+                              TourOperador,
+                              "Hotel Reservado",
+                              "Fecha llegada");
+          rBono.SETRANGE(Delegacion           , rBlank.Delegacion);
+
+          rBono.SETRANGE("TourOperador Compra", rCondUsr."Touroperador Compra");
+          IF rBlank."Touroperador Venta" <> '' THEN
+            rBono.SETRANGE(TourOperador, rBlank."Touroperador Venta");
+
+          rBono.SETRANGE("Hotel Reservado"    , rBlank."Hotel Agencia");
+          rBono.SETRANGE("Fecha llegada"      , rBlank."Fecha Llegada");
+          rBono.SETRANGE(Bono                 , rBlank.Bono);
+          IF rBono.FIND('-') THEN BEGIN
+            sw_directo := FALSE;
+            hotel_directo(rBono);
+            IF NOT sw_directo THEN
+              recorrido_bonos(rBono);
+          END
+          ELSE BEGIN
+            rBono2.RESET;
+            rBono2.SETRANGE("TourOperador Compra", rBlank2.TourOperador);
+            rBono2.SETRANGE(Bono                 , rBlank2.Bono);
+            rBono2.SETRANGE("Hotel Reservado"    , rBlank2."Hotel Agencia");
+
+            IF NOT rBono2.FIND('-') THEN BEGIN
+              rBono2.SETRANGE("Hotel Reservado");
+              // AJS 02.08.2004
+              // Buscamos si hay entradas mismo dia en distinto hotel
+
+              rBono2.SETRANGE("Fecha llegada", rBlank2."Fecha Llegada");
+              IF NOT rBono2.FIND('-') THEN BEGIN
+                rBono2.SETRANGE("Fecha llegada");
+                IF NOT rBono2.FIND('-') THEN
+                  busca_bono_original(rBlank2)
+                ELSE BEGIN
+                  rConc3.RESET;
+                  rConc3.SETFILTER (Delegacion              , rBono2.Delegacion);
+                  rConc3.SETRANGE (TourOperador             , rBono2."TourOperador Compra");
+                  rConc3.SETRANGE (Bono                     , rBono2.Bono);
+                  rConc3.SETRANGE ("Hotel reservado agencia", rBono2."Hotel Reservado");
+                  rConc3.SETRANGE ("Fecha llegada agencia"  , rBono2."Fecha llegada");
+                  rConc3.SETFILTER("N§ HPL"                 , '<>%1', rCondUsr."Num. HPL");
+                  IF rConc3.FIND('-') THEN BEGIN
+                    ya_conciliado(rBono2, rBlank2);
+                  END
+                  ELSE BEGIN
+                    informacion_distinta(rBono2, rBlank2);
+                  END;
+                END;
+              END
+              ELSE BEGIN
+                rConc3.RESET;
+                rConc3.SETFILTER(Delegacion               , rBono2.Delegacion);
+                rConc3.SETRANGE (TourOperador             , rBono2."TourOperador Compra");
+                rConc3.SETRANGE (Bono                     , rBono2.Bono);
+                rConc3.SETRANGE ("Hotel reservado agencia", rBono2."Hotel Reservado");
+                rConc3.SETRANGE ("Fecha llegada agencia"  , rBono2."Fecha llegada");
+                rConc3.SETFILTER("N§ HPL"                 , '<>%1', rCondUsr."Num. HPL");
+                IF rConc3.FIND('-') THEN BEGIN
+                  ya_conciliado(rBono2, rBlank2);
+                END
+                ELSE BEGIN
+                  informacion_distinta(rBono2, rBlank2);
+                END;
+              END;
+            END
+            ELSE BEGIN
+              rConc3.RESET;
+              rConc3.SETFILTER (Delegacion  , rBono2.Delegacion);
+              rConc3.SETRANGE (TourOperador, rBono2."TourOperador Compra");
+              rConc3.SETRANGE (Bono        , rBono2.Bono);
+              rConc3.SETFILTER("N§ HPL"    , '<>%1', rCondUsr."Num. HPL");
+              IF rConc3.FIND('-') THEN BEGIN
+                ya_conciliado(rBono2, rBlank2);
+              END
+              ELSE BEGIN
+                informacion_distinta(rBono2, rBlank2);
+              END;
+            END;
+          END;
+
+          // AJF 25/11/09
+          // se puede haber modificado desde otra variable en las funciones intermedias.
+          // a¤ado un FIND para refrescar el registro.
+          rBlank2.FIND;
+          rBlank2.Conciliado := TRUE;
+          rBlank2.MODIFY;
+
+        UNTIL rBlank.NEXT = 0;
+        ventana.CLOSE;
+      END;
+    END;
+
+    PROCEDURE no_blank@12(VAR par_bono@1103355000 : Record 7010013);
+    BEGIN
+      // no_blank
+      //
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_bono."TourOperador Compra",
+                                                       par_bono.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      WITH par_bono DO BEGIN
+        rConc.INIT;
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel Pago"              := Hotel;
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY();
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := 0;
+        rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::"No Blank";
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+
+        IF "Tipo conciliacion" = "Tipo conciliacion"::"No concil" THEN BEGIN
+          rConc."Importe agencia"         := "Conciliacion BLANK";
+          rConc."Diferencia TTOO-Agencia" := - "Conciliacion BLANK";
+        END
+        ELSE
+        BEGIN
+          rConc."Importe agencia"         := 0;
+          rConc."Diferencia TTOO-Agencia" := 0;
+        END;
+
+        busca_contrato("Hotel Reservado", "TourOperador Compra", "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+
+      par_bono."Modificado tras conciliar" := FALSE;
+      par_bono."Ultimo importe Blank"      := 0;
+      par_bono."N§ HPL"                    := rCondUsr."Num. HPL";
+      par_bono."Tipo conciliacion"         := par_bono."Tipo conciliacion"::"No Blank";
+      par_bono."Validacion Autorizada"     := rCondUsr."Marcar Conciliacion Definitiva";
+      par_bono.MODIFY(TRUE);
+    END;
+
+    PROCEDURE no_agencia@27(VAR par_blank@1103355000 : Record 7010004);
+    BEGIN
+      // no_agencia
+      //
+      w_ultima_conciliacion := ultimo_num_conciliacion(COPYSTR(par_blank."Hotel Agencia",1 ,3),
+                                                       par_blank.TourOperador, par_blank.Bono, 0, '',
+                                                       '', 0D);
+      WITH par_blank DO BEGIN
+        CLEAR(rConc);
+        rConc.Delegacion                := COPYSTR(par_blank."Hotel Agencia", 1, 3);
+        rConc.TourOperador              := TourOperador;
+        rConc.Bono                      := Bono;
+        rConc."Hotel reservado agencia" := '';
+        rConc."N§ Reserva"              := par_blank."N§ Linea"; //+$001
+        rConc."Hotel TO agencia"        := '';
+        rConc."Fecha llegada agencia"   := 0D;
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::"No Bono";
+        rConc."Importe TTOO"            := Importe;
+        rConc."Diferencia TTOO-Agencia" := Importe - 0;
+        rConc."Importe agencia"         := 0;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := "Hotel Agencia";
+        rConc."Hotel TO BLANK"          := "Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := "Fecha Llegada";
+        rConc."No Analisis"             := TRUE;
+
+        busca_contrato("Hotel Agencia", TourOperador, "Fecha Llegada");
+        rConc."Tipo Garantias"     := rCon."Tipo de Garantias";
+        rConc."Touroperador Venta" := "Touroperador Venta";
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+    END;
+
+    PROCEDURE hotel_directo@7(VAR par_bono@1103355000 : Record 7010013);
+    BEGIN
+      // hotel_directo
+      //
+      rHotDir.RESET;
+      rHotDir.SETRANGE (Hotel        , par_bono."Hotel Reservado");
+      rHotDir.SETFILTER("Fecha desde", '<=%1', par_bono."Fecha llegada");
+      rHotDir.SETFILTER("Fecha hasta", '>=%1', par_bono."Fecha llegada");
+      IF rHotDir.FIND('-') THEN BEGIN
+        w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_bono."TourOperador Compra",
+                                                         par_bono.Bono, par_bono."N§ Reserva",
+                                                         par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                         par_bono."Fecha llegada");
+        rConc.INIT;
+        WITH par_bono DO BEGIN
+          rConc.Delegacion                := Delegacion;
+          rConc.TourOperador              := "TourOperador Compra";
+          rConc.Bono                      := Bono;
+          rConc."N§ Reserva"              := "N§ Reserva";
+          rConc."N§ Secuencia"            := "N§ Secuencia";
+          rConc."Hotel reservado agencia" := "Hotel Reservado";
+          rConc."Fecha llegada agencia"   := "Fecha llegada";
+          rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+          rConc."Fecha conciliacion"      := TODAY;
+          rConc."Usuario conciliacion"    := USERID;
+          rConc."Importe TTOO"            := 0;
+          rConc."Diferencia TTOO-Agencia" := 0;
+          rConc."Tipo conciliacion"       := "Tipo conciliacion"::"Pago Directo";
+
+          // AJS 22.04.2008
+          // Por peticion de Micheline Gasser ponemos el importe agencia a cero
+          //rConc."Importe agencia"         := "Conciliacion BLANK";
+
+          rConc."Importe agencia"         := 0;
+          rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+          rConc."Hotel Reservado BLANK"   := rBlank."Hotel Agencia";
+          rConc."Hotel TO BLANK"          := rBlank."Hotel TourOperador";
+          rConc."Fecha llegada BLANK"     := rBlank."Fecha Llegada";
+
+          busca_contrato("Hotel Reservado", "TourOperador Compra", "Fecha llegada");
+          rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+          busca_resumen(Delegacion, "N§ Reserva");
+          rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+          rConc."Regimen TourOperador"    := rRes."Regimen TO";
+          rConc."Dias estancia"           := rRes.Estancia;
+          rConc."Fecha venta"             := rRes."Fecha venta";
+          rConc."Hotel TO agencia"        := rRes."Hotel TO";
+          rConc."Touroperador Venta"      := TourOperador;
+          rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+          rConc.INSERT;
+        END;
+
+        sw_directo := TRUE;
+
+        par_bono."Modificado tras conciliar" := FALSE;
+        par_bono."Ultimo importe Blank"      := 0;
+        par_bono."N§ HPL"                    := rCondUsr."Num. HPL";
+        par_bono."Tipo conciliacion"         := par_bono."Tipo conciliacion"::"Pago Directo";
+        par_bono."Validacion Autorizada"     := rCondUsr."Marcar Conciliacion Definitiva";
+        par_bono.MODIFY(TRUE);
+      END;
+      rHotDir.RESET;
+    END;
+
+    PROCEDURE hotel_directo_blank@26(VAR par_blank@1103355000 : Record 7010004);
+    BEGIN
+      // hotel_directo_blank
+      //
+      rHotDir.RESET;
+      rHotDir.SETRANGE (Hotel        , par_blank."Hotel Agencia");
+      rHotDir.SETFILTER("Fecha desde", '<=%1', par_blank."Fecha Llegada");
+      rHotDir.SETFILTER("Fecha hasta", '>=%1', par_blank."Fecha Llegada");
+      IF rHotDir.FIND('-') THEN BEGIN
+        w_ultima_conciliacion := ultimo_num_conciliacion(COPYSTR(par_blank."Hotel Agencia", 1, 3),
+                                                         par_blank.TourOperador, par_blank.Bono,
+                                                         0, '', '', 0D);
+        WITH par_blank DO BEGIN
+          rConc.INIT;
+          rConc.Delegacion                := COPYSTR("Hotel Agencia", 1, 3);
+          rConc.TourOperador              := TourOperador;
+          rConc.Bono                      := Bono;
+          rConc."Hotel reservado agencia" := '';
+          rConc."Hotel TO agencia"        := '';
+          rConc."Fecha llegada agencia"   := 0D;
+          rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+          rConc."Fecha conciliacion"      := TODAY;
+          rConc."Usuario conciliacion"    := USERID;
+          rConc."Importe TTOO"            := Importe;
+          rConc."Diferencia TTOO-Agencia" := 0;
+          rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::"Pago Directo";
+          rConc."Importe agencia"         := 0;
+          rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+          rConc."Hotel Reservado BLANK"   := "Hotel Agencia";
+          rConc."Hotel TO BLANK"          := "Hotel TourOperador";
+          rConc."Fecha llegada BLANK"     := "Fecha Llegada";
+          rConc."No Analisis"             := TRUE;
+          rConc."Touroperador Venta"      := TourOperador;
+          rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+          rConc.INSERT;
+
+          sw_directo := TRUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE recorrido_bonos@8(VAR par_bono@1103355000 : Record 7010013);
+    VAR
+      w_importe_blank_anterior@1103355001 : Decimal;
+      w_importe_bono_anterior@1103355002 : Decimal;
+    BEGIN
+      // recorrido_bonos
+      //
+      // Sumamos todos los importes de los bonos blank que se corresponden a un mismo bono
+      // en el HPL que estamos conciliando
+      //
+      w_importe_blank := 0;
+      sw_blank := FALSE;
+      rBlank3.RESET;
+      rBlank3.SETCURRENTKEY("N§ HPL",
+                            TourOperador,
+                            Bono,
+                            "Hotel Agencia",
+                            "Fecha Llegada");
+      rBlank3.SETRANGE("N§ HPL"       , rCondUsr."Num. HPL");
+      rBlank3.SETRANGE(TourOperador   , par_bono."TourOperador Compra");
+      rBlank3.SETRANGE(Bono           , par_bono.Bono);
+      rBlank3.SETRANGE("Hotel Agencia", par_bono."Hotel Reservado");
+      rBlank3.SETRANGE("Fecha Llegada", par_bono."Fecha llegada");
+      IF rBlank3.FIND('-') THEN BEGIN
+        w_importe_blank_anterior := rBlank3.Importe;
+        rBlank3.CALCSUMS(Importe);
+        w_importe_blank := rBlank3.Importe;
+        rBlank3.Importe := w_importe_blank_anterior;
+        rBlank3.MODIFYALL(Conciliado, TRUE);
+        IF w_importe_blank = 0 THEN
+          sw_blank := TRUE;
+      END;
+
+      // Sumamos todos los importes conciliacion blank por TourOperador y bono
+
+      w_importe_bono := 0;
+      sw_bono := FALSE;
+
+      rBono4.RESET;
+      rBono4.SETCURRENTKEY(Delegacion,
+                           TourOperador,
+                           "Hotel Reservado",
+                           "Fecha llegada",
+                           Bono,
+                           "N§ HPL");
+      rBono4.SETRANGE (Delegacion       , par_bono.Delegacion);
+      rBono4.SETRANGE (TourOperador     , par_bono.TourOperador);
+      rBono4.SETRANGE ("Hotel Reservado", par_bono."Hotel Reservado");
+      rBono4.SETRANGE ("Fecha llegada"  , par_bono."Fecha llegada");
+      rBono4.SETRANGE (Bono             , par_bono.Bono);
+      rBono4.SETFILTER("N§ HPL"         , '<>%1', rCondUsr."Num. HPL");
+      IF rBono4.FIND('-') THEN BEGIN
+        w_importe_bono_anterior := rBono4."Conciliacion BLANK";
+        rBono4.CALCSUMS("Conciliacion BLANK");
+        w_importe_bono := rBono4."Conciliacion BLANK";
+        rBono4."Conciliacion BLANK" := w_importe_bono_anterior;
+        IF w_importe_bono = 0 THEN
+          sw_bono := TRUE;
+      END;
+
+      // Conciliamos las sumas de los dos importes
+
+      conciliar_importes;
+
+      // Grabamos el Tipo de conciliacion en todos los bonos afectados
+
+      rBono3.RESET;
+      rBono3.SETCURRENTKEY(Delegacion,
+                           TourOperador,
+                           "Hotel Reservado",
+                           "Fecha llegada");
+      rBono3.COPYFILTERS(rBono4);
+      rBono4.SETRANGE("N§ HPL");
+      IF rBono3.FIND('+') THEN BEGIN
+        REPEAT
+          rBono3."Modificado tras conciliar" := FALSE;
+          IF (rBono3."N§ Reserva" = par_bono."N§ Reserva") AND (rBono3."N§ Secuencia" = par_bono."N§ Secuencia") THEN
+            rBono3."Ultimo importe Blank" := w_importe_blank
+          ELSE
+            rBono3."Ultimo importe Blank" := 0;
+          rBono3."N§ HPL" := rCondUsr."Num. HPL";
+          rBono3."Tipo conciliacion" := w_tipo_conciliacion;
+          rBono3."Validacion Autorizada" := rCondUsr."Marcar Conciliacion Definitiva";
+          rBono3.MODIFY(TRUE);
+        UNTIL rBono3.NEXT(-1) = 0;
+      END;
+      rBono3.RESET;
+
+      rBono4.SETRANGE(TourOperador);
+      rBono4.SETRANGE(Delegacion);
+      rBono4.SETRANGE("Hotel Reservado");
+      rBono4.SETRANGE("Fecha llegada");
+      rBono4.SETRANGE(Bono);
+      rBono4.SETRANGE("N§ HPL");
+
+      // Buscamos el ultimo n§ de conciliacion y grabamos el registro de conciliacion
+
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_bono."TourOperador Compra",
+                                                       par_bono.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      rConc.INIT;
+      WITH par_bono DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := w_importe_blank;
+        rConc."Diferencia TTOO-Agencia" := w_importe_blank - w_importe_bono;
+        rConc."Tipo conciliacion"       := w_tipo_conciliacion;
+        rConc."Importe agencia"         := w_importe_bono;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := rBlank."Hotel Agencia";
+        rConc."Hotel TO BLANK"          := rBlank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := rBlank."Fecha Llegada";
+
+        busca_contrato("Hotel Reservado", "TourOperador Compra", "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+    END;
+
+    PROCEDURE busca_bono_original@10(VAR par_blank@1103355000 : Record 7010004);
+    BEGIN
+      // busca_bono_original
+      //
+      rBlank3.RESET;
+      rBlank3.SETRANGE(TourOperador, par_blank.TourOperador);
+      rBlank3.SETRANGE(Bono        , par_blank."Bono Original");
+      IF rBlank3.FIND('-') THEN BEGIN
+        rConc3.RESET;
+        rConc3.SETRANGE(TourOperador, rBlank3.TourOperador);
+        rConc3.SETRANGE(Bono        , rBlank3.Bono);
+        IF rConc3.FIND('-') THEN BEGIN
+          rBono2.RESET;
+          rBono2.SETRANGE(TourOperador   , rBlank3.TourOperador);
+          rBono2.SETRANGE(Bono           , rBlank3.Bono);
+          rBono2.SETRANGE("Fecha llegada", rCondUsr."Fecha desde", rCondUsr."Fecha hasta");
+          IF NOT rBono2.FIND('-') THEN BEGIN
+            ya_reclamado(rConc3, rBlank3);
+          END
+          ELSE BEGIN
+            prolongacion_concil(rBono2, rBlank3);
+          END;
+        END
+        ELSE BEGIN
+          rBono3.RESET;
+          rBono3.SETRANGE("TourOperador Compra", rBlank3.TourOperador);
+          rBono3.SETRANGE(Bono                 , rBlank3.Bono);
+          ok := rBono3.FIND('-');
+          sumar_prolongacion(rBono3, rBlank2, rBlank3);
+          linea_prolongacion(rBlank2);
+        END;
+      END
+      ELSE BEGIN
+        sw_directo := FALSE;
+        hotel_directo_blank(par_blank);
+        IF NOT sw_directo THEN
+          no_agencia(par_blank);
+      END;
+    END;
+
+    PROCEDURE ya_conciliado@5(VAR par_bono@1103355000 : Record 7010013;VAR par_blank@1103355001 : Record 7010004);
+    BEGIN
+      // ya_conciliado
+      //
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_bono."TourOperador Compra",
+                                                       par_bono.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      rConc.INIT;
+      WITH par_bono DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := par_blank.Importe;
+        rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::"Ya concil";
+        rConc."Importe agencia"         := 0;
+        rConc."Diferencia TTOO-Agencia" := par_blank.Importe - 0;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := par_blank."Hotel Agencia";
+        rConc."Hotel TO BLANK"          := par_blank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := par_blank."Fecha Llegada";
+
+        IF ("Fecha llegada" < rCondUsr."Fecha desde") OR ("Fecha llegada" > rCondUsr."Fecha hasta") THEN
+          rConc."No Analisis" := TRUE;
+
+        busca_contrato("Hotel Reservado", "TourOperador Compra", "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+      par_bono."Modificado tras conciliar" := FALSE;
+      par_bono."Ultimo importe Blank"      := 0;
+      par_bono."N§ HPL"                    := rCondUsr."Num. HPL";
+      par_bono."Tipo conciliacion"         := par_bono."Tipo conciliacion"::"Ya concil";
+      par_bono."Validacion Autorizada"     := rCondUsr."Marcar Conciliacion Definitiva";
+      par_bono.MODIFY(TRUE);
+    END;
+
+    PROCEDURE informacion_distinta@6(VAR par_bono@1103355000 : Record 7010013;VAR par_blank@1103355001 : Record 7010004);
+    BEGIN
+      // informacion_distinta
+
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_bono."TourOperador Compra",
+                                                       par_bono.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      rConc.INIT;
+      WITH par_bono DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := par_blank.Importe;
+        rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::"Inf. distinta";
+
+        // AJS 30.03.2004
+        // si ya hemos tratado este bono en la misma conciliacion no lo sumaremos, porque sino se duplican
+        // los importes agencia
+
+        IF par_bono."N§ HPL"  = rCondUsr."Num. HPL" THEN BEGIN
+          rConc."Importe agencia"         := 0;
+          rConc."Diferencia TTOO-Agencia" := par_blank.Importe - 0;
+        END
+        ELSE BEGIN
+          rConc."Importe agencia"         := par_bono."Conciliacion BLANK";
+          rConc."Diferencia TTOO-Agencia" := par_blank.Importe - par_bono."Conciliacion BLANK";
+        END;
+
+        rConc."N§ HPL"                := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK" := par_blank."Hotel Agencia";
+        rConc."Hotel TO BLANK"        := par_blank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"   := par_blank."Fecha Llegada";
+
+        IF ("Fecha llegada" < rCondUsr."Fecha desde") OR ("Fecha llegada" > rCondUsr."Fecha hasta") THEN
+          rConc."No Analisis" := TRUE;
+
+        busca_contrato("Hotel Reservado", "TourOperador Compra", "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+
+      IF par_bono."N§ HPL" <> rCondUsr."Num. HPL" THEN BEGIN
+        par_bono."Modificado tras conciliar" := FALSE;
+        par_bono."Ultimo importe Blank"      := 0;
+        par_bono."N§ HPL"                    := rCondUsr."Num. HPL";
+        par_bono."Tipo conciliacion"         := par_bono."Tipo conciliacion"::"Inf. distinta";
+        par_bono."Validacion Autorizada"     := rCondUsr."Marcar Conciliacion Definitiva";
+        par_bono.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE ya_reclamado@19(VAR par_conc@1103355000 : Record 7010070;VAR par_blank@1103355001 : Record 7010004);
+    BEGIN
+      // ya_reclamado
+
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_conc.Delegacion, par_conc.TourOperador,
+                                                       par_conc.Bono, par_conc."N§ Reserva",
+                                                       par_conc."N§ Secuencia", par_conc."Hotel reservado agencia",
+                                                       par_conc."Fecha llegada agencia");
+      // conciliamos importes
+
+      w_importe_blank := par_blank.Importe;
+      w_importe_bono := par_conc."Diferencia TTOO-Agencia";
+      conciliar_importes;
+
+      // creamos el registro de conciliacion
+
+      rConc.INIT;
+      WITH par_conc DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := TourOperador;
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel reservado agencia";
+        rConc."Fecha llegada agencia"   := "Fecha llegada agencia";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := w_importe_blank;
+        rConc."Diferencia TTOO-Agencia" := w_importe_blank - w_importe_bono;
+        rConc."Tipo conciliacion"       := w_tipo_conciliacion;
+        rConc."Importe agencia"         := w_importe_bono;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := par_blank."Hotel Agencia";
+        rConc."Hotel TO BLANK"          := par_blank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := par_blank."Fecha Llegada";
+
+        IF (rConc."Fecha llegada agencia" < rCondUsr."Fecha desde") OR
+           (rConc."Fecha llegada agencia" > rCondUsr."Fecha hasta") THEN
+          rConc."No Analisis" := TRUE;
+
+        busca_contrato(par_conc."Hotel reservado agencia", rConc.TourOperador, rConc."Fecha llegada agencia");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(par_conc.Delegacion, par_conc."N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+    END;
+
+    PROCEDURE prolongacion_concil@21(VAR par_bono@1103355000 : Record 7010013;VAR par_blank@1103355001 : Record 7010004);
+    BEGIN
+      // prolongacion_concil
+
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_blank.TourOperador,
+                                                       par_blank.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      // conciliamos los importes
+
+      w_importe_blank := par_blank.Importe;
+      w_importe_bono := par_bono."Conciliacion BLANK";
+      conciliar_importes;
+
+      // Grabamos el registro de conciliacion
+
+      rConc.INIT;
+      WITH par_bono DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := w_importe_blank;
+        rConc."Diferencia TTOO-Agencia" := w_importe_blank - w_importe_bono;
+        rConc."Tipo conciliacion"       := w_tipo_conciliacion;
+        rConc."Importe agencia"         := w_importe_bono;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := par_blank."Hotel Agencia";
+        rConc."Hotel TO BLANK"          := par_blank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := par_blank."Fecha Llegada";
+
+        IF (par_bono."Fecha llegada" < rCondUsr."Fecha desde") OR (par_bono."Fecha llegada" > rCondUsr."Fecha hasta") THEN
+          rConc."No Analisis" := TRUE;
+
+        busca_contrato("Hotel Reservado", TourOperador, "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"           := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+      par_bono."Modificado tras conciliar" := FALSE;
+      par_bono."Ultimo importe Blank"      := 0;
+      par_bono."N§ HPL"                    := rCondUsr."Num. HPL";
+      par_bono."Tipo conciliacion"         := w_tipo_conciliacion;
+      par_bono."Validacion Autorizada"     := rCondUsr."Marcar Conciliacion Definitiva";
+      par_bono.MODIFY(TRUE);
+    END;
+
+    PROCEDURE sumar_prolongacion@23(VAR par_bono@1103355000 : Record 7010013;VAR par_blank@1103355001 : Record 7010004;VAR par_blank2@1103355002 : Record 7010004);
+    BEGIN
+      // sumar_prolongacion
+      //
+      w_ultima_conciliacion := ultimo_num_conciliacion(par_bono.Delegacion, par_blank2.TourOperador,
+                                                       par_blank2.Bono, par_bono."N§ Reserva",
+                                                       par_bono."N§ Secuencia", par_bono."Hotel Reservado",
+                                                       par_bono."Fecha llegada");
+      // conciliamos los importes
+
+      w_importe_blank := par_blank.Importe + par_blank2.Importe;
+      w_importe_bono := par_bono."Conciliacion BLANK";
+      conciliar_importes;
+
+      // Grabamos el registro de conciliacion
+
+      rConc.INIT;
+      WITH par_bono DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := "TourOperador Compra";
+        rConc.Bono                      := Bono;
+        rConc."N§ Reserva"              := "N§ Reserva";
+        rConc."N§ Secuencia"            := "N§ Secuencia";
+        rConc."Hotel reservado agencia" := "Hotel Reservado";
+        rConc."Fecha llegada agencia"   := "Fecha llegada";
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := w_importe_blank;
+        rConc."Diferencia TTOO-Agencia" := w_importe_blank - w_importe_bono;
+        rConc."Tipo conciliacion"       := w_tipo_conciliacion;
+        rConc."Importe agencia"         := w_importe_bono;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := par_blank."Hotel Agencia";
+        rConc."Hotel TO BLANK"          := par_blank."Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := par_blank."Fecha Llegada";
+
+        IF ("Fecha llegada" < rCondUsr."Fecha desde") OR ("Fecha llegada" > rCondUsr."Fecha hasta") THEN
+          rConc."No Analisis" := TRUE;
+
+        busca_contrato("Hotel Reservado", TourOperador, "Fecha llegada");
+        rConc."Tipo Garantias" := rCon."Tipo de Garantias";
+
+        busca_resumen(Delegacion, "N§ Reserva");
+        rConc."Habitacion TourOperador" := rRes."Habitacion TO";
+        rConc."Regimen TourOperador"    := rRes."Regimen TO";
+        rConc."Dias estancia"               := rRes.Estancia;
+        rConc."Fecha venta"             := rRes."Fecha venta";
+        rConc."Hotel TO agencia"        := rRes."Hotel TO";
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+    END;
+
+    PROCEDURE linea_prolongacion@24(VAR par_blank@1103355000 : Record 7010004);
+    BEGIN
+      // linea_prolongacion
+      //
+      w_ultima_conciliacion := ultimo_num_conciliacion('', par_blank.TourOperador, par_blank.Bono, 0,
+                                                       '', '', 0D);
+      rConc.INIT;
+      WITH par_blank DO BEGIN
+        rConc.Delegacion                := Delegacion;
+        rConc.TourOperador              := TourOperador;
+        rConc.Bono                      := Bono;
+        rConc."N§ Conciliacion"         := w_ultima_conciliacion;
+        rConc."Fecha conciliacion"      := TODAY;
+        rConc."Usuario conciliacion"    := USERID;
+        rConc."Importe TTOO"            := Importe;
+        rConc."Diferencia TTOO-Agencia" := 0;
+        rConc."Tipo conciliacion"       := rConc."Tipo conciliacion"::Prolon;
+        rConc."Importe agencia"         := 0;
+        rConc."N§ HPL"                  := rCondUsr."Num. HPL";
+        rConc."Hotel Reservado BLANK"   := "Hotel Agencia";
+        rConc."Hotel TO BLANK"          := "Hotel TourOperador";
+        rConc."Fecha llegada BLANK"     := "Fecha Llegada";
+        rConc."No Analisis"             := TRUE;
+        rConc."Touroperador Venta"      := TourOperador;
+        rConc."Conciliaci¢n definitiva" := rCondUsr."Marcar Conciliacion Definitiva";
+        rConc.INSERT;
+      END;
+    END;
+
+    PROCEDURE conciliar_importes@14();
+    BEGIN
+      // conciliar_importes
+      //
+      IF sw_bono THEN BEGIN
+        IF sw_blank THEN
+          w_tipo_conciliacion := w_tipo_conciliacion::Iguales
+        ELSE
+          w_tipo_conciliacion := w_tipo_conciliacion::"Agencia 0";
+        EXIT;
+      END;
+      IF sw_blank THEN BEGIN
+        w_tipo_conciliacion := w_tipo_conciliacion::"Blank 0";
+        EXIT;
+      END;
+      IF (w_importe_blank = 0) AND (w_importe_bono <> 0) THEN BEGIN
+        w_tipo_conciliacion := w_tipo_conciliacion::"No Blank";
+        EXIT;
+      END
+      ELSE BEGIN
+        IF (w_importe_blank <> 0) AND (w_importe_bono = 0) THEN BEGIN
+          w_tipo_conciliacion := w_tipo_conciliacion::"No Bono";
+          EXIT
+        END
+        ELSE BEGIN
+          IF (w_importe_blank <> 0) AND (w_importe_bono <> 0) THEN BEGIN
+            IF w_importe_blank = w_importe_bono THEN BEGIN
+              w_tipo_conciliacion := w_tipo_conciliacion::Iguales;
+              EXIT;
+            END
+            ELSE BEGIN
+              IF w_importe_blank > w_importe_bono THEN BEGIN
+                w_tipo_conciliacion := w_tipo_conciliacion::"Blank mayor";
+                EXIT;
+              END
+              ELSE BEGIN
+                w_tipo_conciliacion := w_tipo_conciliacion::"Blank menor";
+                EXIT;
+              END;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE busca_contrato@20(par_hotel_reservado@1103355000 : Code[20];par_touroperador@1103355001 : Code[10];par_fecha_llegada@1103355002 : Date);
+    BEGIN
+      // busca_contrato
+
+      rCon.RESET;
+      rCon.SETCURRENTKEY(Hotel,
+                         TourOperador,
+                         "Fecha inicio contrato");
+      rCon.SETRANGE (Hotel                  , par_hotel_reservado);
+      rCon.SETRANGE (TourOperador           , par_touroperador);
+      rCon.SETFILTER("Fecha inicio contrato", '<=%1', par_fecha_llegada);
+      rCon.SETFILTER("Fecha final contrato" , '>=%1', par_fecha_llegada);
+      rCon.SETRANGE (Confirmado             , TRUE);
+      IF NOT rCon.FINDFIRST THEN
+        CLEAR(rCon);
+    END;
+
+    PROCEDURE busca_resumen@22(par_delegacion@1103355000 : Code[10];par_reserva@1103355001 : Integer);
+    BEGIN
+      // busca_resumen
+
+      CLEAR(rRes);
+      rRes.SETRANGE(Delegacion  , par_delegacion);
+      rRes.SETRANGE("N§ Reserva", par_reserva);
+      IF rRes.FINDLAST THEN
+        rRes := rRes;
+    END;
+
+    PROCEDURE ultimo_num_conciliacion@28(par_delegacion@1103355000 : Code[10];par_touroperador@1103355001 : Code[10];par_bono@1103355002 : Code[10];par_reserva@1103355003 : Integer;par_secuencia@1103355004 : Code[10];par_hotel@1103355005 : Code[20];par_fecha@1103355006 : Date) : Integer;
+    BEGIN
+      // ultimo_num_conciliacion
+      //
+      rConc2.RESET;
+      IF par_delegacion <> '' THEN
+        rConc2.SETRANGE(Delegacion               , par_delegacion);
+      IF par_touroperador <> '' THEN
+        rConc2.SETRANGE(TourOperador             , par_touroperador);
+      IF par_bono <> '' THEN
+        rConc2.SETRANGE(Bono                     , par_bono);
+      IF par_reserva <> 0 THEN
+        rConc2.SETRANGE("N§ Reserva"             , par_reserva);
+      IF par_secuencia <> '' THEN
+        rConc2.SETRANGE("N§ Secuencia"           , par_secuencia);
+      IF par_hotel <> '' THEN
+        rConc2.SETRANGE("Hotel reservado agencia", par_hotel);
+      IF par_fecha <> 0D THEN
+        rConc2.SETRANGE("Fecha llegada agencia"  , par_fecha);
+      IF rConc2.FINDLAST THEN BEGIN
+        rConc2.RESET;
+        EXIT(rConc2."N§ Conciliacion" + 1);
+      END
+      ELSE BEGIN
+        rConc2.RESET;
+        EXIT(1);
+      END;
+    END;
+
+    PROCEDURE PedirDatosFiltro@1103355000() : Boolean;
+    VAR
+      lfPideDatos@1103355000 : Form 7010076;
+    BEGIN
+      // PedirDatosFiltro
+
+      IF NOT rCondUsr.GET(USERID) THEN BEGIN
+        CLEAR(rCondUsr);
+        rCondUsr.Usuario := USERID;
+        rCondUsr.INSERT;
+      END
+      ELSE BEGIN
+        rCondUsr.INIT;
+        rCondUsr.MODIFY;
+      END;
+
+      rCondUsr.SETRECFILTER;
+
+      COMMIT;
+
+      CLEAR(lfPideDatos);
+      lfPideDatos.SETRECORD(rCondUsr);
+      lfPideDatos.SETTABLEVIEW(rCondUsr);
+      IF lfPideDatos.RUNMODAL <> ACTION::OK THEN
+        EXIT(FALSE);
+      lfPideDatos.GETRECORD(rCondUsr);
+
+      EXIT(ComprobarCondiciones);
+    END;
+
+    LOCAL PROCEDURE ComprobarCondiciones@1103355002() : Boolean;
+    BEGIN
+      // ComprobarCondiciones
+
+      IF rCondUsr."Num. HPL" = '' THEN
+        EXIT(FALSE);
+
+      IF rCondUsr.Delegacion = '' THEN
+        EXIT(FALSE);
+
+      IF (rCondUsr."Fecha desde" = 0D) OR (rCondUsr."Fecha hasta" = 0D) THEN
+        EXIT(FALSE);
+
+      IF rCondUsr.Touroperador = '' THEN
+        EXIT(FALSE);
+
+      IF rCondUsr."Touroperador Compra" = '' THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ComprobarValidoReconciliacion@1103355007(VAR prConcils@1103355000 : Record 7010070;VAR prCondHP@1103355004 : Record 7010003);
+    VAR
+      lwNumConc@1103355001 : Integer;
+      lwNumFiltrados@1103355002 : Integer;
+      lrConcils@1103355003 : Record 7010070;
+    BEGIN
+      // ComprobarValidoReconciliacion.
+      //: Comprobamos que las conciliaciones tengan:
+      //: -Misma delegacion
+      //: -Mismo Num. HPL
+      //: -Mismo Touroperador Compra
+      //: -Mismo Touroperador
+      //: -Mismo valor en Conciliaci¢n definitiva
+      //: @prConcils: registros a comprobar.
+      //: @prCondHP: registro donde guardaremos los datos de filtro si son validos.
+
+      lrConcils.RESET;
+      lrConcils.COPY(prConcils);
+
+      lwNumConc := lrConcils.COUNT;
+
+      // En la conciliacion solo se guarda la fecha de llegada asi que se tiene que filtrar forzosamente
+      // por llegada.
+      IF prConcils.GETFILTER("Fecha llegada agencia") = '' THEN
+        ERROR(Text013);
+
+      prCondHP."Tipo fecha"                     := prCondHP."Tipo fecha"::Llegada;
+      prCondHP."Fecha desde"                    := prConcils.GETRANGEMIN("Fecha llegada agencia");
+      prCondHP."Fecha hasta"                    := prConcils.GETRANGEMAX("Fecha llegada agencia");
+
+      // Filtramos la tabla por las condiciones del primer registro para ver si est 
+      // filtrado por estos campos.
+      lrConcils.FINDFIRST;
+      prCondHP.Delegacion                       := lrConcils.Delegacion;
+      prCondHP."Num. HPL"                       := lrConcils."N§ HPL";
+      prCondHP.Touroperador                     := lrConcils."Touroperador Venta";
+      prCondHP."Touroperador Compra"            := lrConcils.TourOperador;
+      prCondHP."Marcar Conciliacion Definitiva" := lrConcils."Conciliaci¢n definitiva";
+
+      lrConcils.SETRANGE (Delegacion               , lrConcils.Delegacion);
+      lrConcils.SETRANGE ("N§ HPL"                 , lrConcils."N§ HPL");
+      lrConcils.SETRANGE (TourOperador             , lrConcils.TourOperador);
+      lrConcils.SETRANGE ("Touroperador Venta"     , lrConcils."Touroperador Venta");
+      lrConcils.SETRANGE ("Conciliaci¢n definitiva", lrConcils."Conciliaci¢n definitiva");
+      lwNumFiltrados := lrConcils.COUNT;
+
+      IF lwNumFiltrados <> lwNumConc THEN
+        ERROR(Text014);
+
+      prCondHP.MODIFY;
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 29/06/09
+
+        .- (09/00319) Cambiados varios par metros que hacen referencia a c¢digos de hotel de code10 a code20.
+
+      ## AJF 25/11/09
+
+        .- (0900605) Nueva funci¢n "ReconciliarBlank": desconcilia y vuelve a conciliar un grupo de conciliaciones.
+
+      $001 AJS 19122013 En el caso de No_Agencia utilizo el campo de N§ Linea del blank para rellenar el numero de reserva y evitar
+                        un error detectado cuando hay mas de una estancia de un bono
+    }
+    END.
+  }
+}

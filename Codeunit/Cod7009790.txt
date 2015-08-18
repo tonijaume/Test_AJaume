@@ -1,0 +1,611 @@
+OBJECT Codeunit 7009790 Facturar reserva No Show
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/03/15;
+    Time=[ 9:40:58];
+    Modified=Yes;
+    Version List=AIC2009,COM;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000000 : TextConst 'ENU=There is no %1 with %2 "%3" %4 "%5";ESP=No existe %1 con %2 "%3" %4 "%5"';
+      Text002@1000000001 : TextConst 'ENU=Touroperador %1 has no transfer contract for day %2.;ESP=El touroperador %1 no tiene contrato transfer para el dia %2.';
+      Text003@1000000002 : TextConst 'ENU=There is no price for day (%1) route (%2-%3) transfer service (%4) operation type (%5) in the contract %6;ESP=No existe precio para dia (%1) ruta (%2-%3) servicio transfer (%4) tipo operacion (%5) en el contrato %6';
+      Text004@1000000003 : TextConst 'ENU=Calculation completed.;ESP=Calculo terminado.';
+      Text005@1000000004 : TextConst 'ENU=There are no pending reservations in this period.;ESP=No hay reservas pendientes en este periodo.';
+      wVentana@1000000005 : Integer;
+      Text006@1000000006 : TextConst 'ENU=NO SHOW #1######## PERIOD #2###### - #3######;ESP=NO SHOW #1######## PERIODO #2###### - #3######';
+      Text007@1000000007 : TextConst 'ENU=ATENNEA;ESP=ATENNEA';
+
+    PROCEDURE CalcularReserva@1000000000(prReserva@1000000000 : Record 7010252;pwMasivo@1000000007 : Boolean);
+    VAR
+      lrParPer@1000000006 : Record 7009701;
+      lrReserva@1000000003 : Record 7010252;
+      lrConV@1000000001 : Record 7009788;
+      lrPrecio@1000000002 : Record 7009790;
+      lwPaxes@1000000004 : Integer;
+      lwIVA@1000000008 : Decimal;
+      lwPrimeraPersona@1000000005 : Boolean;
+    BEGIN
+      // CalcularReserva
+
+      //. No se puede calcular una reserva facturada
+      IF prReserva."Num. Factura" <> '' THEN
+        EXIT;
+
+      //. Buscar la tabla de parametros persona
+      lrParPer.FINDFIRST;
+
+      //. Buscamos el contrato de venta que aplica en el traslado
+      IF NOT _BuscarContrato(lrConV, prReserva.Touroperador, prReserva."Fecha entrada") THEN
+        ERROR(Text002, prReserva.Touroperador, prReserva."Fecha entrada");
+
+      //. Contar cuantas personas de este bono hay pendientes
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY(Touroperador, "Fecha entrada", Bono);
+      lrReserva.SETRANGE (Touroperador   , prReserva.Touroperador);
+      lrReserva.SETRANGE (Bono           , prReserva.Bono);
+      lrReserva.SETRANGE ("Fecha entrada", prReserva."Fecha entrada");
+      lrReserva.SETFILTER("Tipo Persona" , '%1|%2', lrParPer."Codigo Adulto", lrParPer."Codigo Ni¤o");
+      lrReserva.SETRANGE ("Num. Factura" , '');
+      IF lrReserva.FINDFIRST THEN
+        lwPaxes := lrReserva.COUNT;
+
+      //. Buscamos el precio que aplica a la ruta
+      _BuscarPrecio(lrConV."N§ Contrato Venta", lrPrecio, lrReserva, lwPaxes);
+
+      //. Calculamos y almacenamos la informacion en la reserva
+      IF lrReserva.FINDFIRST THEN
+      BEGIN
+        lwPrimeraPersona := TRUE;
+        REPEAT
+          lrReserva."Tipo aplicacion"    := lrPrecio."Tipo Aplicacion";
+          lrReserva."Num. Contrato"      := lrConV."N§ Contrato Venta";
+          lrReserva."Cod. Divisa"        := lrConV."C¢d. divisa";
+          lrReserva."Zona venta entrada" := _TraducirZona(lrReserva."Num. Contrato", lrReserva."Zona entrada");
+          lrReserva."Zona venta salida"  := _TraducirZona(lrReserva."Num. Contrato", lrReserva."Zona salida");
+          IF lwPrimeraPersona THEN
+          BEGIN
+            IF lrPrecio."Tipo Aplicacion" = lrPrecio."Tipo Aplicacion"::Pax THEN
+            BEGIN
+              IF lrReserva."Tipo Persona" = lrParPer."Codigo Adulto" THEN
+                lrReserva.Precio := lrPrecio."Precio Adulto"
+              ELSE
+                lrReserva.Precio := lrPrecio."Precio Ni¤o";
+            END
+            ELSE
+              lrReserva.Precio := lrPrecio.Precio;
+
+            lrReserva.Importe := lrReserva.Precio
+          END
+          ELSE
+          BEGIN
+            IF lrPrecio."Tipo Aplicacion" = lrPrecio."Tipo Aplicacion"::Pax THEN;
+            BEGIN
+              IF lrReserva."Tipo Persona" = lrParPer."Codigo Adulto" THEN
+                lrReserva.Precio := lrPrecio."Precio Adulto"
+              ELSE
+                lrReserva.Precio := lrPrecio."Precio Ni¤o";
+
+              lrReserva.Importe := lrReserva.Precio
+            END;
+          END;
+
+          //. Guardar los importes son y sin impuestos
+          lwIVA := _GetIVA(lrConV);
+          IF lrConV."Impuestos incluidos" THEN
+          BEGIN
+            lrReserva."Importe con impuestos" := lrReserva.Importe;
+            lrReserva."Importe sin impuestos" := ROUND(lrReserva.Importe / lwIVA);
+          END
+          ELSE
+          BEGIN
+            lrReserva."Importe con impuestos" := ROUND(lrReserva.Importe * lwIVA);
+            lrReserva."Importe sin impuestos" := lrReserva.Importe;
+          END;
+
+          lrReserva.Calculada       := TRUE;
+          lrReserva."Fecha calculo" := CURRENTDATETIME;
+          lrReserva.MODIFY;
+
+          lwPrimeraPersona := FALSE;
+        UNTIL lrReserva.NEXT = 0;
+      END;
+
+      IF NOT pwMasivo THEN
+        MESSAGE(Text004);
+    END;
+
+    LOCAL PROCEDURE _BuscarContrato@1000000001(VAR prConV@1000000000 : Record 7009788;pwTouroperador@1000000001 : Code[10];pwFecha@1000000002 : Date) : Boolean;
+    VAR
+      lrCli@1000000003 : Record 18;
+      lrVATSetup@1000000004 : Record 325;
+    BEGIN
+      // _BuscarContrato
+
+      prConV.RESET;
+      prConV.SETCURRENTKEY(TourOperador,
+                           "Fecha inicio contrato",
+                           "Fecha final contrato");
+      prConV.SETRANGE (TourOperador           , pwTouroperador);
+      prConV.SETFILTER("Fecha inicio contrato", '<=%1', pwFecha);
+      prConV.SETFILTER("Fecha final contrato" , '>=%1', pwFecha);
+      prConV.SETRANGE (Comercializadora       , FALSE); //+$001
+      prConV.SETRANGE (Confirmado             , TRUE);
+      IF NOT prConV.FINDFIRST THEN
+        EXIT(FALSE);
+
+      //. Comprobamos si existe la configuracion de IVA para el cliente con este contrato/producto
+      lrCli.GET(prConV.Cliente);
+      IF NOT lrVATSetup.GET(lrCli."VAT Bus. Posting Group", prConV."Gr. Registro IVA Producto") THEN
+        ERROR(STRSUBSTNO(Text001,
+                         lrVATSetup.TABLECAPTION,
+                         lrVATSetup.FIELDCAPTION("VAT Bus. Posting Group"),
+                         lrCli."VAT Bus. Posting Group",
+                         lrVATSetup.FIELDCAPTION("VAT Prod. Posting Group"),
+                         prConV."Gr. Registro IVA Producto"));
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _BuscarPrecio@1000000003(pwContrato@1000000007 : Code[10];VAR prPrecio@1000000004 : Record 7009790;prReserva@1000000000 : Record 7010252;pwPaxes@1000000006 : Integer);
+    VAR
+      lrAeropuerto@1000000003 : Record 7009704;
+      lwZonaOrigen@1000000002 : Code[10];
+      lwZonaDestino@1000000001 : Code[10];
+    BEGIN
+      // _BuscarPrecio
+
+      //. Buscar el aeropuerto local de llegada para obtener su zona fisica
+      lrAeropuerto.GET(prReserva."IATA destino entrada");
+      lrAeropuerto.TESTFIELD("Zona fisica");
+
+      //. Traducir las zonas fisicas en zonas de precios del contrato
+      lwZonaOrigen  := _TraducirZona(pwContrato, lrAeropuerto."Zona fisica");
+      lwZonaDestino := _TraducirZona(pwContrato, prReserva."Zona entrada");
+
+      prPrecio.RESET;
+      prPrecio.SETRANGE ("N§ Contrato"   , pwContrato);
+      prPrecio.SETRANGE ("Codigo precio" , prPrecio."Codigo precio"::"Precio Base");
+      prPrecio.SETFILTER("Fecha desde"   , '<=%1', prReserva."Fecha entrada");
+      prPrecio.SETFILTER("Fecha hasta"   , '>=%1', prReserva."Fecha entrada");
+      prPrecio.SETFILTER("Rango desde"   , '<=%1', pwPaxes);
+      prPrecio.SETFILTER("Rango hasta"   , '>=%1', pwPaxes);
+      prPrecio.SETRANGE (Origen          , lwZonaOrigen);
+      prPrecio.SETRANGE (Destino         , lwZonaDestino);
+      prPrecio.SETFILTER("Tipo operacion", '%1|%2', prReserva."Tipo operacion", prPrecio."Tipo operacion"::Ambos);
+      prPrecio.SETRANGE ("Tipo Traslado" , prReserva."Servicio transfer entrada");
+      prPrecio.SETRANGE (Activo          , TRUE);
+      IF NOT prPrecio.FINDFIRST THEN
+      BEGIN
+        //. Vamos a girar Origen/Destino por si metieron el precio asi
+        prPrecio.SETRANGE(Origen , lwZonaDestino);
+        prPrecio.SETRANGE(Destino, lwZonaOrigen);
+        IF NOT prPrecio.FINDFIRST THEN
+          ERROR(Text003, prReserva."Fecha entrada", lwZonaOrigen, lwZonaDestino, prReserva."Servicio transfer entrada",
+                         prReserva."Tipo operacion", pwContrato);
+      END;
+    END;
+
+    LOCAL PROCEDURE _TraducirZona@1000000005(pwContrato@1000000000 : Code[10];pwZona@1000000001 : Code[10]) : Code[10];
+    VAR
+      lrZonaTransfer@1000000002 : Record 7009791;
+    BEGIN
+      // _TraducirZona
+
+      lrZonaTransfer.RESET;
+      lrZonaTransfer.SETRANGE(Contrato       , pwContrato);
+      lrZonaTransfer.SETRANGE("Tipo contrato", lrZonaTransfer."Tipo contrato"::Venta);
+      lrZonaTransfer.SETRANGE("Zona fisica"  , pwZona);
+      lrZonaTransfer.FINDFIRST;
+
+      EXIT(lrZonaTransfer.Zona);
+    END;
+
+    PROCEDURE FacturarNoShow@1000000002(VAR prReserva@1000000007 : Record 7010252);
+    VAR
+      lrPar@1000000009 : Record 7009700;
+      lrCond@1000000000 : Record 7010087;
+      lrReserva@1000000002 : Record 7010252;
+      lrReservaTMP@1000000003 : TEMPORARY Record 7010252;
+      lrCabFra@1000000006 : Record 36;
+      lrCabImp@1000000010 : Record 7009908;
+      lrICD@1000000011 : Record 7010264;
+      lcRelease@1000000008 : Codeunit 414;
+      lcCheck@1000000012 : Codeunit 11;
+      lfCond@1000000001 : Form 7009981;
+      lwNumFactura@1000000004 : Code[20];
+      lwImporte@1000000005 : Decimal;
+    BEGIN
+      // FacturarNoShow
+
+      //. Chequear si la fecha de registro esta bloqueada en contabilidad
+      lcCheck.DateNotAllowed(WORKDATE);
+
+      //. Preparamos la tabla de condiciones temporales
+      _PreparaCondiciones(lrCond, prReserva);
+
+      //. Pedir los datos para filtrar al usuario
+      CLEAR(lfCond);
+      lfCond.SETRECORD(lrCond);
+      IF lfCond.RUNMODAL <> ACTION::OK THEN
+        EXIT;
+
+      lfCond.GETRECORD(lrCond);
+
+      //. Comprobar que ha rellenado todos los campos
+      lrCond.TESTFIELD(Touroperador);
+      lrCond.TESTFIELD("Fecha desde");
+      lrCond.TESTFIELD("Fecha hasta");
+      lrCond.TESTFIELD(Delegacion);
+
+      //. En primer lugar vamos a crear un temporal de los bonos que se van a facturar
+      lrReservaTMP.RESET;
+      lrReservaTMP.DELETEALL;
+
+      //. Filtramos las reservas No Show para crear un registro por Touroperador/Bono/Fecha
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY(Touroperador, "Fecha entrada", Bono);
+      lrReserva.SETRANGE(Touroperador   , lrCond.Touroperador);
+      lrReserva.SETRANGE("Fecha entrada", lrCond."Fecha desde", lrCond."Fecha hasta");
+      lrReserva.SETRANGE("Num. Factura" , '');
+      IF lrReserva.FINDFIRST THEN
+      BEGIN
+        REPEAT
+          lrReservaTMP.SETRANGE(Touroperador   , lrReserva.Touroperador);
+          lrReservaTMP.SETRANGE(Bono           , lrReserva.Bono);
+          lrReservaTMP.SETRANGE("Fecha entrada", lrReserva."Fecha entrada");
+          IF NOT lrReservaTMP.FINDFIRST THEN
+          BEGIN
+            lrReservaTMP.INIT;
+            lrReservaTMP := lrReserva;
+            lrReservaTMP.INSERT;
+          END;
+        UNTIL lrReserva.NEXT = 0;
+      END
+      ELSE
+        ERROR(Text005);
+
+      //. Calcular las reservas antes de facturarlas
+      lrReservaTMP.RESET;
+      lrReservaTMP.FINDSET;
+      REPEAT
+        lrReserva.GET(lrReservaTMP.Delegacion, lrReservaTMP."Num. Interno", lrReservaTMP."Num. Acompa¤ante");
+
+        CalcularReserva(lrReserva, TRUE);
+      UNTIL lrReservaTMP.NEXT = 0;
+
+      //. Creamos la cabecera de factura
+      lwNumFactura := _CrearCabeceraFactura(lrReservaTMP, lrCond.Delegacion, lrCond."Fecha desde", lrCond."Fecha hasta");
+
+      //. Creamos las lineas de factura
+      _CrearLineasImpresion(lrReservaTMP, lwNumFactura);
+
+      //. Acumulamos el importe de la linea de factura contable
+      lwImporte := 0;
+
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY(Touroperador, "Fecha entrada", Bono);
+      lrReserva.SETRANGE(Touroperador   , lrCond.Touroperador);
+      lrReserva.SETRANGE("Fecha entrada", lrCond."Fecha desde", lrCond."Fecha hasta");
+      lrReserva.SETRANGE("Num. Factura" , '');
+      lrReserva.FINDSET;
+      REPEAT
+        lwImporte += lrReserva.Importe;
+      UNTIL lrReserva.NEXT = 0;
+
+      //. Grabamos la linea de factura contable
+      lrCabFra.GET(lrCabFra."Document Type"::Invoice, lwNumFactura);
+      _CrearLineaContable(lrReservaTMP, lrCabFra, lwImporte);
+
+      //. Actualizamos los campos de totales de la cabecera de factura
+      lrCabImp.GET(lrCabFra."Document Type"::Invoice, lwNumFactura);
+      lrCabImp.GetImportes;
+
+      //. Lanzamos la factura para que se calculen los impuestos
+      lcRelease.RUN(lrCabFra);
+
+      //+$003 <
+      IF lrCabFra.GET(lrCabFra."Document Type", lrCabFra."No.") THEN
+      BEGIN
+        lrCabFra."Reason Code" := 'ATENNEA';
+        lrCabFra.MODIFY;
+      END;
+      //+$003 >
+
+      //. Grabar el numero de factura en todas las reservas
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY(Touroperador, "Fecha entrada", Bono);
+      lrReserva.SETRANGE(Touroperador   , lrCond.Touroperador);
+      lrReserva.SETRANGE("Fecha entrada", lrCond."Fecha desde", lrCond."Fecha hasta");
+      lrReserva.SETRANGE("Num. Factura" , '');
+      lrReserva.FINDSET;
+      REPEAT
+        lrReserva.MODIFYALL("Fecha factura", TODAY);
+        lrReserva.MODIFYALL("Num. Factura" , lwNumFactura);
+      UNTIL lrReserva.NEXT = 0;
+
+      //. Marcar el periodo ICD
+      lrICD.MarkPeriodTrf(lrCabFra."Posting Date"); //+$010
+
+      //. Imprimir la factura
+      COMMIT;
+      lrCabImp.SETRANGE("Tipo documento", lrCabImp."Tipo documento");
+      lrCabImp.SETRANGE("No."           , lrCabImp."No.");
+
+      lrPar.FINDFIRST;
+      REPORT.RUNMODAL(lrPar."Factura Venta Transfer", TRUE, FALSE, lrCabImp);
+    END;
+
+    LOCAL PROCEDURE _PreparaCondiciones@1000000004(VAR prCond@1000000000 : Record 7010087;VAR prReserva@1000000001 : Record 7010252);
+    VAR
+      lrDelegacion@1000000002 : Record 7009718;
+    BEGIN
+      // _PreparaCondiciones
+
+      IF NOT prCond.GET(USERID) THEN
+      BEGIN
+        prCond.INIT;
+        prCond.Usuario := USERID;
+        prCond.INSERT;
+      END
+      ELSE
+      BEGIN
+        prCond.INIT;
+        prCond.Usuario := USERID;
+      END;
+
+      prCond.Touroperador := prReserva.Touroperador;
+
+      //. Aprovechamos si el usuario ha puesto un filtro
+      IF prReserva.GETFILTER("Fecha entrada") <> '' THEN
+      BEGIN
+        prCond."Fecha desde" := prReserva.GETRANGEMIN("Fecha entrada");
+        prCond."Fecha hasta" := prReserva.GETRANGEMAX("Fecha entrada");
+      END;
+
+      //. Si solo hay una delegacion ponemos la cosa facil
+      lrDelegacion.RESET;
+      lrDelegacion.FINDFIRST;
+      IF lrDelegacion.COUNT = 1 THEN
+        prCond.Delegacion := lrDelegacion.Codigo;
+      prCond.MODIFY;
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE _CrearCabeceraFactura@1000000011(VAR prReservaTMP@1000000000 : TEMPORARY Record 7010252;pwDepartamento@1000000006 : Code[10];pwFechaDesde@1000000007 : Date;pwFechaHasta@1000000008 : Date) : Code[20];
+    VAR
+      lrCabImp@1000000001 : Record 7009908;
+      lrCabFra@1000000002 : Record 36;
+      lrSerie@1000000003 : Record 7009921;
+      lrContV@1000000005 : Record 7009788;
+      lrPar@1000000004 : Record 7009700;
+    BEGIN
+      // _CrearCabeceraFactura
+
+      //. Buscamos la tabla de configuracion de la tabla de configuracion de series
+      lrSerie.RESET;
+      lrSerie.GET(lrSerie.Modulo::Transfer);
+
+      //. Buscamos el contrato de venta para obtener el contrato
+      _BuscarContrato(lrContV, prReservaTMP.Touroperador, prReservaTMP."Fecha entrada");
+      lrContV.TESTFIELD(Confirmado);
+      lrContV.TESTFIELD(Cliente);
+
+      //. Buscamos la tabla de parametros
+      lrPar.FINDFIRST;
+
+      //. Comprobamos si existe el codigo de auditoria
+      _CheckReasonCode;
+
+      //. Creamos la cabecera de factura estandar
+      CLEAR(lrCabFra);
+      lrCabFra.VALIDATE("Document Type", lrCabFra."Document Type"::Invoice);
+      lrCabFra.VALIDATE("No. Series"   , lrSerie."Serie facturas");
+      lrCabFra.INSERT(TRUE);
+
+      lrCabFra.VALIDATE("Posting No. Series"  , lrSerie."Serie facturas");
+      lrCabFra.VALIDATE("Sell-to Customer No.", lrContV.Cliente);
+
+      IF lrPar."Fecha registro agencia" = lrPar."Fecha registro agencia"::"Fecha servicio" THEN
+      BEGIN
+        lrCabFra.VALIDATE("Posting Date" , prReservaTMP."Fecha entrada");
+        lrCabFra.VALIDATE("Document Date", prReservaTMP."Fecha entrada");
+      END
+      ELSE
+      BEGIN
+        lrCabFra.VALIDATE("Posting Date" , WORKDATE);
+        lrCabFra.VALIDATE("Document Date", WORKDATE);
+      END;
+
+      lrCabFra.VALIDATE("Payment Terms Code"       , lrContV."Cod. Terminos Pago");
+      lrCabFra.VALIDATE("Payment Method Code"      , lrContV."Cod. Formas Pago");
+      lrCabFra.VALIDATE("Shortcut Dimension 1 Code", pwDepartamento);
+      lrCabFra.VALIDATE("Shortcut Dimension 2 Code", prReservaTMP.Touroperador);
+      lrCabFra.VALIDATE("Posting Description"      , STRSUBSTNO(Text006,
+                                                                prReservaTMP.Touroperador, pwFechaDesde, pwFechaHasta));
+      lrCabFra.VALIDATE("Prices Including VAT"     , lrContV."Impuestos incluidos");
+      lrCabFra.VALIDATE("Reason Code"              , Text007);
+      lrCabFra.MODIFY;
+
+      // Crea la Cabecera Factura Incoming
+      CLEAR(lrCabImp);
+      lrCabImp.SetInf(lrCabFra);
+
+      // Rellenar el touroperador y la fecha de servicio para despues obtener el contrato
+      lrCabImp.Modulo           := lrCabImp.Modulo::Transfer;
+      lrCabImp.Touroperador     := prReservaTMP.Touroperador;
+      lrCabImp."Fecha servicio" := pwFechaDesde;
+      lrCabImp."Periodo Desde"  := pwFechaDesde;
+      lrCabImp."Periodo Hasta"  := pwFechaHasta;
+      lrCabImp."Fecha creacion" := CURRENTDATETIME;
+      lrCabImp.INSERT;
+
+      EXIT(lrCabFra."No.");
+    END;
+
+    LOCAL PROCEDURE _CrearLineasImpresion@1000000006(VAR prReservaTMP@1000000000 : TEMPORARY Record 7010252;pwNumFactura@1000000002 : Code[20]);
+    VAR
+      lrParPer@1000000007 : Record 7009701;
+      lrReserva@1000000003 : Record 7010252;
+      lrLinImp@1000000001 : Record 7009909;
+      lrContV@1000000004 : Record 7009788;
+      lrCustomer@1000000006 : Record 18;
+      lrVATSetup@1000000005 : Record 325;
+      lwPersonas@1000000008 : Integer;
+    BEGIN
+      // _CrearLineasImpresion
+
+      prReservaTMP.FINDSET;
+
+      //. Buscamos el contrato de venta para obtener el IVA
+      _BuscarContrato(lrContV, prReservaTMP.Touroperador, prReservaTMP."Fecha entrada");
+      lrCustomer.GET(lrContV.Cliente);
+      lrVATSetup.GET(lrCustomer."VAT Bus. Posting Group", lrContV."Gr. Registro IVA Producto");
+
+      lrParPer.FINDFIRST;
+
+      REPEAT
+        //. Buscamos cuantas personas se facturan por bono
+        lrReserva.RESET;
+        lrReserva.SETRANGE (Touroperador   , prReservaTMP.Touroperador);
+        lrReserva.SETRANGE (Bono           , prReservaTMP.Bono);
+        lrReserva.SETRANGE ("Fecha entrada", prReservaTMP."Fecha entrada");
+        lrReserva.SETRANGE ("Num. Factura" , '');
+        lrReserva.SETFILTER("Tipo Persona" , '%1|%2', lrParPer."Codigo Adulto", lrParPer."Codigo Ni¤o");
+        IF lrReserva.FINDFIRST THEN
+          lwPersonas := lrReserva.COUNT;
+
+        CLEAR(lrLinImp);
+        lrLinImp."Tipo documento" := lrLinImp."Tipo documento"::Factura;
+        lrLinImp."N§ documento"   := pwNumFactura;
+        lrLinImp."Line No."       := lrLinImp.NewLineNo;
+        lrLinImp.Concepto         := 'NO SHOW';
+        lrLinImp.Descripcion      := prReservaTMP.Bono + ' ' + prReservaTMP.Nombre;
+        lrLinImp.Aeropuerto       := prReservaTMP."IATA destino entrada";
+        lrLinImp.Zona             := prReservaTMP."Zona entrada";
+        lrLinImp.TourOperador     := prReservaTMP.Touroperador;
+        lrLinImp.Vuelo            := prReservaTMP."Compa¤ia entrada" + ' ' + prReservaTMP."Vuelo entrada" + ' ' +
+                                     prReservaTMP."IATA origen entrada" + '-' + prReservaTMP."IATA destino entrada";
+        lrLinImp.Hotel            := prReservaTMP."Hotel entrada";
+        lrLinImp."% IVA"          := lrVATSetup."VAT+EC %";
+        lrLinImp.Bono             := prReservaTMP.Bono;
+        lrLinImp.Fecha            := prReservaTMP."Fecha entrada";
+        lrLinImp.Nombre           := prReservaTMP.Nombre;
+        lrLinImp.INSERT(TRUE);
+
+        CASE lrReserva."Tipo aplicacion" OF
+          lrReserva."Tipo aplicacion"::Pax:
+          BEGIN
+            lrLinImp.Precio   := lrReserva.Precio;
+            lrLinImp.Cantidad := lwPersonas;
+            lrLinImp.VALIDATE(Importe, lrLinImp.Precio * lrLinImp.Cantidad);
+            lrLinImp."Tipo Linea" := lrLinImp."Tipo Linea"::Persona;
+          END;
+          lrReserva."Tipo aplicacion"::Reserva:
+          BEGIN
+            lrLinImp.Precio   := lrReserva.Precio;
+            lrLinImp.Cantidad := 1;
+            lrLinImp.VALIDATE(Importe , lrLinImp.Precio * lrLinImp.Cantidad);
+            lrLinImp."Tipo Linea"     := lrLinImp."Tipo Linea"::Persona;
+            lrLinImp."Precio x vehiculo" := TRUE;
+          END;
+        END;
+        lrLinImp.SetImportes;
+        lrLinImp.MODIFY;
+      UNTIL prReservaTMP.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE _CrearLineaContable@1000000007(VAR prReservaTMP@1000000004 : TEMPORARY Record 7010252;prCabFra@1000000000 : Record 36;pwImporte@1000000005 : Decimal);
+    VAR
+      lrLinFra@1000000001 : Record 37;
+      lrCuentas@1000000002 : Record 7009705;
+      lrConV@1000000003 : Record 7009788;
+    BEGIN
+      // _CrearLineaContable
+
+      //. Buscamos el setup contable del touroperador
+      lrCuentas.GET(prCabFra."Shortcut Dimension 1 Code", prCabFra."Shortcut Dimension 2 Code");
+
+      //. Buscamos el contrato
+      _BuscarContrato(lrConV, prReservaTMP.Touroperador, prReservaTMP."Fecha entrada");
+
+      lrLinFra.INIT;
+      lrLinFra.VALIDATE("Document Type", prCabFra."Document Type");
+      lrLinFra.VALIDATE("Document No." , prCabFra."No.");
+      lrLinFra.VALIDATE(Type           , lrLinFra.Type::"G/L Account");
+      lrLinFra.VALIDATE("Line No."     , 10000);
+      lrLinFra.INSERT;
+
+      lrLinFra.VALIDATE("No."                      , lrCuentas."Cta. venta transfer");
+      lrLinFra.VALIDATE("Shortcut Dimension 1 Code", prCabFra."Shortcut Dimension 1 Code");
+      lrLinFra.VALIDATE("Shortcut Dimension 2 Code", prCabFra."Shortcut Dimension 2 Code");
+      lrLinFra.VALIDATE("Allow Invoice Disc."      , FALSE);
+      lrLinFra.VALIDATE(Quantity                   , 1);
+      lrLinFra.VALIDATE("VAT Bus. Posting Group"   , prCabFra."VAT Bus. Posting Group");
+      lrLinFra.VALIDATE("VAT Prod. Posting Group"  , lrConV."Gr. Registro IVA Producto");
+      lrLinFra.VALIDATE("Unit Price"               , pwImporte);
+      lrLinFra."Line Discount %" := 0;
+      lrLinFra.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE _CheckReasonCode@1000000008();
+    VAR
+      lrReason@1000000000 : Record 231;
+      TextCodAu@1000000001 : TextConst 'ENU=ATENNEA;ESP=ATENNEA';
+    BEGIN
+      // _CheckReasonCode
+
+      IF NOT lrReason.GET(TextCodAu) THEN
+      BEGIN
+        lrReason.INIT;
+        lrReason.Code        := TextCodAu;
+        lrReason.Description := lrReason.Code;
+        lrReason.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GetIVA@1000000009(prConV@1000000000 : Record 7009788) : Decimal;
+    VAR
+      lrCli@1000000002 : Record 18;
+      lrVATSetup@1000000001 : Record 325;
+    BEGIN
+      // _GetIVA
+
+      //. Buscamos la configuracion de IVA para el cliente con este contrato/producto
+      lrCli.GET(prConV.Cliente);
+      IF NOT lrVATSetup.GET(lrCli."VAT Bus. Posting Group", prConV."Gr. Registro IVA Producto") THEN
+        ERROR(STRSUBSTNO(Text001,
+                         lrVATSetup.TABLECAPTION,
+                         lrVATSetup.FIELDCAPTION("VAT Bus. Posting Group"),
+                         lrCli."VAT Bus. Posting Group",
+                         lrVATSetup.FIELDCAPTION("VAT Prod. Posting Group"),
+                         prConV."Gr. Registro IVA Producto"));
+
+      EXIT(1 + ROUND(lrVATSetup."VAT+EC %" / 100));
+    END;
+
+    BEGIN
+    {
+      $000 AJS 08012015 Nueva codeunit para las funciones relacionadas con la facturacion de las reservas No Show
+
+      $001 AJS 13032015 CNT-CAR-14096, Esta funcion no trabaja con los contratos de comercializadora
+
+      $002 AJS 16032015 CNT-CAR-14096, Nueva funcion en las lineas de factura del estandar para controlar la edicion manual
+
+      $003 AJS 25032015 CNT-CAR-14096, El campo Reason code se rellena al final del proceso de facturacion
+
+      $004 AJS 30032015 Corregir error de la facturacion No Show
+    }
+    END.
+  }
+}

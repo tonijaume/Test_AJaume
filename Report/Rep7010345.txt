@@ -1,0 +1,1238 @@
+OBJECT Report 7010345 Factura Detallada
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/11/14;
+    Time=17:32:39;
+    Version List=TRANSFER,INV;
+  }
+  PROPERTIES
+  {
+    CaptionML=ESP=Factura Detallada;
+    TopMargin=0;
+    BottomMargin=0;
+    LeftMargin=0;
+    OnInitReport=BEGIN
+                   ConfCG.GET;
+                   NoCopias:=1;
+                 END;
+
+    HorzGrid=210;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table36;
+        DataItemTableView=SORTING(Document Type,No.);
+        NewPagePerRecord=Yes;
+        ReqFilterHeadingML=ESP=Facturas venta;
+        OnPreDataItem=BEGIN
+                        InfoEmpresa.GET;
+                        FormatDire.Company(DirEmpresa,InfoEmpresa);
+                        vServicio := '';
+                        IF wInversa THEN
+                          "Sales Header".ASCENDING(FALSE);
+                      END;
+
+        OnAfterGetRecord=VAR
+                           rLV@1100244000 : Record 37;
+                           lwBol@1100253000 : Boolean;
+                         BEGIN
+                           //RRT. Buscamos el c¢digo de servicio asociado a la factura.
+                           IF vServicio = '' THEN BEGIN
+                             rLV.RESET;
+                             rLV.SETCURRENTKEY("Document Type","Document No.");
+                             rLV.SETRANGE("Document Type","Document Type");
+                             rLV.SETRANGE("Document No.","No.");
+                             rLV.SETFILTER(Servicio,'<>%1','');
+                             IF rLV.FIND('-') THEN
+                               vServicio := rLV.Servicio;
+                           END;
+                           //END.RRT.
+
+                           IF "Salesperson Code" = '' THEN BEGIN
+                             RepreVtasComp.INIT;
+                             DescriVendedor := '';
+                           END ELSE BEGIN
+                             RepreVtasComp.GET("Salesperson Code");
+                             DescriVendedor := Text000;
+                           END;
+                           IF "Your Reference" = '' THEN
+                             DescriRefer := ''
+                           ELSE
+                             DescriRefer := FIELDCAPTION("Your Reference");
+                           IF "VAT Registration No." = '' THEN
+                             TextoCIF := ''
+                           ELSE
+                             TextoCIF := FIELDCAPTION("VAT Registration No.");
+                           IF "Currency Code" = '' THEN BEGIN
+                             ConfCG.TESTFIELD("LCY Code");
+                             TotalTexto := STRSUBSTNO(Text001, ConfCG."LCY Code");
+                             TextoTotIVAIncl := STRSUBSTNO(Text002, ConfCG."LCY Code");
+                           END ELSE BEGIN
+                             TotalTexto := STRSUBSTNO(Text001, "Currency Code");
+                             TextoTotIVAIncl := STRSUBSTNO(Text002, "Currency Code");
+                           END;
+                           FormatDire.SalesHeaderBillTo(DirClie, "Sales Header");
+                           Clie.GET("Bill-to Customer No.");
+
+                           IF "Payment Terms Code" = '' THEN
+                             TerminosPago.INIT
+                           ELSE
+                             TerminosPago.GET("Payment Terms Code");
+                           IF "Payment Method Code" = '' THEN
+                             FormaPago.INIT
+                           ELSE
+                             FormaPago.GET("Payment Method Code");
+                           IF "Shipment Method Code" = '' THEN
+                             CondEnv.INIT
+                           ELSE
+                             CondEnv.GET("Shipment Method Code");
+
+                           FormatDire.SalesHeaderBillTo(EnvADir, "Sales Header");
+                           MostrarDireEnvio := "Sell-to Customer No." <> "Bill-to Customer No.";
+                           FOR i := 1 TO ARRAYLEN(EnvADir) DO
+                             IF EnvADir[i] <> DirClie[i] THEN
+                               MostrarDireEnvio := TRUE;
+
+                           w_base_normal     := 0;
+                           w_iva_normal      := 0;
+                           w_impiva_normal   := 0;
+                           w_total_normal    := 0;
+                           w_base_maletas    := 0;
+                           w_iva_maletas     := 0;
+                           w_impiva_maletas  := 0;
+                           w_total_maletas   := 0;
+                           w_total_impresion := 0;
+
+                           // ---- Obtener el contrato de venta para ver si hay que mostrar en cada linea el total ----
+                           // ---- con el IVA incluido o no.
+
+                           rCon.RESET; rCon.INIT;
+
+                           // JPT 27/12/05 Cambio a las nuevas funciones de calculo
+                           // cCalculo.busca_contrato_venta(rCon, "Bill-to Customer No.", "Shortcut Dimension 2 Code",
+                           //                               "Posting Date", "Shortcut Dimension 1 Code");
+
+                           cCalcR.BuscaContratoVentaReal (rCon, "Bill-to Customer No.", "Shortcut Dimension 2 Code",
+                                                          "Posting Date", "Shortcut Dimension 1 Code");
+
+
+                           // ---- Buscar la prefactura que ha originado esta factura y el touroperador para mostrar ----
+                           // ---- su nombre en el impreso de la factura                                             ----
+
+                           rPreFact.RESET; rPreFact.INIT;
+                           rPreFact.SETRANGE("Nß Factura", "Sales Header"."No.");
+                           IF rPreFact.FIND('-') THEN;
+
+                           // 22/09/05 incluyo esto por si no ha encontrado el contrato, lo pille de la prefactura
+                           IF rCon."Nß Contrato"='' THEN BEGIN
+                             rCon.RESET;
+                             //rCon.SETRANGE(Garaje       , rPreFact.Garaje);
+                             rCon.SETRANGE("Nß Contrato", rPreFact."Nß Contrato");
+                             IF NOT rCon.FIND('-') THEN
+                               CLEAR(rCon);
+                           END;
+
+
+
+                           IF NOT EVALUATE(lwBol,GETFILTER("Imprime Logo")) THEN
+                             CLEAR(lwBol);
+
+                           wImpMail := lwBol;
+                           IF rPreFact.Touroperador <> '' THEN
+                             rTO.GET(rPreFact.Touroperador)
+                           ELSE
+                             rTO.INIT;
+
+                           IF wImpMail THEN
+                            NoCopias:=0;
+
+                           // JPT 01/12/04 Buscamos las l°neas de IVA
+                           cFunFact.GetIvaFactura("Sales Header",1,rTempIVABase   , rCon."Maletas incluidas")   ; // Iva Base
+                           cFunFact.GetIvaFactura("Sales Header",2,rTempIVAMaletas, rCon."Maletas incluidas"); // Iva Maletas
+                           wHayIVAmaletas := rTempIVAMaletas.FIND('-');
+                         END;
+
+        ReqFilterFields=No.,Sell-to Customer No.,No. Printed;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            PrintOnEveryPage=Yes;
+            PlaceInBottom=Yes;
+            SectionWidth=19950;
+            SectionHeight=3807;
+            KeepWithNext=No;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(wImpMail);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1103355013;Label  ;2100 ;2961 ;16800;423  ;HorzAlign=Center;
+                                                         FontSize=7;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=INSCRITA EN EL REGISTRO MERCANTIL DE EIVISSA - TOMO 160, LIBRO 159, FOLIO 56, HOJA IB-7171, INSCRIPCI‡N 1¶ - C.I.F. B-57271553 }
+            { 1103355014;Label  ;9660 ;2538 ;9240 ;423  ;HorzAlign=Left;
+                                                         FontSize=7;
+                                                         CaptionML=ESP="C/. Vicente Cuervo, 9 - 07800 Ibiza - Tel. 971 31 15 00 " }
+            { 1103355015;Shape  ;1050 ;1269 ;18480;423  ;ShapeStyle=HorzLine }
+            { 1103355017;Label  ;6300 ;2115 ;11340;423  ;HorzAlign=Left;
+                                                         FontSize=7;
+                                                         CaptionML=ESP=Ctra. de San Antonio, km. 2.5 - Bß Can Negre - Tel. 971 31 43 62 - Fax 971 31 16 11 - 07800 Ibiza }
+            { 1103355018;Label  ;2100 ;2538 ;7560 ;423  ;HorzAlign=Right;
+                                                         FontSize=7;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP="Domicilio social y administrativo: " }
+            { 1103355019;Image  ;4620 ;423  ;4200 ;846  ;Bitmap=C:\SoftW2K3\Logos\islandbus.bmp }
+            { 1103355020;Image  ;8820 ;423  ;3990 ;846  ;Bitmap=C:\SoftW2K3\Logos\union.bmp }
+            { 1103355022;Label  ;3360 ;2115 ;2940 ;423  ;HorzAlign=Right;
+                                                         FontSize=7;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP="Base de operaciones: " }
+            { 1100217003;Image  ;16380;423  ;3360 ;846  ;Bitmap=C:\SoftW2K3\Logos\igt.bmp }
+            { 1100217004;Image  ;1050 ;423  ;3570 ;846  ;Bitmap=C:\SoftW2K3\Logos\ibizatours.bmp }
+            { 1100217005;Image  ;12810;423  ;3570 ;846  ;Bitmap=C:\SoftW2K3\Logos\ibzshut.bmp }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        NewPagePerRecord=Yes;
+        DataItemVarName=BucleCopia;
+        OnPreDataItem=BEGIN
+                        //-$002NoBucles := ABS(NoCopias) + Clie."Invoice Copies" + 1;
+                        NoBucles := ABS(NoCopias) + Clie."Invoice Copies"; //+$002
+                        IF NoBucles <= 0 THEN
+                          NoBucles := 1;
+                        TextoCopia := '';
+                        SETRANGE(Number,1,NoBucles);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Number > 1 THEN
+                             TextoCopia := Text003;
+                           CurrReport.PAGENO := 1;
+                           CLEAR(w_total_impresion);
+                           w_total_impresion := 0; // JPT 11/06/06 Inicializamos el total parcial
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF NOT CurrReport.PREVIEW THEN
+                           ContarVtaImpresa.RUN("Sales Header");
+                       END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=CONST(1));
+        DataItemVarName=BuclePag;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=19950;
+            SectionHeight=3384;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(NOT wImpMail);
+                         END;
+
+          }
+          CONTROLS
+          {
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=19950;
+            SectionHeight=3384;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(wImpMail);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1103355009;Image  ;2290 ;1745 ;11130;846  ;Bitmap=C:\logos\logo_fac_3.bmp }
+            { 1103355010;Image  ;7710 ;805  ;5670 ;1269 ;Bitmap=C:\logos\logo_fac_4.bmp }
+            { 1103355011;Image  ;2275 ;805  ;5460 ;1269 ;Bitmap=C:\logos\logo_fac_2.bmp }
+            { 1103355012;Image  ;0    ;0    ;2310 ;3384 ;Bitmap=C:\logos\logo_fac_1.bmp }
+            { 1100217000;Label  ;3990 ;2538 ;7140 ;423  ;HorzAlign=Center;
+                                                         ForeColor=8388608;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=www.ibizatours-islandbus.com }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=19950;
+            SectionHeight=3384;
+            OnPreSection=BEGIN
+                           CLEAR(wNumLin);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 2   ;TextBox      ;5670 ;1269 ;1680 ;423  ;FontSize=9;
+                                                         SourceExpr=STRSUBSTNO(Text004,FORMAT(CurrReport.PAGENO)) }
+            { 4   ;TextBox      ;10080;0    ;9660 ;423  ;FontSize=9;
+                                                         SourceExpr=DirClie[1] }
+            { 8   ;TextBox      ;10080;846  ;9660 ;423  ;FontSize=9;
+                                                         SourceExpr=DirClie[3] }
+            { 10  ;TextBox      ;10080;1269 ;9660 ;423  ;FontSize=9;
+                                                         SourceExpr=DirClie[4] }
+            { 12  ;TextBox      ;10080;1692 ;9660 ;423  ;FontSize=9;
+                                                         SourceExpr=DirClie[5] }
+            { 15  ;TextBox      ;10080;423  ;9660 ;423  ;FontSize=9;
+                                                         SourceExpr=DirClie[2] }
+            { 29  ;TextBox      ;10080;2115 ;2310 ;423  ;FontSize=9;
+                                                         SourceExpr=TextoCIF }
+            { 30  ;TextBox      ;12600;2115 ;3780 ;423  ;FontSize=9;
+                                                         SourceExpr="Sales Header"."VAT Registration No." }
+            { 36  ;TextBox      ;2940 ;1269 ;2100 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         SourceExpr="Sales Header"."No." }
+            { 54  ;TextBox      ;2940 ;423  ;4410 ;423  ;FontSize=9;
+                                                         SourceExpr=FORMAT("Sales Header"."Posting Date",0,4) }
+            { 89  ;Label        ;10080;2538 ;2310 ;423  ;FontSize=9;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Touroperador }
+            { 93  ;TextBox      ;12600;2538 ;6090 ;423  ;FontSize=9;
+                                                         SourceExpr=rTO.Nombre }
+            { 1   ;TextBox      ;2940 ;2115 ;2100 ;423  ;FontSize=9;
+                                                         SourceExpr=vServicio }
+            { 1103350009;TextBox;2940 ;846  ;2100 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         SourceExpr="Sales Header"."Document Type" }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=3;
+        DataItemTable=Table37;
+        DataItemTableView=SORTING(Document Type,Document No.,Line No.)
+                          ORDER(Ascending);
+        OnPreDataItem=BEGIN
+                        LinImporIVA.DELETEALL;
+
+                        MasLins := FIND('+');
+                        WHILE MasLins AND (Description = '') AND ("No." = '') AND (Quantity = 0) AND (Amount = 0) DO
+                          MasLins := NEXT(-1) <> 0;
+                        IF NOT MasLins THEN
+                          CurrReport.BREAK;
+                        SETRANGE("Line No.",0,"Line No.");
+
+                        _BuscaTipoServicio; //+$005
+
+                        CurrReport.CREATETOTALS(Amount,"Amount Including VAT","Inv. Discount Amount","Pmt. Disc. Given Amount",w_importe_impresion);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           wPrimeraLinea := "Sales Line"."Nß Parte"  <> wNoParte;
+                           IF wPrimeraLinea THEN
+                             wNoParte :=  "Sales Line"."Nß Parte";
+
+                           IF ConfRegistroIVA.GET("Sales Line"."VAT Bus. Posting Group",
+                                                  "Sales Line"."VAT Prod. Posting Group") THEN
+                             IF ConfRegistroIVA."VAT+EC %" <> 0 THEN
+                             BEGIN
+                               LinImporIVA.INIT;
+                               LinImporIVA."VAT %"             := ConfRegistroIVA."VAT %";
+                               LinImporIVA."EC %"              := ConfRegistroIVA."EC %";
+                               LinImporIVA."VAT+EC Base"       := "Sales Line".Amount;
+                               LinImporIVA."Amount Including VAT+EC" := "Sales Line"."Amount Including VAT";
+
+                               LinImporIVA.InsertLine;
+                             END;
+
+                           IF "Description 2" = Text005 THEN BEGIN
+                             IF NOT rCon."Maletas incluidas" THEN BEGIN
+                               w_base_maletas   := w_base_maletas + Amount;
+                               w_iva_maletas    := "VAT %";
+                               w_impiva_maletas := w_impiva_maletas + ("Amount Including VAT" - Amount);
+                               w_total_maletas  := w_total_maletas + "Amount Including VAT";
+                             END
+                             ELSE BEGIN
+                               w_base_maletas   := w_base_maletas + "Importe Impresion";
+                               w_iva_maletas    := "VAT %";
+                               w_impiva_maletas := w_impiva_maletas + ("Importe Impresion con" - "Importe Impresion");
+                               w_total_maletas  := w_total_maletas + "Importe Impresion con";
+
+                               w_base_normal    := w_base_normal - "Importe Impresion";
+                               w_impiva_normal  := w_impiva_normal - ("Importe Impresion con" - "Importe Impresion");
+                               w_total_normal   := w_total_normal - "Importe Impresion con";
+                             END;
+                           END
+                           ELSE BEGIN
+                             w_base_normal   := w_base_normal + Amount;
+                             w_iva_normal    := "VAT %";
+                             w_impiva_normal := w_impiva_normal + ("Amount Including VAT" - Amount);
+                             w_total_normal  := w_total_normal + "Amount Including VAT";
+
+                             // ---- En funcion de las condiciones de contrato se muestra el importe con el IVA ya ----
+                             // ---- incluido o sin incluir                                                        ----
+
+                             IF rCon."Impuestos incluidos" THEN
+                               w_importe_impresion := "Amount Including VAT"
+                             ELSE
+                               w_importe_impresion := Amount;
+                             w_total_impresion   := w_total_impresion + w_importe_impresion
+                           END;
+
+                           _GetDescripciones; //+$005
+
+                           wNumLin +=1;
+
+                           // AJF 19/03/08 - DRF 07002
+                           // Calculamos el campo de AD/NI adultos / Ni§os
+                           IF (Plazas <> 0)  THEN
+                             wAdultosNi§os := FORMAT(Plazas - "Ni§os Facturados") + ' / ' + FORMAT("Ni§os Facturados")
+                           ELSE
+                             wAdultosNi§os := '';
+                         END;
+
+        DataItemLinkReference=Sales Header;
+        DataItemLink=Document Type=FIELD(Document Type),
+                     Document No.=FIELD(No.);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=19950;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTipoServicio."Tipo fijo" = rTipoServicio."Tipo fijo"::Excursion); //+$005
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1000000000;Label  ;1470 ;0    ;1260 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Fecha }
+            { 1000000001;Label  ;2940 ;0    ;5040 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Servicio }
+            { 1000000002;Label  ;8190 ;0    ;840  ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Bus }
+            { 1000000003;Label  ;9240 ;0    ;1680 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Parte }
+            { 1000000004;Label  ;11130;0    ;3990 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Origen }
+            { 1000000005;Label  ;15330;0    ;630  ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Pax }
+            { 1000000006;Label  ;16170;0    ;1050 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=AD/NI }
+            { 1000000007;Label  ;17430;0    ;2310 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Importe }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=19950;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT(rTipoServicio."Tipo fijo" = rTipoServicio."Tipo fijo"::Traslado); //+$005
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 47  ;Label        ;17430;0    ;2310 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Importe }
+            { 9   ;Label        ;1470 ;0    ;1260 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Fecha }
+            { 11  ;Label        ;2940 ;0    ;1260 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Servicio }
+            { 17  ;Label        ;5670 ;0    ;1470 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Vuelo }
+            { 20  ;Label        ;7350 ;0    ;630  ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Letra }
+            { 23  ;Label        ;8190 ;0    ;840  ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Bus }
+            { 26  ;Label        ;9240 ;0    ;1680 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Parte }
+            { 31  ;Label        ;11130;0    ;1890 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Origen }
+            { 32  ;Label        ;13230;0    ;1890 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Destino }
+            { 39  ;Label        ;15330;0    ;630  ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Pax }
+            { 40  ;Label        ;16170;0    ;1050 ;846  ;HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=AD/NI }
+            { 59  ;Label        ;4410 ;0    ;1050 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=ESP=Hora }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=TransHeader;
+            SectionWidth=19950;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 55  ;Label        ;13020;0    ;4200 ;423  ;ParentControl=56;
+                                                         FontSize=9;
+                                                         LeaderDots=Yes }
+            { 56  ;TextBox      ;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         CaptionML=ESP=Suma;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((Type = Type::"G/L Account") AND
+                                                 ("Description 2" = Text006) AND
+                                                 (rTipoServicio."Tipo fijo" = rTipoServicio."Tipo fijo"::Excursion)
+                                                ); //+$005
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1000000008;TextBox;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1000000009;TextBox;1470 ;0    ;1260 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         SourceExpr="Fecha servicio" }
+            { 1000000010;TextBox;2940 ;0    ;5040 ;423  ;FontSize=9;
+                                                         SourceExpr=DescriServicio }
+            { 1000000011;TextBox;8190 ;0    ;840  ;423  ;FontSize=9;
+                                                         SourceExpr=Bus }
+            { 1000000012;TextBox;9240 ;0    ;1680 ;423  ;FontSize=9;
+                                                         SourceExpr="Nß Parte" }
+            { 1000000013;TextBox;11130;0    ;3990 ;423  ;FontSize=9;
+                                                         SourceExpr=DescriDestino }
+            { 1000000014;TextBox;15330;0    ;630  ;423  ;FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=Paxes }
+            { 1000000015;TextBox;16170;0    ;1050 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wAdultosNi§os }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((Type = Type::"G/L Account") AND
+                                                 ("Description 2" = Text006) AND
+                                                 (rTipoServicio."Tipo fijo" = rTipoServicio."Tipo fijo"::Traslado)
+                                                ); //+$005
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 63  ;TextBox      ;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 5   ;TextBox      ;1470 ;0    ;1260 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         SourceExpr="Fecha servicio" }
+            { 14  ;TextBox      ;2940 ;0    ;1260 ;423  ;FontSize=9;
+                                                         SourceExpr=Servicio }
+            { 18  ;TextBox      ;5670 ;0    ;1470 ;423  ;FontSize=9;
+                                                         SourceExpr=Vuelo }
+            { 21  ;TextBox      ;7350 ;0    ;630  ;423  ;FontSize=9;
+                                                         SourceExpr=Letra }
+            { 24  ;TextBox      ;8190 ;0    ;840  ;423  ;FontSize=9;
+                                                         SourceExpr=Bus }
+            { 27  ;TextBox      ;9240 ;0    ;1680 ;423  ;FontSize=9;
+                                                         SourceExpr="Nß Parte" }
+            { 33  ;TextBox      ;11130;0    ;1890 ;423  ;FontSize=9;
+                                                         SourceExpr=Origen }
+            { 37  ;TextBox      ;13230;0    ;1890 ;423  ;FontSize=9;
+                                                         SourceExpr=Destino }
+            { 41  ;TextBox      ;15330;0    ;630  ;423  ;FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=Paxes }
+            { 43  ;TextBox      ;16170;0    ;1050 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wAdultosNi§os }
+            { 60  ;TextBox      ;4410 ;0    ;1050 ;423  ;FontSize=9;
+                                                         CaptionML=ESP=Hora;
+                                                         SourceExpr=Hora;
+                                                         Format=<Hours24,2>:<Minutes,2> }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((ReferenciaLinea <> '') AND ("Description 2" = Text006)); //+$005
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1000000016;TextBox;1470 ;0    ;6510 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         SourceExpr=ReferenciaLinea }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((Type = Type::"G/L Account") AND ("Description 2" = Text007));
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 49  ;TextBox      ;11130;0    ;1890 ;423  ;FontSize=9;
+                                                         SourceExpr=Origen }
+            { 50  ;TextBox      ;13230;0    ;1890 ;423  ;FontSize=9;
+                                                         SourceExpr=Destino }
+            { 53  ;TextBox      ;15330;0    ;630  ;423  ;FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=Paxes }
+            { 58  ;TextBox      ;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103355006;TextBox;16170;0    ;1050 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         DecimalPlaces=0:2;
+                                                         SourceExpr=wAdultosNi§os }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((Type = Type::"G/L Account") AND (("Description 2" = Text008) OR ("Description 2" = Text009))
+                                                                                                                    AND (NOT wPrimeraLinea));
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 84  ;TextBox      ;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 19  ;TextBox      ;13440;0    ;3780 ;423  ;FontSize=9;
+                                                         SourceExpr="Description 2" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+            OnPreSection=BEGIN
+                           CurrReport.SHOWOUTPUT((Type = Type::"G/L Account") AND (("Description 2" = Text008) OR ("Description 2" = Text009))
+                                                                                                                         AND  wPrimeraLinea);
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 22  ;TextBox      ;13440;0    ;3780 ;423  ;FontSize=9;
+                                                         SourceExpr="Description 2" }
+            { 34  ;TextBox      ;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 35  ;TextBox      ;11130;0    ;2100 ;423  ;FontSize=9;
+                                                         SourceExpr=Origen }
+            { 48  ;TextBox      ;9240 ;0    ;1680 ;423  ;FontSize=9;
+                                                         SourceExpr="Nß Parte" }
+            { 51  ;TextBox      ;8190 ;0    ;840  ;423  ;FontSize=9;
+                                                         SourceExpr=Bus }
+            { 66  ;TextBox      ;2940 ;0    ;1260 ;423  ;FontSize=9;
+                                                         SourceExpr=Servicio }
+            { 67  ;TextBox      ;1470 ;0    ;1260 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         SourceExpr="Fecha servicio" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=TransFooter;
+            SectionWidth=19950;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 85  ;Label        ;13440;423  ;3780 ;423  ;ParentControl=86;
+                                                         FontSize=9;
+                                                         LeaderDots=Yes }
+            { 86  ;TextBox      ;17430;423  ;2310 ;423  ;FontSize=9;
+                                                         CaptionML=ESP=Suma;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=19950;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 62  ;Label        ;14490;423  ;2700 ;423  ;VertAlign=Bottom;
+                                                         FontSize=8;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Totales }
+            { 61  ;TextBox      ;17430;423  ;2310 ;423  ;FontSize=9;
+                                                         FontBold=No;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_impresion;
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=3;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=Lineas Iva;
+        OnPreDataItem=BEGIN
+                        CurrReport.CREATETOTALS(LinImporIVA."VAT+EC Base",LinImporIVA."VAT Amount",LinImporIVA."EC Amount",
+                                                LinImporIVA."Amount Including VAT+EC", LinImporIVA."Line Amount", LinImporIVA."Invoice Discount Amount");
+
+                        rTempIVABase.RESET;
+                        rTempIVAMaletas.RESET;
+
+                        CLEAR(wClaseIVA);
+                        IF rTempIVABase.FIND('-') THEN
+                          wClaseIVA := wClaseIVA::Base
+                        ELSE
+                          IF rTempIVAMaletas.FIND('-') THEN
+                            wClaseIVA := wClaseIVA::Maletas;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF wClaseIVA=0 THEN
+                             CurrReport.BREAK;
+
+                           IF wHayIVAmaletas THEN
+                             wTexto := FORMAT(wClaseIVA);
+
+                           // AJF 09/04/08
+                           wDescuento := 0;
+
+                           CASE wClaseIVA OF
+                             wClaseIVA::Base : BEGIN
+                               // AJF 09/04/08
+                               wDescuento := "Sales Header"."Invoice Discount Value";
+                               LinImporIVA := rTempIVABase;
+                               IF rTempIVABase.NEXT=0 THEN BEGIN
+                                 IF rTempIVAMaletas.FIND('-') THEN
+                                   wClaseIVA := wClaseIVA::Maletas
+                                 ELSE
+                                   wClaseIVA := 0;
+                               END;
+                             END;
+                             wClaseIVA::Maletas: BEGIN
+                               // AJF 09/04/08
+                               IF rCon."Descuento sobre maletas" THEN
+                                 wDescuento := "Sales Header"."Invoice Discount Value";
+                               LinImporIVA := rTempIVAMaletas;
+                               IF rTempIVAMaletas.NEXT=0 THEN
+                                 wClaseIVA := 0;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=19950;
+            SectionHeight=1692;
+            OnPreSection=BEGIN
+                           IF wNumLin > 40 THEN
+                             CurrReport.NEWPAGE;
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1103350010;Label  ;6090 ;846  ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Base }
+            { 1103350011;Shape  ;6090 ;1269 ;13650;423  ;ShapeStyle=HorzLine }
+            { 1103350012;Label  ;14070;846  ;1050 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% IVA }
+            { 1103350013;Label  ;15330;846  ;1890 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Importe IVA }
+            { 1103350014;Label  ;17430;846  ;2310 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Total }
+            { 1103355000;Label  ;9660 ;846  ;1890 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Descuento }
+            { 1103355002;Label  ;8400 ;846  ;1260 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=% DTO }
+            { 1103355003;Label  ;11760;846  ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=Base Neta }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19950;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1103350000;TextBox;6090 ;0    ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=No;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT+EC Base";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103350001;TextBox;14070;0    ;1050 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT %" }
+            { 1103350002;TextBox;15330;0    ;1890 ;423  ;FontSize=9;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT Amount" + LinImporIVA."EC Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103350003;TextBox;17430;0    ;2310 ;423  ;FontSize=9;
+                                                         FontBold=No;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."Amount Including VAT+EC";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103350005;TextBox;3570 ;0    ;2310 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         SourceExpr=wTexto }
+            { 1103355001;TextBox;9660 ;0    ;1890 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=No;
+                                                         DecimalPlaces=0:2;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."Invoice Discount Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103355005;TextBox;8400 ;0    ;1050 ;423  ;FontSize=9;
+                                                         DecimalPlaces=2:2;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=wDescuento }
+            { 1103355004;TextBox;11760;0    ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=No;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT+EC Base" + LinImporIVA."Invoice Discount Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=19950;
+            SectionHeight=846;
+            OnPreSection=BEGIN
+                           IF "Sales Header"."Currency Code" = '' THEN BEGIN
+                             w_importe_divisa := 0;
+                             w_texto_divisa   := '';
+                           END
+                           ELSE BEGIN
+                             w_importe_divisa :=
+                               ROUND(
+                                 TipoCambDivisa.ExchangeAmtFCYToLCY("Sales Header"."Posting Date",
+                                 "Sales Header"."Currency Code", LinImporIVA."Amount Including VAT+EC",
+                                 "Sales Header"."Currency Factor"), ConfCG."Amount Rounding Precision");
+                             w_texto_divisa   := ConfCG."LCY Code";
+                           END;
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1103350004;TextBox;6090 ;423  ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT+EC Base";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103350006;TextBox;15330;423  ;1890 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT Amount" + LinImporIVA."EC Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103350007;TextBox;17430;423  ;2310 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."Amount Including VAT+EC";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 6   ;TextBox      ;3780 ;423  ;2100 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_importe_divisa;
+                                                         AutoFormatType=1 }
+            { 3   ;TextBox      ;1470 ;423  ;2100 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=w_texto_divisa }
+            { 1103350008;Shape  ;17430;423  ;2310 ;423   }
+            { 1103355007;TextBox;11760;423  ;2100 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."VAT+EC Base" + LinImporIVA."Invoice Discount Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+            { 1103355008;TextBox;9660 ;423  ;1890 ;423  ;HorzAlign=Right;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         BlankZero=Yes;
+                                                         SourceExpr=LinImporIVA."Invoice Discount Amount";
+                                                         AutoFormatType=1;
+                                                         AutoFormatExpr="Sales Line"."Currency Code" }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=5060;
+      Height=990;
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=ESP=Nß copias;
+                                                   SourceExpr=NoCopias }
+      { 21  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 1103355000;CheckBox;3410;550  ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=ESP=Orden Inverso;
+                                                   SourceExpr=wInversa }
+      { 1103355001;Label  ;0    ;550  ;3300 ;440  ;ParentControl=1103355000 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244049 : TextConst 'ESP=Vendedor';
+      Text001@1100244050 : TextConst 'ESP=Total %1';
+      Text002@1100244051 : TextConst 'ESP=Total %1 incl. IVA';
+      Text003@1100244052 : TextConst 'ESP=COPIA';
+      Text004@1100244053 : TextConst 'ESP=P†g. %1';
+      Text005@1100244054 : TextConst 'ESP=MALETAS';
+      Text006@1100244055 : TextConst 'ESP=LINEA BASE';
+      Text007@1100244056 : TextConst 'ESP=LINEA ZONA';
+      Text008@1100244057 : TextConst 'ESP=SUPLEMENTO';
+      Text009@1100244058 : TextConst 'ESP=EXTRA';
+      Text010@1100244059 : TextConst 'ESP=Maletas';
+      rTO@1100244000 : Record 7010312;
+      rPreFact@1100244001 : Record 7010415;
+      rCon@1100244002 : Record 7010403;
+      ConfCG@1100244003 : Record 98;
+      CondEnv@1100244004 : Record 10;
+      TerminosPago@1100244005 : Record 3;
+      FormaPago@1100244006 : Record 289;
+      RepreVtasComp@1100244007 : Record 13;
+      InfoEmpresa@1100244008 : Record 79;
+      Clie@1100244009 : Record 18;
+      LinImporIVA@1100244010 : TEMPORARY Record 290;
+      rDescuentoTMP@1103355003 : TEMPORARY Record 290;
+      ConfRegistroIVA@1100244011 : Record 325;
+      TipoCambDivisa@1100244012 : Record 330;
+      rLin@1100244013 : Record 37;
+      rDiv@1100244014 : Record 4;
+      rTempIVABase@1103350000 : TEMPORARY Record 290;
+      rTempIVAMaletas@1103350001 : TEMPORARY Record 290;
+      rTipoServicio@1000000000 : Record 7010319;
+      ContarVtaImpresa@1100244015 : Codeunit 313;
+      FormatDire@1100244016 : Codeunit 365;
+      cCalcR@1100253000 : Codeunit 7010407;
+      cFunFact@1103350003 : Codeunit 7010321;
+      DirClie@1100244018 : ARRAY [8] OF Text[50];
+      EnvADir@1100244019 : ARRAY [8] OF Text[50];
+      DirEmpresa@1100244020 : ARRAY [8] OF Text[50];
+      TextNoPedido@1100244021 : Text[30];
+      DescriVendedor@1100244022 : Text[30];
+      TextoCIF@1100244023 : Text[30];
+      DescriRefer@1100244024 : Text[30];
+      TotalTexto@1100244025 : Text[50];
+      TextoTotIVAIncl@1100244026 : Text[50];
+      wTexto@1103350005 : Text[150];
+      MasLins@1100244027 : Boolean;
+      NoCopias@1100244028 : Integer;
+      NoBucles@1100244029 : Integer;
+      TextoCopia@1100244030 : Text[30];
+      MostrarDireEnvio@1100244031 : Boolean;
+      i@1100244032 : Integer;
+      w_base_normal@1100244033 : Decimal;
+      w_iva_normal@1100244034 : Decimal;
+      w_impiva_normal@1100244035 : Decimal;
+      w_impdto_normal@1103355001 : Decimal;
+      w_total_normal@1100244036 : Decimal;
+      w_base_maletas@1100244037 : Decimal;
+      w_iva_maletas@1100244038 : Decimal;
+      w_impiva_maletas@1100244039 : Decimal;
+      w_impdto_maletas@1103355002 : Decimal;
+      w_total_maletas@1100244040 : Decimal;
+      w_total_impresion@1100244041 : Decimal;
+      w_importe_impresion@1100244042 : Decimal;
+      w_importe_divisa@1100244043 : Decimal;
+      w_texto_maletas@1100244044 : Code[10];
+      w_texto_divisa@1100244045 : Code[10];
+      vServicio@1100244046 : Code[10];
+      wNoParte@1100244047 : Code[10];
+      wPrimeraLinea@1100244048 : Boolean;
+      wClaseIVA@1103350002 : ',Base,Maletas';
+      wHayIVAmaletas@1103350004 : Boolean;
+      wImpMail@1103350006 : Boolean;
+      wInversa@1103355006 : Boolean;
+      wNumLin@1103355000 : Integer;
+      wAdultosNi§os@1103355004 : Text[30];
+      wDescuento@1103355005 : Decimal;
+      DescriServicio@1000000001 : Text[100];
+      DescriDestino@1000000002 : Text[100];
+      Text011@1000000003 : TextConst 'ESP=REGRESO';
+      ReferenciaLinea@1000000004 : Code[30];
+
+    LOCAL PROCEDURE _BuscaTipoServicio@1000000003();
+    VAR
+      lrSalesLine@1000000000 : Record 37;
+      lrParte@1000000003 : Record 7010360;
+    BEGIN
+      // _BuscaTipoServicio
+
+      lrSalesLine.COPYFILTERS("Sales Line");
+      lrSalesLine.SETFILTER("Nß Parte", '<>%1', '');
+      IF lrSalesLine.FIND('-') THEN
+      BEGIN
+        lrParte.GET(lrSalesLine."Nß Parte");
+
+        rTipoServicio.GET(lrParte."Tipo Servicio");
+      END;
+    END;
+
+    LOCAL PROCEDURE _GetDescripciones@1000000006();
+    VAR
+      lrParte@1000000000 : Record 7010360;
+      lrCodigoServicio@1000000001 : Record 7010320;
+      lrPunto@1000000002 : Record 7010315;
+      lrParte2@1000000003 : Record 7010360;
+    BEGIN
+      // _GetDescripciones
+
+      DescriServicio := '';
+      DescriDestino   := '';
+      ReferenciaLinea := '';
+
+      IF NOT lrParte.GET(wNoParte) THEN
+        EXIT;
+
+      ReferenciaLinea := lrParte.Referencia;
+
+      IF NOT lrCodigoServicio.GET("Sales Line".Servicio) THEN
+        EXIT;
+
+      IF lrParte."Origen creacion" = lrParte."Origen creacion"::"Recogida Automatica" THEN BEGIN
+        DescriServicio := Text011;
+        lrParte2.RESET;
+        lrParte2.SETRANGE(lrParte2."Recogida Generada",lrParte."Nß Parte");
+        IF lrParte2.FIND('-') THEN BEGIN
+          IF lrCodigoServicio.GET(lrParte2."Codigo Servicio") THEN
+            DescriServicio := DescriServicio + ' ' + lrCodigoServicio.Descripcion;
+        END;
+      END ELSE
+        DescriServicio := lrCodigoServicio.Descripcion;
+
+      DescriDestino := "Sales Line".Destino;
+      IF lrPunto.GET("Sales Line".Destino) AND
+         (lrParte."Origen creacion" <> lrParte."Origen creacion"::"Recogida Automatica") THEN
+        DescriDestino := lrPunto.Descripci¢n;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 11102013 Amplio la visualizacion de los campos de nombre del cliente
+
+      $002 AJS 25022014 Ibizatours ha pedido que se dejen de imprimir dos copias
+
+      $005 AJS 24072014 Vamos a crear un formato distinto si estamos facturado excursiones o traslados
+
+      $006 AJS 22102014 Amplio la variable ReferenciaLinea a Code30
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

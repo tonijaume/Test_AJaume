@@ -1,0 +1,112 @@
+OBJECT Codeunit 5065 E-Mail Dispatcher
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=VAR
+            RMSetup@1004 : Record 5079;
+            Semaphore@1000 : Record 5112;
+            Session@1001 : Record 2000000009;
+          BEGIN
+            IF ISSERVICETIER THEN
+              EXIT;
+
+            RMSetup.GET;
+
+            IF (RMSetup."E-Mail Logging Profile Name" = '') OR
+               (RMSetup."Queue Folder Name" = '') OR
+               (RMSetup."Storage Folder Name" = '') OR
+               (RMSetup."Time Interval (Sec.)" = 0)
+            THEN BEGIN
+              IF RMSetup."E-Mail Logging Profile Name" = '' THEN
+                MESSAGE(Text005,RMSetup.FIELDCAPTION("E-Mail Logging Profile Name"));
+              IF RMSetup."Queue Folder Name" = '' THEN
+                MESSAGE(Text005,RMSetup.FIELDCAPTION("Queue Folder Name"));
+              IF RMSetup."Storage Folder Name" = '' THEN
+                MESSAGE(Text005,RMSetup.FIELDCAPTION("Storage Folder Name"));
+              IF RMSetup."Time Interval (Sec.)" = 0 THEN
+                MESSAGE(Text005,RMSetup.FIELDCAPTION("Time Interval (Sec.)"));
+              EXIT;
+            END;
+
+            Semaphore.LOCKTABLE;
+
+            // Clear lock set by closed and my session
+            IF Semaphore.FINDSET(TRUE) THEN
+              REPEAT
+                Session.RESET;
+                Session.SETRANGE("User ID",Semaphore."User ID");
+                Session.SETRANGE("Login Time",Semaphore."Starting Time");
+                Session.SETRANGE("Login Date",Semaphore."Starting Date");
+                IF Session.FINDFIRST THEN BEGIN
+                  IF Session."My Session" THEN
+                    Semaphore.DELETE;
+                END ELSE
+                  Semaphore.DELETE;
+              UNTIL Semaphore.NEXT = 0;
+
+            // Check lock
+            IF Semaphore.FINDFIRST THEN BEGIN
+              MESSAGE(
+                Text002 + Text003 + Text004,
+                Semaphore."Starting Date",
+                Semaphore."Starting Time",
+                Semaphore."User ID");
+              EXIT;
+            END;
+
+            // Set lock
+            Session.RESET;
+            Session.SETRANGE("My Session",TRUE);
+            Session.FINDFIRST;
+            Semaphore.INIT;
+            Semaphore."Starting Date" := Session."Login Date";
+            Semaphore."Starting Time" := Session."Login Time";
+            Semaphore."User ID" := Session."User ID";
+            Semaphore.INSERT;
+
+            COMMIT;
+
+            IF ISCLEAR(Timer) THEN
+              CREATE(Timer);
+
+            Timer.Enabled := FALSE;
+            Timer.Interval := RMSetup."Time Interval (Sec.)" * 1000;
+            Timer.Enabled := TRUE;
+
+            MESSAGE(Text001);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Semaphore@1004 : Record 5112;
+      Timer@1003 : Automation "{3B311C81-140E-11D5-8B18-00D0590B4EC5} 1.0:{3B311C92-140E-11D5-8B18-00D0590B4EC5}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      Text001@1000 : TextConst 'ENU=The e-mail dispatcher has started.;ESP=Se ha iniciado el distribuidor de correo electr¢nico.';
+      Text002@1007 : TextConst 'ENU=Unable to start the e-mail dispatcher. Another client has locked the e-mail logging process. \;ESP=No puede iniciarse el distribuidor de correo electr¢nico. Otro cliente ha bloqueado el proceso de registro de correo electr¢nico. \';
+      Text003@1006 : TextConst 'ENU=The e-mail logging process was started %1 %2 by %3. \;ESP=El proceso de registro de correo electr¢nico se inici¢ %1 %2 por %3. \';
+      Text004@1005 : TextConst 'ENU=The e-mail logging process can be unlocked by disconnecting this client from the database.;ESP=El proceso de registro de correo electr¢nico se puede desbloquear desconectando el cliente de la base de datos.';
+      Text005@1001 : TextConst 'ENU=E-Mail Logging is unable to start.\Please setup the %1 field in the Relationship Management Setup.;ESP=No ha podido iniciarse el registro de correo electr¢nico.\Por favor, configure el campo %1 en Config. gesti¢n relaciones.';
+
+    EVENT Timer@1003::Timer@1(MilliSecounds@1000 : Integer);
+    VAR
+      EMailLogging@1001 : Codeunit 5064;
+    BEGIN
+      EMailLogging.RunEMailLogging;
+    END;
+
+    EVENT Timer@1003::TimerError@2(ErrorString@1000 : Text[1024]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,215 @@
+OBJECT Codeunit 7009731 Decl. ITBIS reperc. DGII - 607
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/04/13;
+    Time=10:04:02;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            LanzarDecl607;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100253001 : TextConst 'ENU=Select the initial date of the term to declarate #1######\Include invoices with ITBIS #2#\Monthly declaration #3#;ESP=Seleccione la fecha inicial del periodo a declarar #1######\Incluir facturas sin ITBIS #2#\Declaracion mensual #3#';
+      Text002@1100253002 : TextConst 'ENU=Must enter a valid date;ESP=Debe introducir una fecha v lida.';
+      cVar@1100253000 : Codeunit 7009720;
+      Text003@1100253003 : TextConst 'ENU=Route %1 does not exist;ESP=No existe la ruta %1.';
+      Text004@1100253004 : TextConst 'ENU=Movements with receipt number were not found for term %1;ESP=No se han encotrado movimientos con n£mero de comprobante para el periodo de %1.';
+
+    PROCEDURE LanzarDecl607@1100253001();
+    VAR
+      lwFechaIni@1100253000 : Date;
+      lwFechaFin@1100253003 : Date;
+      lwDialog@1100253001 : Dialog;
+      lwInclSin@1100253002 : Boolean;
+      lwMensual@1100217000 : Boolean;
+      lcExcel@1100253004 : Codeunit 7009755;
+      lrCompInfo@1100253005 : Record 79;
+      lrCustEntry@1100253006 : Record 21;
+      lwNumReg@1100253007 : Integer;
+    BEGIN
+      // LanzarDecl607.
+      //:
+
+      CLEAR(lcExcel);
+
+      lwDialog.OPEN(Text001);
+      lwDialog.INPUT(1, lwFechaIni);
+      lwDialog.INPUT(2, lwInclSin);
+      lwDialog.INPUT(3, lwMensual); //+$002
+      lwDialog.CLOSE;
+
+      IF lwFechaIni = 0D THEN
+        ERROR(Text002);
+
+      CLEAR(lrCompInfo);
+      lrCompInfo.FINDFIRST;
+      lrCompInfo.TESTFIELD("VAT Registration No.");
+
+      //+$002 <
+      IF lwMensual THEN
+      BEGIN
+        lwFechaIni := DMY2DATE(1, DATE2DMY(lwFechaIni, 2), DATE2DMY(lwFechaIni, 3));
+        lwFechaFin := CALCDATE('<+1M-1D>', lwFechaIni);
+      END
+      ELSE
+      BEGIN
+        lwFechaIni := CALCDATE('<-CY>', lwFechaIni); // Principio de a¤o.
+        lwFechaFin := CALCDATE('<+CY>', lwFechaIni); // Final de a¤o.
+      END;
+      //+$002 >
+
+      CLEAR(lrCustEntry);
+      lrCustEntry.SETCURRENTKEY("Document Type", "Customer No.", "Posting Date", "Currency Code");
+      lrCustEntry.SETFILTER("Document Type", '%1|%2',
+                            lrCustEntry."Document Type"::Invoice,
+                            lrCustEntry."Document Type"::"Credit Memo");
+      lrCustEntry.SETRANGE ("Posting Date", lwFechaIni, lwFechaFin);
+      lrCustEntry.SETFILTER("Comprobante Fiscal", '<>%1', '');
+      lwNumReg := lrCustEntry.COUNT;
+
+      IF lwNumReg = 0 THEN
+        ERROR(Text004, DATE2DMY(lwFechaIni,3));
+
+      _AbrirExcel(lcExcel);
+
+      _GetCabeceraDeclaracion(lrCompInfo."VAT Registration No.", lwFechaIni, lcExcel);
+      _GetLineasDeclaracion  (lwFechaIni, lwFechaFin, lwInclSin, lcExcel, lwMensual);
+
+      lcExcel.Mostrar;
+    END;
+
+    LOCAL PROCEDURE _GetLineasDeclaracion@1100253006(pwIniPer@1100253001 : Date;pwFinPer@1100253003 : Date;pwInclSin@1100253010 : Boolean;VAR pcExcel@1100253011 : Codeunit 7009755;pwMensual@1100217000 : Boolean);
+    VAR
+      lrCustEntry@1100253000 : Record 21;
+      lrCustEntry2@1100253007 : Record 21;
+      lrCustomer@1100253002 : Record 18;
+      lrSalesInv@1100253006 : Record 112;
+      lrVatEntry@1100253005 : Record 254;
+      lwBaseDoc@1100253008 : Decimal;
+      lwImporteIVADoc@1100253009 : Decimal;
+      lwNumReg@1100253012 : Integer;
+      lwTotBase@1100253013 : Decimal;
+      lwFila@1100253014 : Integer;
+      lwVATRegistration@1100253004 : Code[20];
+    BEGIN
+      // _GetLineasDeclaracion.
+
+      lwFila := 12;
+
+      CLEAR(lrCustEntry);
+      lrCustEntry.SETCURRENTKEY("Document Type", "Customer No.", "Posting Date", "Currency Code");
+      lrCustEntry.SETFILTER("Document Type", '%1|%2',
+                            lrCustEntry."Document Type"::Invoice,
+                            lrCustEntry."Document Type"::"Credit Memo");
+      //+$002 <
+      IF pwMensual THEN
+        lrCustEntry.SETRANGE ("Posting Date", pwIniPer, pwFinPer)
+      ELSE
+        lrCustEntry.SETRANGE ("Posting Date", pwIniPer, CALCDATE('<+CY>', pwIniPer));
+      //+$002 >
+      lrCustEntry.SETFILTER("Comprobante Fiscal", '<>%1', '');
+      IF lrCustEntry.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrCustomer);
+
+          IF lrCustomer.GET(lrCustEntry."Customer No.") THEN BEGIN
+
+            // Se busca el comprobante fiscal al que hace referencia el abono.
+            IF lrCustEntry."Document Type" = lrCustEntry."Document Type"::"Credit Memo" THEN BEGIN
+              CLEAR(lrCustEntry2);
+              IF lrSalesInv.GET(lrCustEntry."External Document No.") THEN BEGIN
+                lrCustEntry2.SETCURRENTKEY("Document No.", "Document Type", "Customer No.");
+                lrCustEntry2.SETRANGE ("Document Type", lrCustEntry2."Document Type"::Invoice);
+                lrCustEntry2.SETRANGE ("Document No." , lrSalesInv."No.");
+                lrCustEntry2.SETRANGE ("Customer No." , lrSalesInv."Bill-to Customer No.");
+                IF NOT lrCustEntry2.FINDFIRST THEN
+                  CLEAR(lrCustEntry2);
+              END;
+            END;
+
+            CLEAR(lwBaseDoc);
+            CLEAR(lwImporteIVADoc);
+            lrVatEntry.RESET;
+            lrVatEntry.SETCURRENTKEY("Document No.",
+                                     "Posting Date");
+            lrVatEntry.SETRANGE("Document No.", lrCustEntry."Document No.");
+            lrVatEntry.SETRANGE("Posting Date", lrCustEntry."Posting Date");
+            IF lrVatEntry.FINDSET THEN BEGIN
+              lwVATRegistration := lrVatEntry."VAT Registration No."; //+$001
+
+              REPEAT
+                lwBaseDoc       += ABS(lrVatEntry.Base);
+                lwImporteIVADoc += ABS(lrVatEntry.Amount);
+              UNTIL lrVatEntry.NEXT = 0;
+            END;
+
+            IF pwInclSin OR (lwImporteIVADoc <> 0) THEN BEGIN
+              lwTotBase += lwBaseDoc;
+              //-$001pcExcel.ValorCelda(lwFila, 2, lrCustomer."VAT Registration No.", FALSE, FALSE, FALSE); // RNC o Cedula.
+              pcExcel.ValorCelda(lwFila, 2, lwVATRegistration, FALSE, FALSE, FALSE); // RNC o Cedula. +$001
+              // Tipo Identificaci¢n autorellenado.
+              pcExcel.ValorCelda(lwFila, 4, lrCustEntry."Comprobante Fiscal"  , FALSE, FALSE, FALSE); // Comprobante.
+              pcExcel.ValorCelda(lwFila, 5, lrCustEntry2."Comprobante Fiscal" , FALSE, FALSE, FALSE); // Comprobante anulacion (abonos).
+              pcExcel.ValorCelda(lwFila, 6, FORMAT(lrCustEntry."Document Date", 0, '<Year4><Month,2><Day,2>'),
+                                 FALSE, FALSE, FALSE); // Fecha comprobante.
+              pcExcel.ValorCelda(lwFila, 7, FORMAT(lwImporteIVADoc)          , FALSE, FALSE, FALSE); // monto ITBIS.
+              pcExcel.ValorCelda(lwFila, 8, FORMAT(lwBaseDoc)                , FALSE, FALSE, FALSE); // base.
+              lwFila += 1;
+              lwNumReg += 1;
+            END;
+          END;
+
+        UNTIL lrCustEntry.NEXT = 0;
+      END;
+
+      pcExcel.ValorCelda(6, 3, FORMAT(lwNumReg) , FALSE, FALSE, FALSE); // Num. registros.
+      pcExcel.ValorCelda(7, 3, FORMAT(lwTotBase), FALSE, FALSE, FALSE); // Total monto.
+    END;
+
+    LOCAL PROCEDURE _GetCabeceraDeclaracion@1100253000(pwRNC@1100253005 : Code[20];pwIniPer@1100253002 : Date;VAR pcExcel@1100253003 : Codeunit 7009755);
+    BEGIN
+      // _GetCabeceraDeclaracion.
+      //:
+
+      pcExcel.ValorCelda(4, 3, pwRNC                        , FALSE, FALSE, FALSE); // RNC.
+      pcExcel.ValorCelda(5, 3, FORMAT(DATE2DMY(pwIniPer, 3)), FALSE, FALSE, FALSE); // Periodo.
+    END;
+
+    LOCAL PROCEDURE _AbrirExcel@1100253007(VAR pcExcel@1100253000 : Codeunit 7009755);
+    VAR
+      lrGLSetup@1100253001 : Record 98;
+      lwRuta@1100253002 : Text[1024];
+    BEGIN
+      // _AbrirExcel.
+      //:
+
+      CLEAR(pcExcel);
+
+      CLEAR(lrGLSetup);
+      lrGLSetup.FINDFIRST;
+
+      lwRuta := cVar.A¤adiraRuta(lrGLSetup."Ruta fichero declaracion 606", 'Formato 607.xls');
+
+      IF NOT EXISTS(lwRuta) THEN
+        ERROR(Text003, lwRuta);
+
+      pcExcel.Abrir(lwRuta);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 15092011 El CIF debe tomarlo de los movimientos y no de la ficha de cliente
+
+      $002 AJS 10042013 Modificamos para contemplar la presentacion mensual de este impuesto
+    }
+    END.
+  }
+}

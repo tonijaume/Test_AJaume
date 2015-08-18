@@ -1,0 +1,358 @@
+OBJECT Codeunit 392 Reminder-Make
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Code;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Currency@1000 : TEMPORARY Record 4;
+      Cust@1001 : Record 18;
+      CustLedgEntry@1002 : Record 21;
+      CustLedgEntry2@1017 : Record 21;
+      ReminderTerms@1003 : Record 292;
+      ReminderHeaderReq@1005 : Record 295;
+      ReminderHeader@1006 : Record 295;
+      ReminderLine@1007 : Record 296;
+      ReminderEntry@1008 : Record 300;
+      Text0000@1023 : TextConst 'ENU=Open Entries Not Due;ESP=Movs. pendientes no vencidos';
+      CustLedgEntryOnHoldTEMP@1011 : TEMPORARY Record 21;
+      AmountsNotDueLineInserted@1004 : Boolean;
+      OverdueEntriesOnly@1009 : Boolean;
+      HeaderExists@1010 : Boolean;
+      IncludeEntriesOnHold@1102601000 : Boolean;
+      Text0001@1102601002 : TextConst 'ENU=Open Entries On Hold;ESP=Abrir movimientos en espera';
+
+    PROCEDURE Code@7() RetVal : Boolean;
+    BEGIN
+      WITH ReminderHeader DO
+        IF "No." <> '' THEN BEGIN
+          HeaderExists := TRUE;
+          TESTFIELD("Customer No.");
+          Cust.GET("Customer No.");
+          TESTFIELD("Document Date");
+          TESTFIELD("Reminder Terms Code");
+          ReminderHeaderReq := ReminderHeader;
+          ReminderLine.SETRANGE("Reminder No.","No.");
+          ReminderLine.DELETEALL;
+        END;
+
+      Cust.TESTFIELD("Reminder Terms Code");
+      IF ReminderHeader."Reminder Terms Code" <> '' THEN
+        ReminderTerms.GET(ReminderHeader."Reminder Terms Code")
+      ELSE
+        ReminderTerms.GET(Cust."Reminder Terms Code");
+      IF HeaderExists THEN
+        MakeReminder(ReminderHeader."Currency Code")
+      ELSE BEGIN
+        Currency.DELETEALL;
+        CustLedgEntry2.COPYFILTERS(CustLedgEntry);
+        CustLedgEntry.SETCURRENTKEY("Customer No.",Open,Positive);
+        CustLedgEntry.SETRANGE("Customer No.",Cust."No.");
+        CustLedgEntry.SETRANGE(Open,TRUE);
+        CustLedgEntry.SETRANGE(Positive,TRUE);
+        IF CustLedgEntry.FIND('-') THEN
+          REPEAT
+            IF CustLedgEntry."On Hold" = '' THEN BEGIN
+              Currency.Code := CustLedgEntry."Currency Code";
+              IF Currency.INSERT THEN;
+            END;
+          UNTIL CustLedgEntry.NEXT = 0;
+        CustLedgEntry.COPYFILTERS(CustLedgEntry2);
+        RetVal := TRUE;
+        IF Currency.FIND('-') THEN BEGIN
+          REPEAT
+            IF NOT MakeReminder(Currency.Code) THEN
+              RetVal := FALSE;
+          UNTIL Currency.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE Set@1(Cust2@1000 : Record 18;VAR CustLedgEntry2@1001 : Record 21;ReminderHeaderReq2@1002 : Record 295;OverdueEntriesOnly2@1003 : Boolean;IncludeEntriesOnHold2@1102601000 : Boolean);
+    BEGIN
+      Cust := Cust2;
+      CustLedgEntry.COPY(CustLedgEntry2);
+      ReminderHeaderReq := ReminderHeaderReq2;
+      OverdueEntriesOnly := OverdueEntriesOnly2;
+      IncludeEntriesOnHold := IncludeEntriesOnHold2;
+    END;
+
+    PROCEDURE SuggestLines@2(ReminderHeader2@1000 : Record 295;VAR CustLedgEntry2@1001 : Record 21;OverdueEntriesOnly2@1002 : Boolean;IncludeEntriesOnHold2@1102601000 : Boolean);
+    BEGIN
+      ReminderHeader := ReminderHeader2;
+      CustLedgEntry.COPY(CustLedgEntry2);
+      OverdueEntriesOnly := OverdueEntriesOnly2;
+      IncludeEntriesOnHold := IncludeEntriesOnHold2;
+    END;
+
+    LOCAL PROCEDURE MakeReminder@3(CurrencyCode@1000 : Code[10]) : Boolean;
+    VAR
+      ReminderLevel@1004 : Record 293;
+      MakeDoc@1011 : Boolean;
+      StartLineInserted@1005 : Boolean;
+      NextLineNo@1010 : Integer;
+      LineLevel@1009 : Integer;
+      MaxLineLevel@1008 : Integer;
+      MaxReminderLevel@1002 : Integer;
+      CustAmount@1007 : Decimal;
+      ReminderDueDate@1003 : Date;
+    BEGIN
+      WITH Cust DO BEGIN
+        CustLedgEntry.SETCURRENTKEY("Customer No.",Open,Positive,"Due Date","Currency Code");
+        CustLedgEntry.SETRANGE(Open,TRUE);
+        CustLedgEntry.SETRANGE("Customer No.","No.");
+        CustLedgEntry.SETRANGE("Due Date");
+        CustLedgEntry.SETRANGE("Last Issued Reminder Level");
+        CustLedgEntry.SETRANGE("Currency Code",CurrencyCode);
+        ReminderLevel.SETRANGE("Reminder Terms Code",ReminderTerms.Code);
+        ReminderLevel.FIND('+');
+
+        CustLedgEntryOnHoldTEMP.DELETEALL;
+
+        //Find and MARK Reminder Candidates
+        REPEAT
+          FilterCustLedgEntries(ReminderLevel);
+          IF CustLedgEntry.FIND('-') THEN
+            REPEAT
+              IF CustLedgEntry."On Hold" = '' THEN BEGIN
+                SetReminderLine(LineLevel,ReminderLevel."No.",ReminderDueDate);
+                IF (CALCDATE(ReminderLevel."Grace Period",ReminderDueDate) < ReminderHeaderReq."Document Date") AND
+                   ((LineLevel <= ReminderTerms."Max. No. of Reminders") OR (ReminderTerms."Max. No. of Reminders" = 0))
+                THEN BEGIN
+                  CustLedgEntry.MARK(TRUE);
+                  ReminderLevel.MARK(TRUE);
+                  IF (ReminderLevel."No." > MaxReminderLevel) AND
+                     (CustLedgEntry."Document Type" <> CustLedgEntry."Document Type" :: "Credit Memo")
+                  THEN
+                    MaxReminderLevel := ReminderLevel."No.";
+                  IF MaxLineLevel < LineLevel THEN
+                    MaxLineLevel := LineLevel;
+                  CustLedgEntry.CALCFIELDS("Remaining Amount");
+                  CustAmount := CustAmount + CustLedgEntry."Remaining Amount";
+                  IF CustLedgEntry.Positive AND
+                     (CALCDATE(ReminderLevel."Grace Period",ReminderDueDate) < ReminderHeaderReq."Document Date")
+                  THEN
+                    MakeDoc := TRUE;
+                END ELSE
+                  IF (CustLedgEntry."Due Date" >= ReminderHeaderReq."Document Date") AND
+                     (NOT OverdueEntriesOnly)
+                  THEN BEGIN
+                    CustLedgEntry.MARK(TRUE);
+                    ReminderLevel.MARK(TRUE);
+                  END;
+              END ELSE BEGIN  // The customer ledger entry is on hold
+                IF IncludeEntriesOnHold  THEN BEGIN
+                  CustLedgEntryOnHoldTEMP := CustLedgEntry;
+                  CustLedgEntryOnHoldTEMP.INSERT;
+                END;
+              END;
+            UNTIL CustLedgEntry.NEXT = 0;
+        UNTIL ReminderLevel.NEXT(-1) = 0;
+
+        ReminderLevel.SETRANGE("Reminder Terms Code",ReminderTerms.Code);
+        ReminderLevel.SETRANGE("No.",1,MaxLineLevel);
+        IF NOT ReminderLevel.FIND('+') THEN
+          ReminderLevel.INIT;
+        IF MakeDoc AND (CustAmount > 0) AND (CustAmountLCY(CurrencyCode,CustAmount) >= ReminderTerms."Minimum Amount (LCY)") THEN BEGIN
+          IF Cust.Blocked = Cust.Blocked::All THEN
+            EXIT(FALSE);
+          ReminderLine.LOCKTABLE;
+          ReminderHeader.LOCKTABLE;
+          IF NOT HeaderExists THEN BEGIN
+            ReminderHeader.SETCURRENTKEY("Customer No.","Currency Code");
+            ReminderHeader.SETRANGE("Customer No.","No.");
+            ReminderHeader.SETRANGE("Currency Code",CurrencyCode);
+            IF ReminderHeader.FIND('-') THEN
+              EXIT(FALSE);
+            ReminderHeader.INIT;
+            ReminderHeader."No." := '';
+            ReminderHeader."Posting Date" := ReminderHeaderReq."Posting Date";
+            ReminderHeader.INSERT(TRUE);
+            ReminderHeader.VALIDATE("Customer No.","No.");
+            ReminderHeader.VALIDATE("Currency Code",CurrencyCode);
+            ReminderHeader."Document Date" := ReminderHeaderReq."Document Date";
+            ReminderHeader."Use Header Level" := ReminderHeaderReq."Use Header Level";
+          END;
+          ReminderHeader."Reminder Level" := ReminderLevel."No.";
+          ReminderHeader.MODIFY;
+          NextLineNo := 0;
+          ReminderLevel.MARKEDONLY(TRUE);
+          CustLedgEntry.MARKEDONLY(TRUE);
+          ReminderLevel.FIND('+');
+
+          REPEAT
+            StartLineInserted := FALSE;
+            FilterCustLedgEntries(ReminderLevel);
+            AmountsNotDueLineInserted := FALSE;
+            IF CustLedgEntry.FIND('-') THEN BEGIN
+              REPEAT
+                SetReminderLine(LineLevel,ReminderLevel."No.",ReminderDueDate);
+                IF ReminderDueDate < ReminderHeaderReq."Document Date" THEN BEGIN
+                  IF (NextLineNo > 0) AND NOT StartLineInserted THEN BEGIN
+                    ReminderLine.INIT;
+                    NextLineNo := NextLineNo + 10000;
+                    ReminderLine."Reminder No." := ReminderHeader."No.";
+                    ReminderLine."Line No." := NextLineNo;
+                    ReminderLine."Line Type" := ReminderLine."Line Type"::ReminderLine;
+                    ReminderLine.INSERT;
+                  END;
+                  NextLineNo := NextLineNo + 10000;
+                  ReminderLine.INIT;
+                  ReminderLine."Reminder No." := ReminderHeader."No.";
+                  ReminderLine."Line No." := NextLineNo;
+                  ReminderLine.Type := ReminderLine.Type::"Customer Ledger Entry";
+                  ReminderLine.VALIDATE("Entry No.",CustLedgEntry."Entry No.");
+                  ReminderLine."No. of Reminders" := LineLevel;
+                  ReminderLine.INSERT;
+                  StartLineInserted := TRUE;
+                END;
+              UNTIL CustLedgEntry.NEXT = 0;
+            END
+          UNTIL ReminderLevel.NEXT(-1) = 0;
+          ReminderHeader."Reminder Level" := MaxReminderLevel;
+          ReminderHeader.VALIDATE("Reminder Level");
+          ReminderHeader.InsertLines;
+          ReminderLine.SETRANGE("Reminder No.",ReminderHeader."No.");
+          ReminderLine.FIND('+');
+          NextLineNo := ReminderLine."Line No.";
+          IF (NOT OverdueEntriesOnly) THEN BEGIN
+            IF CustLedgEntry.FIND('-') THEN BEGIN
+              REPEAT
+                IF CustLedgEntry."Due Date" >= ReminderHeaderReq."Document Date" THEN BEGIN
+                  IF NOT AmountsNotDueLineInserted THEN BEGIN
+                    ReminderLine.INIT;
+                    NextLineNo := NextLineNo + 10000;
+                    ReminderLine."Reminder No." := ReminderHeader."No.";
+                    ReminderLine."Line No." := NextLineNo;
+                    ReminderLine."Line Type" := ReminderLine."Line Type"::"Not Due";
+                    ReminderLine.INSERT;
+                    NextLineNo := NextLineNo + 10000;
+                    ReminderLine.INIT;
+                    ReminderLine."Reminder No." := ReminderHeader."No.";
+                    ReminderLine."Line No." := NextLineNo;
+                    ReminderLine.Description := Text0000;
+                    ReminderLine."Line Type" := ReminderLine."Line Type"::"Not Due";
+                    ReminderLine.INSERT;
+                    AmountsNotDueLineInserted := TRUE;
+                  END;
+                  NextLineNo := NextLineNo + 10000;
+                  ReminderLine.INIT;
+                  ReminderLine."Reminder No." := ReminderHeader."No.";
+                  ReminderLine."Line No." := NextLineNo;
+                  ReminderLine.Type := ReminderLine.Type::"Customer Ledger Entry";
+                  ReminderLine.VALIDATE("Entry No.",CustLedgEntry."Entry No.");
+                  ReminderLine."No. of Reminders" := 0;
+                  ReminderLine."Line Type" := ReminderLine."Line Type"::"Not Due";
+                  ReminderLine.INSERT;
+                END;
+              UNTIL CustLedgEntry.NEXT = 0;
+            END;
+          END;
+          IF IncludeEntriesOnHold THEN BEGIN
+            IF CustLedgEntryOnHoldTEMP.FIND('-') THEN BEGIN
+              ReminderLine.SETRANGE("Reminder No.",ReminderHeader."No.");
+              ReminderLine.FIND('+');
+              NextLineNo := ReminderLine."Line No.";
+              ReminderLine.INIT;
+              NextLineNo := NextLineNo + 10000;
+              ReminderLine."Reminder No." := ReminderHeader."No.";
+              ReminderLine."Line No." := NextLineNo;
+              ReminderLine."Line Type" := ReminderLine."Line Type"::OnHold;
+              ReminderLine.INSERT;
+              NextLineNo := NextLineNo + 10000;
+              ReminderLine.INIT;
+              ReminderLine."Reminder No." := ReminderHeader."No.";
+              ReminderLine."Line No." := NextLineNo;
+              ReminderLine.Description := Text0001;
+              ReminderLine."Line Type" := ReminderLine."Line Type"::OnHold;
+              ReminderLine.INSERT;
+              REPEAT
+                NextLineNo := NextLineNo + 10000;
+                ReminderLine.INIT;
+                ReminderLine."Reminder No." := ReminderHeader."No.";
+                ReminderLine."Line No." := NextLineNo;
+                ReminderLine.Type := ReminderLine.Type::"Customer Ledger Entry";
+                ReminderLine.VALIDATE("Entry No.",CustLedgEntryOnHoldTEMP."Entry No.");
+                ReminderLine."No. of Reminders" := 0;
+                ReminderLine."Line Type" := ReminderLine."Line Type"::OnHold;
+                ReminderLine.INSERT;
+              UNTIL CustLedgEntryOnHoldTEMP.NEXT = 0;
+            END;
+          END;
+          ReminderHeader.MODIFY;
+        END;
+      END;
+      ReminderLevel.RESET;
+      CustLedgEntry.RESET;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CustAmountLCY@4(CurrencyCode@1001 : Code[10];Amount@1002 : Decimal) : Decimal;
+    VAR
+      CurrExchRate@1000 : Record 330;
+    BEGIN
+      IF CurrencyCode <> '' THEN
+        EXIT(
+          CurrExchRate.ExchangeAmtFCYToLCY(
+            ReminderHeaderReq."Posting Date",CurrencyCode,Amount,
+            CurrExchRate.ExchangeRate(ReminderHeaderReq."Posting Date",CurrencyCode)));
+      EXIT(Amount);
+    END;
+
+    LOCAL PROCEDURE FilterCustLedgEntries@6(VAR ReminderLevel2@1001 : Record 293);
+    VAR
+      ReminderLevel3@1000 : Record 293;
+      LastLevel@1002 : Boolean;
+    BEGIN
+      ReminderLevel3 := ReminderLevel2;
+      ReminderLevel3.COPYFILTERS(ReminderLevel2);
+      IF ReminderLevel3.NEXT = 0 THEN
+        LastLevel := TRUE
+      ELSE
+        LastLevel := FALSE;
+      IF (ReminderTerms."Max. No. of Reminders" > 0) THEN
+        IF ReminderLevel2."No." <= ReminderTerms."Max. No. of Reminders" THEN
+          IF LastLevel THEN
+            CustLedgEntry.SETRANGE("Last Issued Reminder Level",ReminderLevel2."No." - 1, ReminderTerms."Max. No. of Reminders" - 1)
+          ELSE
+            CustLedgEntry.SETRANGE("Last Issued Reminder Level",ReminderLevel2."No." - 1)
+        ELSE
+            CustLedgEntry.SETRANGE("Last Issued Reminder Level",-1)
+      ELSE
+        IF LastLevel THEN
+          CustLedgEntry.SETFILTER("Last Issued Reminder Level",'%1..',ReminderLevel2."No." - 1)
+        ELSE
+          CustLedgEntry.SETRANGE("Last Issued Reminder Level",ReminderLevel2."No." - 1);
+    END;
+
+    LOCAL PROCEDURE SetReminderLine@5(VAR LineLevel2@1000 : Integer;Level@1003 : Integer;VAR ReminderDueDate2@1001 : Date);
+    BEGIN
+      IF Level > 1 THEN BEGIN
+        ReminderEntry.SETCURRENTKEY("Customer Entry No.",Type);
+        ReminderEntry.SETRANGE("Customer Entry No.",CustLedgEntry."Entry No.");
+        ReminderEntry.SETRANGE(Type,ReminderEntry.Type::Reminder);
+        ReminderEntry.SETRANGE("Reminder Level", CustLedgEntry."Last Issued Reminder Level");
+        ReminderEntry.FIND('+');
+        ReminderDueDate2 := ReminderEntry."Due Date";
+        LineLevel2 := ReminderEntry."Reminder Level" +1
+      END ELSE BEGIN
+        ReminderDueDate2 := CustLedgEntry."Due Date";
+        LineLevel2 := 1;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

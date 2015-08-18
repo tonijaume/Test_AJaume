@@ -1,0 +1,1272 @@
+OBJECT Table 7010358 Servicio
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/05/15;
+    Time=[ 9:18:39];
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               rUser@1100244000 : Record 7010420;
+             BEGIN
+               rPar.FINDFIRST;
+               rPar.TESTFIELD("Serie Servicios");
+               GestNoSerie.InitSeries(rPar."Serie Servicios", rPar."Serie Servicios", TODAY,
+                                      "N§ Servicio", rPar."Serie Servicios");
+
+               IF (Garaje = '') AND rUser.GET(USERID) AND (rUser."Garaje por defecto" <> '') THEN
+                 Garaje := rUser."Garaje por defecto";
+
+               IF Fecha = 0D THEN
+                 Fecha := CALCDATE(Text000, TODAY);
+
+               Usuario := USERID;
+
+               // Insertar Creaci¢n en el historico
+
+               rHist.inserta_registro(rHist."Tipo Fichero"::Servicio,"N§ Servicio", 0, text2,'',
+                                      Text001 + FORMAT(Fecha));
+             END;
+
+    OnModify=BEGIN
+               // AJS --> Hay que comprobar que los partes asociados no esten confirmados.
+
+               IF parte_confirmado THEN
+                 ERROR(err1);
+             END;
+
+    OnDelete=BEGIN
+               // AJS --> Hay que comprobar que los partes asociados no esten confirmados, si tiene partes
+               //         asociados hay que borrarlos antes de poder borrar el servicio.
+
+               IF parte_confirmado THEN
+                 ERROR(err2);
+
+               rSerPar.RESET;
+               rSerPar.SETCURRENTKEY("N§ Servicio");
+               rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+               rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+               IF rSerPar.FINDFIRST THEN
+                 ERROR(err3);
+
+               rSerPar.SETRANGE("N§ Parte");
+               IF rSerPar.FINDSET THEN BEGIN
+                 REPEAT
+                   IF rSerPar."N§ Parte" <> '' THEN BEGIN
+                     IF rParte.GET(rSerPar."N§ Parte") THEN BEGIN
+                       rParte.SetBol(3, TRUE); // Para evitar el backup
+                       rParte.DELETE(TRUE);
+                       CLEAR(rParte);
+                     END;
+                   END;
+
+                   rSerPar2 := rSerPar;
+                   rSerPar2.DELETE(TRUE);
+                 UNTIL rSerPar.NEXT = 0;
+               END;
+
+               // Borrar los suplementos x punto, asociados al servicio
+
+               rSupPto.RESET;
+               rSupPto.SETRANGE("N§ Servicio", "N§ Servicio");
+               IF rSupPto.FINDSET(TRUE) THEN
+                 rSupPto.DELETEALL;
+
+               // Insertar Borrado en el historico
+
+               rHist.inserta_registro(rHist."Tipo Fichero"::Servicio,"N§ Servicio", 0, text1,
+                                      Text001 + FORMAT(Fecha),DELCHR(Cliente, '<>') + ' - ' + DELCHR("Codigo Servicio", '<>'));
+             END;
+
+    OnRename=BEGIN
+               ERROR(err4);
+             END;
+
+    CaptionML=ESP=Servicio;
+    LookupFormID=Form7010399;
+    DrillDownFormID=Form7010399;
+  }
+  FIELDS
+  {
+    { 1   ;   ;N§ Servicio         ;Code10        ;CaptionML=ESP=N§ Servicio;
+                                                   Description=PK;
+                                                   Editable=No }
+    { 3   ;   ;Garaje              ;Code10        ;TableRelation=Garaje;
+                                                   OnValidate=VAR
+                                                                cFunBas@1100244000 : Codeunit 7010310;
+                                                              BEGIN
+                                                                cFunBas.TestGarajeTodos(Garaje);
+                                                                cFunBas.TestRestringido(Garaje);
+
+                                                                // AJS 30.04.2008
+                                                                // Esta validacion no tiene que hacerse si el servicio aun no esta creado el
+                                                                // error saltaba porque tal estar filtrado por garaje se ejecutaba este OnValidate
+
+                                                                IF "N§ Servicio" <> '' THEN
+                                                                  rGar.ControlCerrado(Garaje);
+
+                                                                IF Garaje <> xRec.Garaje THEN BEGIN
+                                                                  rSerPar.RESET;
+                                                                  rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                  rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                  IF rSerPar.FINDFIRST THEN BEGIN
+                                                                    IF NOT CONFIRM(conf1) THEN BEGIN
+                                                                      Garaje := xRec.Garaje;
+                                                                      EXIT
+                                                                    END
+                                                                    ELSE
+                                                                      actualiza_partes;
+                                                                  END;
+
+                                                                  // Registramos en el historico
+                                                                  //
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Garaje),
+                                                                                         FORMAT(xRec.Garaje), Garaje);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Garaje;
+                                                   SQL Data Type=Varchar;
+                                                   NotBlank=Yes;
+                                                   Description=FK Garaje }
+    { 5   ;   ;Fecha               ;Date          ;OnValidate=BEGIN
+                                                                IF Fecha <> xRec.Fecha THEN
+                                                                BEGIN
+
+                                                                  // AJS 01.05.2006
+                                                                  // Controles de fechas que parecen incongruentes, solo deben saltar cuando se trabaja con servicios manuales
+
+                                                                  // AJS 11.05.2006
+                                                                  // Dejamos los avisos de fecha solo para TRN y Nexus
+
+                                                                  rPar.FINDFIRST;
+                                                                  IF rPar."Empresa Real" IN [rPar."Empresa Real"::TRN, rPar."Empresa Real"::CNT] THEN
+                                                                  BEGIN
+                                                                    IF FIELDNO(Fecha) = CurrFieldNo THEN
+                                                                    BEGIN
+                                                                      IF Fecha < TODAY THEN
+                                                                      BEGIN
+                                                                        IF NOT CONFIRM(Text010, FALSE, "N§ Servicio") THEN
+                                                                        BEGIN
+                                                                          Fecha := xRec.Fecha;
+                                                                          EXIT;
+                                                                        END;
+                                                                      END
+                                                                      ELSE
+                                                                      BEGIN
+                                                                        IF Fecha > CALCDATE(Text50000, TODAY) THEN
+                                                                        BEGIN
+                                                                          MESSAGE(Text011, Fecha, "N§ Servicio");
+                                                                        END
+                                                                      END;
+                                                                    END;
+                                                                  END;
+
+                                                                  rSerPar.RESET;
+                                                                  rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                  rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                  IF rSerPar.FINDFIRST THEN
+                                                                  BEGIN
+                                                                    IF NOT CONFIRM(conf1) THEN
+                                                                    BEGIN
+                                                                      Fecha := xRec.Fecha;
+                                                                      EXIT
+                                                                    END
+                                                                    ELSE
+                                                                    BEGIN
+                                                                      Actualiza_Registro_Actividad;
+                                                                      actualiza_partes;
+                                                                    END;
+                                                                  END;
+
+                                                                  Actualiza_Lineas;
+
+                                                                  // Registramos en el historico
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Fecha),
+                                                                                         FORMAT(xRec.Fecha), FORMAT(Fecha));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha;
+                                                   NotBlank=Yes }
+    { 7   ;   ;Cliente             ;Code20        ;TableRelation=Customer;
+                                                   OnValidate=BEGIN
+                                                                IF Cliente <> xRec.Cliente THEN
+                                                                BEGIN
+
+                                                                  rSerPar.RESET;
+                                                                  rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                  rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                  IF rSerPar.FINDFIRST THEN BEGIN
+                                                                    IF NOT CONFIRM(conf1) THEN BEGIN
+                                                                      Cliente := xRec.Cliente;
+                                                                      EXIT
+                                                                    END
+                                                                    ELSE BEGIN
+                                                                      actualiza_partes;
+                                                                    END;
+                                                                  END;
+
+                                                                  // AJS 04.03.04
+                                                                  // Si el cliente tiene un solo touroperador se rellena automaticamente
+
+                                                                  rCliTo.RESET;
+                                                                  rCliTo.SETRANGE(Cliente, Cliente);
+
+                                                                  // AJS 30.06.2006
+                                                                  // Hay que controlar que el touroperador no este inhabilitado
+
+                                                                  rCliTo.SETRANGE("Operativa Deshabilitada", FALSE);
+
+                                                                  IF rCliTo.COUNT = 1 THEN BEGIN
+                                                                    rCliTo.FINDFIRST;
+                                                                    VALIDATE(Touroperador, rCliTo.TTOO);
+                                                                  END;
+
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Cliente),
+                                                                                        xRec.Cliente, Cliente);
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Cliente;
+                                                   SQL Data Type=Varchar;
+                                                   NotBlank=Yes;
+                                                   Description=FK Cliente }
+    { 9   ;   ;Codigo Servicio     ;Code10        ;TableRelation="Codigo servicio".Codigo WHERE (Filtro Cliente=FIELD(Cliente),
+                                                                                                 Filtro Touroperador=FIELD(Touroperador));
+                                                   OnValidate=BEGIN
+                                                                IF "Codigo Servicio" <> xRec."Codigo Servicio" THEN BEGIN
+                                                                  rSerPar.RESET;
+                                                                  rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                  rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                  IF rSerPar.FINDFIRST THEN BEGIN
+                                                                    IF NOT CONFIRM(conf1) THEN BEGIN
+                                                                      "Codigo Servicio" := xRec."Codigo Servicio";
+                                                                      EXIT
+                                                                    END
+                                                                    ELSE
+                                                                      actualiza_partes;
+                                                                  END;
+
+                                                                  // Obtenemos el tipo de servicio
+                                                                  // Si el codigo de servicio no tiene un codigo de servicio asociado generar  un error
+
+                                                                  rCodSer.GET("Codigo Servicio");
+                                                                  IF rCodSer."Tipo servicio" ='' THEN
+                                                                    ERROR (err5, "Codigo Servicio");
+
+                                                                  VALIDATE("Tipo Servicio", rCodSer."Tipo servicio");
+
+                                                                  Actualiza_Lineas;
+
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0,
+                                                                                         FIELDCAPTION("Codigo Servicio"), xRec."Codigo Servicio",
+                                                                                         "Codigo Servicio");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Codigo Servicio;
+                                                   SQL Data Type=Varchar;
+                                                   NotBlank=Yes;
+                                                   Description="Codigo servicio".Codigo WHERE (Filtro Cliente=FIELD(Cliente),Filtro Touroperador=FIELD(Touroperador)) }
+    { 11  ;   ;Tipo Servicio       ;Code10        ;OnValidate=BEGIN
+
+                                                                // AJS 11.02.2004
+                                                                // Rellenar el Campo Origen/Destino a partir de un parametro
+
+                                                                IF rTipoSer.GET("Tipo Servicio") THEN
+                                                                  VALIDATE("Origen/Destino", rTipoSer."Pto Origen x Defecto");
+                                                              END;
+
+                                                   CaptionML=ESP=Tipo Servicio;
+                                                   Description=FK Tipo Servicio;
+                                                   Editable=No }
+    { 13  ;   ;Adultos Servicio    ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Servicios - Partes"."Adultos transportados" WHERE (N§ Servicio=FIELD(N§ Servicio)));
+                                                   CaptionML=ESP=Adultos Servicio;
+                                                   DecimalPlaces=0:2;
+                                                   Editable=No }
+    { 15  ;   ;Ni¤os Servicio      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Servicios - Partes"."Ni¤os transportados" WHERE (N§ Servicio=FIELD(N§ Servicio)));
+                                                   CaptionML=ESP=Ni¤os Servicio;
+                                                   DecimalPlaces=0:2;
+                                                   Editable=No }
+    { 16  ;   ;Planing             ;Code10        ;CaptionML=ESP=Planing;
+                                                   Editable=No }
+    { 17  ;   ;Referencia          ;Text30        ;OnValidate=BEGIN
+                                                                IF Referencia <> xRec.Referencia THEN BEGIN
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Referencia),
+                                                                                         xRec.Referencia, Referencia);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Referencia }
+    { 19  ;   ;Letreros            ;Text30        ;OnValidate=BEGIN
+                                                                IF Letreros <> xRec.Letreros THEN BEGIN
+
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Letreros),
+                                                                                         xRec.Letreros, Letreros);
+                                                                END;
+
+                                                                IF Letreros = '' THEN BEGIN
+                                                                  CLEAR("Imprimir Letreros");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Letreros }
+    { 20  ;   ;Imprimir Letreros   ;Boolean       ;OnValidate=BEGIN
+                                                                IF Letreros = '' THEN
+                                                                  ERROR(Text007, FIELDCAPTION(Letreros));
+                                                              END;
+
+                                                   CaptionML=ESP=Imprimir Letreros }
+    { 21  ;   ;Origen/Destino      ;Code10        ;TableRelation="Punto de recogida".Codigo;
+                                                   OnValidate=BEGIN
+                                                                IF "Origen/Destino" <> xRec."Origen/Destino" THEN BEGIN
+
+                                                                  // Buscamos el Origen/Destino para obtener la presentacion
+
+                                                                  // AJS 02.03.2004
+                                                                  // En las salidas el punto de presentacion debe quedar en blanco ya que no se corresponde con el aeropuerto/puerto
+
+                                                                  rPar.FINDFIRST;
+                                                                  IF "Codigo Servicio" <> rPar."Codigo Salidas" THEN BEGIN
+                                                                    IF rPtoRec.GET("Origen/Destino") THEN
+                                                                      Presentacion := rPtoRec.Descripci¢n;
+                                                                  END
+                                                                  ELSE
+                                                                    Presentacion := '';
+
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Origen/Destino"),
+                                                                                         xRec."Origen/Destino", "Origen/Destino");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Origen/Destino;
+                                                   SQL Data Type=Varchar;
+                                                   Description=FK Punto de recogida }
+    { 23  ;   ;Touroperador        ;Code10        ;TableRelation=Cliente/TTOO.TTOO WHERE (Cliente=FIELD(Cliente),
+                                                                                          Operativa Deshabilitada=CONST(No));
+                                                   OnValidate=VAR
+                                                                lrSerPar2@1103350000 : Record 7010359;
+                                                              BEGIN
+                                                                // Si el servicio tiene lineas modificamos todas las lineas que tengan el touroperador anterior por el nuevo
+                                                                // Registramos en el historico
+
+                                                                //BRM Actualiza Cod. Grupo
+                                                                IF (Touroperador <> xRec.Touroperador) THEN BEGIN
+
+                                                                  IF rCliTo.GET(Cliente, Touroperador) THEN BEGIN
+                                                                    IF Actualiza_CodGrupo(rCliTo) THEN BEGIN
+                                                                      IF (rCliTo."Cliente Siempre Grupos") AND ("Cod Grupo" = '') THEN
+                                                                        ERROR(Text003);
+                                                                    END;
+                                                                  END;
+                                                                END;
+
+                                                                rSerPar.RESET;
+                                                                rSerPar.SETRANGE("N§ Servicio", "N§ Servicio");
+                                                                rSerPar.SETRANGE(Touroperador , xRec.Touroperador);
+                                                                IF rSerPar.FINDSET THEN BEGIN
+                                                                  REPEAT
+                                                                    lrSerPar2 := rSerPar;
+                                                                    lrSerPar2.VALIDATE(Touroperador, Touroperador);
+                                                                    // JPT 11/07/05 Es necesario adem s de llamar al mantenimiento del Touroperador x parte, pasarle el registro xReg
+                                                                    lrSerPar2.ManteTTOOParte2(rSerPar);
+                                                                    lrSerPar2.MODIFY(TRUE);
+                                                                  UNTIL rSerPar.NEXT = 0;
+                                                                END;
+
+                                                                // Si el servicio tiene partes asociados modificamos el touroperador en los partes
+
+                                                                rSerPar.RESET;
+                                                                rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                IF rSerPar.FINDFIRST THEN
+                                                                  actualiza_partes;
+
+                                                                // Registramos en el historico
+
+                                                                rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Touroperador),
+                                                                                      xRec.Touroperador, Touroperador);
+                                                              END;
+
+                                                   CaptionML=ESP=Touroperador;
+                                                   Description=Cliente/TTOO.TTOO WHERE (Cliente=FIELD(Cliente),Operativa Deshabilitada=CONST(No)) }
+    { 25  ;   ;Usuario             ;Code20        ;TableRelation=User."User ID";
+                                                   CaptionML=ESP=Usuario;
+                                                   Description=FK User;
+                                                   Editable=No }
+    { 26  ;   ;Finalizacion        ;Text80        ;OnLookup=BEGIN
+                                                              CLEAR(rPtoRec);
+                                                              IF FORM.RUNMODAL(0,rPtoRec) = ACTION::LookupOK THEN
+                                                                Finalizacion := COPYSTR(rPtoRec.Descripci¢n, 1, MAXSTRLEN(Finalizacion));
+                                                            END;
+
+                                                   CaptionML=ESP=Finalizacion }
+    { 27  ;   ;Presentacion        ;Text80        ;OnValidate=BEGIN
+                                                                // Registramos en el historico
+
+                                                                rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Presentacion),
+                                                                                       xRec.Presentacion, Presentacion);
+                                                              END;
+
+                                                   CaptionML=ESP=Presentacion }
+    { 29  ;   ;Hora inicio         ;Time          ;OnValidate=BEGIN
+                                                                // Registramos en el historico
+
+                                                                rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Hora inicio"),
+                                                                                       FORMAT(xRec."Hora inicio"), FORMAT("Hora inicio"));
+                                                              END;
+
+                                                   CaptionML=ESP=Hora inicio }
+    { 31  ;   ;Guia                ;Text30        ;OnValidate=BEGIN
+                                                                // El guia puede estar ligado con el fichero de personal del estandar
+
+                                                                cFunBas.ValidaGuia(Guia);
+
+                                                                // Registramos en el historico
+
+                                                                rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION(Guia),
+                                                                                       xRec.Guia, Guia);
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lwGuia@1103350000 : Text[30];
+                                                            BEGIN
+                                                              lwGuia := Guia;
+                                                              IF cFunBas.LookUpGuia(lwGuia) THEN
+                                                                VALIDATE(Guia,lwGuia);
+                                                            END;
+
+                                                   CaptionML=ESP=Guia }
+    { 32  ;   ;Hora Final          ;Time          ;OnValidate=BEGIN
+                                                                // Registramos en el historico
+
+                                                                rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Hora Final"),
+                                                                                       FORMAT(xRec."Hora Final"), FORMAT("Hora Final"));
+                                                              END;
+
+                                                   CaptionML=ESP=Hora Final }
+    { 33  ;   ;Cod Grupo           ;Code10        ;TableRelation=Grupos."Codigo Grupo" WHERE (Cliente=FIELD(Cliente),
+                                                                                              TTOO=FIELD(Touroperador),
+                                                                                              Confirmado=CONST(Yes),
+                                                                                              Facturado=CONST(No));
+                                                   OnValidate=BEGIN
+                                                                //BRM 21/05/04 Damos un aviso si hay partes con Cod. Grupo
+
+                                                                IF ("Cod Grupo" <> xRec."Cod Grupo") THEN BEGIN
+
+                                                                  rCliTo.GET(Cliente,Touroperador);
+                                                                  IF ("Cod Grupo" = '') AND rCliTo."Cliente Siempre Grupos" THEN
+                                                                    ERROR(err7,Cliente);
+
+                                                                  IF ("Cod Grupo" <> '') THEN BEGIN
+                                                                    rGrupo.RESET;
+                                                                    rGrupo.SETRANGE("Codigo Grupo"           , "Cod Grupo");
+                                                                    rGrupo.SETRANGE(Cliente                  , Cliente);
+                                                                    rGrupo.SETRANGE(TTOO                     , Touroperador);
+                                                                    rGrupo.SETFILTER("Fecha Llegada Prevista",'<=%1|%2',Fecha,0D);
+                                                                    rGrupo.SETRANGE(Confirmado               , TRUE);
+                                                                    rGrupo.SETRANGE(Facturado                , FALSE);
+                                                                    IF NOT rGrupo.FINDFIRST THEN
+                                                                      ERROR(err6, "N§ Servicio", "Cod Grupo", Fecha);
+
+                                                                    IF rGrupo.Referencia <> '' THEN // Actualizamos la referencia
+                                                                      VALIDATE(Referencia, rGrupo.Referencia);
+                                                                  END;
+
+                                                                  //Comprobamos si hay partes introducidos del servicio y damos aviso al cambiar Cod. Grupo
+                                                                  // actualiza_partes si se confirma
+
+                                                                  Intro_Hoteles(0);
+
+                                                                  // actualiza_partes
+
+                                                                  rSerPar.RESET; rSerPar.INIT;
+                                                                  rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+                                                                  rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+                                                                  IF rSerPar.FINDSET THEN REPEAT
+                                                                    IF rParte.GET(rSerPar."N§ Parte") THEN BEGIN
+                                                                      rParte.VALIDATE("Cod Grupo", "Cod Grupo");
+                                                                      rParte.MODIFY(TRUE);
+                                                                    END;
+                                                                  UNTIL rSerPar.NEXT = 0;
+
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Cod Grupo"),
+                                                                                       xRec."Cod Grupo","Cod Grupo");
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Cod Grupo;
+                                                   Description=FK Grupos }
+    { 40  ;   ;Vuelos              ;Text65        ;OnValidate=VAR
+                                                                rVuelos@1100244001 : Record 7010400;
+                                                                lwPrimerVuelo@1100244002 : Code[8];
+                                                                lwFecha@1100244003 : Date;
+                                                              BEGIN
+                                                                IF Vuelos <> '' THEN BEGIN // No permitimos rellenarlos si se han rellenado las lineas
+                                                                  CLEAR(rSerPar);
+                                                                  rSerPar.SETRANGE("N§ Servicio", "N§ Servicio");
+                                                                  IF rSerPar.FINDSET THEN BEGIN
+                                                                    REPEAT
+                                                                      IF rSerPar.Vuelo <> '' THEN
+                                                                        ERROR(Text008);
+                                                                    UNTIL  rSerPar.NEXT = 0;
+                                                                  END;
+                                                                END;
+
+                                                                IF Vuelos <> xRec.Vuelos THEN BEGIN
+                                                                  Vuelos := UPPERCASE(Vuelos);
+                                                                  rSerPar.formatea_lista_vuelos(Vuelos, "Hora Vuelo", Fecha);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ESP=Vuelo }
+    { 41  ;   ;Hora Vuelo          ;Time          ;CaptionML=ESP=Hora Vuelo }
+    { 60  ;   ;Observaciones       ;Text250       ;CaptionML=ESP=Observaciones }
+    { 61  ;   ;Vehiculo Escolar    ;Boolean       ;OnValidate=BEGIN
+                                                                IF "Vehiculo Escolar" <> xRec."Vehiculo Escolar" THEN
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Vehiculo Escolar"),
+                                                                                         FORMAT(xRec."Vehiculo Escolar"), FORMAT("Vehiculo Escolar"));
+                                                              END;
+
+                                                   CaptionML=ESP=Vehiculo Escolar }
+    { 62  ;   ;Vehiculo Minusvalidos;Boolean      ;OnValidate=BEGIN
+                                                                IF "Vehiculo Minusvalidos" <> xRec."Vehiculo Minusvalidos" THEN
+                                                                  // Registramos en el historico
+
+                                                                  rHist.inserta_registro(rHist."Tipo Fichero"::Servicio, "N§ Servicio", 0, FIELDCAPTION("Vehiculo Minusvalidos"),
+                                                                                         FORMAT(xRec."Vehiculo Minusvalidos"), FORMAT("Vehiculo Minusvalidos"));
+                                                              END;
+
+                                                   CaptionML=ESP=Vehiculo Minusvalidos }
+    { 70  ;   ;Privado             ;Boolean       ;CaptionML=ESP=Privado;
+                                                   Description=TER }
+    { 71  ;   ;Vehiculo especial   ;Boolean       ;CaptionML=ESP=Vehiculo especial;
+                                                   Description=para exportar servicios especiales para IBIZATOURS }
+  }
+  KEYS
+  {
+    {    ;N§ Servicio                             ;Clustered=Yes }
+    {    ;Codigo Servicio                          }
+    { No ;Tipo Servicio                            }
+    {    ;Planing,Codigo Servicio,Fecha            }
+    {    ;Fecha                                    }
+    {    ;Garaje,Fecha,Cliente,Codigo Servicio,Referencia }
+    {    ;Cod Grupo                                }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355006 : TextConst 'ESP=+1D';
+      Text000@1100244017 : TextConst 'ESP=<1D>';
+      Text001@1100244018 : TextConst 'ESP="FECHA SERVICIO "';
+      rDiaAbierto@1100244022 : Record 7035341;
+      rTipoSer@1100244020 : Record 7010319;
+      rPtoRec@1100244019 : Record 7010315;
+      rCodSer@1100244000 : Record 7010320;
+      rCli@1100244001 : Record 18;
+      rGar@1100244002 : Record 7010310;
+      rPar@1100244003 : Record 7010311;
+      rSerPar@1100244004 : Record 7010359;
+      rSerPar2@1100244005 : Record 7010359;
+      rSupPto@1103355002 : Record 7010363;
+      rParte@1100244006 : Record 7010360;
+      rHist@1100244007 : Record 7010361;
+      rCliTo@1100244021 : Record 7010313;
+      GestNoSerie@1100244008 : Codeunit 396;
+      err1@1100244009 : TextConst 'ESP=No se puede modificar un servicio cuyos partes asociados estan confirmados.';
+      err2@1100244010 : TextConst 'ESP=No se puede borrar un servicio cuyos partes asociados estan confirmados.';
+      err3@1100244011 : TextConst 'ESP=Este servicio tiene partes asociados, debe eliminarlos antes de borrar el servicio.';
+      err4@1100244012 : TextConst 'ESP=No se pueden renombrar Peticiones de servicio.';
+      err5@1100244013 : TextConst 'ESP=El C¢digo de Servicio %1 no tiene Tipo de Servicio asignado.';
+      conf1@1100244014 : TextConst 'ESP=Este servicio tiene partes asociados, desea continuar con la modificacion';
+      text1@1100244015 : TextConst 'ESP=BORRADO';
+      text2@1100244016 : TextConst 'ESP=CREACION';
+      Text002@1100244023 : TextConst 'ESP=No se pueden crear servicios para un dia cerrado.';
+      Text003@1100244024 : TextConst 'ESP=Debe seleccionar un grupo.';
+      Text004@1100244025 : TextConst 'ESP=Ha modificado el Cliente/TTOO, debe modificar el Cod. TPR asociado.';
+      Text005@1100244026 : TextConst 'ESP=Existen partes asociados al grupo %1. ¨Desea cambiarlo?.';
+      cFunBas@1103350001 : Codeunit 7010310;
+      cFunParAd@1100253001 : Codeunit 7010410;
+      rGrupo@1100244027 : Record 7010373;
+      Text006@1103350000 : TextConst 'ESP=No se pueden crear partes asociados al Grupo %1 definido en el servicio %2.';
+      Text007@1100253000 : TextConst 'ESP=El campo %1 est  vacio';
+      Text008@1100253002 : TextConst 'ESP=El campo Vuelo ya est  rellenado en las lineas';
+      Text009@1100253003 : TextConst 'ESP=No se ha asignado ning£n Garaje';
+      err6@1100244028 : TextConst 'ESP=El Servicio %1 no puede asociarse al grupo %2. La fecha llegada prevista del Grupo %2 debe ser anterior a %3';
+      err7@1100244029 : TextConst 'ESP=El Cliente %1 debe estar asociado obligatoriamente a un grupo.';
+      wHoraTemp@1103350002 : Time;
+      Text010@1103355000 : TextConst 'ESP=Ha indicado una fecha de servicio (%1) anterior a la fecha de HOY, desea continuar';
+      Text011@1103355001 : TextConst 'ESP=Ha indicado la fecha %1 para el servicio %2';
+      Text012@1103355003 : TextConst 'ESP=Debe indicar un subtrayecto para los partes de excursiones.';
+      cGestionPartes@1103355004 : Codeunit 7010318;
+      Text013@1103355005 : TextConst 'ESP=¨Desea generar el parte de recogida?';
+
+    PROCEDURE nom_codigo_servicio@2() : Text[30];
+    BEGIN
+      // nom_codigo_servicio
+      //
+      IF NOT rCodSer.GET("Codigo Servicio") THEN
+        EXIT('')
+      ELSE
+        EXIT(rCodSer.Descripcion);
+    END;
+
+    PROCEDURE nom_cliente@1() : Text[50];
+    BEGIN
+      // nom_cliente
+      //
+      IF NOT rCli.GET(Cliente) THEN
+        EXIT('')
+      ELSE
+        EXIT(rCli.Name);
+    END;
+
+    PROCEDURE nom_garaje@3() : Text[30];
+    BEGIN
+      // nom_garaje
+      //
+      IF NOT rGar.GET(Garaje) THEN
+        EXIT('')
+      ELSE
+        EXIT(rGar.Nombre);
+    END;
+
+    PROCEDURE parte_confirmado@5() : Boolean;
+    VAR
+      rParte@1100244000 : Record 7010360;
+    BEGIN
+      // parte_confirmado
+      //
+      rSerPar.RESET;
+      rSerPar.SETCURRENTKEY("N§ Servicio");
+      rSerPar.SETRANGE("N§ Servicio", "N§ Servicio");
+      IF rSerPar.FINDSET THEN BEGIN
+        REPEAT
+          IF rParte.GET(rSerPar."N§ Parte") THEN
+            IF rParte.Confirmado THEN
+              EXIT(TRUE);
+        UNTIL rSerPar.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE actualiza_partes@6();
+    BEGIN
+      // actualiza_partes
+      //
+      rSerPar.RESET;
+      rSerPar.SETRANGE ("N§ Servicio", "N§ Servicio");
+      rSerPar.SETFILTER("N§ Parte"   , '<>%1', '');
+      IF rSerPar.FINDSET THEN BEGIN
+        REPEAT
+          IF rParte.GET(rSerPar."N§ Parte") THEN BEGIN
+            IF Garaje <> xRec.Garaje THEN
+              rParte.VALIDATE(Garaje           , Garaje);
+            IF Fecha <> xRec.Fecha THEN
+              rParte.VALIDATE(Fecha            , Fecha);
+            IF Cliente <> xRec.Cliente THEN
+              rParte.VALIDATE(Cliente          , Cliente);
+            IF "Codigo Servicio" <> xRec."Codigo Servicio" THEN
+              rParte.VALIDATE("Codigo Servicio", "Codigo Servicio");
+            IF Touroperador <> xRec.Touroperador THEN
+              rParte."Touroperador principal" := Touroperador;
+
+            // BRM
+
+            IF "Cod Grupo" <> xRec."Cod Grupo" THEN
+              rParte.VALIDATE("Cod Grupo","Cod Grupo");
+
+            // Control de impresi¢n de partes
+
+            IF (TODAY <= Fecha) AND (rParte.Impreso) AND
+               ((Garaje <> xRec.Garaje)   OR (Fecha <> xRec.Fecha) OR
+               (Cliente <> xRec.Cliente) OR ("Codigo Servicio" <> xRec."Codigo Servicio") ) THEN
+              rParte.Impreso := FALSE;
+
+            rParte.MODIFY(TRUE);
+          END;
+        UNTIL rSerPar.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE Actualiza_Registro_Actividad@4();
+    VAR
+      rSerPar@1100244000 : Record 7010359;
+    BEGIN
+      //Actualiza_Registro_Actividad.
+      //Vamos a intentar de mantener una cierta coherencia en el registro de actividades.
+      rPar.FIND('-');
+      IF NOT rPar."Desvalidar registro actividad" THEN
+        EXIT;
+
+      IF xRec.Fecha <> Fecha THEN BEGIN
+        rSerPar.RESET;
+        rSerPar.SETCURRENTKEY("N§ Servicio");
+        rSerPar.SETRANGE("N§ Servicio","N§ Servicio");
+        IF rSerPar.FIND('-') THEN REPEAT
+          IF rSerPar."N§ Parte" <> '' THEN BEGIN
+            rParte.RESET;
+            IF rParte.GET(rSerPar."N§ Parte") THEN BEGIN
+              IF rParte."Cod Conductor" <> '' THEN BEGIN
+                IF (xRec.Fecha <> 0D) AND (rParte."Fecha conductor" <> 0D) THEN BEGIN
+                  //Se desvincula un parte con respecto a un dia del registro de actividad.
+                  //Hay que recalcular.
+                  Desvalidar_Registro_Actividad(rParte."Cod Conductor",rParte."Fecha conductor");
+                END;
+                IF Fecha <> 0D THEN BEGIN
+                  //Desvalidamos el registro de actividad de la nueva fecha.
+                  Desvalidar_Registro_Actividad(rParte."Cod Conductor",Fecha);
+                END;
+              END;
+            END;
+          END;
+        UNTIL rSerPar.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE Desvalidar_Registro_Actividad@7(pConductor@1100244000 : Code[10];pFecha@1100244001 : Date);
+    VAR
+      cCond@1100244002 : Codeunit 7010313;
+    BEGIN
+      //Desvalidar_Registro_Actividad(pConductor,pFecha);
+      IF cCond.DesvalidarActividad(pConductor,pFecha) THEN BEGIN
+
+        //Tambien desasignaremos los partes de esa fecha para mantener la coherencia.
+        cCond.BorrarAsociacionPartes(pFecha,pConductor);
+
+        //Paralelamente tambien desvalidamos todo el grupo de periodos correspondientes al
+        //mismo registro de actividad.
+        cCond.DesvalidarPeriodos(pConductor,pFecha);
+
+        //Aprovecharemos para indicar la necesidad de refresco en la pantalla gr fica.
+        cCond.CambioRegistroActividad(TRUE);
+
+      END;
+    END;
+
+    PROCEDURE Actualiza_Lineas@8();
+    VAR
+      lrSerPar@1100244000 : Record 7010359;
+    BEGIN
+      //  Actualiza_Lineas
+      //
+      //  JPT - Como su propio nombre indica, esta funci¢n actualizar  varios campos de
+      //        todas las l¡neas adjuntas a este servicio.
+
+      lrSerPar.RESET;
+      lrSerPar.SETRANGE("N§ Servicio","N§ Servicio");
+      IF lrSerPar.FINDSET(TRUE) THEN
+        REPEAT
+          IF Fecha <> xRec.Fecha THEN
+            lrSerPar.VALIDATE (Fecha , Fecha);
+          IF "Codigo Servicio" <> xRec."Codigo Servicio" THEN
+            lrSerPar.VALIDATE("Codigo Servicio" , "Codigo Servicio");
+          IF "Tipo Servicio" <> xRec."Tipo Servicio" THEN
+            lrSerPar.VALIDATE("Tipo Servicio" , "Tipo Servicio");
+          lrSerPar.MODIFY(TRUE);
+        UNTIL lrSerPar.NEXT = 0;
+    END;
+
+    PROCEDURE Actualiza_CodGrupo@1100244001(pwCliente@1100244002 : Record 7010313) : Boolean;
+    VAR
+      lrCond@1100244000 : Record 7010420;
+      lfCond@1100244001 : Form 7010454;
+    BEGIN
+      //BRM Pedimos Cod. Grupo para asignar al servicio
+      IF ("Cod Grupo" <> '') THEN BEGIN
+        //MESSAGE(Text004);
+        "Cod Grupo" := '';
+      END;
+
+      IF pwCliente."Cliente Siempre Grupos" THEN BEGIN
+
+        // AJF 07/01/09
+        // Evito borrar el registro ya que ahora hay datos permanentes en la tabla.
+        IF lrCond.GET(USERID) THEN
+          lrCond.LimpiaRegistro
+        ELSE BEGIN
+          lrCond.INIT;
+          lrCond.Usuario := USERID;
+          lrCond.INSERT;
+        END;
+
+        lrCond.Cliente := pwCliente.Cliente;
+        lrCond.Touroperador := pwCliente.TTOO;
+        lrCond."Fecha desde" := Fecha;
+        lrCond.MODIFY;
+        COMMIT;
+        lrCond.SETRECFILTER;
+
+        CLEAR(lfCond);
+        lfCond.SETTABLEVIEW(lrCond);
+        lfCond.SETRECORD(lrCond);
+        IF lfCond.RUNMODAL=ACTION::OK THEN BEGIN
+          lfCond.GETRECORD(lrCond);
+          VALIDATE("Cod Grupo", lrCond."Cod. Grupo");
+        END;
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE Intro_Hoteles@1100244000(pwNoITinerario@1100253000 : Integer);
+    VAR
+      wlinea@1100244000 : Integer;
+      rHotGrupo@1100244001 : Record 7010374;
+    BEGIN
+      // Intro_Hoteles
+      // Si no hay servicios-partes introducimos hoteles
+      // pwNoITinerario Si es <> 0  solo introduce los hoteles del itinerario indicado
+
+      rSerPar.RESET;
+      rSerPar.SETRANGE ("N§ Servicio","N§ Servicio");
+      IF NOT rSerPar.FINDFIRST THEN BEGIN
+        rHotGrupo.RESET;
+        rHotGrupo.SETRANGE("Cod Grupo"    , "Cod Grupo");
+        rHotGrupo.SETRANGE("N§ Itinerario", pwNoITinerario);
+        IF rHotGrupo.FINDSET THEN BEGIN
+          wlinea := 0;
+          REPEAT
+            wlinea := wlinea + 1000;
+
+            rSerPar.INIT;
+            rSerPar."N§ Servicio" := "N§ Servicio";
+            rSerPar."N§ Linea"    := wlinea;
+            rSerPar.Touroperador  := Touroperador;
+
+            rSerPar.VALIDATE("Punto recogida",rHotGrupo."Punto Recogida");
+            rSerPar.VALIDATE("Descripcion Punto Recogida", rHotGrupo."Descripcion Punto Recogida");
+            rSerPar.VALIDATE("Adultos transportados",rHotGrupo."Adultos Transportados");
+            rSerPar.VALIDATE("Ni¤os transportados",rHotGrupo."Ni¤os Transportados");
+
+            rSerPar.Vehiculo          := rHotGrupo.Vehiculo;
+            rSerPar.Fecha             := Fecha;
+            rSerPar."Tipo Servicio"   := "Tipo Servicio";
+            rSerPar."Codigo Servicio" := "Codigo Servicio";
+            rSerPar.Observaciones     := rHotGrupo.Observaciones;
+            rSerPar.INSERT;
+         UNTIL rHotGrupo.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE BuscarPrimeraHoraParte@1103350002(VAR prSerPar@1100244000 : Record 7010359;pwCodSer@1103350001 : Code[10];VAR pwPresentacion@1000000000 : Text[250]) hora : Time;
+    VAR
+      lrSerParTemp@1100244001 : TEMPORARY Record 7010359;
+      lwPrimeraHora@1100244002 : Time;
+      lwTipo@1103350000 : ',Entrada,Salida,Excursion';
+      lrCodigoSer@1000000001 : Record 7010320;
+      lrTipoSer@1000000002 : Record 7010319;
+    BEGIN
+      // BuscarPrimeraHoraParte
+      // Esta funci¢n devuelve la primera hora de recogida del parte
+      // Se tendr  en cuenta que ninguna de las horas de las l¡neas de parte corresponda al dia siguiente
+      // para ello no la considerara como 1 hora si hay m s de 12 horas de diferencia
+      // Si se lanza desde un OnDelete poner antes la Hora Inicio y Hora vuelo a 0
+      // Las lineas ya tienen que venir filtradas
+      // Utilizamos un temporal para no ocasionar problemas
+
+      rPar.FINDFIRST;
+
+      CLEAR(lwPrimeraHora);
+      IF pwCodSer = '' THEN
+        EXIT;
+
+      IF NOT lrCodigoSer.GET(pwCodSer) THEN
+        CLEAR(lrCodigoSer);
+      IF NOT lrTipoSer.GET(lrCodigoSer."Tipo servicio") THEN
+        CLEAR(lrTipoSer);
+
+      IF (lrCodigoSer."Tipo orden" = lrCodigoSer."Tipo orden"::Salida) OR
+         (lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Excursion) THEN
+        lwTipo := lwTipo::Salida
+      ELSE
+        lwTipo := lwTipo::Entrada;
+
+      lrSerParTemp := prSerPar;  // Primero pasamos el actual
+      IF prSerPar.FIND THEN
+        lrSerParTemp.INSERT;
+
+      prSerPar.SETCURRENTKEY("N§ Parte");
+      IF prSerPar.FINDSET THEN BEGIN
+        REPEAT
+          lrSerParTemp := prSerPar;
+          IF NOT lrSerParTemp.FIND THEN
+            lrSerParTemp.INSERT;
+        UNTIL prSerPar.NEXT = 0;
+      END;
+
+
+      CASE lwTipo OF
+        lwTipo::Salida,lwTipo::Excursion : BEGIN
+          lrSerParTemp.SETCURRENTKEY("N§ Parte",
+                                  "Hora recogida",
+                                  Letra);
+          lrSerParTemp.SETRANGE("N§ Parte", prSerPar."N§ Parte");
+          lrSerParTemp.SETFILTER("Hora recogida",'<>%1',0T);
+          lrSerParTemp.ASCENDING(FALSE);
+          IF lrSerParTemp.FINDFIRST THEN BEGIN
+            lwPrimeraHora := lrSerParTemp."Hora recogida";
+            pwPresentacion := lrSerParTemp."Descripcion Punto Recogida"; //+$001
+            REPEAT
+            // Si la diferencia de horas es menor de 12  (43200000 milisegundos)
+             IF (lrSerParTemp."Hora recogida" > 120000T) OR ( lwPrimeraHora - lrSerParTemp."Hora recogida" < 43200000)  THEN
+               lwPrimeraHora := lrSerParTemp."Hora recogida";
+               pwPresentacion := lrSerParTemp."Descripcion Punto Recogida"; //+$001
+            UNTIL lrSerParTemp.NEXT = 0;
+          END;
+        END;
+
+        lwTipo::Entrada : BEGIN
+          lrSerParTemp.SETCURRENTKEY("N§ Parte",
+                                  "Hora Vuelo");
+          lrSerParTemp.SETRANGE("N§ Parte", prSerPar."N§ Parte");
+          lrSerParTemp.SETFILTER("Hora Vuelo", '<>%1', 0T);
+          lrSerParTemp.ASCENDING(FALSE);
+          IF lrSerParTemp.FINDFIRST THEN BEGIN
+            lwPrimeraHora := lrSerParTemp."Hora Vuelo";
+            pwPresentacion := lrSerParTemp."Descripcion Punto Recogida"; //+$001
+            REPEAT
+              // Si la diferencia de horas es menor de 12  (43200000 milisegundos)
+              IF (lrSerParTemp."Hora Vuelo" > 120000T) OR (lwPrimeraHora - lrSerParTemp."Hora Vuelo" < 43200000) THEN
+                lwPrimeraHora := lrSerParTemp."Hora Vuelo";
+                pwPresentacion := lrSerParTemp."Descripcion Punto Recogida"; //+$001
+            UNTIL lrSerParTemp.NEXT = 0;
+          END;
+        END;
+      END;
+
+      // JPT 14/07/04 Descontamos los minutos parametrizados
+
+      IF (lwPrimeraHora <> 0T) AND (rPar."Minutos Descuento Hora Inicio" <> 0) THEN
+        lwPrimeraHora := lwPrimeraHora - (rPar."Minutos Descuento Hora Inicio" * 60000); // Se pasa a milisegundos
+      EXIT(lwPrimeraHora);
+    END;
+
+    PROCEDURE RellenaVuelosxParte@1103350003(pwPlaning@1100244000 : Code[10];pwFecha@1100244001 : Date;pwParte@1100244002 : Code[10]);
+    VAR
+      lrVueloxParte@1100244003 : Record 7035335;
+      lrVueloxParte2@1100244004 : Record 7035335;
+    BEGIN
+      // RellenaVuelosxParte
+      // Si creamos un parte nuevo con un n§Planing ya existente (ya hay partes con este planing)
+      // copiaremos los registros de la tabla Vuelos x Parte del parte existente.
+
+      IF pwPlaning = '' THEN
+        EXIT;
+
+      lrVueloxParte.RESET;
+      lrVueloxParte.SETCURRENTKEY("Codigo Planing");
+      lrVueloxParte.SETRANGE("Codigo Planing" , pwPlaning);
+      lrVueloxParte.SETRANGE("Fecha Traslado" , pwFecha);
+      IF lrVueloxParte.FINDFIRST THEN BEGIN
+        lrVueloxParte.SETRANGE("N§Parte", lrVueloxParte."N§Parte");
+        IF lrVueloxParte.FINDSET THEN
+          REPEAT
+            lrVueloxParte2           := lrVueloxParte;
+            lrVueloxParte2."N§Parte" := pwParte;
+            lrVueloxParte2.INSERT(TRUE);
+          UNTIL lrVueloxParte.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE FiltrarGarajeUsuario@1103355000();
+    VAR
+      lrParGenerales@1103355000 : Record 7010311;
+      lrUsuario@1103355001 : Record 7010420;
+    BEGIN
+      // FiltrarGarajeUsuario.
+      // Filtramos los partes por garaje dependiendo de la configuraci¢n del usuario.
+
+      lrParGenerales.FINDFIRST;
+
+      lrUsuario.GET(USERID);
+
+      IF lrUsuario."Garaje por defecto" <> '' THEN
+        SETRANGE(Garaje, lrUsuario."Garaje por defecto");
+
+      IF (lrUsuario."Garaje de trabajo" <> '') AND (lrUsuario."Garaje de trabajo" <> lrParGenerales."Todos los garajes") THEN BEGIN
+        FILTERGROUP(2);
+        SETRANGE(Garaje, lrUsuario."Garaje de trabajo");
+        FILTERGROUP(0);
+      END;
+    END;
+
+    PROCEDURE CrearParte@1103355001(VAR prSerPar@1100244000 : Record 7010359;VAR prCond@1103350000 : Record 7010420;VAR prParte@1103350001 : Record 7010360);
+    VAR
+      lrSerPar@1103350003 : Record 7010359;
+      lrParte@1100244003 : Record 7010360;
+      lrTipoSer@1100244001 : Record 7010319;
+      lrHorExc@1100244002 : Record 7035371;
+      lrGrupos@1103350002 : Record 7010373;
+      lwVuelos@1100253000 : Text[100];
+      lrParteTMP@1103355000 : TEMPORARY Record 7010360;
+      lrSerParTMP@1103355001 : TEMPORARY Record 7010359;
+      lfSubtrayectos@1103355002 : Form 7035407;
+      lrSubtrayectos@1103355003 : Record 7035399;
+      lwPresentacion@1000000000 : Text[250];
+    BEGIN
+      // CrearParte
+      // Crear el registro de parte a partir de la informacion de la ficha de servicio.
+
+      rPar.FINDFIRST;
+
+      CrearServParTemp(prSerPar, lrSerParTMP);
+
+      // Cuando creamos partes, si se crea mas de uno el primero tendra la posibilidad de indicar numero manual
+      IF prCond."N§ Parte" <> '' THEN
+        lrParteTMP."N§ Parte" := prCond."N§ Parte";
+
+      lrParteTMP.Garaje                   := Garaje;
+      lrParteTMP.Fecha                    := Fecha;
+      lrParteTMP.Cliente                  := Cliente;
+      lrParteTMP."Codigo Servicio"        := "Codigo Servicio";
+      lrParteTMP."Tipo Servicio"          := "Tipo Servicio";
+      lrParteTMP.Agrupacion               := Planing;
+      lrParteTMP.Observaciones            := Observaciones;
+      lrParteTMP."Vehiculo Escolar"       := "Vehiculo Escolar";
+      lrParteTMP."Vehiculo Minusvalidos"  := "Vehiculo Minusvalidos";
+      //-$003lrParteTMP.Usuario                  := Usuario;
+      lrParteTMP.Usuario                  := USERID; //+$003
+      lrParteTMP.Referencia               := Referencia;
+      lrParteTMP.Letreros                 := Letreros;
+      lrParteTMP."Imprimir Letreros"      := "Imprimir Letreros";
+      lrParteTMP."Touroperador principal" := Touroperador;
+
+      // Para evitar dejar la hora de inicio en blanco utilizamos una variable temporal
+      wHoraTemp := BuscarPrimeraHoraParte(lrSerParTMP, lrParteTMP."Codigo Servicio",lwPresentacion);
+      IF wHoraTemp <> 0T THEN BEGIN
+        lrParteTMP."Hora inicio" := wHoraTemp;
+        lrParteTMP.VALIDATE(Presentacion  , lwPresentacion); //+$001
+      END;
+
+      // A¤adimos el codigo de grupo al servicio Grupo
+      IF "Cod Grupo" <> '' THEN BEGIN
+        lrGrupos.GET("Cod Grupo");
+        IF lrGrupos.Facturado THEN
+          ERROR(Text006, "Cod Grupo", "N§ Servicio");
+        lrParteTMP."Origen creacion" := lrParteTMP."Origen creacion"::Grupos;
+      END;
+
+      lrParteTMP."Cod Grupo" := "Cod Grupo";
+
+      // Si es salidas busca el primero, si es entrada el ultimo
+      lrSerParTMP.SETCURRENTKEY("N§ Parte", "Hora recogida", Letra);
+      lrSerParTMP.SETFILTER("Hora recogida", '<>%1', 0T);
+
+      lrTipoSer.RESET;
+      lrTipoSer.GET(lrParteTMP."Tipo Servicio");
+      IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Excursion THEN BEGIN
+        IF lrSerParTMP.FINDFIRST THEN
+          lrParteTMP."Origen/Destino" := lrSerParTMP."Punto recogida";
+      END
+      ELSE BEGIN
+        lrSerParTMP.SETCURRENTKEY("N§ Parte","Orden Hotel en zona");
+        IF lrSerParTMP.FINDFIRST THEN
+          lrParteTMP."Origen/Destino" := lrSerParTMP."Punto recogida";
+      END;
+
+      IF "Origen/Destino" <> '' THEN
+        lrParteTMP."Origen/Destino" := "Origen/Destino";
+
+      IF "Hora inicio" <> 0T THEN
+        lrParteTMP."Hora inicio" := "Hora inicio";
+      IF "Hora Final" <> 0T THEN
+        lrParteTMP."Hora final"  := "Hora Final";
+
+      IF rPar."Empresa Real" IN [rPar."Empresa Real"::UEX, rPar."Empresa Real"::IBZ] THEN
+      BEGIN
+        lrTipoSer.GET(lrParteTMP."Tipo Servicio");
+        IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Excursion THEN BEGIN
+          lrHorExc.RESET;
+          lrHorExc.SETRANGE ("Codigo Servicio", lrParteTMP."Codigo Servicio");
+          lrHorExc.SETRANGE ("Zona fisica"    , lrParteTMP."Zona parte");
+          lrHorExc.SETFILTER("Fecha Desde"    , '<=%1',lrParteTMP.Fecha);
+          lrHorExc.SETFILTER("Fecha Hasta"    , '>=%1|%2',lrParteTMP.Fecha,0D);
+          IF lrHorExc.FINDLAST THEN
+          BEGIN
+            lrParteTMP."Hora inicio" := lrHorExc."Hora Inicio";
+            lrParteTMP."Hora final"  := lrHorExc."Hora Fin";
+          END;
+        END;
+      END;
+
+      lrParteTMP.Guia := prCond.Guia;
+      lrParteTMP.Presentacion := Presentacion;
+      lrParteTMP.Finalizacion := Finalizacion;
+
+      lrSerParTMP.RESET;
+      IF lrSerParTMP.FINDFIRST THEN BEGIN
+        IF Vuelos <> '' THEN BEGIN
+            lrSerPar := lrSerParTMP;
+            IF lrSerPar.FIND THEN BEGIN
+              lrSerPar.Vuelo        := Vuelos;
+              lrSerPar."Hora Vuelo" := "Hora Vuelo";
+              lrSerPar.MODIFY(TRUE);
+            END;
+        END;
+      END;
+
+      // Si no esta rellenada la presentaci¢n lo busca en las lineas
+      IF lrParteTMP.Presentacion = '' THEN BEGIN
+        lrSerParTMP.RESET;
+        CASE rPar."Empresa Real" OF
+          rPar."Empresa Real"::TRN:
+            lrSerParTMP.SETCURRENTKEY("N§ Parte", "N§ Linea");
+          ELSE
+            lrSerParTMP.SETCURRENTKEY("N§ Parte", "Hora recogida", Letra)
+        END;
+        rPar.TESTFIELD(rPar."Codigo Entradas");
+        lrSerParTMP.ASCENDING(rPar."Codigo Entradas" <> "Codigo Servicio");
+        IF lrSerParTMP.FINDFIRST THEN BEGIN
+          lrParteTMP.Presentacion := COPYSTR(lrSerParTMP.nom_punto, 1, MAXSTRLEN(lrParte.Presentacion));
+        END;
+      END;
+
+      lrSerParTMP.DELETEALL; // borro ya que las lineas ya existen en este caso.
+      IF lrParteTMP."Origen creacion" = lrParteTMP."Origen creacion"::Grupos THEN
+        cGestionPartes.CrearParte(lrParteTMP, lrSerParTMP, cGestionPartes.TipoParteGrupos, lrParte)
+      ELSE
+        cGestionPartes.CrearParte(lrParteTMP, lrSerParTMP, cGestionPartes.TipoParteServicio, lrParte);
+
+      // Pasamos las lineas al parte.
+      IF prSerPar.FINDSET(TRUE) THEN BEGIN
+
+        REPEAT
+          lrSerPar := prSerPar;
+          lrSerPar.es_alta(TRUE);
+          lrSerPar.VALIDATE("N§ Parte", lrParte."N§ Parte");
+          lrSerPar.MODIFY(TRUE);
+        UNTIL prSerPar.NEXT = 0;
+
+        prSerPar:= lrSerPar; // Recuperamos los valores que le acabamos de pasar
+      END;
+
+      prSerPar.actualizar_vuelos(prSerPar, prSerPar.Vuelo, prSerPar."Hora Vuelo", lrParte);
+
+      prSerPar.Actualiza_Hora1erVuelo_Partes(lrParte."N§ Parte", '', 0);
+      lrParte.GET(lrParte."N§ Parte"); //+$004
+
+      prSerPar.ultima_zona_fisica(lrParte, FALSE, FALSE);
+
+      IF rPar."Empresa Real" <> rPar."Empresa Real"::UEX THEN
+      BEGIN
+        cFunParAd.GarajeAutomatico(lrParte); // Automatizaci¢n del Garaje
+        IF lrParte.Garaje = '' THEN // Automatica o manualmente tienen que haber alg£n Garaje
+          ERROR(Text009);
+        // AJS 30.04.2008
+        // Si el garaje esta cerrado no podemos crear el parte de trabajo
+        rGar.ControlCerrado(lrParte.Garaje);
+        lrParte.MODIFY;
+      END;
+
+      lrParte.CALCFIELDS("Adultos transportados", lrParte."Ni¤os transportados");
+      lrParte."Adultos trans. soporte" := lrParte."Adultos transportados";
+      lrParte."Ni¤os trans. soporte"   := lrParte."Ni¤os transportados";
+      lrParte.MODIFY;
+
+      IF lrTipoSer."Tipo fijo" <> lrTipoSer."Tipo fijo"::Excursion THEN
+        RellenaVuelosxParte(Planing, Fecha, lrParte."N§ Parte");
+
+      IF prCond."N§ Parte" <> '' THEN
+        prCond."N§ Parte" := ''
+      ELSE
+      BEGIN
+        IF rPar."Empresa Real" = rPar."Empresa Real"::TRN THEN
+          lrParte.Renumera; // Le cambiamos el numero provisional por el suyo definitivo
+      END;
+
+      // AJF 31/10/08
+      // Tratamos de generar los subtrayectos al crear el parte para Ibiza Tours.
+      IF rPar."Empresa Real" = rPar."Empresa Real"::IBZ THEN
+      BEGIN
+        COMMIT;
+
+        // AJF 16/03/09
+        // En el caso que no se generen subtrayectos autom ticamente sacaremos la ventana.
+        // AJF 30/03/09
+        // Abro la ventana de subtrayectos siempre.
+        lrParte.CargarSubtrayectos;
+        IF lrTipoSer."Tipo fijo" = lrTipoSer."Tipo fijo"::Excursion THEN
+        BEGIN
+          COMMIT;
+          lfSubtrayectos.SetParte(lrParte."N§ Parte");
+          lfSubtrayectos.RUNMODAL;
+
+          IF NOT lrParte.CargarSubtrayectos THEN
+            MESSAGE(Text012);
+
+          lrSubtrayectos.SETRANGE("N§ Parte", lrParte."N§ Parte");
+          lrSubtrayectos.FINDFIRST;
+
+          // AJS 03.04.2009
+          // Tiene que crear el parte de recogida solo si estan rellenados los campos
+          // "Punto Desde Subtrayecto" y "Punto Hasta Subtrayecto"
+          //IF NOT lrSubtrayectos."Vehiculo a disposicion" THEN
+
+          IF (lrSubtrayectos."Punto Desde Subtrayecto" <> '') AND (lrSubtrayectos."Punto Hasta Subtrayecto" <> '') THEN
+            IF CONFIRM(Text013) THEN
+              lrParte.GenerarParteRecogida;
+        END;
+      END;
+
+      prParte.COPY(lrParte); // devolvemos el valor del parte
+    END;
+
+    PROCEDURE CrearServParTemp@1103355003(VAR prServPar@1103355001 : Record 7010359;VAR prServParTMP@1103355000 : TEMPORARY Record 7010359);
+    BEGIN
+      // CrearServParTemp
+      // Creo un record temporary con las lineas de servicio que se van a usar para crear un parte en CrearParte.
+      // el record prServPar viene previamente filtrado
+
+      IF prServPar.FINDSET THEN BEGIN
+        REPEAT
+          prServParTMP := prServPar;
+          prServParTMP.INSERT;
+        UNTIL prServPar.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      ## AJS 03.04.2009
+
+        .- Modificacion del criterio para crear el parte de recogida de las excursiones
+           pedido por IBIZATOURS
+
+      $001 AJS 23092013 La funcion BuscarPrimeraHoraParte tambien retorna la presentacion
+
+      $002 AJS 11102013 Modifico la funcion nom_cliente para que retorne un Text(50)
+
+      $003 AJS 22012015 Modifico la funcion CrearParte para que el usuario del parte no sea el mismo que creo el servicio
+
+      $004 AJS 18022015 Al crear el parte, despues de llamar a la funcion Actualiza_Hora1er_Vuelo hay que recoger el registro de parte
+    }
+    END.
+  }
+}

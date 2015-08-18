@@ -1,0 +1,812 @@
+OBJECT Table 7009723 Contrato compra hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/07/14;
+    Time=13:48:30;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               rContrato@1103355000 : Record 7009723;
+             BEGIN
+               rPar.LOCKTABLE;
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text001 + '\' + Text002);
+
+               IF rPar."Contador Contrato compra hotel" = '' THEN
+                 rPar."Contador Contrato compra hotel" := Text031 + '0000000';
+
+               IF "N§ Contrato compra" = '' THEN BEGIN
+                 REPEAT
+                   rPar."Contador Contrato compra hotel" :=INCSTR(rPar."Contador Contrato compra hotel");
+                   rPar.MODIFY;
+                 UNTIL NOT rContrato.GET(rPar.Delegacion, rPar."Contador Contrato compra hotel");
+                 "N§ Contrato compra" := rPar."Contador Contrato compra hotel";
+               END;
+
+               Delegacion := rPar.Delegacion;
+
+               VALIDATE(Replicado);
+
+               // JPT 08/09/08 Se crean los hitos de seguimiento del contrato
+
+               CrearSeguimiento;
+
+                cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, Text029,'','');
+             END;
+
+    OnModify=BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text004 + '\' + Text002);
+
+               Confirmado := cCon.confirmar_contrato_compra(Rec);
+
+               IF "Cambio Booking" THEN
+                 cambiar_booking;
+
+               "Cambio Booking" := FALSE;
+
+               VALIDATE(Replicado);
+             END;
+
+    OnDelete=VAR
+               lrActED@1103355000 : Record 7010001;
+               lrSeg@1103355001 : Record 7009995;
+             BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text005 + '\' + Text002);
+
+               cFunSeg.TienePermiso(Text007, TRUE);
+
+               borrar_registro;
+
+               //. Recogemos el registro porque el borrado de las tablas auxiliares lo modifica
+               Rec.GET(Delegacion, "N§ Contrato compra");
+
+               cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, Text009,
+                                             Text010, '');
+
+               // Replicacion
+               InsertaLinAction;
+
+               // Borramos las lineas de seguimiento
+
+               CLEAR(lrSeg);
+               lrSeg.SETCURRENTKEY(Delegacion,"No Contrato");
+               lrSeg.SETRANGE(Delegacion   , Delegacion);
+               lrSeg.SETRANGE("No Contrato", "N§ Contrato compra");
+               IF lrSeg.FINDSET THEN
+                 lrSeg.DELETEALL;
+             END;
+
+    OnRename=BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text011 + Text002);
+
+               VALIDATE(Replicado);
+             END;
+
+    CaptionML=[ENU=Hotel purchase contract;
+               ESP=Contrato compra hotel];
+    LookupFormID=Form7009737;
+    DrillDownFormID=Form7009737;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Delegacion          ;Code10        ;CaptionML=[ENU=Local Office;
+                                                              ESP=Delegacion];
+                                                   Description=PK, FK Delegaciones;
+                                                   Editable=No }
+    { 3   ;   ;N§ Contrato compra  ;Code10        ;CaptionML=[ENU=Purchase contract No.;
+                                                              ESP=N§ Contrato compra];
+                                                   Description=PK }
+    { 5   ;   ;Fecha firma contrato;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha firma contrato" <> xRec."Fecha firma contrato" THEN BEGIN
+                                                                  IF "Fecha inicio contrato" <> 0D THEN
+                                                                    VALIDATE("Fecha inicio contrato");
+
+                                                                    switch;
+                                                                    cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Fecha firma contrato"),
+                                                                                                  STRSUBSTNO('%1', xRec."Fecha firma contrato"), STRSUBSTNO('%1', "Fecha firma contrato"));
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Enrollment date;
+                                                              ESP=Fecha firma contrato] }
+    { 7   ;   ;Fecha inicio contrato;Date         ;OnValidate=BEGIN
+                                                                IF "Fecha inicio contrato" <> xRec."Fecha inicio contrato" THEN BEGIN
+                                                                  IF ("Fecha firma contrato" > "Fecha inicio contrato") THEN
+                                                                    ERROR(Text012+
+                                                                          Text013);
+                                                                  IF "Fecha final contrato" <> 0D THEN BEGIN
+                                                                    IF "Fecha inicio contrato" > "Fecha final contrato" THEN
+                                                                      ERROR(Text014);
+                                                                  END;
+
+                                                                    switch;
+                                                                    cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Fecha inicio contrato"),
+                                                                                                  STRSUBSTNO('%1', xRec."Fecha inicio contrato"), STRSUBSTNO('%1', "Fecha inicio contrato"));
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Starting Contract Date;
+                                                              ESP=Fecha inicio contrato] }
+    { 9   ;   ;Fecha final contrato;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha final contrato" <> xRec."Fecha final contrato" THEN BEGIN
+                                                                  IF "Fecha inicio contrato" <> 0D THEN BEGIN
+                                                                    IF "Fecha inicio contrato" > "Fecha final contrato" THEN
+                                                                      ERROR(Text014);
+                                                                  END;
+                                                                  IF xRec."Fecha final contrato" <> 0D THEN
+                                                                    switch;
+
+                                                                  // AJF 17/02/09
+                                                                  // saco la insercion en el hist¢rico de la condici¢n de "Fecha fin contrato" <> 0D
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Fecha final contrato"),
+                                                                                                STRSUBSTNO('%1', xRec."Fecha final contrato"), STRSUBSTNO('%1', "Fecha final contrato"));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Ending Contract Date;
+                                                              ESP=Fecha final contrato] }
+    { 11  ;   ;TourOperador        ;Code10        ;TableRelation=TourOperador.TourOperador;
+                                                   OnValidate=BEGIN
+                                                                //$006-
+                                                                rTTOO.RESET;
+                                                                rTTOO.GET(TourOperador);
+                                                                rTTOO.TESTFIELD(Bloqueado, FALSE);
+                                                                //$006+
+
+                                                                IF TourOperador <> xRec.TourOperador THEN BEGIN
+                                                                  IF xRec.TourOperador <> '' THEN BEGIN
+                                                                    IF NOT CONFIRM(Text015) THEN
+                                                                      ERROR(Text016);
+                                                                  END;
+                                                                  "Cambio Booking" := TRUE;
+
+                                                                  switch;
+
+                                                                  _ControlReservas;
+
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION(TourOperador),
+                                                                                                xRec.TourOperador, TourOperador);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=TourOperator;
+                                                              ESP=TourOperador];
+                                                   NotBlank=Yes;
+                                                   Description=FK TourOperador }
+    { 13  ;   ;Hotel               ;Code20        ;TableRelation=Hotel.Hotel;
+                                                   OnValidate=BEGIN
+                                                                IF Hotel <> xRec.Hotel THEN BEGIN
+                                                                  IF xRec.Hotel <> '' THEN BEGIN
+                                                                    IF NOT CONFIRM(Text017) THEN
+                                                                      ERROR(Text016);
+                                                                  END;
+                                                                  "Cambio Booking" := TRUE;
+
+                                                                  _BuscaProveedor;
+
+                                                                  switch;
+
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION(Hotel),
+                                                                                                xRec.Hotel, Hotel);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Hotel;
+                                                              ESP=Hotel];
+                                                   Description=FK Hotel }
+    { 15  ;   ;Impuestos incluidos ;Boolean       ;OnValidate=BEGIN
+                                                                IF "Impuestos incluidos" <> xRec."Impuestos incluidos" THEN BEGIN
+                                                                  switch;
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Impuestos incluidos"),
+                                                                                                STRSUBSTNO('%1', xRec."Impuestos incluidos"), STRSUBSTNO('%1', "Impuestos incluidos"));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Included Taxes;
+                                                              ESP=Impuestos incluidos] }
+    { 17  ;   ;Tipo de Contrato    ;Option        ;OnValidate=BEGIN
+                                                                IF "Tipo de Contrato" <> xRec."Tipo de Contrato" THEN BEGIN
+                                                                  switch;
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Tipo de Contrato"),
+                                                                                                COPYSTR(STRSUBSTNO('%1', xRec."Tipo de Contrato"), 1, 30),
+                                                                                                COPYSTR(STRSUBSTNO('%1', "Tipo de Contrato"), 1, 30));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Contract type;
+                                                              ESP=Tipo de Contrato];
+                                                   OptionCaptionML=[ENU=Intermediary,,On its own behalf;
+                                                                    ESP=Intermediacion,,En nombre propio];
+                                                   OptionString=Intermediacion,,En nombre propio;
+                                                   Description=Intermediacion o Nombre Propio }
+    { 19  ;   ;Tipo de Garantias   ;Option        ;OnValidate=BEGIN
+                                                                IF "Tipo de Garantias" <> xRec."Tipo de Garantias" THEN BEGIN
+                                                                  switch;
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Tipo de Garantias"),
+                                                                                                STRSUBSTNO('%1', xRec."Tipo de Garantias"), STRSUBSTNO('%1', "Tipo de Garantias"));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Guarantees type;
+                                                              ESP=Tipo de Garantias];
+                                                   OptionCaptionML=[ENU=Without guarantees,Total,Partial;
+                                                                    ESP=Sin Garant¡as,Total,Parcial];
+                                                   OptionString=Sin Garant¡as,Total,Parcial;
+                                                   Description=Garantizado o no. }
+    { 21  ;   ;Gr. Registro IVA Producto;Code10   ;TableRelation="VAT Product Posting Group".Code;
+                                                   OnValidate=BEGIN
+                                                                IF "Gr. Registro IVA Producto" <> xRec."Gr. Registro IVA Producto" THEN BEGIN
+                                                                    switch;
+                                                                    cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Gr. Registro IVA Producto"),
+                                                                                                  xRec."Gr. Registro IVA Producto", "Gr. Registro IVA Producto");
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=VAT Prod. posting group;
+                                                              ESP=Gr. Registro IVA Producto];
+                                                   NotBlank=Yes;
+                                                   Description=FK Gr. Registro IVA Producto }
+    { 23  ;   ;Cod. Terminos Pago  ;Code10        ;TableRelation="Payment Terms".Code;
+                                                   OnValidate=BEGIN
+                                                                IF "Cod. Terminos Pago" <> xRec."Cod. Terminos Pago" THEN BEGIN
+                                                                    switch;
+                                                                    cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Cod. Terminos Pago"),
+                                                                                                  xRec."Cod. Terminos Pago", "Cod. Terminos Pago");
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Payment terms code;
+                                                              ESP=Cod. Terminos Pago];
+                                                   Description=FK Terminos Pago }
+    { 25  ;   ;Cod. Formas Pago    ;Code10        ;TableRelation="Payment Method".Code;
+                                                   OnValidate=BEGIN
+                                                                IF "Cod. Formas Pago" <> xRec."Cod. Formas Pago" THEN BEGIN
+                                                                    switch;
+                                                                    cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Cod. Formas Pago"),
+                                                                                                  xRec."Cod. Formas Pago", "Cod. Formas Pago");
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Payment methods code;
+                                                              ESP=Cod. Formas Pago];
+                                                   Description=FK Cod. Forma Pago }
+    { 27  ;   ;OLD_Cod. Serie      ;Code10        ;TableRelation="No. Series".Code;
+                                                   CaptionML=[ENU=Serial code;
+                                                              ESP=Cod. Serie];
+                                                   Description=Marcado Obsoleto 21.12.2011, FK N§ Serie }
+    { 29  ;   ;Enviar              ;Boolean       ;InitValue=Yes;
+                                                   OnValidate=BEGIN
+                                                                IF Enviar <> xRec.Enviar THEN BEGIN
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION(Enviar),
+                                                                                                STRSUBSTNO('%1', xRec.Enviar), STRSUBSTNO('%1', Enviar));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Send;
+                                                              ESP=Enviar];
+                                                   Editable=Yes }
+    { 31  ;   ;Confirmado          ;Boolean       ;OnValidate=BEGIN
+                                                                IF Confirmado <> xRec.Confirmado THEN BEGIN
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION(Confirmado),
+                                                                                                STRSUBSTNO('%1', xRec.Confirmado), STRSUBSTNO('%1', Confirmado));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Confirmed;
+                                                              ESP=Confirmado];
+                                                   Editable=No }
+    { 33  ;   ;Total Garantia      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Pago garantia compra hotel".Importe WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                               N§ Contrato=FIELD(N§ Contrato compra)));
+                                                   CaptionML=[ENU=Total guarantee;
+                                                              ESP=Total Garantia];
+                                                   Description=Calculado sobre Pagos Garantia;
+                                                   Editable=No;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 35  ;   ;Garantia Pendiente  ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Pago garantia compra hotel".Importe WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                               N§ Contrato=FIELD(N§ Contrato compra),
+                                                                                                               Pagada=CONST(No)));
+                                                   CaptionML=[ENU=Remaining guarantee;
+                                                              ESP=Garantia Pendiente];
+                                                   Description=Calculado sobre Pagos Garantia;
+                                                   Editable=No;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 37  ;   ;Cambio Booking      ;Boolean       ;CaptionML=[ENU=Booking change;
+                                                              ESP=Cambio Booking] }
+    { 39  ;   ;Replicado           ;Boolean       ;InitValue=No;
+                                                   OnValidate=BEGIN
+                                                                Replicado:= FALSE;
+                                                              END;
+
+                                                   CaptionML=[ENU=Replicated;
+                                                              ESP=Replicado];
+                                                   Description=Campo usado en el replicador }
+    { 41  ;   ;C¢d. divisa         ;Code10        ;TableRelation=Currency.Code;
+                                                   CaptionML=[ENU=Currency code;
+                                                              ESP=C¢d. divisa];
+                                                   Description=FK Divisa }
+    { 43  ;   ;Minimo estancias    ;Integer       ;OnValidate=BEGIN
+                                                                IF "Minimo estancias" <> xRec."Minimo estancias" THEN BEGIN
+                                                                  cPar.intro_historico_contrato(Delegacion, "N§ Contrato compra", 0, FIELDCAPTION("Minimo estancias"),
+                                                                                                FORMAT(xRec."Minimo estancias"), FORMAT("Minimo estancias"));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Minimum stays;
+                                                              ESP=Minimo estancias];
+                                                   Description=Indica el minimo de estancias admitidas en este contrato }
+    { 44  ;   ;Cupo sin activar    ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Cupos contrato compra" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                    N§ Contrato compra=FIELD(N§ Contrato compra),
+                                                                                                    Activo=CONST(No)));
+                                                   CaptionML=[ENU=Non-actived allotment;
+                                                              ESP=Cupo sin activar];
+                                                   Description=Exist("Cupos contrato compra" WHERE (Delegacion=FIELD(Delegacion),N§ Contrato compra=FIELD(N§ Contrato compra),Activo=CONST(No)));
+                                                   Editable=No }
+    { 45  ;   ;Precio sin activar  ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Precios contrato compra" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                      N§ Contrato=FIELD(N§ Contrato compra),
+                                                                                                      Activo=CONST(No)));
+                                                   CaptionML=[ENU=Non-actived price;
+                                                              ESP=Precio sin activar];
+                                                   Description=Exist("Precios contrato compra" WHERE (Delegacion=FIELD(Delegacion),N§ Contrato=FIELD(N§ Contrato compra),Activo=CONST(No)));
+                                                   Editable=No }
+    { 50  ;   ;Codigo Barra        ;Code10        ;CaptionML=[ENU=Barcode;
+                                                              ESP=Codigo Barra];
+                                                   Description=No se usa, se ha separado en una nueva tabla para permitir m s de un c¢digo de barras. }
+    { 51  ;   ;Filtro Touroperador venta;Code250  ;CaptionML=[ENU=Sale Touroperator Filter;
+                                                              ESP=Filtro Touroperador venta] }
+    { 60  ;   ;Completado          ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=-Exist("Seguimiento Contrato" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                    No Contrato=FIELD(N§ Contrato compra),
+                                                                                                    Completado=CONST(No)));
+                                                   CaptionML=[ENU=Completed;
+                                                              ESP=Completado];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Delegacion,N§ Contrato compra           ;Clustered=Yes }
+    {    ;Hotel,TourOperador,Fecha inicio contrato;KeyGroups=RENUMERING }
+    {    ;Confirmado                              ;KeyGroups=RENUMERING }
+    {    ;Enviar                                  ;KeyGroups=RENUMERING }
+    {    ;Delegacion,TourOperador,Hotel,Fecha inicio contrato,Fecha final contrato;
+                                                   KeyGroups=RENUMERING }
+    {    ;Replicado                               ;KeyGroups=RENUMERING }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text001@1103355020 : TextConst 'ENU=Only hotel contracts can be entered\;ESP=Solo se pueden dar de alta contratos de hotel';
+      Text002@1103355021 : TextConst 'ENU=in the local offices;ESP=en las delegaciones.';
+      Text003@1103355022 : TextConst 'ENU=Must give an initial serial number of hotel purchase contracts in agency parameters;ESP=Debe dar un numero inicial a la serie de contratos de compra de hotel en parametros agencia.';
+      Text004@1103355023 : TextConst 'ENU=Only hotel contracts can be modified\;ESP=Solo se pueden modificar contratos de hotel';
+      Text005@1103355024 : TextConst 'ENU=Only hotel contracts can be cancelled\;ESP=Solo se pueden dar de baja contratos de hotel';
+      Text006@1103355025 : TextConst 'ENU=User %1 does not exist;ESP=No existe el usuario %1.';
+      Text007@1103355026 : TextConst 'ENU=FUN-ACT-COC;ESP=FUN-ACT-COC';
+      Text009@1103355028 : TextConst 'ENU=Deleted;ESP=Borrado';
+      Text010@1103355029 : TextConst 'ENU=Deleted register;ESP=Borrado registro';
+      Text011@1103355030 : TextConst 'ENU=Only hotel contracts can be renamed\;ESP=Solo se pueden renombrar contratos de hotel\';
+      Text012@1103355031 : TextConst 'ENU=Starting date of the contract must be after\;ESP=La fecha de inicio del contrato debe ser posterior a la\';
+      Text013@1103355032 : TextConst 'ENU=the signature date of the contract.;ESP=fecha de firma del contrato.';
+      Text014@1103355033 : TextConst 'ENU=Starting date cannot be higher than final date;ESP=La fecha de inicio no puede ser posterior a la de final.';
+      Text015@1103355034 : TextConst 'ENU=Are you sure about to change the TourOperator of the contract;ESP=Esta seguro de que desea cambiar el TourOperador del contrato.';
+      Text016@1103355035 : TextConst 'ENU=Cancelled change;ESP=Cambio anulado.';
+      Text017@1103355036 : TextConst 'ENU=Are you sure about to change the Hotel of the contract;ESP=Esta seguro de que desea cambiar el Hotel del contrato.';
+      Text018@1103355037 : TextConst 'ENU=Unable to delete a contract because it has linked bookings;ESP=No se puede borrar un contrato porque tiene reservas ligadas a ‚l.';
+      Text019@1103355038 : TextConst 'ENU=" CHANGING THE BOOKING OF THE CONTRACT \";ESP=CAMBIANDO EL BOOKING DEL CONTRATO';
+      Text020@1103355039 : TextConst 'ENU="  Room: #1########.";ESP="  Habitacion: #1########."';
+      Text021@1103355040 : TextConst 'ENU="  CHANGING THE FORECAST OF THE CONTRACT \";ESP=CAMBIANDO LA PREVISION DEL CONTRATO';
+      rPar@1103355002 : Record 7009700;
+      rRsv@1103355003 : Record 7009743;
+      rPre@1103355004 : Record 7009738;
+      rCupo@1103355005 : Record 7009739;
+      rGar@1103355006 : Record 7009729;
+      rPagGar@1103355007 : Record 7009726;
+      rCupoDia@1103355008 : Record 7009757;
+      rHandling@1103355010 : Record 7009733;
+      rAport@1103355011 : Record 7010007;
+      rHis@1103355012 : Record 7009764;
+      rHisP@1103355013 : Record 7009765;
+      rConHab@1103355014 : Record 7009731;
+      rTTOO@1000000000 : Record 7009717;
+      cPar@1103355016 : Codeunit 7009700;
+      cCon@1103355017 : Codeunit 7009701;
+      cFunSeg@1100253001 : Codeunit 7009751;
+      ventana@1103355018 : Dialog;
+      Text022@1103355041 : TextConst 'ENU=Number of copies #1###;ESP=N£mero de copias #1###';
+      Text023@1103355042 : TextConst 'ENU=Must print 1 copy at least;ESP=Debe de imprimirse al menos 1 copia';
+      Text024@1103355043 : TextConst 'ENU=Are you sure to print %1 barcodes?;ESP=¨Desa realmente imprimir %1 c¢digos de barra?';
+      Text025@1103355044 : TextConst 'ENU=%1 field is not filled up.\Label was not printed;ESP=El campo %1 No est  rellenado.\No se ha impreso la etiqueta';
+      Text026@1103355045 : TextConst 'ENU=File %1 was not found;ESP=No se encuentra el archivo %1';
+      Text027@1103355046 : TextConst 'ENU=Would you like to re-print the barcode (%1 copies)?;ESP=¨Desea reimprimir el c¢digo de barras (%1 copias)?';
+      Text028@1103355047 : TextConst 'ENU=PURCHASE CONTRACTS;ESP=CONTRATOS DE COMPRA';
+      Text029@1103355048 : TextConst 'ENU=Creation;ESP=Creacion';
+      Text030@1100253000 : TextConst 'ENU=The hotel or tour operator cannot be changed in a contract with reservations associated.;ESP=No se puede cambiar el hotel o touroperador de un contrato con reservas asociadas.';
+      Text031@1100217000 : TextConst 'ENU=PHC;ESP=CCH';
+
+    PROCEDURE switch@1();
+    BEGIN
+      VALIDATE(Confirmado, FALSE);
+      VALIDATE(Enviar, TRUE);
+    END;
+
+    PROCEDURE borrar_registro@4();
+    BEGIN
+      // borrar_registro
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "Contrato compra");
+      rRsv.SETRANGE(Delegacion       , Delegacion);
+      rRsv.SETRANGE("Contrato compra", "N§ Contrato compra");
+      IF rRsv.FIND('-') THEN
+        ERROR(Text018);
+
+      VaciarContrato(Rec);
+    END;
+
+    PROCEDURE VaciarContrato@1103355003(prCon@1103355000 : Record 7009723);
+    VAR
+      lrCom@1100253000 : Record 7009784;
+    BEGIN
+      // VaciarContrato
+
+      rPre.RESET;
+      rPre.SETRANGE(Delegacion   , prCon.Delegacion);
+      rPre.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      IF rPre.FIND('-') THEN
+        rPre.DELETEALL(TRUE);
+
+      rCupo.RESET;
+      rCupo.SETRANGE(Delegacion          , prCon.Delegacion);
+      rCupo.SETRANGE("N§ Contrato compra", prCon."N§ Contrato compra");
+      IF rCupo.FIND('-') THEN
+        rCupo.DELETEALL(TRUE);
+
+      rGar.RESET;
+      rGar.SETRANGE(Delegacion   , prCon.Delegacion);
+      rGar.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      IF rGar.FIND('-') THEN
+        rGar.DELETEALL(TRUE);
+
+      rPagGar.RESET;
+      rPagGar.SETRANGE(Delegacion   , prCon.Delegacion);
+      rPagGar.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      IF rPagGar.FIND('-') THEN
+        rPagGar.DELETEALL(TRUE);
+
+      rCupoDia.RESET;
+      rCupoDia.SETRANGE(Delegacion       , prCon.Delegacion);
+      rCupoDia.SETRANGE("Contrato compra", prCon."N§ Contrato compra");
+      IF rCupoDia.FIND('-') THEN
+        rCupoDia.DELETEALL(TRUE);
+
+      rHandling.RESET;
+      rHandling.SETRANGE(Delegacion     , prCon.Delegacion);
+      rHandling.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      rHandling.SETRANGE("Tipo contrato", rHandling."Tipo contrato"::Compra);
+      IF rHandling.FIND('-') THEN
+        rHandling.DELETEALL(TRUE);
+
+      rAport.RESET;
+      rAport.SETRANGE(Delegacion   , prCon.Delegacion);
+      rAport.SETRANGE("N§ Contrato", prCon."N§ Contrato compra");
+      IF rAport.FIND('-') THEN
+        rAport.DELETEALL(TRUE);
+
+      rConHab.RESET;
+      rConHab.SETRANGE(Delegacion     , prCon.Delegacion);
+      rConHab.SETRANGE("Tipo contrato", rConHab."Tipo contrato"::Compra);
+      rConHab.SETRANGE("N§ Contrato"  , prCon."N§ Contrato compra");
+      IF rConHab.FIND('-') THEN
+        rConHab.DELETEALL(TRUE);
+
+      //+$001
+      lrCom.RESET;
+      lrCom.SETRANGE(Delegacion     , Delegacion);
+      lrCom.SETRANGE("N§ Contrato"  , "N§ Contrato compra");
+      lrCom.SETRANGE("Tipo Contrato", lrCom."Tipo Contrato"::"C Hotel");
+      IF lrCom.FINDSET THEN
+        lrCom.DELETEALL;
+      //+$001
+    END;
+
+    PROCEDURE cambiar_booking@2();
+    VAR
+      rPre@1103355000 : Record 7009747;
+      rPreDia@1103355001 : Record 7009783;
+    BEGIN
+      // cambiar_booking
+
+      rCupo.RESET;
+      rCupo.SETRANGE(Delegacion          , Delegacion);
+      rCupo.SETRANGE("N§ Contrato compra", "N§ Contrato compra");
+      rCupo.SETRANGE(Activo              , TRUE);
+      IF rCupo.FIND('-') THEN BEGIN
+        ventana.OPEN(Text019+
+                     '\'+
+                     Text020);
+        REPEAT
+          ventana.UPDATE(1, rCupo."Habitacion cupo");
+          // Borrar registros de booking
+          //
+          rCupoDia.RESET;
+          rCupoDia.SETRANGE(Delegacion       , Delegacion);
+          rCupoDia.SETRANGE("Contrato compra", "N§ Contrato compra");
+          rCupoDia.SETRANGE(Hotel            , xRec.Hotel);
+          rCupoDia.SETRANGE(TourOperador     , xRec.TourOperador);
+          rCupoDia.SETRANGE(Dia              , rCupo."Fecha desde", rCupo."Fecha hasta");
+          rCupoDia.SETRANGE(Habitacion       , rCupo."Habitacion cupo");
+          IF rCupoDia.FIND('-') THEN
+            rCupoDia.DELETEALL(TRUE);
+          rCupoDia.RESET;
+          cCon.activar_cupo_compra(rCupo, Rec);
+        UNTIL rCupo.NEXT = 0;
+        ventana.CLOSE;
+      END;
+      rCupo.RESET;
+      // Cambiamos tambien la prevision de ocupacion
+      //
+      rPre.RESET;
+      rPre.SETRANGE(Delegacion     , Delegacion);
+      rPre.SETRANGE("Tipo Contrato", rPre."Tipo Contrato"::Compra);
+      rPre.SETRANGE("N§ Contrato"  , "N§ Contrato compra");
+      IF rPre.FIND('-') THEN BEGIN
+        ventana.OPEN(Text021+
+                     '\'+
+                     Text020);
+        REPEAT
+          ventana.UPDATE(1, rPre."Habitacion cupo");
+          // Borrar registros de Prevision por dia
+          //
+          rPreDia.RESET;
+          rPreDia.SETRANGE(Delegacion     , rPre.Delegacion);
+          rPreDia.SETRANGE("Tipo Contrato", rPre."Tipo Contrato");
+          rPreDia.SETRANGE("N§ Contrato"  , rPre."N§ Contrato");
+          rPreDia.SETRANGE("N§ Orden"     , rPre."N§ Orden");
+          IF rPreDia.FIND('-') THEN
+            rPreDia.DELETEALL;
+          rPreDia.RESET;
+          rPre.activar_prevision;
+        UNTIL rPre.NEXT = 0;
+      END;
+      rPre.RESET;
+    END;
+
+    PROCEDURE InsertaLinAction@1103355000();
+    VAR
+      lwRec@1103355000 : RecordRef;
+      lcFunExp@1103355001 : Codeunit 7009911;
+    BEGIN
+      // InsertaLinAction
+      // Inserta una linea para el borrado de la sincronizacion a la empresa Hotel Payment
+
+      lwRec.GETTABLE(Rec);
+      lcFunExp.InsertaLinAct(lwRec);
+    END;
+
+    PROCEDURE ImprimirEtiqueta@1103355001(VAR prCodBarras@1103355004 : Record 7009870;pwNuevo@1103355003 : Boolean);
+    VAR
+      lwNum@1103355001 : Integer;
+      lrImpE@1103355000 : Report 7009743;
+      lwText@1103355002 : Text[1024];
+    BEGIN
+      // ImprimirEtiqueta
+
+      CLEAR(lrImpE);
+      lwNum := 1; // Numero de copias que van a imprimirse
+      CLEAR(ventana);
+      ventana.OPEN(Text022);
+      ventana.UPDATE(1, lwNum);
+      ventana.INPUT(1 , lwNum);
+      ventana.CLOSE;
+      IF lwNum <1 THEN
+        ERROR(Text023);
+
+      IF pwNuevo OR (prCodBarras."Codigo barras" = '') THEN
+        lwText := Text024
+      ELSE
+        lwText := Text027;
+
+      IF NOT CONFIRM(lwText, FALSE, lwNum) THEN
+        ERROR('');
+
+      lrImpE.PasarParametros(lwNum,3);
+      // AJF 20/04/10
+      // Pasamos el codigo de barras anterior para que no genere un nuevo c¢digo de barras
+      // sino que reimprima el existente.
+      IF NOT pwNuevo THEN
+        lrImpE.PasarCodigoImpreso(prCodBarras."Codigo barras");
+      lrImpE.USEREQUESTFORM := FALSE;
+      lrImpE.RUNMODAL;
+
+      // AJF 09/02/09
+      // Ponemos los codigos de barras en una tabla a parte para poder tener
+      // m s de uno por documento.
+
+      prCodBarras.Delegacion        := Delegacion;
+      prCodBarras."Contrato Compra" := "N§ Contrato compra";
+      lrImpE.RetornaParametros(prCodBarras."Codigo barras");
+
+      // Notese que no se hace ning£n modify. Deber  de realizarse a posteriori
+    END;
+
+    PROCEDURE AbrirPDF@1103355002();
+    VAR
+      lwArch@1103355000 : Text[1024];
+    BEGIN
+      // AbrirPDF
+
+      IF "Codigo Barra" = '' THEN
+        ERROR(Text025, FIELDCAPTION("Codigo Barra"));
+
+      rPar.FIND('-');
+      CLEAR(lwArch);
+      rPar.TESTFIELD("Ruta ficheros PDF");
+      lwArch := rPar."Ruta ficheros PDF";
+      IF lwArch[STRLEN(lwArch)] <> '\' THEN
+        lwArch := lwArch + '\';
+      lwArch := lwArch + Text028 + '\';
+
+      lwArch := STRSUBSTNO('%1%2.PDF',lwArch,"Codigo Barra");
+      IF NOT EXISTS(lwArch) THEN
+        ERROR(Text026, lwArch);
+
+      HYPERLINK(lwArch);
+    END;
+
+    PROCEDURE CrearSeguimiento@1103355004();
+    VAR
+      lrSeg@1103355000 : Record 7009995;
+      lwCont@1103355001 : Integer;
+    BEGIN
+      // CrearSeguimiento
+      // Creamos los registros de seguimiento del contrato de compra
+
+      // Limpiamos primero
+      CLEAR(lrSeg);
+      lrSeg.SETCURRENTKEY(Delegacion,"No Contrato");
+      lrSeg.SETRANGE(Delegacion   , Delegacion);
+      lrSeg.SETRANGE("No Contrato", "N§ Contrato compra");
+      IF lrSeg.FINDSET THEN
+        lrSeg.DELETEALL;
+
+      // Creamos los hitos de seguimiento
+      CLEAR(lrSeg);
+      lrSeg.Delegacion    := Delegacion;
+      lrSeg."No Contrato" := "N§ Contrato compra";
+      FOR lwCont := 0 TO 6 DO BEGIN
+        lrSeg.Id   :=0;
+        lrSeg.Hito := lwCont;
+        lrSeg.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetSeguimiento@1103355005(pwHito@1103355000 : 'Habitaciones,Cupos,Precios Regimen,Precios Habitacion,Suplementos,Extras,Ofertas') : Boolean;
+    VAR
+      lwCompl@1103355001 : Boolean;
+      lrSeg@1103355002 : Record 7009995;
+    BEGIN
+      // GetSeguimiento
+
+      CLEAR(lwCompl);
+
+      CLEAR(lrSeg);
+      lrSeg.SETCURRENTKEY(Delegacion,"No Contrato");
+      lrSeg.SETRANGE(Delegacion   , Delegacion);
+      lrSeg.SETRANGE("No Contrato", "N§ Contrato compra");
+      lrSeg.SETRANGE(Hito         , pwHito);
+      IF lrSeg.FINDFIRST THEN
+        lwCompl := lrSeg.Completado;
+
+      EXIT(lwCompl);
+    END;
+
+    PROCEDURE SetSeguimiento@1103355007(pwHito@1103355000 : 'Habitaciones,Cupos,Precios Regimen,Precios Habitacion,Suplementos,Extras,Ofertas';pwComplt@1103355004 : Boolean);
+    VAR
+      lrSeg@1103355002 : Record 7009995;
+      lwExist@1103355003 : Boolean;
+    BEGIN
+      // GetSeguimiento
+      // Fuerza la existencia del registro de seguimiento
+
+      CLEAR(lrSeg);
+      lrSeg.SETCURRENTKEY(Delegacion,"No Contrato");
+      lrSeg.SETRANGE(Delegacion   , Delegacion);
+      lrSeg.SETRANGE("No Contrato", "N§ Contrato compra");
+      lrSeg.SETRANGE(Hito         , pwHito);
+      lwExist:= lrSeg.FINDFIRST;
+      IF lwExist THEN BEGIN
+        lrSeg.VALIDATE(Completado, pwComplt);
+        lrSeg.MODIFY;
+      END
+      ELSE BEGIN
+        CLEAR(lrSeg);
+        lrSeg.Delegacion    := Delegacion;
+        lrSeg."No Contrato" := "N§ Contrato compra";
+        lrSeg.Hito          := pwHito;
+        lrSeg.VALIDATE(Completado,pwComplt);
+        lrSeg.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE _ControlReservas@1100253000();
+    BEGIN
+      // _ControlReservas
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion, "Contrato compra", Responsable);
+      rRsv.SETRANGE(Delegacion       , Delegacion);
+      rRsv.SETRANGE("Contrato compra", "N§ Contrato compra");
+      IF NOT rRsv.ISEMPTY THEN
+        ERROR(Text030);
+    END;
+
+    LOCAL PROCEDURE _BuscaProveedor@1100217000();
+    VAR
+      lrTTOO@1100217000 : Record 7009717;
+      lrHotel@1100217001 : Record 7009724;
+      lrVendor@1100217002 : Record 23;
+    BEGIN
+      // _BuscaProveedor
+
+      rPar.FINDFIRST;
+
+      IF NOT lrTTOO.GET(TourOperador) THEN
+        EXIT;
+
+      CLEAR(lrHotel);
+
+      IF (lrTTOO."Traspasar Hotel Payment") AND
+         (rPar."Empres Hotel Payment" <> '') THEN
+      BEGIN
+        lrHotel.CHANGECOMPANY(rPar."Empres Hotel Payment");
+        lrVendor.CHANGECOMPANY(rPar."Empres Hotel Payment");
+      END;
+
+      IF lrHotel.GET(Hotel) THEN
+      BEGIN
+        IF lrVendor.GET(lrHotel."Proveedor Intermediacion") THEN
+        BEGIN
+          "Cod. Terminos Pago" := lrVendor."Payment Terms Code";
+          "Cod. Formas Pago"   := lrVendor."Payment Method Code";
+          "C¢d. divisa"        := lrVendor."Currency Code";
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 20122011 Modifico la funcion VaciarContrato para incluir los comentarios
+
+      $002 AJS 21122011 Marco como obsoleto el campo Cod. Serie y elimino todo el codigo que tenia
+
+      $003 AJS 17042012 Cuando se cambia el hotel o el touroperador controlo que el contrato no tenga reservas asociadas
+
+      $004 AJS 21122012 Eliminar la table relation de "N§ Contrato compra"
+
+      $005 AJS 27062014 Elimino variable Booking Compra
+
+      $006 MNC 22072014 CNT-LP-14054 No se pueden usar TTOO bloqueados
+    }
+    END.
+  }
+}

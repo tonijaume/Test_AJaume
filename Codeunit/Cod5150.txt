@@ -1,0 +1,429 @@
+OBJECT Codeunit 5150 Integration Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.10;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 112=rm,
+                TableData 113=rm;
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1001 : TextConst 'ENU=Error creating %1 - %2. It already exists.;ESP=Error al crear %1 - %2. Ya existe.';
+      MarketingSetupRead@1002 : Boolean;
+      IntegrationActivated@1003 : Boolean;
+
+    PROCEDURE GetDatabaseTableTriggerSetup@1(TableID@1000 : Integer;VAR Insert@1001 : Boolean;VAR Modify@1002 : Boolean;VAR Delete@1003 : Boolean;VAR Rename@1004 : Boolean);
+    VAR
+      MarketingSetup@1005 : Record 5079;
+    BEGIN
+      IF COMPANYNAME = '' THEN
+        EXIT;
+
+      IF NOT MarketingSetupRead THEN BEGIN
+        MarketingSetupRead := TRUE;
+        IF MarketingSetup.GET THEN
+          IntegrationActivated := MarketingSetup."Enable Connector";
+      END;
+
+      IF NOT IntegrationActivated THEN
+        EXIT;
+
+      IF IsIntegrationRecord(TableID) OR IsIntegrationRecordChild(TableID) THEN BEGIN
+        Insert := TRUE;
+        Modify := TRUE;
+        Delete := TRUE;
+        Rename := TRUE;
+      END;
+    END;
+
+    PROCEDURE OnDatabaseInsert@2(RecRef@1000 : RecordRef);
+    VAR
+      TimeStamp@1001 : DateTime;
+    BEGIN
+      TimeStamp := CURRENTDATETIME;
+      UpdateParentIntegrationRecord(RecRef,TimeStamp);
+      InsertUpdateIntegrationRecord(RecRef,TimeStamp);
+    END;
+
+    PROCEDURE OnDatabaseModify@3(RecRef@1000 : RecordRef);
+    VAR
+      TimeStamp@1001 : DateTime;
+    BEGIN
+      TimeStamp := CURRENTDATETIME;
+      UpdateParentIntegrationRecord(RecRef,TimeStamp);
+      InsertUpdateIntegrationRecord(RecRef,TimeStamp);
+    END;
+
+    PROCEDURE OnDatabaseDelete@4(RecRef@1000 : RecordRef);
+    VAR
+      IntegrationRecord@1001 : Record 5151;
+      FieldRef1@1002 : FieldRef;
+      SkipDeletion@1004 : Boolean;
+      TimeStamp@1003 : DateTime;
+    BEGIN
+      TimeStamp := CURRENTDATETIME;
+      UpdateParentIntegrationRecord(RecRef,TimeStamp);
+      IF IsIntegrationRecord(RecRef.NUMBER) THEN BEGIN
+        IntegrationRecord.SETRANGE("Record ID",RecRef.RECORDID);
+        IF IntegrationRecord.FINDFIRST THEN BEGIN
+          // Handle exceptions where "Deleted On" should not be set.
+          IF RecRef.NUMBER = DATABASE::"Sales Header" THEN BEGIN
+            FieldRef1 := RecRef.FIELD(58); // Invoice
+            SkipDeletion := FieldRef1.VALUE;
+          END;
+
+          IF NOT SkipDeletion THEN
+            IntegrationRecord."Deleted On" := TimeStamp;
+
+          CLEAR(IntegrationRecord."Record ID");
+          IntegrationRecord."Modified On" := TimeStamp;
+          IntegrationRecord.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE OnDatabaseRename@5(RecRef@1000 : RecordRef;XRecRef@1001 : RecordRef);
+    VAR
+      IntegrationRecord@1003 : Record 5151;
+      TimeStamp@1002 : DateTime;
+    BEGIN
+      TimeStamp := CURRENTDATETIME;
+      UpdateParentIntegrationRecord(RecRef,TimeStamp);
+      IF IsIntegrationRecord(RecRef.NUMBER) THEN BEGIN
+        IntegrationRecord.SETRANGE("Record ID",XRecRef.RECORDID);
+        IF IntegrationRecord.FINDFIRST THEN BEGIN
+          IntegrationRecord."Record ID" := RecRef.RECORDID;
+          IntegrationRecord.MODIFY;
+        END;
+      END;
+      InsertUpdateIntegrationRecord(RecRef,TimeStamp);
+    END;
+
+    LOCAL PROCEDURE UpdateParentIntegrationRecord@17(RecRef@1000 : RecordRef;TimeStamp@1008 : DateTime);
+    VAR
+      SalesHeader@1001 : Record 36;
+      SalesInvoiceHeader@1002 : Record 112;
+      Customer@1003 : Record 18;
+      FieldRef1@1004 : FieldRef;
+      FieldRef2@1005 : FieldRef;
+      ParentRecRef@1006 : RecordRef;
+    BEGIN
+      // Handle cases where entities change should update the parent record
+      // Function must not fail even if the parent record cannot be found
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Line":
+          BEGIN
+            FieldRef1 := RecRef.FIELD(1); // "Document Type"
+            FieldRef2 := RecRef.FIELD(3); // "Document No."
+            IF SalesHeader.GET(FieldRef1.VALUE,FieldRef2.VALUE) THEN BEGIN
+              ParentRecRef.GETTABLE(SalesHeader);
+              InsertUpdateIntegrationRecord(ParentRecRef,TimeStamp);
+            END;
+          END;
+        DATABASE::"Sales Invoice Line":
+          BEGIN
+            FieldRef1 := RecRef.FIELD(3); // "Document No."
+            IF SalesInvoiceHeader.GET(FieldRef1.VALUE) THEN BEGIN
+              ParentRecRef.GETTABLE(SalesInvoiceHeader);
+              InsertUpdateIntegrationRecord(ParentRecRef,TimeStamp);
+            END;
+          END;
+        DATABASE::"Ship-to Address":
+          BEGIN
+            FieldRef1 := RecRef.FIELD(1); // "Customer No."
+            IF Customer.GET(FieldRef1.VALUE) THEN BEGIN
+              ParentRecRef.GETTABLE(Customer);
+              InsertUpdateIntegrationRecord(ParentRecRef,TimeStamp);
+            END;
+          END;
+      END;
+    END;
+
+    PROCEDURE EnableConnector@7();
+    VAR
+      IntegrationPage@1000 : Record 5150;
+    BEGIN
+      IF NOT IntegrationPage.FINDFIRST THEN BEGIN
+        SetupWebServicePages(FORM::"Resource List",DATABASE::Resource);
+        SetupWebServicePages(FORM::"Payment Terms",DATABASE::"Payment Terms");
+        SetupWebServicePages(FORM::"Shipment Methods",DATABASE::"Shipment Method");
+        SetupWebServicePages(FORM::"Shipping Agents",DATABASE::"Shipping Agent");
+        SetupWebServicePages(FORM::Currencies,DATABASE::Currency);
+        SetupWebServicePages(FORM::"Salespeople/Purchasers",DATABASE::"Salesperson/Purchaser");
+        SetupWebServicePages(FORM::"Customer Card",DATABASE::Customer);
+        SetupWebServicePages(FORM::"Item Card",DATABASE::Item);
+        SetupWebServicePages(FORM::"Sales Order",DATABASE::"Sales Header");
+        SetupWebServicePages(FORM::"Sales Invoice",DATABASE::"Sales Header");
+        SetupWebServicePages(FORM::"Posted Sales Invoice",DATABASE::"Sales Invoice Header");
+        SetupWebServicePages(FORM::"Units of Measure",DATABASE::"Unit of Measure");
+        SetupWebServicePages(FORM::"Ship-to Address",DATABASE::"Ship-to Address");
+        SetupWebServicePages(FORM::"Contact Card",DATABASE::Contact);
+        SetupWebServicePages(FORM::"Currency Exchange Rates",DATABASE::"Currency Exchange Rate");
+        SetupWebServicePages(FORM::"Customer Disc. Groups",DATABASE::"Customer Discount Group");
+        SetupWebServicePages(FORM::"Item Disc. Groups",DATABASE::"Item Discount Group");
+
+        SetupIntegrationService;
+      END;
+
+      MarkDeletedIntegrationRecords;
+      SetupIntegrationTables;
+    END;
+
+    PROCEDURE MarkDeletedIntegrationRecords@15();
+    VAR
+      IntegrationRecord@1000 : Record 5151;
+      RecRef@1001 : RecordRef;
+      TimeStamp@1002 : DateTime;
+    BEGIN
+      TimeStamp := CURRENTDATETIME;
+      IntegrationRecord.SETRANGE("Deleted On",0DT);
+      IF IntegrationRecord.FINDSET THEN
+        REPEAT
+          IF NOT RecRef.GET(IntegrationRecord."Record ID") THEN BEGIN
+            CLEAR(IntegrationRecord."Record ID");
+            IntegrationRecord."Deleted On" := TimeStamp;
+            IntegrationRecord."Modified On" := TimeStamp;
+            IntegrationRecord.MODIFY;
+          END;
+        UNTIL IntegrationRecord.NEXT = 0;
+    END;
+
+    PROCEDURE SetupIntegrationTables@8();
+    BEGIN
+      InitializeIntegrationRecords(DATABASE::Resource);
+      InitializeIntegrationRecords(DATABASE::"Payment Terms");
+      InitializeIntegrationRecords(DATABASE::"Shipment Method");
+      InitializeIntegrationRecords(DATABASE::"Shipping Agent");
+      InitializeIntegrationRecords(DATABASE::Currency);
+      InitializeIntegrationRecords(DATABASE::"Salesperson/Purchaser");
+      InitializeIntegrationRecords(DATABASE::Customer);
+      InitializeIntegrationRecords(DATABASE::Item);
+      InitializeIntegrationRecords(DATABASE::"Sales Header");
+      InitializeIntegrationRecords(DATABASE::"Sales Invoice Header");
+      InitializeIntegrationRecords(DATABASE::"Unit of Measure");
+      InitializeIntegrationRecords(DATABASE::"Ship-to Address");
+      InitializeIntegrationRecords(DATABASE::Contact);
+      InitializeIntegrationRecords(DATABASE::"Currency Exchange Rate");
+      InitializeIntegrationRecords(DATABASE::"Customer Discount Group");
+      InitializeIntegrationRecords(DATABASE::"Item Discount Group");
+    END;
+
+    LOCAL PROCEDURE InitializeIntegrationRecords@9(TableID@1000 : Integer);
+    VAR
+      RecRef@1002 : RecordRef;
+    BEGIN
+      WITH RecRef DO BEGIN
+        OPEN(TableID,FALSE);
+        IF FINDSET(FALSE) THEN
+          REPEAT
+            InsertUpdateIntegrationRecord(RecRef,CURRENTDATETIME);
+          UNTIL NEXT = 0;
+        CLOSE;
+      END;
+    END;
+
+    PROCEDURE DisableConnector@10();
+    VAR
+      MarketingSetup@1000 : Record 5079;
+      Company@1002 : Record 2000000006;
+      MultipleCompanies@1003 : Boolean;
+    BEGIN
+      MultipleCompanies := FALSE;
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Company.FINDSET THEN BEGIN
+        REPEAT
+          MarketingSetup.CHANGECOMPANY(Company.Name);
+          IF MarketingSetup.GET THEN
+            IF MarketingSetup."Enable Connector" THEN
+              MultipleCompanies := TRUE;
+        UNTIL (Company.NEXT = 0) OR MultipleCompanies;
+      END;
+
+      IF NOT MultipleCompanies THEN BEGIN
+        DeleteWebServicePages;
+        DeleteIntegrationService;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetupWebServicePages@11(PageID@1000 : Integer;SourceTableID@1005 : Integer);
+    VAR
+      WebService@1001 : Record 2000000076;
+      Objects@1002 : Record 2000000038;
+      IntegrationPage@1004 : Record 5150;
+    BEGIN
+      Objects.SETRANGE("Object Type",WebService."Object Type"::Page);
+      Objects.SETRANGE("Object ID",PageID);
+      IF Objects.FINDFIRST THEN BEGIN
+        WebService.INIT;
+        WebService."Object Type" := WebService."Object Type"::Page;
+        WebService."Service Name" := 'Integration ' + Objects."Object Name";
+        WebService."Object ID" := Objects."Object ID";
+        WebService.Published := TRUE;
+        IF NOT WebService.INSERT THEN
+          ERROR(Text001,WebService.TABLECAPTION,WebService."Service Name");
+
+        IntegrationPage.INIT;
+        IntegrationPage."Service Name" := WebService."Service Name";
+        IntegrationPage."Source Table ID" := SourceTableID;
+        IF NOT IntegrationPage.INSERT THEN
+          ERROR(Text001,IntegrationPage.TABLECAPTION,WebService."Service Name");
+      END;
+    END;
+
+    LOCAL PROCEDURE SetupIntegrationService@12();
+    VAR
+      WebService@1000 : Record 2000000076;
+    BEGIN
+      IF NOT WebService.GET(WebService."Object Type"::Codeunit,'Integration Service') THEN BEGIN
+        WebService.INIT;
+        WebService."Object Type" := WebService."Object Type"::Codeunit;
+        WebService."Object ID" := 5151;
+        WebService."Service Name" := 'Integration Service';
+        WebService.Published := TRUE;
+        WebService.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteWebServicePages@13();
+    VAR
+      WebService@1000 : Record 2000000076;
+      IntegrationPage@1001 : Record 5150;
+    BEGIN
+      IF IntegrationPage.FIND('-') THEN
+        REPEAT
+          IF WebService.GET(WebService."Object Type"::Page,IntegrationPage."Service Name") THEN
+            WebService.DELETE;
+          IntegrationPage.DELETE;
+        UNTIL IntegrationPage.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE DeleteIntegrationService@14();
+    VAR
+      WebService@1000 : Record 2000000076;
+    BEGIN
+      IF WebService.GET(WebService."Object Type"::Codeunit,'Integration Service') THEN
+        WebService.DELETE;
+    END;
+
+    LOCAL PROCEDURE InsertUpdateIntegrationRecord@16(RecRef@1000 : RecordRef;IntegrationLastModified@1001 : DateTime);
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+      Contact@1003 : Record 5050;
+      FieldRef1@1004 : FieldRef;
+      Type@1005 : Integer;
+    BEGIN
+      IF IsIntegrationRecord(RecRef.NUMBER) THEN BEGIN
+        WITH IntegrationRecord DO BEGIN
+          SETRANGE("Record ID",RecRef.RECORDID);
+          IF FINDFIRST THEN BEGIN
+            // Handle exceptions where entities change state and should not be integrated.
+            IF RecRef.NUMBER = DATABASE::Contact THEN BEGIN
+              FieldRef1 := RecRef.FIELD(5050); // Type
+              Type := FieldRef1.VALUE;
+              IF Type = Contact.Type::Company THEN BEGIN
+                CLEAR("Record ID");
+                "Deleted On" := IntegrationLastModified;
+              END;
+            END;
+            "Modified On" := IntegrationLastModified;
+            MODIFY;
+          END ELSE BEGIN
+            // Handle exceptions where entities should not be integrated.
+            IF RecRef.NUMBER = DATABASE::Contact THEN BEGIN
+              FieldRef1 := RecRef.FIELD(5050); // Type
+              Type := FieldRef1.VALUE;
+              IF Type = Contact.Type::Company THEN
+                EXIT
+            END;
+            RESET;
+            INIT;
+            "Integration ID" := CREATEGUID;
+            "Record ID" := RecRef.RECORDID;
+            "Table ID" := RecRef.NUMBER;
+            "Page ID" := GetPageID(RecRef);
+            "Modified On" := IntegrationLastModified;
+            INSERT;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE IsIntegrationRecord@6(TableID@1000 : Integer) : Boolean;
+    BEGIN
+      IF TableID IN
+         [DATABASE::Resource,
+          DATABASE::"Payment Terms",
+          DATABASE::"Shipment Method",
+          DATABASE::"Shipping Agent",
+          DATABASE::Currency,
+          DATABASE::"Salesperson/Purchaser",
+          DATABASE::Customer,
+          DATABASE::Item,
+          DATABASE::"Sales Header",
+          DATABASE::"Sales Invoice Header",
+          DATABASE::"Unit of Measure",
+          DATABASE::"Ship-to Address",
+          DATABASE::Contact,
+          DATABASE::"Currency Exchange Rate",
+          DATABASE::"Customer Discount Group",
+          DATABASE::"Item Discount Group"]
+      THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE IsIntegrationRecordChild@18(TableID@1000 : Integer) : Boolean;
+    BEGIN
+      IF TableID IN
+         [DATABASE::"Sales Line",
+          DATABASE::"Sales Invoice Line"]
+      THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE GetPageID@19(RecRef@1000 : RecordRef) : Integer;
+    VAR
+      SalesHeader@1002 : Record 36;
+      IntegrationPage@1001 : Record 5150;
+      FieldRef1@1003 : FieldRef;
+      DocumentType@1004 : Integer;
+    BEGIN
+      WITH IntegrationPage DO BEGIN
+        SETRANGE("Source Table ID",RecRef.NUMBER);
+        IF FINDFIRST THEN BEGIN
+          IF COUNT = 1 THEN BEGIN
+            CALCFIELDS("Page ID");
+            EXIT("Page ID");
+          END ELSE BEGIN
+            IF RecRef.NUMBER = DATABASE::"Sales Header" THEN BEGIN
+              FieldRef1 := RecRef.FIELD(1); // "Document Type"
+              DocumentType := FieldRef1.VALUE;
+              CASE DocumentType OF
+                SalesHeader."Document Type"::Order:
+                  EXIT(FORM::"Sales Order");
+                SalesHeader."Document Type"::Invoice:
+                  EXIT(FORM::"Sales Invoice");
+              END;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,1490 @@
+OBJECT Codeunit 7010412 Funciones Shuttle
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/05/15;
+    Time=18:10:24;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            lrParte@1103355000 : Record 7010360;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355029 : TextConst 'ESP=<-1D>';
+      Text50001@1103355030 : TextConst 'ESP=<+1D>';
+      rParGenerales@1103355000 : Record 7010311;
+      cuImportacion@1103355001 : Codeunit 7010402;
+      cnf001@1103355002 : TextConst 'ESP=Si reasigna la reserva %1 a este parte estar  excediendo el m ximo de Hoteles por parte en %2. ¨Desea continuar con la asignaci¢n de esta reserva?';
+      cnf002@1103355003 : TextConst 'ESP=La hora de vuelo supera en menos de %1 minutos el horario m ximo de parte. ¨Desea continuar con la asignaci¢n de esta reserva?';
+      cnf003@1103355010 : TextConst 'ESP=Esta es la £ltima l¡nea del parte n§ %1, si deasigna la l¡nea el parte se eliminar .\¨Est  seguro de que quiere desasignar la l¡nea?';
+      cnf004@1103355011 : TextConst 'ESP=¨Est  seguro de que quiere desasignar la l¡nea?';
+      cnf005@1103355012 : TextConst 'ESP=ATENCIàN. La hora de vuelo supera en m s de %1 minutos el horario m ximo de parte. ¨Desea continuar con la asignaci¢n de esta reserva?';
+      err001@1103355004 : TextConst 'ESP=La reserva %1 supera los l¡mites de seguridad del parte. Vuelva a probarlo sin est  l¡nea de recogida.';
+      err002@1103355005 : TextConst 'ESP=Se ha detenido la asignaci¢n de reservas al Parte.';
+      err003@1103355006 : TextConst 'ESP=La zona de trabajo de la reserva %1 no coincide con la zona de trabajo del parte.';
+      err004@1103355007 : TextConst 'ESP=La reserva %1 supera el l¡mite de paxes del parte. Vuelva a probarlo sin est  l¡nea de recogida.';
+      err005@1103355008 : TextConst 'ESP=El parte %1 al que quiere reasignar la reserva no es un parte de Shuttle.';
+      err006@1103355009 : TextConst 'ESP=la reserva ya est  deasignada.';
+      text001@1103355013 : TextConst 'ESP=LIN FUERA LIMITES CONFIRMADA';
+      text002@1103355014 : TextConst 'ESP=Hora Inicio Parte: %1 Hora vuelo: %2';
+      text003@1103355015 : TextConst 'ESP=DESASIGNACION';
+      text004@1103355016 : TextConst 'ESP="Vuelo Anterior: %1 "';
+      text005@1103355017 : TextConst 'ESP=REASIGNACION';
+      text006@1103355018 : TextConst 'ESP=REAGRUPACION';
+      text007@1103355019 : TextConst 'ESP=Vuelo Actual: %1';
+      text008@1103355020 : TextConst 'ESP=SHU_DES';
+      text009@1103355021 : TextConst 'ESP=BORRADO';
+      text010@1103355022 : TextConst 'ESP=Linea borrada';
+      text011@1103355023 : TextConst 'ESP=Hotel %1, Adultos %2, Ni¤os %3';
+      text012@1103355024 : TextConst 'ESP=Vuelo: %1 %2';
+      text013@1103355025 : TextConst 'ESP=No se puede eliminar una reserva asignada a un parte.';
+      text014@1103355026 : TextConst 'ESP=No se puede eliminar una reserva confirmada.';
+      text015@1103355027 : TextConst 'ESP=No se puede eliminar una reserva ya cobrada.';
+      cGestionPartes@1103355028 : Codeunit 7010318;
+      cFunBas@1103355031 : Codeunit 7010310;
+
+    PROCEDURE ActualizaHoraVuelo@1103355005(prNumVueloAnt@1103355000 : Code[10];prNumVueloNuevo@1103355012 : Code[10];pdtHoraAnterior@1103355006 : DateTime;pdtHoraNueva@1103355001 : DateTime) LineasDesasignadas : Integer;
+    VAR
+      lrLinsParte@1103355003 : Record 7010359;
+      lrLinsParteTMP@1103355007 : TEMPORARY Record 7010359;
+      lrSerParAux@1103355005 : Record 7010359;
+      lrParte@1103355004 : Record 7010360;
+      lwNumParte@1103355002 : Code[10];
+      ldtLimiteInf@1103355008 : DateTime;
+      ldtLimiteSup@1103355009 : DateTime;
+      ldtLimInf@1103355011 : DateTime;
+      ldtLimSup@1103355010 : DateTime;
+      lrHist@1103355013 : Record 7010361;
+    BEGIN
+      // AJF 29.01.2008 - DRF 07004
+      // Actualizamos la hora de vuelo de todas las lineas de recogida para los servicios que sean de llegada.
+      // Las lineas actualizadas se deasignan de su parte.
+
+      rParGenerales.FINDFIRST;
+
+      lrLinsParte.CLEARMARKS;
+      lrLinsParte.MARKEDONLY(FALSE);
+
+      // AJS 04.03.2008
+      // Ordenamos las lineas por Fecha y hora del vuelo
+
+      // JPT 02/02/10 Datetime a Biginteger
+      // lrLinsParte.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrLinsParte.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+
+      // AJF 02/04/08
+      // vamos a coger los vuelos que est n dentro del mismo dia, por si hay descuadres de horas.
+
+      ldtLimInf := CREATEDATETIME(DT2DATE(pdtHoraAnterior), 000000T);
+      ldtLimSup := CREATEDATETIME(DT2DATE(pdtHoraAnterior), 235959T);
+
+      // JPT 02/02/10 Datetime a Biginteger
+      // lrLinsParte.SETRANGE("FechaHora Vuelo", ldtLimInf, ldtLimSup);
+      lrLinsParte.SETRANGE("FechaHora Vuelo BI", cFunBas.DTtoBIGINT(ldtLimInf), cFunBas.DTtoBIGINT(ldtLimSup));
+      lrLinsParte.SETRANGE(Vuelo            , prNumVueloAnt);
+      lrLinsParte.SETRANGE("Codigo Servicio", rParGenerales."Codigo Entradas");
+
+
+      IF lrLinsParte.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+
+          // AJF 05/03/08
+          // metemos las l¡neas que queremos modificar en un temporary.
+
+          lrLinsParteTMP                     := lrLinsParte;
+          lrLinsParteTMP.Vuelo               := prNumVueloNuevo;
+          lrLinsParteTMP."FechaHora Vuelo"   := pdtHoraNueva;
+          lrLinsParteTMP."Hora Vuelo"        := DT2TIME(pdtHoraNueva);
+          lrLinsParteTMP."Hora recogida"     := DT2TIME(pdtHoraNueva);
+          lrLinsParteTMP.INSERT;
+
+        UNTIL lrLinsParte.NEXT = 0;
+
+      END;
+
+      lrLinsParte.RESET;
+
+      IF lrLinsParteTMP.FINDSET THEN BEGIN
+        REPEAT
+
+          IF lrLinsParte.GET(lrLinsParteTMP."N§ Servicio", lrLinsParteTMP."N§ Linea") THEN BEGIN
+
+            lrLinsParte.Vuelo               := lrLinsParteTMP.Vuelo;
+            lrLinsParte."FechaHora Vuelo"   := lrLinsParteTMP."FechaHora Vuelo";
+            // JPT 02/02/10 la siguiente funci¢n rellena "FechaHora Vuelo BI"
+            lrLinsParte.ConvDTBIV;
+            IF lrLinsParte."N§ Parte" = '' THEN
+              // JPT 02/02/10 la validaci¢n rellena "FechaHora Parte BI"
+              // lrLinsParte."FechaHora Parte" := lrLinsParteTMP."FechaHora Vuelo";
+              lrLinsParte.VALIDATE("FechaHora Parte", lrLinsParteTMP."FechaHora Vuelo");
+
+            lrLinsParte."Hora Vuelo"        := lrLinsParteTMP."Hora Vuelo";
+            lrLinsParte."Hora recogida"     := lrLinsParteTMP."Hora recogida";
+            lrLinsParte.Fecha               := DT2DATE(lrLinsParte."FechaHora Vuelo");
+
+            lrLinsParte.MODIFY;
+
+
+            // Desasignamos la l¡nea modificada del parte al que pertenec¡a.
+            // Si se sale fuera del horario del parte.
+
+            IF (lrLinsParte."N§ Parte" <> '') THEN BEGIN
+
+              lwNumParte := lrLinsParte."N§ Parte";
+              lrParte.GET(lrLinsParte."N§ Parte");
+              // JPT 02/02/10 Datetime a Biginteger. Asegura "Hora Inicio DT"
+              lrParte.VALIDATE("Hora Inicio BI");
+              ldtLimiteInf := lrParte."Hora Inicio DT" - rParGenerales."Maximo espera en aeropuerto" * 60000;
+              ldtLimiteSup := lrParte."Hora Inicio DT" + rParGenerales."Maximo espera en aeropuerto" * 60000;
+
+              //IF  (lrLinsParte."FechaHora Vuelo" < ldtLimiteInf) OR
+              //     (lrLinsParte."FechaHora Vuelo" > ldtLimiteSup)
+              IF NOT ComprobarHorario(lrParte, lrLinsParte,FALSE) THEN BEGIN
+
+                lrSerParAux.RESET;
+                lrSerParAux.SETCURRENTKEY("N§ Parte", "Orden Hotel en zona");
+                lrSerParAux.SETRANGE ("N§ Parte", lrLinsParte."N§ Parte");
+
+                IF lrSerParAux.COUNT = 1 THEN BEGIN
+
+                  lrParte.GET(lrLinsParte."N§ Parte");
+
+                  // AJF 28/07/08
+                  // Desasignaci¢n a Historico.
+                  lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, lrLinsParte."N§ Servicio",  lrLinsParte."N§ Linea",
+                                   STRSUBSTNO(text003),
+                                   STRSUBSTNO(text004, lrLinsParte.Reserva + ' ' + prNumVueloAnt + ' ' + FORMAT(pdtHoraAnterior)),
+                                   STRSUBSTNO(text007, prNumVueloNuevo + ' ' + FORMAT(pdtHoraNueva)));
+
+                  TraspasarLinea(lrLinsParte, 0, '', text008);
+                  lrParte.SetBol(3, TRUE); // Para evitar el backup
+                  lrParte.DELETE(TRUE);
+
+                END
+                ELSE BEGIN
+
+                  lrParte.GET(lrLinsParte."N§ Parte");
+
+                  // AJF 28/07/08
+                  // Desasignaci¢n a Historico.
+                  lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, lrLinsParte."N§ Servicio",  lrLinsParte."N§ Linea",
+                                   STRSUBSTNO(text003),
+                                   STRSUBSTNO(text004, lrLinsParte.Reserva + ' ' + prNumVueloAnt + ' ' + FORMAT(pdtHoraAnterior)),
+                                   STRSUBSTNO(text007, prNumVueloNuevo + ' ' + FORMAT(pdtHoraNueva)));
+
+                  TraspasarLinea(lrLinsParte, 0, '', text008);
+
+
+                  // Actualizamos los paxes del parte.
+                  lrParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+                  lrParte."Adultos trans. soporte" := lrParte."Adultos transportados";
+                  lrParte."Ni¤os trans. soporte"   := lrParte."Ni¤os transportados";
+
+                  // AJF 17/03/08
+                  // Actualizar TTOOxParte
+
+                  ActualizaTTOOxParte(lrParte."N§ Parte", lrLinsParte, TRUE);
+
+                  lrParte.MODIFY;
+                END;
+
+                lrLinsParte.DELETE;
+
+              END;
+
+            END;
+
+            IF (lrParte.GET(lwNumParte)) THEN BEGIN
+              lrParte.ActualizaDatosVuelos(lrLinsParte, FALSE);
+            END;
+
+          END;
+
+        UNTIL lrLinsParteTMP.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE LocalizaVuelos@1103355003(prDiaTrabajo@1103355000 : Date;prNumVuelo@1103355001 : Code[10];VAR prPartesTMP@1103355003 : TEMPORARY Record 7010360) Ok : Boolean;
+    VAR
+      lrLinsparte@1103355002 : Record 7010359;
+      lrPartes@1103355004 : Record 7010360;
+    BEGIN
+      // AJF 29.01.2008 - DRF 07004
+      // Localiza todos los partes para el dia de trabajo especificado que contengan el vuelo especificado.
+      // Devolvemos true si se han encontrado partes que contengan el vuelo especificado.
+
+      Ok := FALSE;
+
+      prPartesTMP.RESET;
+      prPartesTMP.DELETEALL;
+
+      lrLinsparte.SETCURRENTKEY(Fecha);
+      lrLinsparte.SETRANGE(Fecha, CALCDATE(Text50000, prDiaTrabajo), CALCDATE(Text50001, prDiaTrabajo));
+
+      IF lrLinsparte.FINDSET THEN BEGIN
+        REPEAT
+          IF lrLinsparte.Vuelo = prNumVuelo THEN BEGIN
+            Ok := TRUE;
+            IF NOT prPartesTMP.GET(lrLinsparte."N§ Parte") THEN BEGIN
+              IF lrPartes.GET(lrLinsparte."N§ Parte") THEN BEGIN
+                prPartesTMP := lrPartes;
+                prPartesTMP.INSERT;
+              END;
+            END;
+          END;
+        UNTIL lrLinsparte.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE LocalizaCliente@1103355000(pdDiaDesde@1103355001 : Date;pwTTOO@1103355002 : Code[10];pwLocalizador@1103355003 : Code[30];pwNombreCliente@1103355004 : Text[250];pwCodigoServicio@1103355006 : Code[10];VAR prParte@1103355000 : Record 7010360;pdDiaHasta@1103355010 : Date;pbFiltroVentana@1103355007 : Boolean) Ok : Boolean;
+    VAR
+      lrLinsParte@1103355005 : Record 7010359;
+      ldtLimiteInferior@1103355009 : DateTime;
+      ldtLimiteSuperior@1103355008 : DateTime;
+    BEGIN
+      // LocalizaCliente
+
+      // AJF 29.01.2008 - DRF 07004
+      // Localiza el parte entre dos fechas en que aparece un cliente identificado por
+      // TTOO, Localizador y nombre de cliente.
+      // Devolvemos Ok si se encuentra el registro y
+      // guardamos el parte donde se localiza el cliente en prParte.
+      // Si indicamos pbFiltroVentana se filtra por los dias que constan en la ventana de partes.
+      // si no se usan DiaDesde / DiaHasta.
+
+
+      // AJS 05.03.2008
+      // Activo una clave para mejorar el rendimiento de este proceso
+      {
+      lrLinsParte.SETCURRENTKEY(Fecha,
+                                Touroperador,
+                                "Tipo Servicio",
+                                "Codigo Servicio",
+                                "N§ Parte");
+      }
+      lrLinsParte.SETCURRENTKEY(Reserva);
+
+      IF NOT pbFiltroVentana THEN BEGIN
+        IF pdDiaDesde <> 0D THEN BEGIN
+          IF pdDiaHasta <> 0D THEN
+            lrLinsParte.SETRANGE(Fecha, pdDiaDesde, pdDiaHasta)
+          ELSE
+            lrLinsParte.SETRANGE(Fecha, pdDiaDesde);
+        END;
+      END
+      ELSE BEGIN
+        ldtLimiteInferior := CURRENTDATETIME - (12 * 60 * 60000); // -12 Horas.
+        ldtLimiteSuperior := CURRENTDATETIME + (24 * 60 * 60000); // +24 Horas.
+        lrLinsParte.SETRANGE(Fecha, DT2DATE(ldtLimiteInferior), DT2DATE(ldtLimiteSuperior));
+      END;
+
+      IF pwTTOO <> '' THEN
+        lrLinsParte.SETRANGE(Touroperador,      pwTTOO);
+      //+$001 <
+      IF pwLocalizador <> '' THEN
+        lrLinsParte.SETRANGE(Reserva,           pwLocalizador);
+      //+$001 >
+      IF pwCodigoServicio <> '' THEN
+        lrLinsParte.SETRANGE("Codigo Servicio", pwCodigoServicio);
+      IF pwNombreCliente <> '' THEN
+      BEGIN
+        pwNombreCliente := '*@' + pwNombreCliente + '*';
+        lrLinsParte.SETFILTER("Nombre Cliente", pwNombreCliente);
+      END;
+
+      Ok := lrLinsParte.FINDFIRST;
+
+      IF (Ok) THEN
+        prParte.GET(lrLinsParte."N§ Parte");
+    END;
+
+    PROCEDURE ReagruparReservas@1103355002(pdtInicio@1103355000 : DateTime;pdtFinal@1103355001 : DateTime;VAR piAdultos@1103355008 : Integer;VAR piNinos@1103355010 : Integer) Lineas : Integer;
+    VAR
+      lrLinPartes@1103355002 : Record 7010359;
+      lrLinPartesCopia@1103355009 : Record 7010359;
+      lrAuxLinea@1103355014 : Record 7010359;
+      lrPartes@1103355003 : Record 7010360;
+      lrZonaFisica@1103355004 : Record 7010314;
+      lrVehiculo@1103355005 : Record 7010346;
+      ldtInicioParte@1103355006 : DateTime;
+      ldtFinalParte@1103355007 : DateTime;
+      liNinos@1103355011 : Integer;
+      liAdultos@1103355012 : Integer;
+      liPlazas@1103355013 : Integer;
+    BEGIN
+      // AJF 01/02/2008 - DRF 07004
+      // Cogemos las lineas de parte de Shuttle que no tengan parte asignado
+      // que est‚n en el int‚rvalo de pdtInicio - pdtFinal
+      // y trataremos de recolocarlas en los partes de estas fechas que coincidan en
+      // zona de trabajo que se encuentren en ese periodo en el aeropuerto.
+
+      rParGenerales.FINDFIRST;
+
+      Lineas    := 0;
+      piAdultos := 0;
+      piNinos   := 0;
+
+      // filtramos las lineas de parte
+
+      // JPT 02/02/10 Datetime a Biginteger. cambio de clave
+      // lrLinPartes.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrLinPartes.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+      // lrLinPartes.SETRANGE("FechaHora Vuelo", pdtInicio, pdtFinal);
+      lrLinPartes.SETRANGE("FechaHora Vuelo BI", cFunBas.DTtoBIGINT(pdtInicio), cFunBas.DTtoBIGINT(pdtFinal));
+      lrLinPartes.SETRANGE("Codigo Servicio", rParGenerales."Codigo Entradas");
+      lrLinPartes.SETRANGE("Origen creacion", lrLinPartes."Origen creacion"::Shuttle);
+
+      lrPartes.SETRANGE("Origen creacion", lrPartes."Origen creacion"::Shuttle);
+      lrPartes.SETRANGE("Codigo Servicio", rParGenerales."Codigo Entradas");
+      //lrPartes.SETFILTER(Vehiculo, '<>%1', '');
+
+      ldtInicioParte  := pdtInicio - rParGenerales."Maximo espera en aeropuerto" * 60000;
+      ldtFinalParte   := pdtFinal  + rParGenerales."Maximo espera en aeropuerto" * 60000;
+
+      // JPT 02/02/10 Datetime a Biginteger
+      // lrPartes.SETRANGE("Hora Inicio DT", ldtInicioParte, ldtFinalParte);
+      lrPartes.SETRANGE("Hora Inicio BI", cFunBas.DTtoBIGINT(ldtInicioParte), cFunBas.DTtoBIGINT(ldtFinalParte));
+      IF lrPartes.FINDSET THEN BEGIN
+        REPEAT
+
+          IF (lrPartes.Vehiculo <> '') THEN BEGIN
+            lrVehiculo.GET(lrPartes.Vehiculo);
+            liPlazas := lrVehiculo.Plazas;
+          END
+          ELSE BEGIN
+            liPlazas := 55;
+          END;
+
+          IF (liPlazas > lrPartes."Adultos trans. soporte" + lrPartes."Ni¤os trans. soporte") THEN BEGIN
+            lrLinPartesCopia.COPY(lrLinPartes);
+            Lineas += AsignarLineasAParte(lrPartes, liPlazas, lrLinPartesCopia, liAdultos, liNinos);
+            piAdultos += liAdultos;
+            piNinos   += liNinos;
+          END;
+
+          lrPartes.ActualizaDatosVuelos(lrLinPartes, FALSE);
+
+        UNTIL lrPartes.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AsignarLineaAParte@1103355009(prParte@1103355000 : Record 7010360;VAR prLinsParte@1103355002 : Record 7010359);
+    VAR
+      liPaxes@1103355004 : Integer;
+      ldtLimiteSup@1103355003 : DateTime;
+      ldtLimiteInf@1103355018 : DateTime;
+      lrZonaFisica@1103355005 : Record 7010314;
+      liNumLinAnt@1103355006 : Integer;
+      liNumLinPos@1103355009 : Integer;
+      lrForward@1103355010 : Record 7010359;
+      liNumNuevo@1103355011 : Integer;
+      lwServicio@1103355012 : Code[10];
+      liQuedanLins@1103355013 : Integer;
+      lrAuxLins@1103355014 : Record 7010359;
+      pbAsignada@1103355015 : Boolean;
+      pbFin@1103355016 : Boolean;
+      lrServicio@1103355017 : Record 7010358;
+      lrHoteles@1103355020 : TEMPORARY Record 7010315;
+      NumHoteles@1103355019 : Integer;
+      lrHist@1103355001 : Record 7010361;
+    BEGIN
+
+      rParGenerales.FINDFIRST;
+      liNumLinAnt := 0;
+
+      NumHoteles := CargarHotelesTMP(prParte, lrHoteles);
+
+      lrForward.SETCURRENTKEY("N§ Parte");
+      lrForward.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrForward.FINDFIRST THEN BEGIN
+
+        lwServicio  := lrForward."N§ Servicio";
+
+      END
+      ELSE BEGIN
+
+        // BuscaServicio Crea un nuevo servicio si no encuentra ninguno vinculado al parte.
+        cuImportacion.BuscaServicio(prParte,lrServicio);
+        lwServicio  := lrServicio."N§ Servicio";
+
+      END;
+
+      // Ahora filtramos el Forward por el servicio, por si el servicio ya tiene un parte introducido.
+      //lrForward.SETRANGE("N§ Parte");
+
+      lrForward.RESET;
+      lrForward.SETRANGE("N§ Servicio", lwServicio);
+
+      IF lrForward.FINDLAST THEN
+        liNumLinPos := lrForward."N§ Linea" + 10000
+      ELSE
+        liNumLinPos := 10000;
+
+      //pbAsignada := FALSE;
+
+      TraspasarLinea(prLinsParte, liNumLinPos, prParte."N§ Parte", lwServicio);
+
+      // AJF 17/03/08
+      // Actualizamos TTOOxParte.
+
+      ActualizaTTOOxParte(prParte."N§ Parte", prLinsParte, FALSE);
+
+      prLinsParte.DELETE;
+    END;
+
+    PROCEDURE ComprobarCapacidadParte@1103355006(prParte@1103355000 : Record 7010360;VAR prLinsParte@1103355001 : Record 7010359;VAR piCapRestante@1103355002 : Integer;VAR piPaxesLineas@1103355003 : Integer);
+    VAR
+      lrVehiculo@1103355004 : Record 7010346;
+      lrLinsParte@1103355005 : Record 7010359;
+      ldtLimiteSup@1103355006 : DateTime;
+      ldtLimiteInf@1103355009 : DateTime;
+      liPlazas@1103355007 : Integer;
+      lrZonaFisica@1103355008 : Record 7010314;
+    BEGIN
+      // AJF 04/02/2008 - DRF 07004
+      // Comprobamos si los paxes de las lineas de parte seleccionadas caben en el parte prParte.
+      // Devolvemos piCapRestante si es mayor que 0 son las plazas libres en el parte,si es menor son las que faltan.
+      // y piPaxesLineas es el total de paxes de todas las lineas seleccionadas.
+
+      rParGenerales.FINDFIRST;
+
+      CLEAR(lrLinsParte);
+      lrLinsParte.COPY(prLinsParte);
+
+      // JPT 02/02/10 Datetime a Biginteger. Aseguramos "Hora Inicio DT"
+      prParte.VALIDATE("Hora Inicio BI");
+      ldtLimiteSup := prParte."Hora Inicio DT" + rParGenerales."Maximo espera en aeropuerto" * 60000;
+
+      // AJS 04.03.2008
+      // Buscar las reservas que esten en el entorno del maximo de espera, tanto antes de la hora
+      // de inicio como despues
+
+      ldtLimiteInf := prParte."Hora Inicio DT" - rParGenerales."Maximo espera en aeropuerto" * 60000;
+
+      // AJS 04.03.2008
+      // Ordenamos las lineas por Fecha y hora del vuelo
+
+      // JPT 02/02/10 Datetime a Biginteger. Cambio de clave
+      // lrLinsParte.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrLinsParte.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+
+      // JPT 02/02/10 Datetime a Biginteger.
+      // lrLinsParte.SETRANGE ("FechaHora Vuelo", ldtLimiteInf, ldtLimiteSup);
+      lrLinsParte.SETRANGE("FechaHora Vuelo BI", cFunBas.DTtoBIGINT(ldtLimiteInf), cFunBas.DTtoBIGINT(ldtLimiteSup));
+
+      lrLinsParte.SETFILTER("N§ Parte"       , '<>%1', prParte."N§ Parte");
+
+      piPaxesLineas := 0;
+
+      IF (prParte.Vehiculo <> '') THEN BEGIN
+        lrVehiculo.GET(prParte.Vehiculo);
+        liPlazas := lrVehiculo.Plazas;
+      END
+      ELSE BEGIN
+        liPlazas := 55;
+      END;
+
+      IF lrLinsParte.FINDSET THEN BEGIN
+        REPEAT
+          lrZonaFisica.GET(lrLinsParte."Zona fisica");
+          IF (prParte."Zona trabajo" = lrZonaFisica."Zona trabajo") THEN BEGIN
+            piPaxesLineas += lrLinsParte."Paxes transportados";
+          END;
+        UNTIL lrLinsParte.NEXT = 0;
+      END;
+
+      piCapRestante := liPlazas - (prParte."Adultos transportados" +
+                                   prParte."Ni¤os transportados" +
+                                   piPaxesLineas);
+    END;
+
+    PROCEDURE TraspasarLinea@1103355012(prLineaParte@1103355000 : Record 7010359;pwNumLinea@1103355001 : Integer;pwParte@1103355002 : Code[10];pwServicio@1103355003 : Code[10]);
+    VAR
+      lrNuevaLinea@1103355004 : Record 7010359;
+      lrLinDeasignadas@1103355005 : Record 7010359;
+      lrHistorico@1103355006 : Record 7010361;
+      lrNuevoHist@1103355007 : Record 7010361;
+      lrParte@1103355008 : Record 7010360;
+    BEGIN
+      // TraspasarLinea
+
+      lrNuevaLinea.TRANSFERFIELDS(prLineaParte, FALSE);
+
+      lrNuevaLinea."N§ Servicio" := pwServicio;
+
+      IF (pwServicio = text008) THEN BEGIN
+        lrLinDeasignadas.SETRANGE("N§ Servicio", text008);
+        IF (lrLinDeasignadas.FINDLAST) THEN BEGIN
+          lrNuevaLinea."N§ Linea" := lrLinDeasignadas."N§ Linea" + 1
+        END
+        ELSE BEGIN
+          lrNuevaLinea."N§ Linea" := 10000;
+        END;
+      END
+      ELSE BEGIN
+
+        lrNuevaLinea."N§ Linea"    := pwNumLinea;
+      END;
+
+      lrNuevaLinea.VALIDATE("N§ Parte", pwParte);
+
+      // AJF 03/04/08
+      // Si la l¡nea que asignamos es la primera tendremos que actualizar los DT de parte de las dem s l¡neas.
+
+      IF (pwParte <> '') THEN
+        MantenDTLineasParte(lrNuevaLinea, FALSE)
+      ELSE
+        MantenDTLineasParte(prLineaParte,TRUE);
+
+      // JPT 12/09/08 Provocamos el calculo de los partes
+      IF NOT lrParte.GET(pwParte) THEN
+        CLEAR(lrParte);
+      lrNuevaLinea.ActualizaPaxesSoporte(lrParte, FALSE);
+      lrNuevaLinea.INSERT;
+
+      // AJF 29/07/08
+      // Traspasamos tambi‚n el hist¢rico de la l¡nea.
+
+      // Borramos el hist¢rico anterior, ya que con el funcionamiento anterior la l¡nea a la que se van a traspasar
+      // podian tener retales de reservas no asignadas.
+
+      lrHistorico.SETRANGE("Tipo Fichero", lrHistorico."Tipo Fichero"::Linea);
+      lrHistorico.SETRANGE("N§"          , lrNuevaLinea."N§ Servicio");
+      lrHistorico.SETRANGE("N§ Linea"    , lrNuevaLinea."N§ Linea");
+      lrHistorico.DELETEALL;
+
+      lrHistorico.RESET;
+      lrHistorico.SETRANGE("Tipo Fichero", lrHistorico."Tipo Fichero"::Linea);
+      lrHistorico.SETRANGE("N§"          , prLineaParte."N§ Servicio");
+      lrHistorico.SETRANGE("N§ Linea"    , prLineaParte."N§ Linea");
+
+      IF lrHistorico.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          lrNuevoHist.INIT;
+          lrNuevoHist            := lrHistorico;
+          lrNuevoHist."N§"       := lrNuevaLinea."N§ Servicio";
+          lrNuevoHist."N§ Linea" := lrNuevaLinea."N§ Linea";
+
+          lrNuevoHist.INSERT;
+
+        UNTIL lrHistorico.NEXT = 0;
+      END;
+
+      // Borramos el historico de la l¡nea anterior.
+      lrHistorico.DELETEALL;
+    END;
+
+    PROCEDURE CargarHotelesTMP@1103355008(prParte@1103355001 : Record 7010360;VAR prHoteles@1103355000 : TEMPORARY Record 7010315) NumHoteles : Integer;
+    VAR
+      lrLinsParte@1103355002 : Record 7010359;
+      lwHotelAnt@1103355003 : Code[10];
+    BEGIN
+      // CargarHotelesTMP
+      // Cargamos los hoteles distintos que hay en un parte a un Record TMP
+      // Devolvemos el numero de hoteles con el valor de retorno.
+
+      NumHoteles := 0;
+
+      lrLinsParte.SETCURRENTKEY("N§ Parte", "Punto recogida", "Hora recogida");
+
+      lrLinsParte.SETRANGE("N§ Parte", prParte."N§ Parte");
+
+      IF lrLinsParte.FINDSET THEN BEGIN
+
+        prHoteles.INIT;
+
+        REPEAT
+
+          IF (lwHotelAnt <> lrLinsParte."Punto recogida")  THEN BEGIN
+
+            prHoteles.Codigo := lrLinsParte."Punto recogida";
+            prHoteles.INSERT;
+
+            lwHotelAnt := lrLinsParte."Punto recogida";
+            NumHoteles += 1;
+
+          END;
+
+        UNTIL lrLinsParte.NEXT = 0 ;
+
+      END;
+    END;
+
+    PROCEDURE ComprobarNumHoteles@1103355026(prLinParte@1103355000 : Record 7010359;VAR prHoteles@1103355001 : TEMPORARY Record 7010315;VAR piNumHoteles@1103355002 : Integer;pbConfirmar@1103355003 : Boolean) Ok : Boolean;
+    BEGIN
+      // ComprobarNumHoteles
+
+      rParGenerales.FINDFIRST;
+
+      Ok := TRUE;
+
+      IF NOT prHoteles.GET(prLinParte."Punto recogida") THEN BEGIN
+
+        IF (piNumHoteles >= rParGenerales."Maximo hoteles x Recogida") THEN
+          IF pbConfirmar THEN BEGIN
+            IF NOT CONFIRM(cnf001, FALSE, prLinParte.Reserva,
+                           piNumHoteles - rParGenerales."Maximo hoteles x Recogida" + 1) THEN
+              EXIT(FALSE);
+          END
+          ELSE BEGIN
+            EXIT(FALSE);
+          END;
+        prHoteles.INIT;
+        prHoteles.Codigo := prLinParte."Punto recogida";
+        prHoteles.INSERT;
+
+        piNumHoteles += 1;
+
+      END;
+    END;
+
+    PROCEDURE ActualizaTTOOxParte@1103355010(pwNumParte@1103355000 : Code[10];prLinsParte@1103355001 : Record 7010359;pbDesasignada@1103355004 : Boolean);
+    VAR
+      lrParte@1103355002 : Record 7010360;
+      lrTTOOxParte@1103355003 : Record 7010365;
+      lrLinsParte@1103355005 : Record 7010359;
+    BEGIN
+      // ActualizaTTOOxParte
+      // Si pbDesasignada TRUE -> Hemos desasignado prLinsParte, si no hemos asignado la l¡nea.
+
+      lrParte.GET(pwNumParte);
+
+      IF NOT pbDesasignada THEN BEGIN
+        IF NOT lrTTOOxParte.GET(lrParte."N§ Parte", prLinsParte.Touroperador) THEN BEGIN
+          CLEAR(lrTTOOxParte);
+          lrTTOOxParte."N§ Parte"                 := lrParte."N§ Parte";
+          lrTTOOxParte."Cliente operativo"        := lrParte.Cliente;
+          lrTTOOxParte."Cliente estadistico"      := lrParte.GetClienteEstadistico(prLinsParte.Touroperador);
+          lrTTOOxParte.VALIDATE(Touroperador, prLinsParte.Touroperador);
+          lrTTOOxParte.INSERT(TRUE);
+          lrTTOOxParte.Bono                       := lrParte.Bono;
+          lrTTOOxParte."Fecha Servicio Parte"     := lrParte.Fecha;
+          lrTTOOxParte."Fecha Facturacion"        := lrParte."Fecha facturacion";
+          lrTTOOxParte.Facturable                 := lrParte.Facturable;
+          lrTTOOxParte."Ingreso Precios Por"      := lrParte."Ingreso Precios por";
+          lrTTOOxParte."Coste Precios Por"        := lrParte."Coste Precios por";
+          lrTTOOxParte.Gestor                     := lrParte.Gestor;
+          lrTTOOxParte.Vehiculo                   := lrParte.Vehiculo;
+          lrTTOOxParte."Tipo Vehiculo"            := lrParte."Tipo Vehiculo facturacion";
+          lrTTOOxParte."Codigo Servicio"          := lrParte."Codigo Servicio";
+          lrTTOOxParte."Adultos transportados"    := 0;
+          lrTTOOxParte."Ni¤os transportados"      := 0;
+          lrTTOOxParte."Adultos invitados ingreso":= 0;
+          lrTTOOxParte."Ni¤os invitados ingreso"  := 0;
+          lrTTOOxParte."Adultos invitados coste"  := 0;
+          lrTTOOxParte."Ni¤os invitados coste"    := 0;
+        END;
+
+        lrTTOOxParte."Adultos transportados"      += prLinsParte."Adultos transportados";
+        lrTTOOxParte."Ni¤os transportados"        += prLinsParte."Ni¤os transportados";
+        lrTTOOxParte."Adultos invitados ingreso"  += prLinsParte."Adultos invitados ingreso";
+        lrTTOOxParte."Ni¤os invitados ingreso"    += prLinsParte."Ni¤os invitados ingreso";
+        lrTTOOxParte."Adultos invitados coste"    += prLinsParte."Adultos invitados coste";
+        lrTTOOxParte."Ni¤os invitados coste"      += prLinsParte."Ni¤os invitados coste";
+        lrTTOOxParte.MODIFY;
+      END
+      ELSE BEGIN
+        IF lrTTOOxParte.GET(lrParte."N§ Parte", prLinsParte.Touroperador) THEN BEGIN
+
+          lrLinsParte.SETCURRENTKEY("N§ Parte", Touroperador);
+          lrLinsParte.SETRANGE ("N§ Parte",         pwNumParte);
+          lrLinsParte.SETFILTER("N§ Linea", '<>%1', prLinsParte."N§ Linea");
+          lrLinsParte.SETRANGE (Touroperador,       prLinsParte.Touroperador);
+
+          IF lrLinsParte.FINDFIRST THEN BEGIN
+
+            lrTTOOxParte."Adultos transportados"      -= prLinsParte."Adultos transportados";
+            lrTTOOxParte."Ni¤os transportados"        -= prLinsParte."Ni¤os transportados";
+            lrTTOOxParte."Adultos invitados ingreso"  -= prLinsParte."Adultos invitados ingreso";
+            lrTTOOxParte."Ni¤os invitados ingreso"    -= prLinsParte."Ni¤os invitados ingreso";
+            lrTTOOxParte."Adultos invitados coste"    -= prLinsParte."Adultos invitados coste";
+            lrTTOOxParte."Ni¤os invitados coste"      -= prLinsParte."Ni¤os invitados coste";
+            lrTTOOxParte.MODIFY;
+
+          END
+          ELSE BEGIN
+
+            lrTTOOxParte.DELETE;
+
+          END;
+
+        END;
+      END;
+    END;
+
+    PROCEDURE ComprobarHorario@1103355019(prParte@1103355000 : Record 7010360;prLinParte@1103355004 : Record 7010359;pbError@1103355007 : Boolean) : Boolean;
+    VAR
+      lrLinsParte@1103355005 : Record 7010359;
+      lrHist@1103355008 : Record 7010361;
+      ldtLimiteSup@1103355001 : DateTime;
+      ldtLimiteInf@1103355002 : DateTime;
+      ldtLimiteSupCnf@1103355003 : DateTime;
+      ldtLimiteInfCnf@1103355006 : DateTime;
+    BEGIN
+      rParGenerales.FINDFIRST;
+
+      // AJF 27/03/08
+      // Definimos los limites por los cuales se asignar /pediar  confirmaci¢n/ rechazar  la l¡nea.
+
+      // JPT 02/02/10 Datetime a Biginteger. Cambio de clave
+      // lrLinsParte.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrLinsParte.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+
+      // JPT 02/02/10 Datetime a Biginteger. Aseguramos "Hora Inicio DT
+      prParte.VALIDATE("Hora Inicio BI");
+
+      lrLinsParte.SETRANGE("N§ Parte", prParte."N§ Parte");
+
+      // Si encontramos l¡neas definimos los limites sobre ellas , si no sobre la hora de inicio del parte.
+      IF lrLinsParte.FINDFIRST THEN BEGIN
+
+        // JPT 02/02/10 Esto actualiza "FechaHora Vuelo";
+        lrLinsParte.VALIDATE("FechaHora Vuelo BI");
+        ldtLimiteSup    := lrLinsParte."FechaHora Vuelo" + rParGenerales."Maximo espera en aeropuerto" * 60000;
+        ldtLimiteSupCnf := ldtLimiteSup + rParGenerales."Maximo espera en aeropuerto" * 30000;
+
+        lrLinsParte.FINDLAST;
+
+        // JPT 02/02/10 Esto actualiza "FechaHora Vuelo";
+        lrLinsParte.VALIDATE("FechaHora Vuelo BI");
+        ldtLimiteInf    := lrLinsParte."FechaHora Vuelo" - rParGenerales."Maximo espera en aeropuerto" * 60000;
+        ldtLimiteInfCnf := ldtLimiteInf - rParGenerales."Maximo espera en aeropuerto" * 30000;
+
+      END
+      ELSE BEGIN
+
+        ldtLimiteSup    := prParte."Hora Inicio DT" + rParGenerales."Maximo espera en aeropuerto" * 60000;
+        ldtLimiteInf    := prParte."Hora Inicio DT" - rParGenerales."Maximo espera en aeropuerto" * 60000;
+        ldtLimiteInfCnf := ldtLimiteInf - rParGenerales."Maximo espera en aeropuerto" * 30000;
+        ldtLimiteSupCnf := ldtLimiteSup + rParGenerales."Maximo espera en aeropuerto" * 30000;
+
+      END;
+
+
+      // JPT 02/02/10 Esto actualiza "FechaHora Vuelo";
+      prLinParte.VALIDATE("FechaHora Vuelo BI");
+      IF (prLinParte."FechaHora Vuelo" < ldtLimiteInf) OR (prLinParte."FechaHora Vuelo" > ldtLimiteSup) THEN
+       IF (prLinParte."FechaHora Vuelo" < ldtLimiteInfCnf) OR (prLinParte."FechaHora Vuelo" > ldtLimiteSupCnf) THEN BEGIN
+         IF pbError THEN BEGIN
+           //ERROR(err001, prLinParte.Reserva);
+           IF NOT CONFIRM(cnf005, FALSE, rParGenerales."Maximo espera en aeropuerto" DIV 2) THEN
+             ERROR(err002);
+           lrHist.inserta_registro(lrHist."Tipo Fichero"::Parte, prParte."N§ Parte",  0,
+                                   text001, '', STRSUBSTNO(text002, prParte."Hora Inicio DT", prLinParte."FechaHora Vuelo"));
+         END
+         ELSE BEGIN
+           EXIT(FALSE);
+         END;
+       END
+       ELSE
+         IF pbError THEN BEGIN
+           IF NOT CONFIRM(cnf002, FALSE, rParGenerales."Maximo espera en aeropuerto" DIV 2) THEN
+             ERROR(err002);
+         END
+         ELSE
+           EXIT (FALSE);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AsignarLineasAParte@1103355001(prParte@1103355000 : Record 7010360;piPlazas@1103355001 : Integer;VAR prLinsParte@1103355002 : Record 7010359;VAR piAdultos@1103355007 : Integer;VAR piNinos@1103355008 : Integer) Lineas : Integer;
+    VAR
+      liPaxes@1103355004 : Integer;
+      ldtLimiteSup@1103355003 : DateTime;
+      ldtLimiteInf@1103355018 : DateTime;
+      lrZonaFisica@1103355005 : Record 7010314;
+      liNumLinAnt@1103355006 : Integer;
+      liNumLinPos@1103355009 : Integer;
+      lrForward@1103355010 : Record 7010359;
+      liNumNuevo@1103355011 : Integer;
+      lwServicio@1103355012 : Code[10];
+      liQuedanLins@1103355013 : Integer;
+      lrAuxLins@1103355014 : Record 7010359;
+      pbAsignada@1103355015 : Boolean;
+      pbFin@1103355016 : Boolean;
+      lrServicio@1103355017 : Record 7010358;
+      lrHoteles@1103355020 : TEMPORARY Record 7010315;
+      NumHoteles@1103355019 : Integer;
+      lrHist@1103355021 : Record 7010361;
+      lrAuxLin@1103355022 : Record 7010359;
+    BEGIN
+
+      rParGenerales.FINDFIRST;
+      liPaxes   := prParte."Adultos trans. soporte" + prParte."Ni¤os trans. soporte";
+      Lineas      := 0;
+      piAdultos   := 0;
+      piNinos     := 0;
+      liNumLinAnt := 0;
+
+      NumHoteles := CargarHotelesTMP(prParte, lrHoteles);
+
+      lrForward.SETCURRENTKEY("N§ Parte");
+      lrForward.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrForward.FINDFIRST THEN BEGIN
+
+        lwServicio  := lrForward."N§ Servicio";
+
+      END
+      ELSE BEGIN
+
+        // BuscaServicio Crea un nuevo servicio si no encuentra ninguno vinculado al parte.
+        cuImportacion.BuscaServicio(prParte,lrServicio);
+        lwServicio  := lrServicio."N§ Servicio";
+
+      END;
+
+      // Ahora filtramos el Forward por el servicio, por si el servicio ya tiene un parte introducido.
+      lrForward.RESET;
+      lrForward.SETRANGE("N§ Servicio", lwServicio);
+
+      IF lrForward.FINDLAST THEN
+        liNumLinPos := lrForward."N§ Linea" + 10000
+      ELSE
+        liNumLinPos := 10000;
+
+
+      prLinsParte.SETRANGE("N§ Parte", '');
+      //prLinsParte.SETRANGE("FechaHora Vuelo", ldtLimiteInf, ldtLimiteSup);
+
+      IF prLinsParte.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          pbAsignada := FALSE;
+          IF ComprobarHorario(prParte, prLinsParte,FALSE) THEN BEGIN
+            lrZonaFisica.GET(prLinsParte."Zona fisica");
+            IF (lrZonaFisica."Zona trabajo" = prParte."Zona trabajo") THEN BEGIN
+              IF (liPaxes + prLinsParte."Paxes transportados" <= piPlazas) THEN BEGIN
+                IF ComprobarNumHoteles(prLinsParte, lrHoteles, NumHoteles,FALSE) THEN BEGIN
+
+                  TraspasarLinea(prLinsParte, liNumLinPos, prParte."N§ Parte", lwServicio);
+                  // AJF 28/07/08
+                  // Recuperamos la nueva l¡nea para insertar en el historico.
+                  lrAuxLins.RESET;
+                  lrAuxLins.SETCURRENTKEY("N§ Parte", "N§ Linea");
+                  lrAuxLins.SETRANGE("N§ Parte", prParte."N§ Parte");
+                  lrAuxLins.FINDLAST;
+                  lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, lrAuxLins."N§ Servicio",  lrAuxLins."N§ Linea",
+                                          STRSUBSTNO(text006),
+                                          lrAuxLins.Reserva +  ' ' + prLinsParte."N§ Parte", prParte."N§ Parte");
+
+                  liNumLinPos += 10000;
+
+                  // AJF 17/03/08
+                  // Actualizamos TTOOxParte.
+
+                  ActualizaTTOOxParte(prParte."N§ Parte", prLinsParte, FALSE);
+
+                  pbAsignada := TRUE;
+                  liPaxes    += prLinsParte."Paxes transportados";
+                  Lineas     += 1;
+                  piAdultos  += prLinsParte."Adultos transportados";
+                  piNinos    += prLinsParte."Ni¤os transportados";
+
+                END;
+              END;
+            END;
+          END;
+
+          lrAuxLin := prLinsParte;
+          liQuedanLins := (prLinsParte.NEXT);
+
+          IF (pbAsignada) THEN BEGIN
+            lrAuxLin.DELETE;
+          END;
+
+        UNTIL (liQuedanLins = 0)  OR (liPaxes = piPlazas);
+      END;
+    END;
+
+    PROCEDURE MantenDTLineasParte@1103355011(VAR prLinea@1103355000 : Record 7010359;pbBaja@1103355001 : Boolean);
+    VAR
+      lrLinsParte@1103355002 : Record 7010359;
+      ldtFecha@1103355003 : DateTime;
+    BEGIN
+      // MantenDTLineasParte
+
+      // JPT 02/02/10 Datetime a Biginteger
+      // lrLinsParte.SETCURRENTKEY("FechaHora Parte");
+      lrLinsParte.SETCURRENTKEY("FechaHora Parte BI");
+
+      lrLinsParte.SETRANGE("N§ Parte", prLinea."N§ Parte");
+
+      // Filtramos las l¡neas s¡n hora de vuelo, para evitar que se traspase al parte.
+      lrLinsParte.SETFILTER("Hora Vuelo", '<>%1', 0T);
+
+      // Filtramos la l¡nea que estamos tratando, para evitar modificarla 2 veces.
+      lrLinsParte.SETFILTER("N§ Linea", '<>%1', prLinea."N§ Linea");
+
+      // JPT 02/02/10 Esto asegura "FechaHora Vuelo"
+      prLinea.VALIDATE("FechaHora Vuelo BI");
+
+      // Capturamos la nueva FechaHora Vuelo de las l¡neas del parte.
+      IF prLinea."Hora Vuelo" <> 0T THEN BEGIN
+        IF lrLinsParte.FINDFIRST THEN BEGIN
+          // JPT 02/02/10 Esto asegura "FechaHora Vuelo"
+          lrLinsParte.VALIDATE("FechaHora Vuelo BI");
+          IF (prLinea."FechaHora Vuelo" <= lrLinsParte."FechaHora Vuelo") AND NOT pbBaja THEN
+            ldtFecha := prLinea."FechaHora Vuelo"
+          ELSE
+            ldtFecha := lrLinsParte."FechaHora Vuelo";
+        END
+        ELSE
+          ldtFecha := prLinea."FechaHora Vuelo";
+
+        IF NOT pbBaja THEN
+          // JPT 02/02/10 Datetime a Biginteger
+          // prLinea."FechaHora Parte" := ldtFecha;
+          prLinea.VALIDATE("FechaHora Parte", ldtFecha);
+
+        lrLinsParte.SETRANGE("Hora Vuelo");
+
+        IF prLinea."N§ Parte" <> '' THEN
+          IF lrLinsParte.FINDSET(TRUE) THEN BEGIN
+             lrLinsParte.MODIFYALL("FechaHora Parte",ldtFecha);
+             // JPT 02/02/10 Datetime a Biginteger
+             lrLinsParte.MODIFYALL("FechaHora Parte BI", cFunBas.DTtoBIGINT(ldtFecha));
+          END;
+
+      END;
+    END;
+
+    PROCEDURE DesasignarReserva@1103355013(VAR prLinParte@1103355000 : Record 7010359);
+    VAR
+      lrLineas@1103355001 : Record 7010359;
+      lrParte@1103355003 : Record 7010360;
+      lwUltima@1103355002 : Boolean;
+      lrHist@1103355004 : Record 7010361;
+    BEGIN
+      // DesasignarReserva
+      // Desasignamos una l¡nea de un parte shuttle, quedando esta como una l¡nea suelta.
+
+      // La l¡nea ya est  desasignada.
+      IF prLinParte."N§ Parte" = '' THEN
+        ERROR(err006);
+
+      IF NOT CONFIRM(cnf004, FALSE) THEN
+        EXIT;
+
+      // Comprobamos si el parte tiene m s l¡neas.
+
+      lrLineas.SETCURRENTKEY("N§ Parte");
+
+      lrLineas.SETRANGE ("N§ Parte", prLinParte."N§ Parte");
+      lrLineas.SETFILTER("N§ Linea", '<>%1', prLinParte."N§ Linea");
+
+      lwUltima := FALSE;
+      IF NOT lrLineas.FINDFIRST THEN BEGIN
+        lwUltima := TRUE;
+        IF NOT CONFIRM(cnf003,FALSE, prLinParte."N§ Parte") THEN
+          EXIT;
+      END;
+
+      // Creamos la l¡nea suelta nueva.
+
+      // AJF 28/07/08
+      // Desasignaci¢n a Historico.
+      lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, prLinParte."N§ Servicio",  prLinParte."N§ Linea",
+                              STRSUBSTNO(text003), prLinParte."N§ Parte", '');
+
+      TraspasarLinea(prLinParte, 0, '', text008);
+
+
+      // Actualizamos el parte dependiendo de si es la £ltima l¡nea o no.
+
+      lrParte.GET(prLinParte."N§ Parte");
+
+      IF lwUltima THEN BEGIN
+        lrParte.DELETE;
+      END
+      ELSE BEGIN
+
+        lrParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+        lrParte."Adultos trans. soporte" := lrParte."Adultos transportados";
+        lrParte."Ni¤os trans. soporte"   := lrParte."Ni¤os transportados";
+
+        ActualizaTTOOxParte(lrParte."N§ Parte", prLinParte, TRUE);
+
+        lrParte.MODIFY;
+
+        lrParte.ActualizaDatosVuelos(prLinParte, TRUE);
+
+        prLinParte.ultima_zona_fisica(lrParte, TRUE, FALSE);
+      END;
+
+      // borramos la l¡nea.
+
+      // JPT 12/09/08 Mantenemos paxes soporte en partes
+      prLinParte.ActualizaPaxesSoporte(lrParte, TRUE);
+      prLinParte.DELETE;
+    END;
+
+    PROCEDURE EliminarReserva@1103355014(VAR prReserva@1103355000 : Record 7010359);
+    VAR
+      lrHistorico@1103355001 : Record 7010361;
+      lrNuevoHist@1103355003 : Record 7010361;
+      lwNumLinea@1103355002 : Integer;
+    BEGIN
+      // EliminarReserva
+      // Elimina una reserva deasignada que no haya sido confirmada ni pagada.
+
+      // Controles.
+      IF prReserva."N§ Servicio" <> text008 THEN
+        ERROR(text013);
+
+      IF prReserva.Confirmada THEN
+        ERROR(text014);
+
+      IF prReserva.Cobrado THEN
+        ERROR(text015);
+
+      // Insertamos una l¡nea en el historico para el borrado.
+      lrHistorico.inserta_registro(lrHistorico."Tipo Fichero"::Linea, prReserva."N§ Servicio", prReserva."N§ Linea",
+                                   STRSUBSTNO(text010),
+                                   STRSUBSTNO(text011, prReserva.Reserva + ' ' + prReserva."Punto recogida",
+                                              prReserva."Adultos transportados",
+                                              prReserva."Ni¤os transportados"),
+                                   STRSUBSTNO(text012, prReserva.Vuelo, prReserva."FechaHora Vuelo"));
+
+      // Movemos el historial como servicio borrado.
+
+      lrHistorico.RESET;
+      lrHistorico.SETRANGE("Tipo Fichero", lrHistorico."Tipo Fichero"::Linea);
+      lrHistorico.SETRANGE("N§", text009);
+      IF lrHistorico.FINDLAST THEN
+        lwNumLinea := lrHistorico."N§ Linea" + 1000
+      ELSE
+        lwNumLinea := 1000;
+
+      lrHistorico.RESET;
+      lrHistorico.SETRANGE("Tipo Fichero", lrHistorico."Tipo Fichero"::Linea);
+      lrHistorico.SETRANGE("N§"          , prReserva."N§ Servicio");
+      lrHistorico.SETRANGE("N§ Linea"     , prReserva."N§ Linea");
+
+      IF lrHistorico.FINDSET THEN BEGIN
+        REPEAT
+
+          lrNuevoHist.INIT;
+          lrNuevoHist             := lrHistorico;
+          lrNuevoHist."N§"        := text009;
+          lrNuevoHist."N§ Linea"  := lwNumLinea;
+          lrNuevoHist.Localizador := prReserva.Reserva;
+          lrNuevoHist.INSERT;
+
+        UNTIL lrHistorico.NEXT = 0;
+      END;
+
+      lrHistorico.DELETEALL;
+
+      prReserva.DELETE;
+    END;
+
+    PROCEDURE LimpiarMarcas@1103355015();
+    VAR
+      lrReservas@1103355000 : Record 7010359;
+    BEGIN
+      // LimpiarMarcas
+      // Limpiamos las marcas de usuario
+
+      lrReservas.SETCURRENTKEY(Marca);
+      lrReservas.SETRANGE(Marca, USERID);
+      lrReservas.MODIFYALL(Marca, '');
+    END;
+
+    PROCEDURE ReasignarReservas@1103355017(prParte@1103355000 : Record 7010360;VAR prLinsParte@1103355001 : Record 7010359);
+    VAR
+      lrVuelo@1103355002 : Record 7035335;
+      lrAuxLins@1103355003 : Record 7010359;
+      lrAuxParte@1103355004 : Record 7010360;
+      lrParte2@1103355023 : Record 7010360;
+      lrLinsParte@1103355005 : Record 7010359;
+      ldtLimiteSup@1103355006 : DateTime;
+      ldtLimiteInf@1103355016 : DateTime;
+      lrVehiculo@1103355007 : Record 7010346;
+      liPlazsPrev@1103355008 : Integer;
+      lrZonaFisica@1103355009 : Record 7010314;
+      liPlazas@1103355010 : Integer;
+      lbFin@1103355011 : Boolean;
+      liNumLinea@1103355012 : Integer;
+      liAdultos@1103355013 : Integer;
+      liNinos@1103355014 : Integer;
+      lbAsignada@1103355015 : Boolean;
+      lwParte@1103355017 : Code[10];
+      lrHoteles@1103355018 : TEMPORARY Record 7010315;
+      NumHoteles@1103355019 : Integer;
+      ldtLimiteSupCnf@1103355021 : DateTime;
+      ldtLimiteInfCnf@1103355020 : DateTime;
+      lrHist@1103355022 : Record 7010361;
+      lrLineasTMP@1103355024 : TEMPORARY Record 7010359;
+      lrPartesTMP@1103355025 : TEMPORARY Record 7010360;
+      lwServicio@1103355026 : Code[10];
+      lrServicio@1103355027 : Record 7010358;
+      lwNumLinea@1103355028 : Integer;
+    BEGIN
+      // ReasignarReservas
+      // AJF 04/02/2008 - DRF 07004
+      // Reasignamos todas las lineas que contiene el record LinsParte
+      // y las asignamos al parte prParte.
+
+      rParGenerales.FINDFIRST;
+
+      IF (prParte."Origen creacion" <> prParte."Origen creacion"::Shuttle) THEN
+        ERROR(err005, prParte."N§ Parte");
+
+      // AJF 14/03/08
+      // Cargamos los hoteles del parte en un record temporary y el num hoteles.
+
+      NumHoteles := CargarHotelesTMP(prParte, lrHoteles);
+
+      CargarLineasTMP(lrLineasTMP, lrPartesTMP, prParte, TRUE);
+
+      lrLineasTMP.RESET;
+      // JPT 02/02/10 Datetime a Biginteger. Cambio de clave
+      // lrLineasTMP.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+      lrLineasTMP.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+      //lrLineasTMP.SETFILTER("N§ Parte"       , '<>%1', prParte."N§ Parte");
+
+      IF (prParte.Vehiculo <> '') THEN BEGIN
+        lrVehiculo.GET(prParte.Vehiculo);
+        liPlazas := lrVehiculo.Plazas;
+      END
+      ELSE BEGIN
+        liPlazas := 55;
+      END;
+
+      lbFin := FALSE;
+
+      liPlazsPrev := prParte."Adultos transportados" + prParte."Ni¤os transportados";
+
+      IF lrLineasTMP.FINDSET THEN BEGIN
+        REPEAT
+
+          // Comprobaciones.
+
+          ComprobarHorario(prParte, lrLineasTMP, TRUE);
+
+          lrZonaFisica.GET(lrLineasTMP."Zona fisica");
+
+          IF (prParte."Zona trabajo" <> lrZonaFisica."Zona trabajo") THEN
+            ERROR(err003, lrLineasTMP.Reserva);
+
+          liPlazsPrev += lrLineasTMP."Paxes transportados";
+          IF (liPlazas < liPlazsPrev) THEN
+            ERROR(err004, lrLineasTMP.Reserva);
+
+          IF NOT ComprobarNumHoteles(lrLineasTMP, lrHoteles, NumHoteles, TRUE) THEN
+            ERROR(err002);
+
+          // reasignacion a Historico.
+
+          IF lrLineasTMP."N§ Parte" <> '' THEN
+            lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, lrLineasTMP."N§ Servicio",  lrLineasTMP."N§ Linea",
+                                    STRSUBSTNO(text005),
+                                    lrLineasTMP.Reserva + ' ' + lrLineasTMP."N§ Parte", prParte."N§ Parte");
+
+          // Mantenemos el datetime del parte del que estamos borrando la l¡nea.
+
+          MantenDTLineasParte(lrLineasTMP,TRUE);
+
+          IF lrLineasTMP."N§ Parte" <> '' THEN
+            ActualizaTTOOxParte(lrLineasTMP."N§ Parte", lrLineasTMP, TRUE);
+
+          IF NOT lrParte2.GET(lrLineasTMP."N§ Parte") THEN
+            CLEAR(lrParte2);
+
+          lrLineasTMP.ultima_zona_fisica(lrParte2, TRUE, FALSE);
+
+          IF lrLineasTMP."N§ Parte" <> '' THEN
+            lrParte2.ActualizaDatosVuelos(lrLineasTMP, FALSE);
+
+
+          //AsignarLineaAParte
+
+          lrLinsParte.RESET;
+          lrLinsParte.SETCURRENTKEY("N§ Parte");
+          lrLinsParte.SETRANGE("N§ Parte", prParte."N§ Parte");
+          IF lrLinsParte.FINDFIRST THEN
+          BEGIN
+
+            lwServicio  := lrLinsParte."N§ Servicio";
+
+          END
+          ELSE
+          BEGIN
+
+            // BuscaServicio Crea un nuevo servicio si no encuentra ninguno vinculado al parte.
+            cuImportacion.BuscaServicio(prParte,lrServicio);
+            lwServicio  := lrServicio."N§ Servicio";
+
+          END;
+
+          lrLinsParte.RESET;
+          lrLinsParte.SETRANGE("N§ Servicio", lwServicio);
+
+          IF lrLinsParte.FINDLAST THEN
+            lwNumLinea := lrLinsParte."N§ Linea" + 10000
+          ELSE
+            lwNumLinea := 10000;
+
+          TraspasarLinea(lrLineasTMP, lwNumLinea, prParte."N§ Parte", lwServicio);
+          ActualizaTTOOxParte(prParte."N§ Parte", lrLineasTMP, FALSE);
+          prParte.ActualizaDatosVuelos(lrLineasTMP, FALSE); // lrLineasTMP no se usa con el segundo parametro a FALSE;
+
+          // Recuperamos la nueva l¡nea para insertar en el historico.
+
+          lrLinsParte.RESET;
+          lrLinsParte.SETCURRENTKEY("N§ Parte", "N§ Linea");
+          lrLinsParte.SETRANGE("N§ Parte", prParte."N§ Parte");
+          lrLinsParte.FINDLAST;
+          lrHist.inserta_registro(lrHist."Tipo Fichero"::Linea, lrLinsParte."N§ Servicio",  lrLinsParte."N§ Linea",
+                                  STRSUBSTNO(text005),
+                                  lrLinsParte.Reserva + ' ' + lrLineasTMP."N§ Parte", prParte."N§ Parte");
+
+        UNTIL lrLineasTMP.NEXT = 0;
+
+        // Borrar partes vacios.
+        BorrarPartesVacios(lrPartesTMP, lrLineasTMP);
+
+      END;
+
+      prParte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+      prParte."Adultos trans. soporte" := prParte."Adultos transportados";
+      prParte."Ni¤os trans. soporte"   := prParte."Ni¤os transportados";
+      prParte.MODIFY;
+
+      LimpiarMarcas;
+    END;
+
+    PROCEDURE CargarLineasTMP@1103355016(VAR prLineasTMP@1103355000 : TEMPORARY Record 7010359;VAR prPartesTMP@1103355001 : TEMPORARY Record 7010360;VAR prParte@1103355005 : Record 7010360;pwBorrar@1103355004 : Boolean);
+    VAR
+      lrLinsParte@1103355002 : Record 7010359;
+      lrPartes@1103355003 : Record 7010360;
+    BEGIN
+      // CargarLineasTMP
+      // Cargamos a temporary las lineas de servicios - partes con la marca de usuario
+      // y los partes afectados.
+
+      prLineasTMP.RESET;
+      prLineasTMP.DELETEALL;
+      prPartesTMP.RESET;
+      prPartesTMP.DELETEALL;
+
+      lrLinsParte.SETCURRENTKEY(Marca);
+
+      lrLinsParte.SETRANGE (Marca, USERID);
+      lrLinsParte.SETFILTER("N§ Parte", '<>%1', prParte."N§ Parte");
+
+      IF lrLinsParte.FINDSET THEN BEGIN
+
+        REPEAT
+
+          prLineasTMP := lrLinsParte;
+          prLineasTMP.INSERT;
+
+          IF lrLinsParte."N§ Parte" <> '' THEN BEGIN
+            IF lrPartes.GET(lrLinsParte."N§ Parte") THEN BEGIN
+              IF NOT prPartesTMP.GET(lrLinsParte."N§ Parte") THEN BEGIN
+                prPartesTMP := lrPartes;
+                prPartesTMP.INSERT;
+              END;
+            END
+            ELSE
+              CLEAR(lrPartes);
+
+          END;
+
+        UNTIL lrLinsParte.NEXT = 0;
+
+        IF pwBorrar THEN BEGIN
+
+          lrLinsParte.DELETEALL;
+
+          prPartesTMP.RESET;
+          IF prPartesTMP.FINDSET THEN BEGIN
+            REPEAT
+              IF lrPartes.GET(prPartesTMP."N§ Parte") THEN BEGIN
+                lrPartes.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+                lrPartes."Adultos trans. soporte" := lrPartes."Adultos transportados";
+                lrPartes."Ni¤os trans. soporte"   := lrPartes."Ni¤os transportados";
+                lrPartes.MODIFY;
+              END;
+            UNTIL prPartesTMP.NEXT = 0;
+          END;
+        END;
+
+      END;
+    END;
+
+    PROCEDURE BorrarPartesVacios@1103355022(VAR prPartesTMP@1103355000 : TEMPORARY Record 7010360;VAR prLineasTMP@1103355003 : Record 7010359);
+    VAR
+      lrPartes@1103355001 : Record 7010360;
+      lrLineas@1103355002 : Record 7010359;
+      lwVacio@1103355004 : Boolean;
+    BEGIN
+      // BorrarPartesVacios
+
+      prPartesTMP.RESET;
+      prLineasTMP.RESET;
+
+      IF prPartesTMP.FINDSET THEN BEGIN
+        REPEAT
+
+          lrLineas.RESET;
+          lrLineas.SETCURRENTKEY("N§ Parte");
+          lrLineas.SETRANGE("N§ Parte", prPartesTMP."N§ Parte");
+
+          lwVacio := TRUE;
+          IF lrLineas.FINDSET THEN BEGIN
+            REPEAT
+              IF NOT prLineasTMP.GET(lrLineas."N§ Servicio", lrLineas."N§ Linea") THEN
+                lwVacio := FALSE;
+            UNTIL (lrLineas.NEXT = 0) OR NOT lwVacio;
+          END;
+
+          IF lwVacio THEN BEGIN
+            lrPartes.GET(prPartesTMP."N§ Parte");
+            lrPartes.SetBol(3, TRUE); // Para evitar el backup
+            lrPartes.DELETE(TRUE);
+          END;
+
+        UNTIL prPartesTMP.NEXT = 0;
+      END
+    END;
+
+    PROCEDURE CrearParte@1103355018(VAR prLinsParte@1103355000 : Record 7010359;VAR prParte@1103355001 : Record 7010360) Creado : Boolean;
+    VAR
+      lrCodSer@1103355002 : Record 7010320;
+      lrTipSer@1103355003 : Record 7010319;
+      lrClienteTTOO@1103355004 : Record 7010313;
+      lrPunt@1103355005 : Record 7010315;
+      lrZonaFisica@1103355006 : Record 7010314;
+      lrCliente@1103355007 : Record 18;
+      lrParteTMP@1103355008 : TEMPORARY Record 7010360;
+      lrLinParteTMP@1103355009 : TEMPORARY Record 7010359;
+      lrUsuario@1000000000 : Record 7010420;
+    BEGIN
+      // AJF 05/02/2008 - DRF 07004
+      // Creamos un parte de entrada a partir de las l¡neas de prLinsParte.
+
+      rParGenerales.FINDFIRST;
+
+      Creado := FALSE;
+
+      IF prLinsParte.FINDFIRST THEN
+      BEGIN
+        lrParteTMP.Fecha                            := prLinsParte.Fecha;
+        lrParteTMP."Fecha facturacion"              := prLinsParte.Fecha;
+        lrParteTMP."Touroperador principal"         := prLinsParte.Touroperador;
+        lrParteTMP.Cliente                          := rParGenerales."Cliente Shuttle x Defecto";
+
+        lrZonaFisica.GET(prLinsParte."Zona fisica");
+        lrParteTMP."Zona parte"                     := prLinsParte."Zona fisica";
+        lrParteTMP."Zona trabajo"                   := lrZonaFisica."Zona trabajo";
+        lrParteTMP.Garaje                           := lrZonaFisica."Garaje Predeterminado";
+        //+$002 <
+        IF lrParteTMP.Garaje = '' THEN
+        BEGIN
+          IF NOT lrUsuario.GET(USERID) THEN
+            CLEAR(lrUsuario);
+          lrParteTMP.Garaje := lrUsuario."Garaje por defecto";
+        END;
+        //+$002 >
+
+        // AJF 09/06/08
+        // recogemos el valor de busca precio ingreso por defecto del cliente.
+        IF (lrCliente.GET(rParGenerales."Cliente Shuttle x Defecto")) THEN BEGIN
+          lrParteTMP."Busca precio ingreso" := lrCliente."Busca precio ingreso";
+        END;
+
+        IF (lrClienteTTOO.GET(rParGenerales."Cliente Shuttle x Defecto", prLinsParte.Touroperador)) THEN BEGIN
+          lrParteTMP."Ingreso Precios por"          := lrClienteTTOO."Precios por";
+          IF lrParteTMP."Ingreso Precios por" = lrParteTMP."Ingreso Precios por"::"Zona mas alejada" THEN BEGIN
+            lrParteTMP."Busca precio pasaje x zona ing" := FALSE;
+          END;
+          lrParteTMP.Gestor                         := lrClienteTTOO.Gestor;
+        END;
+
+        lrParteTMP."Codigo Servicio" := rParGenerales."Codigo Entradas";
+        IF lrCodSer.GET(lrParteTMP."Codigo Servicio") THEN BEGIN
+          lrParteTMP."Tipo Servicio" := lrCodSer."Tipo servicio";
+        END;
+
+        IF lrTipSer.GET(lrCodSer."Tipo servicio") THEN BEGIN
+          lrParteTMP."Calcular maletas" :=  lrTipSer."Calcular Maletas";
+          lrParteTMP."Origen/Destino"   :=  lrTipSer."Pto Origen x Defecto";
+        END;
+
+        IF lrPunt.GET(lrParteTMP."Origen/Destino") THEN BEGIN
+          lrParteTMP.Presentacion := COPYSTR(lrPunt.Descripci¢n, 1, MAXSTRLEN(lrParteTMP.Presentacion));
+        END;
+
+        lrParteTMP."Hora 1er Vuelo"  := prLinsParte."Hora Vuelo";
+        lrParteTMP."Hora inicio"     := prLinsParte."Hora Vuelo";
+        lrParteTMP."Dia siguiente"   := FALSE;
+
+        lrParteTMP.Usuario           := USERID;
+        lrParteTMP."Origen creacion" := lrParteTMP."Origen creacion"::Shuttle;
+
+        lrParteTMP.INSERT;
+
+        // lrLinparteTMP est  vacio, no se van a insertar lineas nuevas.
+        cGestionPartes.CrearParte(lrParteTMP, lrLinParteTMP, cGestionPartes.TipoParteShuttle, prParte);
+
+        Creado := TRUE;
+      END;
+    END;
+
+    PROCEDURE ComprobarReservasConfirmadas@1103355020(VAR prVuelo@1103355000 : Record 7035335) rvEncontrados : Boolean;
+    VAR
+      lrLinsParte@1103355001 : Record 7010359;
+      lwLimInf@1103355002 : DateTime;
+      lwLimSup@1103355003 : DateTime;
+    BEGIN
+      // ComprobarReservasConfirmadas
+      //: Buscamos si existen reservas confirmadas para el vuelo indicado.
+      //: @prVuelo: Vuelo del que vamos a buscar la reservas confirmadas.
+
+      rParGenerales.RESET;
+      rParGenerales.FINDFIRST;
+      // JPT 02/02/10 Datetime a Biginteger. Aseguramos "FechaHora Vuelo"
+      prVuelo.VALIDATE("FechaHora Vuelo BI");
+
+      // JPT 02/02/10 Datetime a Biginteger.Cambio de clave
+      // lrLinsParte.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo", "N§ Parte", "Origen creacion");
+      lrLinsParte.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI", "N§ Parte", "Origen creacion");
+      lwLimInf := CREATEDATETIME(DT2DATE(prVuelo."FechaHora Vuelo"), 000000T);
+      lwLimSup := CREATEDATETIME(DT2DATE(prVuelo."FechaHora Vuelo"), 235959T);
+
+      // JPT 02/02/10 Datetime a Biginteger.
+      // lrLinsParte.SETRANGE("FechaHora Vuelo", lwLimInf, lwLimSup);
+      lrLinsParte.SETRANGE("FechaHora Vuelo BI", cFunBas.DTtoBIGINT(lwLimInf), cFunBas.DTtoBIGINT(lwLimSup));
+      lrLinsParte.SETRANGE(Vuelo            , prVuelo."Referencia Vuelo");
+      lrLinsParte.SETRANGE("Codigo Servicio", rParGenerales."Codigo Entradas");
+      lrLinsParte.SETRANGE(Confirmada       , TRUE);
+
+      EXIT(NOT lrLinsParte.ISEMPTY);
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 30/07/09
+
+        .- (INC-42834) A¤adida funci¢n "ComprobarReservasConfirmadas" para comprobar si un vuelo tiene reservas ya
+           confirmadas.
+
+      JPT 02/02/10 Datetime a Biginteger
+
+      $001 AJS 18052015 Modifico la funcion LocalizaCliente para que no sea obligatorio el localizador
+
+      $002 AJS 26052015 Modifico la funcion CrearParte para traer el Garaje por defecto si la zona no tiene
+    }
+    END.
+  }
+}

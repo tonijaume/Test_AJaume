@@ -1,0 +1,249 @@
+OBJECT Codeunit 5501 Prod. Schedule Calculations
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=5409;
+    OnRun=BEGIN
+            CalculateEndDate(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WorkCenter@1015 : Record 99000754;
+      MachineCenter@1003 : Record 99000758;
+      ProdOrderRtngLine@1001 : Record 5409;
+      ProdSchedMgt@1004 : Codeunit 5500;
+      StartDate@1014 : Date;
+      EndDate@1005 : Date;
+      StartTime@1013 : Time;
+      EndTime@1011 : Time;
+      ResourceType@1010 : 'Work Center,Machine Center';
+      ResourceNo@1009 : Code[20];
+      CapNeed@1000 : Text[30];
+      CapNeedDivideFactor@1002 : Text[30];
+      ErrorCalculatingDate@1016 : Boolean;
+      Write@1017 : Boolean;
+      Text000@1006 : TextConst 'ENU=You cannot change %1, because there is at least one %2 associated with %3 %4 %5.;ESP=No puede cambiar %1. Existe al menos un %2 asociado con %3 %4 %5.';
+
+    PROCEDURE Initialize@7(StartDate1@1010 : Date;StartTime1@1009 : Time;EndDate1@1008 : Date;EndTime1@1007 : Time;ResourceType1@1006 : 'Work Center,Machine Center';ResourceNo1@1005 : Code[20];CapNeed1@1011 : Text[30];CapNeedDivideFactor1@1012 : Text[30];Write1@1013 : Boolean);
+    BEGIN
+      StartDate := StartDate1;
+      StartTime := StartTime1;
+      EndDate := EndDate1;
+      EndTime := EndTime1;
+      ResourceType := ResourceType1;
+      ResourceNo := ResourceNo1;
+      CapNeed := CapNeed1;
+      CapNeedDivideFactor := CapNeedDivideFactor1;
+      ErrorCalculatingDate := TRUE;
+      Write := Write1;
+    END;
+
+    PROCEDURE CalculateEndDate@11(VAR ProdOrderRtngLine1@1000 : Record 5409);
+    VAR
+      ProdOrderLine@1004 : Record 5406;
+      PurchLine@1008 : Record 39;
+      CalcProdOrderRtngLine@1001 : Codeunit 99000774;
+      CalcProdOrder@1005 : Codeunit 99000773;
+      Direction@1002 : 'Forward,Backward';
+      CapNeed1@1006 : Decimal;
+    BEGIN
+      ProdOrderRtngLine := ProdOrderRtngLine1;
+      ProdOrderRtngLine."Schedule Manually" := FALSE;
+
+      ProdOrderRtngLine."Starting Date" := StartDate;
+      ProdOrderRtngLine."Starting Time" := StartTime;
+      ProdOrderRtngLine.Type := ResourceType;
+
+      ProdOrderRtngLine.Recalculate := FALSE;
+      IF ProdOrderRtngLine."No." = '' THEN
+        EXIT;
+      IF ProdOrderRtngLine."No." <> ResourceNo THEN BEGIN
+        ProdOrderRtngLine."No." := ResourceNo;
+
+        IF ProdOrderRtngLine.SubcontractPurchOrderExist THEN
+          ERROR(Text000,ProdOrderRtngLine.FIELDCAPTION("No."),PurchLine.TABLECAPTION,
+            ProdOrderRtngLine.Status,ProdOrderRtngLine.TABLECAPTION,ProdOrderRtngLine."Operation No.");
+
+        CASE  ProdOrderRtngLine.Type OF
+          ProdOrderRtngLine.Type::"Work Center":
+            BEGIN
+              WorkCenter.GET(ProdOrderRtngLine."No.");
+              WorkCenter.TESTFIELD(Blocked,FALSE);
+              TransferWorkCenterFields;
+            END;
+          ProdOrderRtngLine.Type::"Machine Center":
+            BEGIN
+              MachineCenter.GET(ProdOrderRtngLine."No.");
+              MachineCenter.TESTFIELD(Blocked,FALSE);
+              TransferMachineCenterFields;
+            END;
+        END;
+        ProdOrderRtngLine.MODIFY(TRUE);
+        ProdOrderRtngLine.ModifyCapNeedEntries;
+      END;
+
+      CalcProdOrderRtngLine.CalculateRoutingLine(ProdOrderRtngLine,Direction::Forward,FALSE);
+
+      EndDate := ProdOrderRtngLine."Ending Date";
+      EndTime := ProdOrderRtngLine."Ending Time";
+
+      CapNeed1 := CalcCapacityNeed(ProdOrderRtngLine);
+      CapNeed := FORMAT(ROUND(CapNeed1,0.001),0,'<Integer><Decimals>');
+      CapNeed := DELCHR(CONVERTSTR(CapNeed,',.;:','    '),'=',' ');
+      CapNeedDivideFactor := ProdSchedMgt.DivideFactor(CapNeed1);
+
+      ProdOrderLine.SETRANGE("Prod. Order No.",ProdOrderRtngLine."Prod. Order No.");
+      ProdOrderLine.SETRANGE("Routing Reference No.",ProdOrderRtngLine."Routing Reference No.");
+      ProdOrderLine.SETRANGE("Routing No.",ProdOrderRtngLine."Routing No.");
+      IF ProdOrderLine.FIND('-') THEN
+        REPEAT
+          CalcProdOrder.CalculateProdOrderDates(ProdOrderLine);
+          ProdOrderRtngLine.AdjustComponents(ProdOrderLine);
+        UNTIL ProdOrderLine.NEXT = 0;
+      CalcProdOrder.CalculateComponents;
+
+      ErrorCalculatingDate := FALSE;
+
+      IF NOT Write THEN
+        ERROR('');
+    END;
+
+    PROCEDURE TransferWorkCenterFields@10();
+    BEGIN
+      WITH ProdOrderRtngLine DO BEGIN
+        "Work Center No." := WorkCenter."No.";
+        "Work Center Group Code" := WorkCenter."Work Center Group Code";
+        "Setup Time Unit of Meas. Code" := WorkCenter."Unit of Measure Code";
+        "Run Time Unit of Meas. Code" := WorkCenter."Unit of Measure Code";
+        "Wait Time Unit of Meas. Code" := WorkCenter."Unit of Measure Code";
+        "Move Time Unit of Meas. Code" := WorkCenter."Unit of Measure Code";
+        Description := WorkCenter.Name;
+        "Flushing Method" := WorkCenter."Flushing Method";
+        "Unit Cost per" := WorkCenter."Unit Cost";
+        "Direct Unit Cost" := WorkCenter."Direct Unit Cost";
+        "Indirect Cost %" := WorkCenter."Indirect Cost %";
+        "Overhead Rate" := WorkCenter."Overhead Rate";
+        "Unit Cost Calculation" := WorkCenter."Unit Cost Calculation";
+      END;
+    END;
+
+    PROCEDURE TransferMachineCenterFields@8();
+    BEGIN
+      WITH ProdOrderRtngLine DO BEGIN
+        WorkCenter.GET(MachineCenter."Work Center No.");
+        TransferWorkCenterFields;
+
+        Description := MachineCenter.Name;
+        "Setup Time" := MachineCenter."Setup Time";
+        "Wait Time" := MachineCenter."Wait Time";
+        "Move Time" := MachineCenter."Move Time";
+        "Fixed Scrap Quantity" := MachineCenter."Fixed Scrap Quantity";
+        "Scrap Factor %" := MachineCenter."Scrap %";
+        "Minimum Process Time" := MachineCenter."Minimum Process Time";
+        "Maximum Process Time" := MachineCenter."Maximum Process Time";
+        "Concurrent Capacities" := MachineCenter."Concurrent Capacities";
+        "Send-Ahead Quantity" := MachineCenter."Send-Ahead Quantity";
+        "Setup Time Unit of Meas. Code" := MachineCenter."Setup Time Unit of Meas. Code";
+        "Wait Time Unit of Meas. Code" := MachineCenter."Wait Time Unit of Meas. Code";
+        "Move Time Unit of Meas. Code" := MachineCenter."Move Time Unit of Meas. Code";
+        "Flushing Method" := MachineCenter."Flushing Method";
+        "Unit Cost per" := MachineCenter."Unit Cost";
+        "Direct Unit Cost" := MachineCenter."Direct Unit Cost";
+        "Indirect Cost %" := MachineCenter."Indirect Cost %";
+        "Overhead Rate" := MachineCenter."Overhead Rate";
+      END;
+    END;
+
+    PROCEDURE GetResult@6(VAR StartDate1@1003 : Text[30];VAR StartTime1@1002 : Text[30];VAR EndDate1@1001 : Text[30];VAR EndTime1@1000 : Text[30];VAR CapNeed1@1005 : Text[30];VAR CapNeedDivideFactor1@1006 : Text[30]);
+    BEGIN
+      IF NOT ErrorCalculatingDate THEN BEGIN
+        StartDate1 := ProdSchedMgt.ConvertToDDMMYY(StartDate);
+        StartTime1 := FORMAT(StartTime,0,'<Hours24,2>:<Minutes,2>:<Seconds,2>');
+        EndDate1 := ProdSchedMgt.ConvertToDDMMYY(EndDate);
+        EndTime1 := FORMAT(EndTime,0,'<Hours24,2>:<Minutes,2>:<Seconds,2>');
+        CapNeed1 := CapNeed;
+        CapNeedDivideFactor1 := CapNeedDivideFactor;
+      END ELSE BEGIN
+        StartDate1 := '';
+        StartTime1 := '';
+        EndDate1 := '';
+        EndTime1 := '';
+        CapNeed1 := '';
+        CapNeedDivideFactor1 := '';
+      END
+    END;
+
+    PROCEDURE CalculationErrorExist@4() : Boolean;
+    BEGIN
+      EXIT(ErrorCalculatingDate);
+    END;
+
+    PROCEDURE CalcCapacityNeed@2(ProdOrderRtngLine1@1005 : Record 5409) : Decimal;
+    VAR
+      WorkCenter@1004 : Record 99000754;
+      MachineCenter@1003 : Record 99000758;
+      ProdOrderCapNeed@1002 : Record 5410;
+      CalendarMgt@1001 : Codeunit 99000755;
+      TotalAllocated@1000 : Decimal;
+      CapNeed1@1007 : Decimal;
+    BEGIN
+      CASE ProdOrderRtngLine1.Type OF
+        ProdOrderRtngLine1.Type::"Work Center":
+          WorkCenter.GET(ProdOrderRtngLine1."No.");
+        ProdOrderRtngLine1.Type::"Machine Center":
+          BEGIN
+            MachineCenter.GET(ProdOrderRtngLine1."No.");
+            MachineCenter.TESTFIELD("Work Center No.");
+            WorkCenter.GET(MachineCenter."Work Center No.");
+          END;
+      END;
+
+      ProdOrderCapNeed.SETRANGE(Status,ProdOrderRtngLine1.Status);
+      ProdOrderCapNeed.SETRANGE("Prod. Order No.",ProdOrderRtngLine1."Prod. Order No.");
+      ProdOrderCapNeed.SETRANGE("Routing No.",ProdOrderRtngLine1."Routing No.");
+      ProdOrderCapNeed.SETRANGE("Routing Reference No.",ProdOrderRtngLine1."Routing Reference No.");
+      ProdOrderCapNeed.SETRANGE("Operation No.",ProdOrderRtngLine1."Operation No.");
+      ProdOrderCapNeed.SETFILTER("Allocated Time",'<>%1',0);
+
+      CapNeed1 := 0;
+      TotalAllocated := 0;
+      IF ProdOrderCapNeed.FIND('-') THEN
+        REPEAT
+          CapNeed1 :=
+            CapNeed1 +
+            ROUND(ProdOrderCapNeed."Concurrent Capacities" * ProdOrderCapNeed.Efficiency *
+              ROUND((ProdOrderCapNeed."Ending Time" - ProdOrderCapNeed."Starting Time") /
+                CalendarMgt.TimeFactor(WorkCenter."Unit of Measure Code"),WorkCenter."Calendar Rounding Precision") / 100,0.001);
+          TotalAllocated :=
+            TotalAllocated +
+            ROUND((ProdOrderCapNeed."Ending Time" - ProdOrderCapNeed."Starting Time") /
+              CalendarMgt.TimeFactor(WorkCenter."Unit of Measure Code"),WorkCenter."Calendar Rounding Precision");
+        UNTIL ProdOrderCapNeed.NEXT = 0;
+
+      TotalAllocated :=
+        TotalAllocated +
+        ROUND(ProdOrderRtngLine1."Wait Time" *
+          CalendarMgt.TimeFactor(ProdOrderRtngLine1."Wait Time Unit of Meas. Code") /
+          CalendarMgt.TimeFactor(WorkCenter."Unit of Measure Code"),WorkCenter."Calendar Rounding Precision") +
+        ROUND(ProdOrderRtngLine1."Move Time" * CalendarMgt.TimeFactor(ProdOrderRtngLine1."Move Time Unit of Meas. Code") /
+          CalendarMgt.TimeFactor(WorkCenter."Unit of Measure Code"),WorkCenter."Calendar Rounding Precision");
+
+      IF TotalAllocated > 0 THEN
+        CapNeed1 := ROUND(CapNeed1 / TotalAllocated,0.001);
+
+      EXIT(CapNeed1);
+    END;
+
+    BEGIN
+    END.
+  }
+}

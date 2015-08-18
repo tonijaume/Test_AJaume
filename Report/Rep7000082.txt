@@ -1,0 +1,475 @@
+OBJECT Report 7000082 Settle Docs. in Posted PO
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 21=imd,
+                TableData 25=imd,
+                TableData 45=m,
+                TableData 7000003=imd,
+                TableData 7000004=imd,
+                TableData 7000021=imd,
+                TableData 7000022=imd;
+    CaptionML=[ENU=Settle Docs. in Posted PO;
+               ESP=Liq. docs. en ord. pago regis.];
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   PostingDate := WORKDATE;
+                 END;
+
+    OnPreReport=BEGIN
+                  GLSetup.GET;
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7000003;
+        DataItemTableView=SORTING(Bill Gr./Pmt. Order No.,Status,Category Code,Redrawn,Due Date)
+                          WHERE(Status=CONST(Open));
+        DataItemVarName=PostedDoc;
+        OnPreDataItem=BEGIN
+                        DocPost.CheckPostingDate(PostingDate);
+
+                        SourceCodeSetup.GET;
+                        SourceCode := SourceCodeSetup."Cartera Journal";
+                        DocCount := 0;
+                        SumLCYAmt := 0;
+                        GenJnlLineNextNo := 0;
+                        ExistInvoice := FALSE;
+                        ExistVATEntry := FALSE;
+                        Window.OPEN(
+                          Text1100000);
+                        Counter := COUNT;
+                        IF (Counter > 1) AND GLSetup."Unrealized VAT" THEN BEGIN
+                          VATEntry.LOCKTABLE;
+                          IF VATEntry.FIND('+') THEN
+                            FromVATEntryNo := VATEntry."Entry No." + 1;
+                        END;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           FromJnl@1100001 : Boolean;
+                         BEGIN
+                           IsRedrawn := CarteraManagement.CheckFromRedrawnDoc(PostedDoc."No.");
+                           IF PostedDoc."Document Type" = PostedDoc."Document Type"::Invoice THEN
+                             ExistInvoice := TRUE;
+
+                           PostedPmtOrd.GET(PostedDoc."Bill Gr./Pmt. Order No.");
+                           BankAcc.GET(PostedPmtOrd."Bank Account No.");
+                           Delay := BankAcc."Delay for Notices";
+
+                           IF DueOnly AND (PostingDate < "Due Date" + Delay) THEN
+                             CurrReport.SKIP;
+
+                           DocCount := DocCount + 1;
+                           Window.UPDATE(1,DocCount);
+
+                           CASE "Document Type" OF
+                             PostedDoc."Document Type"::Invoice,PostedDoc."Document Type"::"1":
+                               BEGIN
+                                 WITH GenJnlLine DO BEGIN
+                                   GenJnlLineNextNo := GenJnlLineNextNo + 10000;
+                                   CLEAR(GenJnlLine);
+                                   INIT;
+                                   "Line No." := GenJnlLineNextNo;
+                                   "Posting Date" := PostingDate;
+                                   "Reason Code" := PostedPmtOrd."Reason Code";
+                                   GenJnlLine."Document Date" := "Document Date";
+                                   VALIDATE("Account Type","Account Type"::Vendor);
+                                   VendLedgEntry.GET(PostedDoc."Entry No.");
+                                   VALIDATE("Account No.",VendLedgEntry."Vendor No.");
+                                   "Document Type" := "Document Type"::Payment;
+                                   Description := COPYSTR(STRSUBSTNO(Text1100001,PostedDoc."Document No."),1,MAXSTRLEN(Description));
+                                   "Document No." := PostedPmtOrd."No.";
+                                   VALIDATE("Currency Code",PostedDoc."Currency Code");
+                                   IF GenJnlPostLine.CheckCalcPmtDiscGenJnlVend(GenJnlLine,VendLedgEntry,0,FALSE) THEN
+                                     VALIDATE(Amount,PostedDoc."Remaining Amount" + VendLedgEntry."Remaining Pmt. Disc. Possible")
+                                   ELSE
+                                     VALIDATE(Amount,PostedDoc."Remaining Amount" );
+                                   "Applies-to Doc. Type" := VendLedgEntry."Document Type";
+                                   "Applies-to Doc. No." := VendLedgEntry."Document No.";
+                                   "Applies-to Bill No." := VendLedgEntry."Bill No.";
+                                   "Source Code" := SourceCode;
+                                   "Global Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+                                   "System-Created Entry" := TRUE;
+                                   "Shortcut Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+                                   "Shortcut Dimension 2 Code" := VendLedgEntry."Global Dimension 2 Code";
+                                   INSERT;
+                                   CarteraDimMgt.VendInsertJnlLinDimension(GenJnlLine,VendLedgEntry,TRUE);
+                                   SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                                 END;
+                                 GroupAmount := GroupAmount + "Remaining Amount";
+                                 IF GenJnlPostLine.CheckCalcPmtDiscGenJnlVend(GenJnlLine,VendLedgEntry,0,FALSE) THEN
+                                   CalcBankAccount("No.","Remaining Amount" + VendLedgEntry."Remaining Pmt. Disc. Possible",VendLedgEntry."Entry No.")
+                                 ELSE
+                                   CalcBankAccount("No.","Remaining Amount",VendLedgEntry."Entry No.");
+                                 VendLedgEntry."Document Status" := VendLedgEntry."Document Status"::Honored;
+                                 VendLedgEntry.MODIFY;
+                               END;
+                             PostedDoc."Document Type"::Bill:
+                               BEGIN
+                                 WITH GenJnlLine DO BEGIN
+                                   GenJnlLineNextNo := GenJnlLineNextNo + 10000;
+                                   CLEAR(GenJnlLine);
+                                   INIT;
+                                   "Line No." := GenJnlLineNextNo;
+                                   "Posting Date" := PostingDate;
+                                   "Document Type" := "Document Type"::Payment;
+                                   "Document No." := PostedPmtOrd."No.";
+                                   "Reason Code" := PostedPmtOrd."Reason Code";
+                                   VALIDATE("Account Type","Account Type"::Vendor);
+                                   VendLedgEntry.GET(PostedDoc."Entry No.");
+
+                                   IF GLSetup."Unrealized VAT" THEN BEGIN
+                                     FromJnl := FALSE;
+                                     IF PostedDoc."From Journal" THEN
+                                       FromJnl := TRUE;
+                                     ExistsNoRealVAT := GenJnlPostLine.VendFindVATSetup(VATPostingSetup,VendLedgEntry,FromJnl);
+                                   END;
+
+                                   VALIDATE("Account No.",VendLedgEntry."Vendor No.");
+                                   Description := COPYSTR(STRSUBSTNO(Text1100002,PostedDoc."Document No.",PostedDoc."No."),1,MAXSTRLEN(Description));
+                                   VALIDATE("Currency Code",PostedDoc."Currency Code");
+                                   VALIDATE(Amount,PostedDoc."Remaining Amount");
+                                   "Applies-to Doc. Type" := VendLedgEntry."Document Type";
+                                   "Applies-to Doc. No." := VendLedgEntry."Document No.";
+                                   "Applies-to Bill No." := VendLedgEntry."Bill No.";
+                                   "Source Code" := SourceCode;
+                                   "System-Created Entry" := TRUE;
+                                   "Shortcut Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+                                   "Shortcut Dimension 2 Code" := VendLedgEntry."Global Dimension 2 Code";
+                                   INSERT;
+                                   CarteraDimMgt.VendInsertJnlLinDimension(GenJnlLine,VendLedgEntry,TRUE);
+                                   SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                                 END;
+                                 IF GLSetup."Unrealized VAT" AND ExistsNoRealVAT AND(NOT IsRedrawn) THEN BEGIN
+                                   VendLedgEntry.CALCFIELDS("Remaining Amount","Remaining Amt. (LCY)");
+                                   CarteraManagement.VendUnrealizedVAT2(
+                                     VendLedgEntry,
+                                     VendLedgEntry."Remaining Amt. (LCY)",
+                                     GenJnlLine,
+                                     ExistVATEntry,
+                                     FirstVATEntryNo,
+                                     LastVATEntryNo,
+                                     NoRealVATBuffer,
+                                     FromJnl);
+                                   TempCurrCode := "Currency Code";
+                                   "Currency Code" := '';
+
+                                   IF NoRealVATBuffer.FIND('-') THEN BEGIN
+                                     REPEAT
+                                       BEGIN
+                                         InsertGenJournalLine(
+                                           GenJnlLine."Account Type"::"G/L Account",
+                                           NoRealVATBuffer.Account,
+                                           NoRealVATBuffer.Amount,
+                                           PostedDoc."Global Dimension 1 Code",
+                                           PostedDoc."Global Dimension 2 Code");
+                                         InsertGenJournalLine(
+                                           GenJnlLine."Account Type"::"G/L Account",
+                                           NoRealVATBuffer."Balance Account",
+                                           -NoRealVATBuffer.Amount,
+                                           PostedDoc."Global Dimension 1 Code",
+                                           PostedDoc."Global Dimension 2 Code");
+                                       END;
+                                     UNTIL NoRealVATBuffer.NEXT = 0;
+                                     NoRealVATBuffer.DELETEALL;
+                                   END;
+
+                                    "Currency Code" := TempCurrCode;
+                                  END;
+                                 GroupAmount := GroupAmount + "Remaining Amount";
+                                 CalcBankAccount("No.","Remaining Amount",VendLedgEntry."Entry No.");
+                                 VendLedgEntry."Document Status" := VendLedgEntry."Document Status"::Honored;
+                                 VendLedgEntry.MODIFY;
+                               END;
+                           END;
+                         END;
+
+        OnPostDataItem=VAR
+                         VendLedgEntry2@1100001 : Record 25;
+                         JnlLineDim@1100000 : Record 356;
+                         PostedDoc2@1100002 : Record 7000003;
+                       BEGIN
+                         IF (DocCount = 0) OR (GroupAmount = 0) THEN BEGIN
+                           IF DueOnly THEN
+                             ERROR(Text1100003 + Text1100004)
+                           ELSE
+                             ERROR(Text1100003 + Text1100005);
+                         END;
+                         IF BankAccPostBuffer.FIND('-') THEN
+                           REPEAT
+                             VendLedgEntry2.GET(BankAccPostBuffer."Entry No.");
+                             PostedDoc2.GET(1,VendLedgEntry2."Entry No.");
+                             PostedPmtOrd.GET(PostedDoc2."Bill Gr./Pmt. Order No.");
+                             BankAcc.GET(PostedPmtOrd."Bank Account No.");
+                             GenJnlLineNextNo := GenJnlLineNextNo + 10000;
+                             WITH GenJnlLine DO BEGIN
+                               CLEAR(GenJnlLine);
+                               INIT;
+                               "Line No." := GenJnlLineNextNo;
+                               "Posting Date" := PostingDate;
+                               "Document Type" := "Document Type"::Payment;
+                               "Document No." := PostedPmtOrd."No.";
+                               "Reason Code" := PostedPmtOrd."Reason Code";
+                               VALIDATE("Account Type",GenJnlLine."Account Type"::"Bank Account");
+                               VALIDATE("Account No.",BankAcc."No.");
+                               Description := COPYSTR(STRSUBSTNO(Text1100006,PostedPmtOrd."No."),1,MAXSTRLEN(Description));
+                               VALIDATE("Currency Code",PostedPmtOrd."Currency Code");
+                               VALIDATE(Amount,-BankAccPostBuffer.Amount);
+                               "Source Code" := SourceCode;
+                               "Shortcut Dimension 1 Code" := BankAccPostBuffer."Global Dimension 1 Code";
+                               "Shortcut Dimension 2 Code" := BankAccPostBuffer."Global Dimension 2 Code";
+                               "System-Created Entry" := TRUE;
+                               INSERT;
+                               CarteraDimMgt.VendInsertJnlLinDimension(GenJnlLine,VendLedgEntry2,TRUE);
+
+                               SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+                             END;
+                           UNTIL BankAccPostBuffer.NEXT = 0;
+
+                         IF PostedPmtOrd."Currency Code" <> '' THEN BEGIN
+                           IF SumLCYAmt <> 0 THEN BEGIN
+                             Currency.SETFILTER(Code,PostedPmtOrd."Currency Code");
+                             Currency.FIND('-');
+                             IF SumLCYAmt > 0 THEN BEGIN
+                               Currency.TESTFIELD("Residual Gains Account");
+                               Acct := Currency."Residual Gains Account";
+                             END ELSE BEGIN
+                               Currency.TESTFIELD("Residual Losses Account");
+                               Acct := Currency."Residual Losses Account";
+                             END;
+                             GenJnlLineNextNo := GenJnlLineNextNo + 10000;
+                             WITH GenJnlLine DO BEGIN
+                               CLEAR(GenJnlLine);
+                               INIT;
+                               "Line No." := GenJnlLineNextNo;
+                               "Posting Date" := PostingDate;
+                               "Document Type" := "Document Type"::Payment;
+                               "Document No." := PostedPmtOrd."No.";
+                               "Reason Code" := PostedPmtOrd."Reason Code";
+                               VALIDATE("Account Type","Account Type"::"G/L Account");
+                               VALIDATE("Account No.",Acct);
+                               Description := Text1100007;
+                               VALIDATE("Currency Code",'');
+                               VALIDATE(Amount,-SumLCYAmt);
+                               "Source Code" := SourceCode;
+                               "System-Created Entry" := TRUE;
+                               INSERT;
+                             END;
+                           END;
+                         END;
+                         IF GenJnlLine.FIND('-') THEN
+                           REPEAT
+                             GenJnlLine2 := GenJnlLine;
+                             GenJnlPostLine.SetFromSettlement(TRUE);
+                             JnlLineDim.SETRANGE("Table ID",DATABASE::"Gen. Journal Line");
+                             JnlLineDim.SETRANGE("Journal Template Name",GenJnlLine2."Journal Template Name");
+                             JnlLineDim.SETRANGE("Journal Batch Name",GenJnlLine2."Journal Batch Name");
+                             JnlLineDim.SETRANGE("Journal Line No.",GenJnlLine2."Line No.");
+                             GenJnlPostLine.RunWithCheck(GenJnlLine2,JnlLineDim);
+                             IF PostedPmtOrd.GET(GenJnlLine."Document No.") THEN
+                               DocPost.ClosePmtOrdIfEmpty(PostedPmtOrd,PostingDate);
+                           UNTIL GenJnlLine.NEXT = 0;
+
+                         Window.CLOSE;
+
+                         IF (Counter > 1) AND GLSetup."Unrealized VAT" AND ExistVATEntry AND ExistInvoice THEN BEGIN
+                           IF VATEntry.FIND('+') THEN
+                             ToVATEntryNo := VATEntry."Entry No.";
+                           GLReg.FIND('+');
+                           GLReg."From VAT Entry No." := FromVATEntryNo;
+                           GLReg."To VAT Entry No." := ToVATEntryNo;
+                           GLReg.MODIFY;
+                         END ELSE BEGIN
+                           IF ExistVATEntry THEN BEGIN
+                             GLReg.FIND('+');
+                             GLReg."From VAT Entry No." := FirstVATEntryNo;
+                             GLReg."To VAT Entry No." := LastVATEntryNo;
+                             GLReg.MODIFY;
+                           END;
+                         END;
+
+                         COMMIT;
+
+                         IF NOT HidePrintDialog THEN
+                           MESSAGE(Text1100008,DocCount,GroupAmount);
+                       END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=5060;
+      Height=990;
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 5   ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Posting Date;
+                                                              ESP=Fecha registro];
+                                                   NotBlank=Yes;
+                                                   SourceExpr=PostingDate }
+      { 6   ;CheckBox     ;3410 ;550  ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Due bills only;
+                                                              ESP=S¢lo docs. vencidos];
+                                                   SourceExpr=DueOnly }
+      { 13  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=5 }
+      { 7   ;Label        ;0    ;550  ;3300 ;440  ;ParentControl=6 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 5   ;2   ;Field     ;
+                  CaptionML=[ENU=Posting Date;
+                             ESP=Fecha registro];
+                  NotBlank=Yes;
+                  SourceExpr=PostingDate }
+
+      { 6   ;2   ;Field     ;
+                  CaptionML=[ENU=Due bills only;
+                             ESP=S¢lo docs. vencidos];
+                  SourceExpr=DueOnly }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text1100000@1000 : TextConst 'ENU=Settling payable documents     #1######;ESP=Liquidando docs. a pagar       #1######';
+      Text1100001@1001 : TextConst 'ENU=Payable document settlement %1;ESP=Liq. documento a pagar %1';
+      Text1100002@1002 : TextConst 'ENU=Payable bill settlement %1/%2;ESP=Liq. efecto a pagar %1/%2';
+      Text1100003@1003 : TextConst 'ENU=No payable documents have been found that can be settled.;ESP=No hay documentos a pagar que liquidar.';
+      Text1100004@1004 : TextConst 'ENU=Please check that the selection is not empty and at least one payable document is open and due.;ESP=Compruebe que ha seleccionado al menos un documento a pagar pendiente y vencido.';
+      Text1100005@1005 : TextConst 'ENU=Please check that the selection is not empty and at least one payable document is open.;ESP=Compruebe que ha seleccionado al menos un documento a pagar pendiente.';
+      Text1100006@1006 : TextConst 'ENU=Payment Order settlement %1;ESP=Liq. orden pago %1';
+      Text1100007@1007 : TextConst 'ENU=Residual adjust generated by rounding Amount;ESP=Ajuste por redondeo';
+      Text1100008@1008 : TextConst 'ENU=%1 documents totaling %2 have been settled.;ESP=Se han liquidado %1 documentoss por un importe de %2.';
+      Text1100009@1009 : TextConst 'ENU=Document settlement %1/%2;ESP=Liq. documento %1/%2';
+      SourceCodeSetup@1100000 : Record 242;
+      PostedPmtOrd@1100001 : Record 7000021;
+      GenJnlLine@1100002 : TEMPORARY Record 81;
+      GenJnlLine2@1100003 : Record 81;
+      VendLedgEntry@1100004 : Record 25;
+      BankAcc@1100006 : Record 270;
+      Currency@1100008 : Record 4;
+      GLReg@1100009 : Record 45;
+      GLSetup@1100010 : Record 98;
+      VATPostingSetup@1100011 : Record 325;
+      VATEntry@1100012 : Record 254;
+      BankAccPostBuffer@1100016 : TEMPORARY Record 7000012;
+      NoRealVATBuffer@1100038 : TEMPORARY Record 7000012;
+      DocPost@1100013 : Codeunit 7000006;
+      CarteraManagement@1100014 : Codeunit 7000000;
+      GenJnlPostLine@1100015 : Codeunit 12;
+      CarteraDimMgt@1100036 : Codeunit 7000011;
+      Window@1100017 : Dialog;
+      PostingDate@1100018 : Date;
+      DueOnly@1100019 : Boolean;
+      Delay@1100020 : Decimal;
+      SourceCode@1100021 : Code[10];
+      Acct@1100022 : Code[20];
+      DocCount@1100023 : Integer;
+      GroupAmount@1100024 : Decimal;
+      GenJnlLineNextNo@1100025 : Integer;
+      SumLCYAmt@1100026 : Decimal;
+      ExistVATEntry@1100027 : Boolean;
+      FirstVATEntryNo@1100028 : Integer;
+      LastVATEntryNo@1100029 : Integer;
+      IsRedrawn@1100030 : Boolean;
+      ExistInvoice@1100031 : Boolean;
+      FromVATEntryNo@1100032 : Integer;
+      ToVATEntryNo@1100033 : Integer;
+      Counter@1100034 : Integer;
+      TempCurrCode@1100035 : Code[10];
+      ExistsNoRealVAT@1100037 : Boolean;
+      HidePrintDialog@1100100 : Boolean;
+
+    LOCAL PROCEDURE InsertGenJournalLine@4(AccType@1100000 : Integer;AccNo@1100001 : Code[20];Amount2@1100002 : Decimal;Dep@1100003 : Code[20];Proj@1100004 : Code[20]);
+    BEGIN
+      GenJnlLineNextNo := GenJnlLineNextNo + 10000;
+
+      WITH GenJnlLine DO BEGIN
+        CLEAR(GenJnlLine);
+        INIT;
+        "Line No." := GenJnlLineNextNo;
+        "Posting Date" := PostingDate;
+        "Document Type" := "Document Type"::Payment;
+        "Document No." := PostedPmtOrd."No.";
+        "Reason Code" := PostedPmtOrd."Reason Code";
+        "Account Type" := AccType;
+        "Account No." := AccNo;
+        IF PostedDoc."Document Type" = PostedDoc."Document Type"::Bill THEN
+          Description := COPYSTR(STRSUBSTNO(Text1100009,PostedDoc."Document No.",PostedDoc."No."),1,MAXSTRLEN(Description))
+        ELSE
+          Description := COPYSTR(STRSUBSTNO(Text1100009,PostedDoc."Document No.",PostedDoc."No."),1,MAXSTRLEN(Description));
+        VALIDATE("Currency Code",PostedDoc."Currency Code");
+        VALIDATE(Amount,-Amount2);
+        "Applies-to Doc. Type" := VendLedgEntry."Document Type";
+        "Applies-to Doc. No." := '';
+        "Applies-to Bill No." := VendLedgEntry."Bill No.";
+        "Source Code" := SourceCode;
+        "System-Created Entry" := TRUE;
+        "Shortcut Dimension 1 Code" := Dep;
+        "Shortcut Dimension 2 Code" := Proj;
+        SumLCYAmt := SumLCYAmt + "Amount (LCY)";
+        INSERT;
+        CarteraDimMgt.VendInsertJnlLinDimension(GenJnlLine,VendLedgEntry,TRUE);
+      END;
+    END;
+
+    PROCEDURE CalcBankAccount@5(BankAcc2@1100000 : Code[20];Amount2@1100001 : Decimal;EntryNo@1100002 : Integer);
+    BEGIN
+      IF BankAccPostBuffer.GET(BankAcc2,'',EntryNo) THEN BEGIN
+        BankAccPostBuffer.Amount := BankAccPostBuffer.Amount + Amount2;
+        BankAccPostBuffer.MODIFY;
+      END ELSE BEGIN
+        BankAccPostBuffer.INIT;
+        BankAccPostBuffer.Account := BankAcc2;
+        BankAccPostBuffer.Amount := Amount2;
+        BankAccPostBuffer."Entry No." := EntryNo;
+        BankAccPostBuffer."Global Dimension 1 Code" := VendLedgEntry."Global Dimension 1 Code";
+        BankAccPostBuffer."Global Dimension 2 Code" := VendLedgEntry."Global Dimension 2 Code";
+        BankAccPostBuffer.INSERT;
+      END;
+    END;
+
+    PROCEDURE SetHidePrintDialog@1100100(NewHidePrintDialog@1100000 : Boolean);
+    BEGIN
+      HidePrintDialog := NewHidePrintDialog;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

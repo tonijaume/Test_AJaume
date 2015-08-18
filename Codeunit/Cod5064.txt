@@ -1,0 +1,756 @@
+OBJECT Codeunit 5064 E-Mail - Logging
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=VAR
+            Semaphore@1001 : Record 5112;
+            Session@1000 : Record 2000000009;
+          BEGIN
+            RMSetup.GET;
+
+            RMSetup.TESTFIELD("E-Mail Logging Profile Name");
+            RMSetup.TESTFIELD("Queue Folder Name");
+            RMSetup.TESTFIELD("Storage Folder Name");
+            Semaphore.LOCKTABLE;
+
+            IF Semaphore.FINDSET(TRUE) THEN
+              REPEAT
+                Session.RESET;
+                Session.SETRANGE("User ID",Semaphore."User ID");
+                Session.SETRANGE("Login Time",Semaphore."Starting Time");
+                Session.SETRANGE("Login Date",Semaphore."Starting Date");
+                IF Session.FINDFIRST THEN BEGIN
+                  IF Session."My Session" THEN
+                    Semaphore.DELETE;
+                END ELSE
+                  Semaphore.DELETE;
+              UNTIL Semaphore.NEXT = 0;
+
+            IF Semaphore.FINDFIRST THEN
+              ERROR(
+                Text001 + Text002 + Text003,
+                Semaphore."Starting Date",
+                Semaphore."Starting Time",
+                Semaphore."User ID");
+
+            Session.RESET;
+            Session.SETRANGE("My Session",TRUE);
+            Session.FINDFIRST;
+
+            Semaphore.INIT;
+            Semaphore."Starting Date" := Session."Login Date";
+            Semaphore."Starting Time" := Session."Login Time";
+            Semaphore."User ID" := Session."User ID";
+            Semaphore.INSERT;
+
+            COMMIT;
+
+            RunEMailLogging;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RMSetup@1004 : Record 5079;
+      InteractionTmplSetup@1003 : Record 5122;
+      CDOSession@1002 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEB3-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOStorageMessages@1008 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{10EAB9E0-68DC-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      Text000@1000 : TextConst 'ENU=Do not select a root folder.;ESP=No seleccione un archivo de ruta.';
+      Text001@1007 : TextConst 'ENU=Unable to start the e-mail logging. Another client has locked the e-mail logging process. \;ESP=No se puede iniciar el registro del correo electr¢nico. Otro cliente ha bloqueado el proceso de registro de correo electr¢nico. \';
+      Text002@1006 : TextConst 'ENU=The e-mail logging process was started %1 %2 by %3. \;ESP=El proceso de registro de correo electr¢nico se inici¢ %1 %2 por %3. \';
+      Text003@1005 : TextConst 'ENU=The e-mail logging process can be unlocked by disconnecting this client from the database.;ESP=El proceso de registro de correo electr¢nico se puede desbloquear desconectando el cliente de la base de datos.';
+
+    PROCEDURE RunEMailLogging@21();
+    VAR
+      TempSegLine@1017 : TEMPORARY Record 5077;
+      Attachment@1016 : Record 5062;
+      InteractLogEntry@1015 : Record 5065;
+      SearchManagement@1014 : Codeunit 5067;
+      SegManagement@1002 : Codeunit 5051;
+      Mail@1000 : Codeunit 397;
+      CDOQueueFolder@1013 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEA9-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOMessages@1012 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{10EAB9E0-68DC-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOQueueMessage@1011 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOPrevQueueMessage@1010 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOStorageMessage@1009 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOHandler@1018 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{3A6EBE76-2645-4AE0-8926-B1200E42E49D}:Unknown Automation Server.Unknown Class";
+      StoreID@1008 : InStream;
+      EntryID@1007 : InStream;
+      Continue@1006 : Boolean;
+      Subject@1005 : Text[50];
+      AttachmentNo@1004 : Integer;
+      NextInteractLogEntryNo@1003 : Integer;
+      InformationFlow@1001 : Integer;
+    BEGIN
+      IF ISCLEAR(CDOHandler) THEN
+        CREATE(CDOHandler,TRUE,TRUE);
+
+      RMSetup.GET;
+      InteractionTmplSetup.GET;
+      InteractionTmplSetup.TESTFIELD("E-Mails");
+      RMSetup.TESTFIELD("Queue Folder Name");
+      RMSetup.TESTFIELD("Storage Folder Name");
+
+      Logon;
+
+      RMSetup.CALCFIELDS("Queue Folder Store ID","Queue Folder Entry ID");
+      RMSetup."Queue Folder Store ID".CREATEINSTREAM(StoreID);
+      RMSetup."Queue Folder Entry ID".CREATEINSTREAM(EntryID);
+      GetCDOFolder(StoreID,EntryID,CDOQueueFolder);
+      CDOMessages := CDOQueueFolder.Messages;
+      CDOQueueMessage := CDOMessages.GetLast;
+
+      WHILE NOT ISCLEAR(CDOQueueMessage) DO BEGIN
+        TempSegLine.DELETEALL;
+        TempSegLine.INIT;
+        Continue := FORMAT(CDOHandler.GetSensitivity(CDOQueueMessage)) = '0'; // CdoNoSensitivity
+
+        IF Continue THEN
+          Continue := NOT AlreadyInStorage(CDOQueueMessage);
+
+        // Check if in- or out-bound and store sender and recipients in segment line(s)
+        IF Continue THEN BEGIN
+          IF SalespersonSender(CDOQueueMessage,TempSegLine) THEN BEGIN
+            TempSegLine."Information Flow" := TempSegLine."Information Flow"::Outbound;
+            Continue := ContactRecipients(CDOQueueMessage,TempSegLine);
+          END ELSE BEGIN
+            IF ContactSender(CDOQueueMessage,TempSegLine) THEN BEGIN
+              TempSegLine."Information Flow" := TempSegLine."Information Flow"::Inbound;
+              Continue := SalespersonRecipients(CDOQueueMessage,TempSegLine);
+            END ELSE
+              Continue := FALSE;
+          END;
+        END;
+
+        IF Continue THEN BEGIN
+          Continue := NOT TempSegLine.ISEMPTY;
+          Subject := CDOHandler.GetSubjectSubString(CDOQueueMessage,1,MAXSTRLEN(TempSegLine.Description));
+        END;
+
+        IF Continue AND (TempSegLine."Information Flow" = TempSegLine."Information Flow"::Outbound) THEN
+          IF TempSegLine.COUNT = 1 THEN
+            Continue := NOT LoggedAsInternalInteraction(CDOQueueMessage,TempSegLine);
+
+        // Create the attachement record and log the segment lines
+        IF Continue THEN BEGIN
+          Attachment.LOCKTABLE;
+          IF Attachment.FINDLAST THEN
+            AttachmentNo := Attachment."No." + 1
+          ELSE
+            AttachmentNo := 1;
+          Attachment.INIT;
+          Attachment."No." := AttachmentNo;
+          Attachment.INSERT;
+
+          TempSegLine.RESET;
+          TempSegLine.FINDSET(TRUE);
+          REPEAT
+            InformationFlow := TempSegLine."Information Flow";
+            TempSegLine.VALIDATE("Interaction Template Code",InteractionTmplSetup."E-Mails");
+            TempSegLine."Information Flow" := InformationFlow;
+            TempSegLine.Description := Subject;
+            TempSegLine.Date := VARIANT2DATE(CDOHandler.GetTimeReceivedOrDelivered(CDOQueueMessage));
+            TempSegLine."Time of Interaction" := VARIANT2TIME(CDOHandler.GetTimeReceivedOrDelivered(CDOQueueMessage));
+            TempSegLine.Subject := Subject;
+            TempSegLine."Attachment No." := Attachment."No.";
+            TempSegLine.MODIFY;
+          UNTIL TempSegLine.NEXT = 0;
+
+          AddField(CDOQueueMessage,UniqueFieldName,FORMAT(Attachment."No."));
+          CopyToStorage(CDOQueueMessage,CDOStorageMessage);
+          CDOStorageMessage.Update;
+
+          Attachment.LinkToMessage(CDOStorageMessage,TRUE);
+
+          InteractLogEntry.LOCKTABLE;
+          IF InteractLogEntry.FINDLAST THEN
+            NextInteractLogEntryNo := InteractLogEntry."Entry No.";
+          IF TempSegLine.FINDSET THEN
+            REPEAT
+              NextInteractLogEntryNo := NextInteractLogEntryNo + 1;
+              InteractLogEntry.INIT;
+              InteractLogEntry."Entry No." := NextInteractLogEntryNo;
+              SegManagement.CopyFieldsToInteractLogEntry(InteractLogEntry,TempSegLine);
+              Mail.FindMailGUID(CDOQueueMessage,InteractLogEntry."Mail GUID");
+              InteractLogEntry."E-Mail Logged" := TRUE;
+              InteractLogEntry.INSERT;
+              SearchManagement.ParseIntLogEntry(InteractLogEntry,FALSE);
+            UNTIL TempSegLine.NEXT = 0;
+
+          COMMIT;
+
+        END;
+
+        CDOPrevQueueMessage := CDOMessages.GetPrevious;
+        CDOQueueMessage.Delete;
+        CDOQueueMessage := CDOPrevQueueMessage;
+
+      END;
+
+      Logoff;
+    END;
+
+    PROCEDURE LookupProfile@1(VAR ProfileName@1000 : Text[250]);
+    VAR
+      TmpVariant@1001 : Variant;
+    BEGIN
+      IF ISCLEAR(CDOSession) THEN
+        CREATE(CDOSession,TRUE,TRUE);
+
+      CDOSession.Logon(ProfileName,'',TRUE,FALSE,-1);
+
+      TmpVariant := CDOSession.Name;
+      IF TmpVariant.ISTEXT THEN
+        IF FORMAT(CDOSession.Name) <> '' THEN
+          ProfileName := CDOSession.Name;
+
+      Logoff;
+    END;
+
+    PROCEDURE LookupFolder@3(VAR Name@1003 : Text[250];VAR StoreID@1000 : OutStream;VAR EntryID@1001 : OutStream;PreferEmpty@1011 : Boolean;NotEmptyWarning@1012 : Text[1024]) : Boolean;
+    VAR
+      OLApplication@1006 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.0:{0006F03A-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      OLNameSpace@1005 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.0:{0006308B-0000-0000-C000-000000000046}:Unknown Automation Server.NameSpace";
+      OLMAPIFolder@1004 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.0:{00063006-0000-0000-C000-000000000046}:Unknown Automation Server.MAPIFolder";
+      OLParentMAPIFolder@1010 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.0:{00063006-0000-0000-C000-000000000046}:Unknown Automation Server.MAPIFolder";
+      OutlookHandler@1008 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{2766747D-01E4-40A1-89B3-062173C5F24D}:Unknown Automation Server.Unknown Class";
+      ParentVariant@1009 : Variant;
+      Index@1007 : Integer;
+    BEGIN
+      Logon;
+
+      IF ISCLEAR(OLApplication) THEN
+        CREATE(OLApplication,TRUE,TRUE);
+
+      OLNameSpace := OLApplication.GetNamespace('MAPI');
+      OLMAPIFolder := OLNameSpace.PickFolder;
+
+      IF ISCLEAR(OLMAPIFolder) THEN
+        EXIT(FALSE);
+
+      ParentVariant := OLMAPIFolder.Parent;
+      OLParentMAPIFolder := ParentVariant;
+      IF FORMAT(OLParentMAPIFolder.Class) = '1' THEN
+        ERROR(Text000);
+
+      IF PreferEmpty THEN
+        IF OLMAPIFolder.Items.Count <> 0 THEN
+          IF NOT CONFIRM(NotEmptyWarning,FALSE) THEN
+            EXIT(FALSE);
+
+      Name := OLMAPIFolder.Name;
+      REPEAT
+        Name := COPYSTR(OLParentMAPIFolder.Name + '\' + Name,1,MAXSTRLEN(Name));
+        ParentVariant := OLParentMAPIFolder.Parent;
+        OLParentMAPIFolder := ParentVariant;
+      UNTIL FORMAT(OLParentMAPIFolder.Class) = '1';
+
+      IF ISCLEAR(OutlookHandler) THEN
+        CREATE(OutlookHandler,TRUE,TRUE);
+
+      OutlookHandler.FindFolderID(OLMAPIFolder);
+      FOR Index := 1 TO OutlookHandler.FolderStoreIDNoOfParts DO
+        StoreID.WRITETEXT(OutlookHandler.FolderStoreIDPart(Index));
+      FOR Index := 1 TO OutlookHandler.FolderEntryIDNoOfParts DO
+        EntryID.WRITETEXT(OutlookHandler.FolderEntryIDPart(Index));
+
+      Logoff;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ClearEMailJounalingSetup@5(VAR RMSetup@1000 : Record 5079);
+    BEGIN
+      RMSetup."E-Mail Logging Profile Name" := '';
+      RMSetup."Queue Folder Name" := '';
+      CLEAR(RMSetup."Queue Folder Store ID");
+      CLEAR(RMSetup."Queue Folder Entry ID");
+      RMSetup."Storage Folder Name" := '';
+      CLEAR(RMSetup."Storage Folder Store ID");
+      CLEAR(RMSetup."Storage Folder Entry ID");
+      RMSetup.MODIFY;
+    END;
+
+    PROCEDURE Logon@4();
+    BEGIN
+      RMSetup.GET;
+      RMSetup.TESTFIELD("E-Mail Logging Profile Name");
+
+      Logoff;
+
+      CREATE(CDOSession,TRUE,TRUE);
+      CDOSession.Logon(RMSetup."E-Mail Logging Profile Name",'',TRUE,FALSE,-1,TRUE);
+    END;
+
+    PROCEDURE Logoff@2();
+    BEGIN
+      IF NOT ISCLEAR(CDOSession) THEN BEGIN
+        CDOSession.Logoff();
+        CLEAR(CDOSession);
+      END;
+    END;
+
+    PROCEDURE GetCDOFolder@16(VAR StoreID@1003 : InStream;VAR EntryID@1002 : InStream;VAR CDOFolder@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEA9-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class");
+    VAR
+      CDOHandler@1006 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{3A6EBE76-2645-4AE0-8926-B1200E42E49D}:Unknown Automation Server.Unknown Class";
+      StoreIDPart@1004 : Text[250];
+      EntryIDPart@1005 : Text[250];
+    BEGIN
+      IF ISCLEAR(CDOHandler) THEN
+        CREATE(CDOHandler,TRUE,TRUE);
+
+      CDOHandler.ClearIDs;
+
+      StoreIDPart := '';
+      EntryIDPart := '';
+
+      WHILE NOT StoreID.EOS DO BEGIN
+        StoreID.READTEXT(StoreIDPart,250);
+        CDOHandler.AddStoreIDPart(StoreIDPart);
+      END;
+      WHILE NOT EntryID.EOS DO BEGIN
+        EntryID.READTEXT(EntryIDPart,250);
+        CDOHandler.AddEntryIDPart(EntryIDPart);
+      END;
+
+      CDOFolder := CDOHandler.GetFolder(CDOSession);
+    END;
+
+    PROCEDURE AlreadyInStorage@6(VAR CDOQueueMessage@1002 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class") : Boolean;
+    VAR
+      CDOStorageMessage@1001 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      IF NOT IdenticalItemInStorage(CDOQueueMessage,CDOStorageMessage) THEN
+        EXIT(FALSE);
+
+      IF ItemLinkedFromAttachment(CDOStorageMessage) THEN
+        EXIT(TRUE);
+
+      CDOStorageMessage.Delete;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE IdenticalItemInStorage@9(VAR CDOQueueMessage@1006 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR CDOStorageMessage@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class") : Boolean;
+    VAR
+      CDOStorageFolder@1001 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEA9-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOStorageMessageFilter@1009 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{D725D1C3-7657-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOHandler@1004 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{3A6EBE76-2645-4AE0-8926-B1200E42E49D}:Unknown Automation Server.Unknown Class";
+      SenderVariant@1002 : Variant;
+      StoreID@1007 : InStream;
+      EntryID@1003 : InStream;
+    BEGIN
+      IF ISCLEAR(CDOHandler) THEN
+        CREATE(CDOHandler,TRUE,TRUE);
+
+      RMSetup.CALCFIELDS("Storage Folder Store ID","Storage Folder Entry ID");
+      RMSetup."Storage Folder Store ID".CREATEINSTREAM(StoreID);
+      RMSetup."Storage Folder Entry ID".CREATEINSTREAM(EntryID);
+      GetCDOFolder(StoreID,EntryID,CDOStorageFolder);
+
+      IF ISCLEAR(CDOStorageMessages) OR GUIALLOWED THEN
+        CDOStorageMessages := CDOStorageFolder.Messages
+      ELSE
+        CDOStorageFolder.Update;
+
+      CDOStorageMessageFilter := CDOStorageMessages.Filter;
+
+      CDOStorageMessageFilter.TimeFirst := CDOHandler.GetTimeReceivedOrDelivered(CDOQueueMessage);
+      CDOStorageMessageFilter.TimeLast := DATI2VARIANT(VARIANT2DATE(CDOHandler.GetTimeReceivedOrDelivered(CDOQueueMessage)),VARIANT2TIME
+      (CDOHandler.GetTimeReceivedOrDelivered(CDOQueueMessage)) + 1000);
+
+      SenderVariant := CDOQueueMessage.Sender;
+      IF SenderVariant.ISAUTOMATION THEN
+        CDOStorageMessageFilter.Sender := CDOQueueMessage.Sender;
+
+      CDOHandler.SetSubjectComparisonField(CDOStorageMessageFilter,CDOQueueMessage);
+
+      CDOStorageMessage := CDOStorageMessages.GetFirst;
+      WHILE NOT ISCLEAR(CDOStorageMessage) DO BEGIN
+        IF CDOHandler.IdenticalText(CDOQueueMessage,CDOStorageMessage) THEN BEGIN
+          IF CDOHandler.IdenticalAttachments(CDOQueueMessage,CDOStorageMessage) THEN
+            EXIT(TRUE);
+        END;
+        CDOStorageMessage := CDOStorageMessages.GetNext;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ItemLinkedFromAttachment@10(VAR CDOMessage@1002 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class") : Boolean;
+    VAR
+      Attachment@1001 : Record 5062;
+      TempAttachment@1000 : TEMPORARY Record 5062;
+      EntryID@1003 : InStream;
+      EntryID2@1004 : InStream;
+      StoreID@1010 : InStream;
+      StoreID2@1009 : InStream;
+      EntryIDPart@1005 : Text[250];
+      EntryIDPart2@1006 : Text[250];
+      StoreIDPart@1008 : Text[250];
+      StoreIDPart2@1007 : Text[250];
+      Identical@1011 : Boolean;
+    BEGIN
+      TempAttachment.INSERT;
+      TempAttachment.LinkToMessage(CDOMessage,FALSE);
+
+      Attachment.SETCURRENTKEY("Entry Pointer Checksum","Store Pointer Checksum");
+      Attachment.SETRANGE("Store Pointer Checksum",TempAttachment."Store Pointer Checksum");
+      Attachment.SETRANGE("Entry Pointer Checksum",TempAttachment."Entry Pointer Checksum");
+      Attachment.SETRANGE("Storage Type",Attachment."Storage Type"::"Exchange Storage");
+      IF NOT Attachment.FIND('-') THEN
+        EXIT(FALSE);
+
+      EntryIDPart := '';
+      EntryIDPart2 := '';
+      StoreIDPart := '';
+      StoreIDPart2 := '';
+
+      REPEAT
+        Identical := TRUE;
+        Attachment.CALCFIELDS("Store Pointer ID","Entry Pointer ID");
+        Attachment."Entry Pointer ID".CREATEINSTREAM(EntryID);
+        TempAttachment.CALCFIELDS("Store Pointer ID","Entry Pointer ID");
+        TempAttachment."Entry Pointer ID".CREATEINSTREAM(EntryID2);
+        WHILE Identical AND (NOT EntryID.EOS) DO BEGIN
+          IF NOT EntryID2.EOS THEN BEGIN
+            EntryID.READTEXT(EntryIDPart);
+            EntryID2.READTEXT(EntryIDPart2);
+            IF EntryIDPart <> EntryIDPart2 THEN
+              Identical := FALSE;
+          END ELSE
+            Identical := FALSE;
+        END;
+
+        IF Identical THEN BEGIN
+          Attachment."Store Pointer ID".CREATEINSTREAM(StoreID);
+          TempAttachment."Store Pointer ID".CREATEINSTREAM(StoreID2);
+          WHILE NOT StoreID.EOS DO BEGIN
+            IF NOT StoreID2.EOS THEN BEGIN
+              StoreID.READTEXT(StoreIDPart);
+              StoreID2.READTEXT(StoreIDPart2);
+              IF StoreIDPart <> StoreIDPart2 THEN
+                Identical := FALSE;
+            END ELSE
+              Identical := FALSE;
+          END;
+          IF Identical THEN
+            EXIT(TRUE);
+        END;
+      UNTIL Attachment.NEXT = 0;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SalespersonSender@14(VAR CDOMessage@1005 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR SegLine@1001 : Record 5077) : Boolean;
+    VAR
+      Salesperson@1002 : Record 13;
+      CDOAddressEntry@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAB-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      SenderVariant@1003 : Variant;
+      EMail@1004 : Code[80];
+    BEGIN
+      SenderVariant := CDOMessage.Sender;
+      IF NOT SenderVariant.ISAUTOMATION THEN
+        EXIT(FALSE);
+
+      CDOAddressEntry := CDOMessage.Sender;
+      EMail := COPYSTR(AddressEntryEMail(CDOAddressEntry),1,MAXSTRLEN(EMail));
+      IF EMail <> '' THEN
+        WITH Salesperson DO BEGIN
+          SETCURRENTKEY("Search E-Mail");
+          SETFILTER("Search E-Mail",'=%1',EMail);
+          IF FIND('-') THEN
+            SegLine."Salesperson Code" := Code;
+        END;
+
+      EXIT(SegLine."Salesperson Code" <> '');
+    END;
+
+    PROCEDURE ContactSender@13(VAR CDOMessage@1002 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR SegLine@1000 : Record 5077) : Boolean;
+    VAR
+      CDOAddressEntry@1001 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAB-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      SenderVariant@1003 : Variant;
+    BEGIN
+      SenderVariant := CDOMessage.Sender;
+      IF NOT SenderVariant.ISAUTOMATION THEN
+        EXIT(FALSE);
+
+      CDOAddressEntry := CDOMessage.Sender;
+      EXIT(ContactFound(AddressEntryEMail(CDOAddressEntry),SegLine));
+    END;
+
+    PROCEDURE SalespersonRecipients@12(VAR CDOMessage@1008 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR SegLine@1001 : Record 5077) : Boolean;
+    VAR
+      Salesperson@1014 : Record 13;
+      CDORecipients@1010 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{D725D1C0-7657-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDORecipient@1009 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAD-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOAddressEntry@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAB-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      EMail@1007 : Code[80];
+      RecipientCount@1006 : Integer;
+      RecipientNo@1003 : Integer;
+    BEGIN
+      CDORecipients := CDOMessage.Recipients;
+      EVALUATE(RecipientCount,FORMAT(CDORecipients.Count));
+      IF RecipientCount = 0 THEN
+        EXIT(FALSE);
+
+      FOR RecipientNo := 1 TO RecipientCount DO BEGIN
+        CDORecipient := CDORecipients.Item(RecipientNo);
+        CDOAddressEntry := CDORecipient.AddressEntry;
+        EMail := COPYSTR(AddressEntryEMail(CDOAddressEntry),1,MAXSTRLEN(EMail));
+        IF EMail <> '' THEN BEGIN
+          Salesperson.RESET;
+          Salesperson.SETCURRENTKEY("Search E-Mail");
+          Salesperson.SETFILTER("Search E-Mail",'=%1',EMail);
+          IF Salesperson.FIND('-') THEN BEGIN
+            SegLine."Salesperson Code" := Salesperson.Code;
+            InsertSegLine(SegLine);
+          END;
+        END;
+      END;
+      EXIT(NOT SegLine.ISEMPTY);
+    END;
+
+    PROCEDURE ContactRecipients@11(VAR CDOMessage@1004 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR SegLine@1001 : Record 5077) : Boolean;
+    VAR
+      InteractLogEntry@1006 : Record 5065;
+      Mail@1008 : Codeunit 397;
+      CDORecipients@1011 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{D725D1C0-7657-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDORecipient@1007 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAD-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOAddressEntry@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAB-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      RecipientCount@1003 : Integer;
+      RecipientNo@1002 : Integer;
+      MailGUID@1005 : GUID;
+    BEGIN
+      CDORecipients := CDOMessage.Recipients;
+      EVALUATE(RecipientCount,FORMAT(CDORecipients.Count));
+      IF RecipientCount = 0 THEN
+        EXIT(FALSE);
+
+      CLEAR(MailGUID);
+      Mail.FindMailGUID(CDOMessage,MailGUID);
+      InteractLogEntry.SETFILTER("Mail GUID",MailGUID);
+      IF InteractLogEntry.FINDFIRST AND NOT ISNULLGUID(MailGUID) THEN BEGIN
+        SegLine."Contact No." := InteractLogEntry."Contact No.";
+        InsertSegLine(SegLine);
+      END ELSE
+        FOR RecipientNo := 1 TO RecipientCount DO BEGIN
+          CDORecipient := CDORecipients.Item(RecipientNo);
+          CDOAddressEntry := CDORecipient.AddressEntry;
+          IF ContactFound(AddressEntryEMail(CDOAddressEntry),SegLine) THEN
+            InsertSegLine(SegLine);
+        END;
+      EXIT(NOT SegLine.ISEMPTY);
+    END;
+
+    PROCEDURE AddressEntryEMail@31(VAR CDOAddressEntry@1001 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAB-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class") : Code[250];
+    VAR
+      CDOFields@1006 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{000662A0-68DC-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOField@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEB0-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      FieldNumber@1004 : Integer;
+    BEGIN
+      CDOFields := CDOAddressEntry.Fields;
+      FieldNumber := CDOFields.Count;
+      WHILE FieldNumber > 0 DO BEGIN
+        CDOField := CDOFields.Item(FieldNumber);
+        IF FORMAT(CDOField.ID) IN ['972947486','805503006'] THEN
+          IF STRPOS(FORMAT(CDOField.Value),'@') <> 0 THEN
+            EXIT(FORMAT(CDOField.Value));
+        FieldNumber := FieldNumber - 1;
+      END;
+    END;
+
+    PROCEDURE ContactFound@7(EMail@1002 : Code[250];VAR SegLine@1000 : Record 5077) : Boolean;
+    VAR
+      Cont@1003 : Record 5050;
+      ContAltAddress@1004 : Record 5051;
+    BEGIN
+      IF EMail = '' THEN
+        EXIT(FALSE);
+
+      WITH Cont DO BEGIN
+        SETCURRENTKEY("Search E-Mail");
+        SETFILTER("Search E-Mail",'=%1',COPYSTR(EMail,1,MAXSTRLEN("Search E-Mail")));
+        IF FIND('-') THEN BEGIN
+          SegLine."Contact No." := "No.";
+          SegLine."Contact Company No." := "Company No.";
+          SegLine."Contact Alt. Address Code" := '';
+          EXIT(TRUE);
+        END;
+      END;
+
+      WITH ContAltAddress DO BEGIN
+        SETCURRENTKEY("Search E-Mail");
+        SETFILTER("Search E-Mail",'=%1',COPYSTR(EMail,1,MAXSTRLEN("Search E-Mail")));
+        IF FIND('-') THEN BEGIN
+          SegLine."Contact No." := "Contact No.";
+          Cont.GET("Contact No.");
+          SegLine."Contact Company No." := Cont."Company No.";
+          SegLine."Contact Alt. Address Code" := Code;
+          EXIT(TRUE);
+        END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE InsertSegLine@8(VAR SegLine@1000 : Record 5077);
+    BEGIN
+      SegLine.INSERT;
+      SegLine."Line No." := SegLine."Line No." + 1;
+    END;
+
+    PROCEDURE LoggedAsInternalInteraction@20(VAR CDOQueueMessage@1003 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR SegLine@1000 : Record 5077) : Boolean;
+    VAR
+      Attachment@1005 : Record 5062;
+      InteractLogEntry@1001 : Record 5065;
+      Mail@1008 : Codeunit 397;
+      CDOStorageMessage@1004 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOHandler@1009 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{3A6EBE76-2645-4AE0-8926-B1200E42E49D}:Unknown Automation Server.Unknown Class";
+      AttachmentNo@1006 : Integer;
+      MailGUID@1007 : GUID;
+    BEGIN
+      SegLine.FIND('-');
+
+      InteractLogEntry.LOCKTABLE;
+      InteractLogEntry.SETCURRENTKEY("Contact No.","Correspondence Type","E-Mail Logged",Subject);
+      InteractLogEntry.SETRANGE("Contact No.",SegLine."Contact No.");
+      InteractLogEntry.SETRANGE("Correspondence Type",InteractLogEntry."Correspondence Type"::"E-Mail");
+      InteractLogEntry.SETRANGE("E-Mail Logged",FALSE);
+      InteractLogEntry.SETRANGE(Postponed,FALSE);
+      CLEAR(MailGUID);
+      Mail.FindMailGUID(CDOQueueMessage,MailGUID);
+      InteractLogEntry.SETFILTER("Mail GUID",MailGUID);
+
+      IF NOT InteractLogEntry.FIND('-') THEN
+        EXIT(FALSE);
+
+      InteractLogEntry."E-Mail Logged" := TRUE;
+
+      IF InteractLogEntry."Attachment No." <> 0 THEN BEGIN
+        InteractLogEntry.MODIFY;
+        EXIT(TRUE); // The InteractLogEntry was created using Microsoft Word merge
+      END;
+
+      // The InteractLogEntry was created using a NewMailMessage button
+      Attachment.LOCKTABLE;
+      IF Attachment.FIND('+') THEN
+        AttachmentNo := Attachment."No." + 1
+      ELSE
+        AttachmentNo := 1;
+      Attachment.INIT;
+      Attachment."No." := AttachmentNo;
+      Attachment.INSERT;
+
+      AddField(CDOQueueMessage,UniqueFieldName,FORMAT(Attachment."No."));
+      CopyToStorage(CDOQueueMessage,CDOStorageMessage);
+      CDOStorageMessage.Update;
+
+      Attachment.LinkToMessage(CDOStorageMessage,TRUE);
+
+      InteractLogEntry."Attachment No." := Attachment."No.";
+
+      IF ISCLEAR(CDOHandler) THEN
+        CREATE(CDOHandler);
+      InteractLogEntry.Subject := CDOHandler.GetSubjectSubString(CDOStorageMessage,1,MAXSTRLEN(InteractLogEntry.Subject));
+      InteractLogEntry.Description := InteractLogEntry.Subject;
+      InteractLogEntry."Time of Interaction" := VARIANT2TIME(CDOHandler.GetTimeReceivedOrDelivered(CDOStorageMessage));
+      InteractLogEntry.MODIFY;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CopyToStorage@15(VAR CDOQueueMessage@1005 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";VAR CDOStorageMessage@1006 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class");
+    VAR
+      CDOHandler@1000 : Automation "{3C2554FE-2B41-4543-B3E8-E64296773DA5} 2.0:{3A6EBE76-2645-4AE0-8926-B1200E42E49D}:Unknown Automation Server.Unknown Class";
+      StoreID@1001 : InStream;
+      EntryID@1003 : InStream;
+      StoreIDPart@1002 : Text[250];
+      EntryIDPart@1004 : Text[250];
+    BEGIN
+      IF ISCLEAR(CDOHandler) THEN
+        CREATE(CDOHandler,TRUE,TRUE);
+      CDOHandler.ClearIDs;
+
+      StoreIDPart := '';
+      EntryIDPart := '';
+
+      RMSetup.CALCFIELDS("Storage Folder Store ID","Storage Folder Entry ID");
+      RMSetup."Storage Folder Store ID".CREATEINSTREAM(StoreID);
+      RMSetup."Storage Folder Entry ID".CREATEINSTREAM(EntryID);
+
+      WHILE NOT StoreID.EOS DO BEGIN
+        StoreID.READTEXT(StoreIDPart,250);
+        CDOHandler.AddStoreIDPart(StoreIDPart);
+      END;
+
+      WHILE NOT EntryID.EOS DO BEGIN
+        EntryID.READTEXT(EntryIDPart,250);
+        CDOHandler.AddEntryIDPart(EntryIDPart);
+      END;
+
+      CDOStorageMessage := CDOHandler.CopyTo(CDOQueueMessage);
+    END;
+
+    PROCEDURE UniqueFieldName@18() : Text[50];
+    BEGIN
+      EXIT('Navision Attain Attachment No.');
+    END;
+
+    PROCEDURE AddField@17(VAR CDOMessage@1008 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEAA-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";FieldName@1001 : Text[50];FieldValue@1002 : Text[50]);
+    VAR
+      CDOFields@1009 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{000662A0-68DC-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      CDOField@1000 : Automation "{3FA7DEA7-6438-101B-ACC1-00AA00423326} 1.33:{3FA7DEB0-6438-101B-ACC1-00AA00423326}:Unknown Automation Server.Unknown Class";
+      FieldCount@1007 : Integer;
+      FieldNumber@1005 : Integer;
+      FieldFound@1006 : Boolean;
+    BEGIN
+      CDOFields := CDOMessage.Fields;
+      EVALUATE(FieldCount,FORMAT(CDOFields.Count));
+      WHILE NOT FieldFound AND (FieldNumber < FieldCount) DO BEGIN
+        FieldNumber := FieldNumber + 1;
+        CDOField := CDOFields.Item(FieldNumber);
+        IF FORMAT(CDOField.Name) = FieldName THEN BEGIN
+          CDOField.Value := FieldValue;
+          CDOMessage.Update(TRUE);
+          FieldFound := TRUE;
+        END;
+      END;
+
+      IF NOT FieldFound THEN BEGIN
+        CDOField := CDOFields.Add(FieldName,8); // vbString
+        CDOField.Value := FieldValue;
+        CDOMessage.Update(TRUE);
+      END;
+    END;
+
+    PROCEDURE Checksum@19(VAR IDInStream@1000 : InStream) ChecksumValue@1005 : Integer;
+    VAR
+      StringPart@1004 : Text[1024];
+      CharNo@1001 : Integer;
+      MaxInteger@1002 : Integer;
+      DecValue@1003 : Decimal;
+    BEGIN
+      RANDOMIZE(1);
+      MaxInteger := 2147483647;
+      StringPart := '';
+
+      WHILE NOT IDInStream.EOS DO BEGIN
+        IDInStream.READTEXT(StringPart,MAXSTRLEN(StringPart));
+        FOR CharNo := 1 TO STRLEN(StringPart) DO
+          DecValue := (DecValue + (((StringPart[CharNo] MOD 43) + 1) * RANDOM((MaxInteger DIV 44)))) MOD MaxInteger;
+      END;
+
+      ChecksumValue := DecValue;
+    END;
+
+    BEGIN
+    END.
+  }
+}

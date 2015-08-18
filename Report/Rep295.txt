@@ -1,0 +1,444 @@
+OBJECT Report 295 Combine Shipments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.10,NAVES6.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Combine Shipments;
+               ESP=Fact. autom tica];
+    ProcessingOnly=Yes;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table36;
+        DataItemTableView=SORTING(Document Type,Combine Shipments,Bill-to Customer No.)
+                          WHERE(Document Type=CONST(Order),
+                                Combine Shipments=CONST(Yes));
+        DataItemVarName=SalesOrderHeader;
+        ReqFilterHeadingML=[ENU=Sales Order;
+                            ESP=Pedido venta];
+        OnPreDataItem=BEGIN
+                        IF PostingDateReq = 0D THEN
+                          ERROR(Text000);
+                        IF DocDateReq = 0D THEN
+                          ERROR(Text001);
+
+                        Window.OPEN(
+                          Text002 +
+                          Text003 +
+                          Text004 +
+                          Text005);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           CurrReport.LANGUAGE := Language.GetLanguageID("Language Code");
+
+                           Window.UPDATE(1,"Bill-to Customer No.");
+                           Window.UPDATE(2,"No.");
+
+                           FromDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+                           FromDocDim.SETRANGE("Document Type",SalesOrderHeader."Document Type");
+                           FromDocDim.SETRANGE("Document No.",SalesOrderHeader."No.");
+                         END;
+
+        OnPostDataItem=BEGIN
+                         CurrReport.LANGUAGE := GLOBALLANGUAGE;
+                         Window.CLOSE;
+                         IF SalesHeader."No." <> '' THEN BEGIN // Not the first time
+                           FinalizeSalesInvHeader;
+                           IF (NoOfSalesInvErrors = 0) AND NOT HideDialog THEN BEGIN
+                             IF NoOfskippedShiment > 0 THEN BEGIN
+                               MESSAGE(
+                                 Text010 + Text011,
+                                 NoOfSalesInv,NoOfskippedShiment)
+                             END ELSE BEGIN
+                               MESSAGE(
+                                 Text010,
+                                 NoOfSalesInv);
+                             END;
+                           END ELSE
+                             IF NOT HideDialog THEN
+                               MESSAGE(
+                                 Text007,
+                                 NoOfSalesInvErrors)
+                         END ELSE
+                           IF NOT HideDialog THEN
+                             MESSAGE(Text008);
+                       END;
+
+        ReqFilterFields=Sell-to Customer No.,Bill-to Customer No.;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table110;
+        DataItemTableView=SORTING(Order No.);
+        ReqFilterHeadingML=[ENU=Posted Sales Shipment;
+                            ESP=Hist¢rico albaranes venta];
+        OnAfterGetRecord=VAR
+                           DueDate@1000 : Date;
+                           PmtDiscDate@1001 : Date;
+                           "PmtDisc%"@1002 : Decimal;
+                         BEGIN
+                           Window.UPDATE(3,"No.");
+
+                           IF OnlyStdPmtTerms THEN BEGIN
+                             Cust.GET("Bill-to Customer No.");
+                             PmtTerms.GET(Cust."Payment Terms Code");
+                             IF PmtTerms.Code = "Sales Shipment Header"."Payment Terms Code" THEN BEGIN
+                               DueDate := CALCDATE(PmtTerms."Due Date Calculation","Document Date");
+                               PmtDiscDate := CALCDATE(PmtTerms."Discount Date Calculation","Document Date");
+                               "PmtDisc%" := PmtTerms."Discount %";
+                               IF (DueDate <> "Sales Shipment Header"."Due Date") OR
+                                 (PmtDiscDate <> "Sales Shipment Header"."Pmt. Discount Date") OR
+                                 ("PmtDisc%" <> "Sales Shipment Header"."Payment Discount %")
+                               THEN BEGIN
+                                 NoOfskippedShiment := NoOfskippedShiment + 1;
+                                 CurrReport.SKIP;
+                               END;
+                             END ELSE BEGIN
+                               NoOfskippedShiment := NoOfskippedShiment + 1;
+                               CurrReport.SKIP;
+                             END;
+                           END;
+                         END;
+
+        ReqFilterFields=Posting Date;
+        DataItemLink=Order No.=FIELD(No.);
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table111;
+        DataItemTableView=SORTING(Document No.,Line No.);
+        OnAfterGetRecord=BEGIN
+                           IF "Sales Shipment Line".Type = 0 THEN BEGIN
+                             IF ((NOT CopyTextLines) OR ("Sales Shipment Line"."Attached to Line No." <> 0)) THEN
+                               CurrReport.SKIP;
+                           END;
+
+                           IF "Authorized for Credit Card" THEN
+                             CurrReport.SKIP;
+
+                           IF ("Qty. Shipped Not Invoiced" <> 0) OR ("Sales Shipment Line".Type = 0) THEN BEGIN
+                             IF ("Bill-to Customer No." <> Cust."No.") AND
+                                ("Sales Shipment Line"."Sell-to Customer No." <> '') THEN
+                               Cust.GET("Bill-to Customer No.");
+                             IF NOT (Cust.Blocked IN [Cust.Blocked::All,Cust.Blocked::Invoice]) THEN BEGIN
+                               IF (SalesOrderHeader."Bill-to Customer No." <> SalesHeader."Bill-to Customer No.") OR
+                                  (SalesOrderHeader."Currency Code" <> SalesHeader."Currency Code") OR
+                                  (NOT VerifyDimAnalogy)
+                               THEN BEGIN
+                                 IF SalesHeader."No." <> '' THEN
+                                   FinalizeSalesInvHeader;
+                                 InsertSalesInvHeader;
+                                 SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                                 SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                                 SalesLine."Document Type" := SalesHeader."Document Type";
+                                 SalesLine."Document No." := SalesHeader."No.";
+                               END;
+                               SalesShptLine := "Sales Shipment Line";
+                               HasAmount := HasAmount OR ("Qty. Shipped Not Invoiced" <>0);
+                               SalesShptLine.InsertInvLineFromShptLine(SalesLine,TempFromLineDim);
+                               DimMgt.MoveTempFromDimToTempToDim(TempFromLineDim,TempToLineDim);
+                             END ELSE
+                               NoOfSalesInvErrors := NoOfSalesInvErrors + 1;
+                           END;
+                         END;
+
+        OnPostDataItem=VAR
+                         SalesGetShpt@1000 : Codeunit 64;
+                       BEGIN
+                         SalesGetShpt.GetItemChargeAssgnt("Sales Shipment Line");
+                       END;
+
+        DataItemLink=Document No.=FIELD(No.);
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=5060;
+      Height=3190;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF PostingDateReq = 0D THEN
+                     PostingDateReq := WORKDATE;
+                   IF DocDateReq = 0D THEN
+                     DocDateReq := WORKDATE;
+                   SalesSetup.GET;
+                   CalcInvDisc := SalesSetup."Calc. Inv. Discount";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Posting Date;
+                                                              ESP=Fecha registro];
+                                                   SourceExpr=PostingDateReq }
+      { 21  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 2   ;CheckBox     ;3410 ;1100 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Calc. Inv. Discount;
+                                                              ESP=Calc. dto. factura];
+                                                   SourceExpr=CalcInvDisc;
+                                                   OnValidate=BEGIN
+                                                                SalesSetup.GET;
+                                                                SalesSetup.TESTFIELD("Calc. Inv. Discount",FALSE);
+                                                              END;
+                                                               }
+      { 1100000;Label     ;0    ;1100 ;3300 ;440  ;ParentControl=2;
+                                                   CaptionML=[ENU=Calc. Inv. and Pmt. Discount;
+                                                              ESP=Calc. dto. factura y P.P.] }
+      { 3   ;CheckBox     ;3410 ;1650 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Post Invoices;
+                                                              ESP=Registrar facturas];
+                                                   SourceExpr=PostInv }
+      { 23  ;Label        ;0    ;1650 ;3300 ;440  ;ParentControl=3 }
+      { 4   ;TextBox      ;3410 ;550  ;1650 ;440  ;CaptionML=[ENU=Document Date;
+                                                              ESP=Fecha emisi¢n documento];
+                                                   SourceExpr=DocDateReq }
+      { 5   ;Label        ;0    ;550  ;3300 ;440  ;ParentControl=4 }
+      { 6   ;CheckBox     ;3410 ;2200 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Only Std. Payment Terms;
+                                                              ESP=S¢lo plazos de pago est ndar];
+                                                   SourceExpr=OnlyStdPmtTerms }
+      { 7   ;Label        ;0    ;2200 ;3300 ;440  ;ParentControl=6 }
+      { 8   ;CheckBox     ;3410 ;2750 ;440  ;440  ;ShowCaption=No;
+                                                   SourceExpr=CopyTextLines }
+      { 9   ;Label        ;0    ;2750 ;3300 ;440  ;ParentControl=8;
+                                                   CaptionML=[ENU=Copy Text Lines;
+                                                              ESP=Copiar l¡neas texto] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF PostingDateReq = 0D THEN
+                     PostingDateReq := WORKDATE;
+                   IF DocDateReq = 0D THEN
+                     DocDateReq := WORKDATE;
+                   SalesSetup.GET;
+                   CalcInvDisc := SalesSetup."Calc. Inv. Discount";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Posting Date;
+                             ESP=Fecha registro];
+                  SourceExpr=PostingDateReq }
+
+      { 4   ;2   ;Field     ;
+                  CaptionML=[ENU=Document Date;
+                             ESP=Fecha emisi¢n documento];
+                  SourceExpr=DocDateReq }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=[ENU=Calc. Inv. and Pmt. Discount;
+                             ESP=Calc. dto. factura y P.P.];
+                  SourceExpr=CalcInvDisc;
+                  OnValidate=BEGIN
+                               SalesSetup.GET;
+                               SalesSetup.TESTFIELD("Calc. Inv. Discount",FALSE);
+                             END;
+                              }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Post Invoices;
+                             ESP=Registrar facturas];
+                  SourceExpr=PostInv }
+
+      { 6   ;2   ;Field     ;
+                  CaptionML=[ENU=Only Std. Payment Terms;
+                             ESP=S¢lo plazos de pago est ndar];
+                  SourceExpr=OnlyStdPmtTerms }
+
+      { 8   ;2   ;Field     ;
+                  CaptionML=[ENU=Copy Text Lines;
+                             ESP=Copiar l¡neas texto];
+                  SourceExpr=CopyTextLines }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Please enter the posting date.;ESP=Introduzca la fecha registro.';
+      Text001@1001 : TextConst 'ENU=Please enter the document date.;ESP=Introduzca la fecha emisi¢n factura.';
+      Text002@1002 : TextConst 'ENU=Combining shipments...\\;ESP=Agrupando albaranes...\\';
+      Text003@1003 : TextConst 'ENU=Customer No.    #1##########\;ESP=N§ cliente      #1##########\';
+      Text004@1004 : TextConst 'ENU=Order No.       #2##########\;ESP=N§ pedido       #2##########\';
+      Text005@1005 : TextConst 'ENU=Shipment No.    #3##########;ESP=N§ albar n      #3##########';
+      Text007@1006 : TextConst 'ENU=Not all the invoices were posted. A total of %1 invoices were not posted.;ESP=No se registraron todas las facturas. %1 facturas est n pendientes de registrar.';
+      Text008@1007 : TextConst 'ENU=There is nothing to combine.;ESP=No hay albaranes para agrupar.';
+      Text010@1008 : TextConst 'ENU=The shipments are now combined, and the number of invoice(s) created is %1.;ESP=Se han agrupado los albaranes y el n£mero de factura(s) creada(s) es %1.';
+      SalesHeader@1010 : Record 36;
+      SalesLine@1011 : Record 37;
+      SalesShptLine@1012 : Record 111;
+      SalesSetup@1013 : Record 311;
+      FromDocDim@1014 : Record 357;
+      ToDocDim@1016 : Record 357;
+      TempFromLineDim@1031 : TEMPORARY Record 357;
+      TempToLineDim@1032 : TEMPORARY Record 357;
+      Cust@1018 : Record 18;
+      Language@1009 : Record 8;
+      PmtTerms@1017 : Record 3;
+      SalesCalcDisc@1019 : Codeunit 60;
+      SalesPost@1020 : Codeunit 80;
+      DimMgt@1033 : Codeunit 408;
+      Window@1021 : Dialog;
+      PostingDateReq@1022 : Date;
+      DocDateReq@1023 : Date;
+      CalcInvDisc@1024 : Boolean;
+      PostInv@1025 : Boolean;
+      OnlyStdPmtTerms@1015 : Boolean;
+      HasAmount@1102601000 : Boolean;
+      HideDialog@1034 : Boolean;
+      NextLineNo@1026 : Integer;
+      NoOfSalesInvErrors@1027 : Integer;
+      NoOfSalesInv@1028 : Integer;
+      Text011@1029 : TextConst 'ENU=\%2 Shipments with non-standard Payment Terms have not been combined.;ESP=\No se combinaron %2 env¡os con condiciones de pago no est ndar.';
+      NoOfskippedShiment@1030 : Integer;
+      CopyTextLines@1035 : Boolean;
+
+    LOCAL PROCEDURE FinalizeSalesInvHeader@2();
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        IF NOT(HasAmount) THEN BEGIN
+          SalesHeader.DELETE(TRUE);
+          TempToLineDim.DELETEALL;
+          EXIT;
+        END;
+        IF CalcInvDisc THEN
+          SalesCalcDisc.RUN(SalesLine);
+        SalesHeader.FIND;
+        DimMgt.TransferTempToDimToDocDim(TempToLineDim);
+        COMMIT;
+        CLEAR(SalesCalcDisc);
+        CLEAR(SalesPost);
+        NoOfSalesInv := NoOfSalesInv + 1;
+        IF PostInv THEN BEGIN
+          CLEAR(SalesPost);
+          IF NOT SalesPost.RUN(SalesHeader) THEN
+            NoOfSalesInvErrors := NoOfSalesInvErrors + 1;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertSalesInvHeader@1();
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        INIT;
+        "Document Type" := "Document Type"::Invoice;
+        "No." := '';
+        INSERT(TRUE);
+        VALIDATE("Sell-to Customer No.",SalesOrderHeader."Bill-to Customer No.");
+        IF "Bill-to Customer No." <> "Sell-to Customer No." THEN
+          VALIDATE("Bill-to Customer No.",SalesOrderHeader."Bill-to Customer No.");
+        VALIDATE("Posting Date",PostingDateReq);
+        VALIDATE("Document Date",DocDateReq);
+        VALIDATE("Currency Code",SalesOrderHeader."Currency Code");
+        "Salesperson Code" := SalesOrderHeader."Salesperson Code";
+        "Shortcut Dimension 1 Code" := SalesOrderHeader."Shortcut Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := SalesOrderHeader."Shortcut Dimension 2 Code";
+        MODIFY;
+        COMMIT;
+        HasAmount := FALSE;
+
+        ToDocDim.SETRANGE("Document Type","Document Type");
+        ToDocDim.SETRANGE("Document No.","No.");
+        ToDocDim.DELETEALL;
+
+        IF FromDocDim.FIND('-') THEN BEGIN
+          REPEAT
+            ToDocDim.INIT;
+            ToDocDim."Table ID" := DATABASE::"Sales Header";
+            ToDocDim."Document Type" := "Document Type";
+            ToDocDim."Document No." := "No.";
+            ToDocDim."Line No." := 0;
+            ToDocDim."Dimension Code" := FromDocDim."Dimension Code";
+            ToDocDim."Dimension Value Code" := FromDocDim."Dimension Value Code";
+            ToDocDim.INSERT;
+          UNTIL FromDocDim.NEXT = 0;
+        END;
+
+        ToDocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+
+        NextLineNo := 10000;
+      END;
+    END;
+
+    PROCEDURE VerifyDimAnalogy@3() : Boolean;
+    BEGIN
+      IF NOT FromDocDim.FIND('-') THEN BEGIN
+        FromDocDim.INIT;
+        FromDocDim."Dimension Code" := '';
+      END;
+
+      ToDocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+      ToDocDim.SETRANGE("Document Type",SalesHeader."Document Type");
+      ToDocDim.SETRANGE("Document No.",SalesHeader."No.");
+      IF NOT ToDocDim.FIND('-') THEN BEGIN
+        ToDocDim.INIT;
+        ToDocDim."Dimension Code" := '';
+      END;
+
+      IF FromDocDim.FIND('-') THEN
+        REPEAT
+          IF (FromDocDim."Dimension Code" <> ToDocDim."Dimension Code") OR
+             (FromDocDim."Dimension Value Code" <> ToDocDim."Dimension Value Code")
+          THEN
+            EXIT(FALSE);
+        UNTIL (FromDocDim.NEXT = 0) AND (ToDocDim.NEXT = 0);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE InitializeReport@5(PostingDate@1002 : Date;DocDate@1003 : Date);
+    BEGIN
+      PostingDateReq := PostingDate;
+      DocDateReq := DocDate;
+    END;
+
+    PROCEDURE SetHideDialog@7(NewHideDialog@1000 : Boolean);
+    BEGIN
+      HideDialog := NewHideDialog;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

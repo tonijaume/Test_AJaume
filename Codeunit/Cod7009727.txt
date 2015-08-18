@@ -1,0 +1,615 @@
+OBJECT Codeunit 7009727 Validar coste Hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/05/15;
+    Time=15:07:51;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355003 : TextConst 'ENU=Invoice %1 has a line without Voucher;ESP=La factura %1 tienen una linea sin Bono';
+      Text001@1103355004 : TextConst 'ENU=Vouchers have been found with different type of contract;ESP=Se han encontrado Bonos con distinto tipo de contrato';
+      Text002@1103355005 : TextConst 'ENU=Invoice %1 does not have lines to validate;ESP=La factura %1 No tiene lineas que validar';
+      Text003@1103355006 : TextConst 'ENU=Total amount is 0;ESP=El importe total es 0';
+      Text004@1103355007 : TextConst 'ENU=Invoice %1;ESP=Factura %1';
+      Text005@1103355008 : TextConst 'ENU="Differences TTOO=%1";ESP="Diferencias TTOO=%1"';
+      Text006@1103355009 : TextConst 'ENU=DIF INV HOTEL %1;ESP=DIF FRAS HOTEL %1';
+      rParAg@1103355000 : Record 7009700;
+      GLSetup@1103355010 : Record 98;
+      Text007@1103355011 : TextConst 'ENU=Invoice %1 of hotel %2 has already been registered;ESP=La factura %1 del hotel %2 ya se ha registrado.';
+      cFunGesDoc@1103355012 : Codeunit 7009900;
+      Text008@1103355013 : TextConst 'ENU=This invoice has non-authorized vouchers;ESP=Esta factura contiene bonos No autorizados';
+      Text009@1103355014 : TextConst 'ENU=Unable to change the hotel of an invoice with lines, delete the lines before continuing;ESP=No se puede cambiar el hotel de una factura con lineas, elimine las lineas antes de continuar.';
+      cFunSeg@1100217000 : Codeunit 7009751;
+
+    PROCEDURE ValidaFra@2(VAR prFraHot@1103355000 : Record 7010014) : Code[20];
+    VAR
+      lrCabComp@1103355001 : Record 38;
+      lrLinComp@1103355002 : Record 39;
+      lrContr@1103355003 : Record 7009723;
+      lrlinVal@1103355004 : Record 7009861;
+      lrBono@1103355005 : Record 7010013;
+      lrHotel@1103355006 : Record 7009724;
+      lrProv@1103355007 : Record 23;
+      lrGrupProv@1103355008 : Record 93;
+      lrTemp@1103355009 : TEMPORARY Record 7009861;
+      lrCtas@1103355010 : Record 7009705;
+      lrValBono@1103355011 : Record 7010022;
+      lrFraHotel@1103355023 : Record 7010014;
+      lrCurrency@1100253004 : Record 4;
+      lrTTOO@1100253005 : Record 7009717;
+      lcCheck@1100217000 : Codeunit 11;
+      lwImporte@1103355013 : Decimal;
+      lwImporteLi@1103355014 : Decimal;
+      lwImporteHotel@1103355015 : Decimal;
+      lwImpVal@1103355016 : Decimal;
+      lwImpFPR@1100253000 : Decimal;
+      lwIVA@1100253003 : Decimal;
+      lwContrato@1103355017 : Code[10];
+      lwPrimeraFecha@1103355021 : Date;
+      lwTipoContrato@1103355022 : Integer;
+      lwCont@1100253002 : Integer;
+      lwSigno@1100253001 : Integer;
+      lcRelease@1000000000 : Codeunit 415;
+      lcSincro@1000000001 : Codeunit 7009793;
+    BEGIN
+      // ValidaFra
+
+      cFunSeg.TienePermiso('HOT-VAL-COS', TRUE); //$003
+
+      rParAg.FINDFIRST;
+
+      // AJS 26.02.2007
+      // Comprobacion del codigo de barras
+
+      prFraHot.TESTFIELD("Codigo barras PDF");
+
+      // AJS 03.10.2007
+      // Comprobamos que no estemos validando dos veces el mismo numero de factura
+
+      lrFraHotel.RESET;
+      lrFraHotel.SETRANGE (Hotel        , prFraHot.Hotel);
+      lrFraHotel.SETRANGE ("Num. Factura" , prFraHot."Num. Factura");
+      lrFraHotel.SETFILTER(ID        , '<>%1', prFraHot.ID);
+      lrFraHotel.SETRANGE (Contabilizada, TRUE);
+      IF lrFraHotel.FINDFIRST THEN
+        ERROR(Text007, prFraHot."Num. Factura", prFraHot.Hotel);
+
+      //. Chequear si la fecha de registro esta bloqueada en contabilidad
+      lcCheck.DateNotAllowed(TODAY); //+$004
+
+      // Comprobar el estado de cada linea para v/er si ha cambiado alguno en funcion de que se haya validado alguna factura
+      // que afecte a algun bono de esta factura
+
+      lrlinVal.RESET;
+      lrlinVal.SETRANGE(No, prFraHot.ID);
+      IF lrlinVal.FINDSET(TRUE) THEN BEGIN
+        // AJF 27/10/08
+        // Si el hotel es prepago nos saltamos el control de pendiente de autorizar
+        lrHotel.GET(prFraHot.Hotel);
+        REPEAT
+          IF NOT lrHotel."Hotel con Prepago" THEN BEGIN
+      // $002 JPT GOC-LP-11011 Permitir la validacion de bonos de touroperadores que no ejecutan el proceso de conciliacion de bonos
+            CLEAR(lrTTOO);
+            lrTTOO.GET(lrlinVal.TourOperador);
+
+            // $002
+            IF NOT lrTTOO."Permitir Validar Sin Conciliar" THEN
+              IF lrlinVal."Pendiente autorizar" THEN
+                ERROR(Text008);
+          END;
+
+          lrlinVal.CompruebaEstado(prFraHot.MontaFiltroFecha);
+          lrlinVal.MODIFY;
+        UNTIL lrlinVal.NEXT = 0;
+      END;
+
+      // Creamos una factura de compra a partir de la factura hotel
+
+      lrlinVal.RESET;
+      lrlinVal.SETRANGE(No, prFraHot.ID);
+      IF lrlinVal.FINDSET(TRUE) THEN BEGIN
+        CLEAR(lwImporte);
+        CLEAR(lwImporteHotel);
+        CLEAR(lwContrato);
+        CLEAR(lwPrimeraFecha);
+
+        // Recorremos todas las lineas montando un temporal que totalice por touroperador
+
+        lrTemp.RESET;
+        IF lrTemp.FINDSET(TRUE) THEN
+          lrTemp.DELETEALL;
+
+        CLEAR(lwCont);
+        lwTipoContrato := -1;
+        REPEAT
+          CLEAR(lwImporteLi);
+          CASE lrlinVal.Estado OF
+            lrlinVal.Estado::"Menor Hotel" , lrlinVal.Estado::Ok : lwImporteLi := lrlinVal."Importe Hotel";
+            lrlinVal.Estado::"Mayor Hotel" : lwImporteLi := lrlinVal."Importe Calculado";
+            lrlinVal.Estado::"No Bono", 0   : ERROR(Text000,prFraHot."Num. Factura");
+          END;
+
+          lwImporte      += lwImporteLi;
+          lwImporteHotel += lrlinVal."Importe Hotel";
+
+          lrBono.GET(lrlinVal.Delegacion, lrlinVal.TourOperador, lrlinVal.Bono, lrlinVal."N§ Reserva", lrlinVal."N§ Secuencia");
+          lrBono.CALCFIELDS("Importe coste");
+
+          lwImpFPR := lrBono."Importe coste" - lrBono."Importe en FPR";
+
+          IF lwContrato = '' THEN // Buscamos el contrato de hotel
+            lwContrato := lrBono."N§ Contrato";
+
+          lrTemp.SETRANGE(TourOperador  , lrlinVal.TourOperador);
+          lrTemp.SETRANGE(Bono          , lrlinVal.Bono);
+          lrTemp.SETRANGE("N§ Reserva"  , lrlinVal."N§ Reserva");
+          lrTemp.SETRANGE("N§ Secuencia", lrlinVal."N§ Secuencia");
+          IF NOT lrTemp.FIND('-') THEN BEGIN
+            lwCont +=1;
+            lrTemp.INIT;
+            lrTemp."No Linea"     := lwCont;
+            lrTemp.TourOperador   := lrlinVal."Touroperador Compra";
+            lrTemp.Bono           := lrlinVal.Bono;
+            lrTemp."N§ Reserva"   := lrlinVal."N§ Reserva";
+            lrTemp."N§ Secuencia" := lrlinVal."N§ Secuencia";
+            lrTemp.INSERT;
+          END;
+
+          // A partir de ahora no se contabilizan las diferencias en la factura
+
+          lrTemp."Importe Calculado" += lwImporteLi;
+          lrTemp.MODIFY;
+
+          // Mantiene el campo "Importe en Fpr" de Bono as¡ como la tabla "Validaci¢n Bono"
+
+          // A partir de ahora no se contabilizan las diferencias en la factura
+
+          lrBono."Importe en FPR" += lwImporteLi;
+          lrBono.VALIDATE(Validado, TRUE);
+          lrBono.MODIFY;
+
+          // Comprobaci¢n de que no tenemos bonos con distinto tipo de contrato en el contrato
+
+          lrContr.GET(prFraHot.Delegacion, lrBono."N§ Contrato");
+          IF lwTipoContrato = -1 THEN
+            lwTipoContrato := lrContr."Tipo de Contrato";
+          IF lwTipoContrato <> lrContr."Tipo de Contrato" THEN
+            ERROR(Text001);
+
+          IF lwImporteLi <> 0 THEN BEGIN
+            CLEAR(lrValBono);
+            lrValBono.Delegacion            := lrBono.Delegacion;
+            lrValBono.TourOperador          := lrBono.TourOperador;
+            lrValBono.Bono                  := lrBono.Bono;
+            lrValBono."N§ Reserva"          := lrBono."N§ Reserva";
+            lrValBono."N§ Secuencia"        := lrBono."N§ Secuencia";
+            lrValBono."N§ Factura"          := prFraHot."Num. Factura";
+
+            lrValBono."Hotel Factura"       := prFraHot.Hotel;
+            lrValBono."Importe validacion"  := lwImporteLi;
+            lrValBono."Importe agencia"     := lrBono."Importe coste";
+            lrValBono."Hotel Pago"          := prFraHot.Hotel;
+            lrValBono."TourOperador Compra" := lrlinVal."Touroperador Compra";
+            lrValBono."C¢d. divisa"         := lrlinVal."C¢d. divisa";
+            lrValBono."Fecha factura"       := prFraHot."Fecha factura";
+            lrValBono."Importe Hotel"       := lrlinVal."Importe Hotel";
+            lrValBono.INSERT(TRUE);
+          END;
+
+          IF (lwPrimeraFecha > lrlinVal."Fecha Entrada") OR (lwPrimeraFecha = 0D) THEN
+            lwPrimeraFecha := lrlinVal."Fecha Entrada";
+
+          lrlinVal."Importe validado" := lwImporteLi;
+          lrlinVal.MODIFY;
+        UNTIL lrlinVal.NEXT = 0;
+      END
+      ELSE
+        ERROR(Text002, prFraHot."Num. Factura");
+
+      IF lwImporteHotel = 0 THEN
+        ERROR(Text003);
+
+      CLEAR(lrCabComp);
+      IF lwImporte >= 0 THEN BEGIN
+        lrCabComp."Document Type" := lrCabComp."Document Type"::Invoice;
+        lwSigno := 1;
+      END
+      ELSE BEGIN
+        lrCabComp."Document Type" := lrCabComp."Document Type"::"Credit Memo";
+        lwSigno := -1;
+      END;
+      _CheckReasonCode;
+      lrCabComp.INSERT(TRUE);
+
+      // Las facturas de validacion especial especifican el proveedor en la ficha de la factura, las normales hay que
+      // buscarlo en la tabla hotel
+
+      IF prFraHot."Validacion HP especial" THEN BEGIN
+        prFraHot.TESTFIELD(Proveedor);
+        lrCabComp.VALIDATE("Buy-from Vendor No.", prFraHot.Proveedor);
+      END
+      ELSE BEGIN
+        lrContr.GET(prFraHot.Delegacion , lwContrato);
+        lrHotel.GET(prFraHot.Hotel);
+
+        // Insertamos el proveedor en funci¢n del tipo se¤alado en el contrato
+        CASE lrContr."Tipo de Contrato" OF
+          0,1 : BEGIN  // Intermediaci¢n
+                  lrHotel.TESTFIELD("Proveedor Intermediacion");
+                  lrCabComp.VALIDATE("Buy-from Vendor No." , lrHotel."Proveedor Intermediacion");
+                END;
+          2 : BEGIN  // En nombre propio
+                lrHotel.TESTFIELD("Proveedor Cuenta Propia");
+                lrCabComp.VALIDATE("Buy-from Vendor No.", lrHotel."Proveedor Cuenta Propia");
+              END;
+        END;
+        prFraHot.Proveedor := lrCabComp."Buy-from Vendor No.";
+      END;
+
+      lrCabComp.VALIDATE("Posting Date" , TODAY);
+      lrCabComp.VALIDATE("Document Date", prFraHot."Fecha factura");
+
+      lrProv.GET(lrCabComp."Buy-from Vendor No.");
+      lrProv.TESTFIELD("Vendor Posting Group");
+      lrGrupProv.GET(lrProv."Vendor Posting Group");
+
+      lrCabComp.VALIDATE("Posting Description", STRSUBSTNO(Text004, lrHotel.Nombre));
+      prFraHot.TESTFIELD("Global Dimension 1 Code");
+      lrCabComp.VALIDATE("Shortcut Dimension 1 Code"   , prFraHot."Global Dimension 1 Code");
+
+      // si es un abono hay que rellenar el n§ abono proveedor
+
+      IF lrCabComp."Document Type" = lrCabComp."Document Type"::Invoice THEN
+        lrCabComp.VALIDATE("Vendor Invoice No.", prFraHot."Num. Factura")
+      ELSE
+        lrCabComp.VALIDATE("Vendor Cr. Memo No.", prFraHot."Num. Factura");
+
+      // Pasamos el codigo de barras a la cabecera de factura compra
+
+      lrCabComp."Codigo barras PDF"   := prFraHot."Codigo barras PDF";
+
+      lrCabComp."Posting Description" := prFraHot."Texto registro";
+
+      // Rellenar el campo Tipo de factura con un parametro si aplica NCF
+
+      GLSetup.FINDFIRST;
+      IF GLSetup."Aplica legislacion NCF" THEN BEGIN
+        rParAg.TESTFIELD("Tipo factura compra Incoming");
+        lrCabComp."Tipo factura compra" := rParAg."Tipo factura compra Incoming";
+      END;
+
+      lrCabComp."Comprobante Fiscal" := prFraHot.NCF;
+      lrCabComp.VALIDATE("Prices Including VAT", lrContr."Impuestos incluidos");
+      lrCabComp.MODIFY;
+
+      // Gestion de las observaciones, las convertiremos en comentarios de la factura
+
+      GestionComentarios(lrCabComp, prFraHot);
+
+      // Inserta las lineas
+      // Inserta una linea por touroperador
+      CLEAR(lwCont);
+      lrTemp.RESET;
+      IF lrTemp.FINDSET THEN BEGIN
+        CASE lrContr."Tipo de Contrato" OF
+          0,1 : lrGrupProv.TESTFIELD("Cta. FPR hotel intermediacion");
+          2   : lrGrupProv.TESTFIELD("Cta. FPR hotel cuenta propia");
+        END;
+        lrLinComp.RESET;
+        REPEAT
+          // Introducimos dos lineas por cada touroperador: Una por FPR y la otra de diferencias FPR
+
+          IF lrTemp."Importe Calculado" <> 0 THEN BEGIN
+            lrLinComp.INIT;
+            lrLinComp."Document Type" := lrCabComp."Document Type";
+            lrLinComp."Document No."   := lrCabComp."No.";
+            lwCont +=1;
+            lrLinComp."Line No."       := lwCont;
+            lrLinComp.INSERT(TRUE);
+            lrLinComp.Type := lrLinComp.Type::"G/L Account";
+            CASE lrContr."Tipo de Contrato" OF
+              0,1 : BEGIN
+                      lrGrupProv.TESTFIELD("Cta. FPR hotel intermediacion");  // Intermediacion
+                      lrLinComp.VALIDATE("No." , lrGrupProv."Cta. FPR hotel intermediacion");
+                    END;
+              2   : BEGIN
+                      lrGrupProv.TESTFIELD("Cta. FPR hotel cuenta propia"); // En nombre propio
+                      lrLinComp.VALIDATE("No." , lrGrupProv."Cta. FPR hotel cuenta propia");
+                    END;
+            END;
+            lrLinComp.VALIDATE(Quantity                   , 1);
+            lrLinComp.VALIDATE("Direct Unit Cost"         , lwSigno * lrTemp."Importe Calculado");
+            lrLinComp.VALIDATE("Shortcut Dimension 1 Code", lrCabComp."Shortcut Dimension 1 Code");
+            lrLinComp.VALIDATE("Shortcut Dimension 2 Code", lrTemp.TourOperador);
+
+            lrLinComp.Description := STRSUBSTNO('#1######## #2###### #3##################',
+                                                lrTemp.Bono, lrTemp."Fecha Entrada", COPYSTR(lrTemp.Nombre, 1, 20));
+
+            lwIVA := 1 + (lrLinComp."VAT %" / 100);
+            IF NOT lrCurrency.GET(lrCabComp."Currency Code") THEN
+              CLEAR(lrCurrency);
+
+            //-$006IF lrCabComp."Prices Including VAT" THEN
+            //-$006BEGIN
+            //-$006  lrLinComp."Amount Including VAT" := lrLinComp."Direct Unit Cost";
+            //-$006  lrLinComp.Amount                 := ROUND(lrLinComp."Direct Unit Cost" / lwIVA,
+            //-$006                                            lrCurrency."Amount Rounding Precision");
+            //-$006END
+            //-$006ELSE
+            //-$006BEGIN
+            //-$006  lrLinComp.Amount                 := lrLinComp."Direct Unit Cost";
+            //-$006  lrLinComp."Amount Including VAT" := ROUND(lrLinComp."Direct Unit Cost" * lwIVA,
+            //-$006                                            lrCurrency."Amount Rounding Precision");
+            //-$006END;
+
+            lrLinComp.ActualizaCamposImporte; //+$006
+            lrLinComp.MODIFY(TRUE);
+          END;
+
+          //. Diferencias
+          IF lrTemp.Diferencia <> 0 THEN
+          BEGIN
+            lrLinComp.INIT;
+            lrLinComp."Document Type" := lrCabComp."Document Type";
+            lrLinComp."Document No."  := lrCabComp."No.";
+            lwCont +=1;
+            lrLinComp."Line No."       := lwCont;
+            lrLinComp.INSERT(TRUE);
+
+            lrLinComp.Type := lrLinComp.Type::"G/L Account";
+            IF NOT lrCtas.GET(prFraHot.Delegacion, lrTemp.TourOperador) THEN
+              lrCtas.GET(prFraHot.Delegacion, '');
+            CASE lrContr."Tipo de Contrato" OF
+              0,1 : BEGIN
+                      lrCtas.TESTFIELD("Cta. dif. intermediacio");  // Intermediacion
+                      lrLinComp.VALIDATE("No.", lrCtas."Cta. dif. intermediacio");
+                    END;
+              2   : BEGIN
+                      lrCtas.TESTFIELD("Cta. dif. cuenta propia");   // Cuenta propia
+                      lrLinComp.VALIDATE("No.", lrCtas."Cta. dif. cuenta propia");
+                    END;
+            END;
+            lrLinComp.VALIDATE(Quantity                   , 1);
+            lrLinComp.VALIDATE("Direct Unit Cost"         , lwSigno * lrTemp.Diferencia);
+            lrLinComp.VALIDATE("Shortcut Dimension 1 Code", lrCabComp."Shortcut Dimension 1 Code");
+            lrLinComp.VALIDATE("Shortcut Dimension 2 Code", lrTemp.TourOperador);
+
+            // lrLinComp.Descripci¢n := STRSUBSTNO(Text005,lrTemp.TourOperador);
+
+            rParAg.TESTFIELD("Grupo Registro IVA Prod.Exento");
+            lrLinComp.VALIDATE("VAT Prod. Posting Group" , rParAg."Grupo Registro IVA Prod.Exento");
+            lrLinComp.ActualizaCamposImporte; //+$006
+            lrLinComp.MODIFY(TRUE);
+          END;
+
+        UNTIL lrTemp.NEXT=0;
+      END;
+
+      prFraHot.CALCFIELDS("Importe Hotel Validacion","Importe Calculado Validacion");
+      prFraHot.Contabilizada      := TRUE;
+      prFraHot."Fecha validacion" := TODAY;
+      prFraHot."Fecha llegada"    := lwPrimeraFecha;
+      prFraHot."Importe hotel"    := prFraHot."Importe Hotel Validacion";
+      prFraHot."Importe calculado":= prFraHot."Importe Calculado Validacion";
+      prFraHot."Num. Contrato"      := lwContrato;
+      prFraHot."Tipo contrato"    := lwTipoContrato;
+      IF lrTemp.FIND('-') THEN
+        prFraHot.TourOperador     := lrTemp.TourOperador;
+
+      prFraHot."Num documento NAV" := lrCabComp."No.";
+      prFraHot.MODIFY;
+
+      // JPT 01/02/08 Gestion Documental FTP GOC
+      cFunGesDoc.RefrescarEstadoCta(lrProv."No.");
+
+      //+$007 <
+      //. Recuperamos la cabecera de factura para lanzarla
+      IF lrCabComp.GET(lrCabComp."Document Type", lrCabComp."No.") THEN
+        lcRelease.RUN(lrCabComp);
+      //+$007 >
+
+      //+$009 <
+      IF lrCabComp.GET(lrCabComp."Document Type", lrCabComp."No.") THEN
+      BEGIN
+        lrCabComp."Reason Code" := 'ATENNEA';
+        lrCabComp.MODIFY;
+      END;
+      //+$009 >
+
+      //+$010 <
+      //. Traspasamos la factura a comercializadora
+      IF rParAg."Registrar costes en comerciali" THEN
+        lcSincro.SincronizaDocCompra(lrCabComp."Document Type", lrCabComp."No.", lrCabComp."Shortcut Dimension 2 Code");
+      //+$010 >
+
+      // Devuelve el numero de Cab. Compra
+      EXIT(lrCabComp."No.");
+    END;
+
+    PROCEDURE CambiarDatosFactura@3(prFra@1103355000 : Record 7010014);
+    VAR
+      lrCond@1103355001 : Record 7010085;
+      lrLinFra@1103355003 : Record 7009861;
+      lfFichaDatos@1103355002 : Form 7010078;
+    BEGIN
+      // CambiarDatosFactura
+
+      IF NOT lrCond.GET(USERID) THEN BEGIN
+        lrCond.INIT;
+        lrCond.Usuario := USERID;
+        lrCond.INSERT;
+      END;
+
+      lrCond.Hotel        := prFra.Hotel;
+      lrCond."N§ Factura" := prFra."Num. Factura";
+      lrCond.MODIFY;
+      COMMIT;
+
+      CLEAR(lfFichaDatos);
+      lrCond.SETRECFILTER;
+      lfFichaDatos.SETTABLEVIEW(lrCond);
+      IF lfFichaDatos.RUNMODAL <> ACTION::OK THEN
+        EXIT;
+
+      lfFichaDatos.GETRECORD(lrCond);
+
+      // AJS 18.05.2009
+
+      IF lrCond.Hotel <> prFra.Hotel THEN BEGIN
+        lrLinFra.RESET;
+        lrLinFra.SETRANGE(No, prFra.ID);
+        IF NOT lrLinFra.ISEMPTY THEN
+          ERROR(Text009);
+      END;
+
+      prFra.VALIDATE(Hotel       , lrCond.Hotel);
+      prFra.VALIDATE("Num. Factura", lrCond."N§ Factura");
+
+      // AJS 24.03.2009
+
+      prFra.MODIFY(TRUE);
+    END;
+
+    PROCEDURE AnularFactura@1103355000(prFactura@1103355000 : Record 7010014);
+    BEGIN
+      // AnularFacturaCompra
+    END;
+
+    PROCEDURE GestionComentarios@1103355001(prCab@1103355000 : Record 38;prFraHot@1103355001 : Record 7010014);
+    VAR
+      lrLinComent@1103355003 : Record 43;
+      lrLinVal@1103355005 : Record 7009861;
+      lwIndice@1103355002 : Integer;
+      lwNumLinea@1103355004 : Decimal;
+      lwTexto@1103355006 : Text[80];
+    BEGIN
+      // GestionComentarios
+
+      // Las observaciones son de 250 caracteres, tomamos los trozos de 80 caracteres para meter en las lineas
+      // de comentarios
+
+      lwNumLinea := 0;
+
+      lwTexto := WordWrap(prFraHot.Observaciones, 80);
+      WHILE lwTexto <> '' DO BEGIN
+        lwNumLinea += 10000;
+
+        lrLinComent."Document Type" := prCab."Document Type";
+        lrLinComent."No."           := prCab."No.";
+        lrLinComent."Line No."      := lwNumLinea;
+        lrLinComent.Date            := TODAY;
+        lrLinComent.Comment         := lwTexto;
+        lrLinComent.INSERT;
+
+        lwTexto := WordWrap(prFraHot.Observaciones, 80);
+      END;
+
+      lrLinVal.RESET;
+      lrLinVal.SETRANGE(No, prFraHot.ID);
+      IF lrLinVal.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          lwTexto := WordWrap(lrLinVal.Observaciones, 80);
+          WHILE lwTexto <> '' DO BEGIN
+            lwNumLinea += 10000;
+
+            lrLinComent."Document Type" := prCab."Document Type";
+            lrLinComent."No."           := prCab."No.";
+            lrLinComent."Line No."      := lwNumLinea;
+            lrLinComent.Date            := TODAY;
+            lrLinComent.Comment         := lwTexto;
+            lrLinComent.INSERT;
+
+            lwTexto := WordWrap(lrLinVal.Observaciones, 80);
+          END;
+        UNTIL lrLinVal.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE WordWrap@1000000010(VAR LongText@1000000000 : Text[1024];MaxLen@1000000001 : Integer) ShortText : Text[1024];
+    BEGIN
+      //split a long String into some short strings, usefull for conerting long text into the Navision-Tablestructure like Comment
+      //If exists LineBreak (\) befor Maxlen: Use for Dividing. Finish (maybe newcall)
+      IF (STRPOS(LongText,'\') <= MaxLen) AND (STRPOS(LongText,'\') > 0) THEN BEGIN
+        MaxLen := STRPOS(LongText,'\');
+        ShortText := DELCHR(COPYSTR(LongText,1,MaxLen-1),'>');
+        LongText := COPYSTR(LongText,MaxLen+1);
+        EXIT;
+      END;
+
+      //If the Basestring is shorter than the maxlen: Return all. Finish (Maybe newcall)
+      IF STRLEN(LongText) <= MaxLen THEN BEGIN
+        ShortText := LongText;
+        CLEAR(LongText);
+        EXIT;
+      END;
+
+      //Start on maxlen, go left till divider (every no-char char), return first Part.
+      WHILE (MaxLen > 10) AND (IsChar(LongText,MaxLen)) DO
+        MaxLen -= 1;
+      ShortText := DELCHR(COPYSTR(LongText,1,MaxLen),'>');
+      LongText := COPYSTR(LongText,MaxLen+1);
+    END;
+
+    PROCEDURE IsChar@1000000017(TestText@1000000000 : Text[1024];Position@1000000001 : Integer) : Boolean;
+    BEGIN
+      //Test for beeing a Letter-Char. A Number like 1234 will also be treated as Char-combination
+
+      TestText := UPPERCASE(COPYSTR(TestText,Position,1));
+      TestText := DELCHR(TestText,'=','ABCDEFGHIJKLMN¥OPQRSTUVWXYZ01234567890Ž™šá');
+      EXIT(TestText = '');
+    END;
+
+    LOCAL PROCEDURE _CheckReasonCode@1000000008();
+    VAR
+      lrReason@1000000000 : Record 231;
+      TextCodAu@1000000001 : TextConst 'ENU=ATENNEA;ESP=ATENNEA';
+    BEGIN
+      // _CheckReasonCode
+
+      IF NOT lrReason.GET(TextCodAu) THEN
+      BEGIN
+        lrReason.INIT;
+        lrReason.Code        := TextCodAu;
+        lrReason.Description := lrReason.Code;
+        lrReason.INSERT;
+      END;
+    END;
+
+    BEGIN
+    {
+      ## AJS 24.03.2009
+
+        .- En la rutina CambiarDatosFactura he puesto el TRUE en el MODIFY
+
+      $002 JPT GOC-LP-11011 Permitir la validacion de bonos de touroperadores que no ejecutan el proceso de conciliacion de bonos
+
+      $003 AJS 23082012 Control de seguridad por usuario
+
+      $004 AJS 18062014 Comprobar si la fecha de registro esta bloqueada en contabilidad
+
+      $005 AJS 28102014 Cogemos solo los 20 primeros caracteres del nombre a la hora de pasar a la linea de factura
+
+      $006 AJS 21112014 Utilizo la funcion ActualizaCamposImporte de la lineas de factura para rellenar los campos Amount y
+                        Amount Incl. VAT
+
+      $007 AJS 21012015 Ejecutar el proceso estandar Lanzar factura
+
+      $008 AJS 16032015 CNT-CAR-14096, Nueva funcion en las lineas de factura del estandar para controlar la edicion manual
+
+      $009 AJS 25032015 CNT-CAR-14096, El campo Reason code se rellena al final del proceso de facturacion
+
+      $010 AJS 08052015 CNT-OC-15134, Algunas facturas no registran costes, pasamos la factura a la empresa comercializadora
+    }
+    END.
+  }
+}

@@ -1,0 +1,173 @@
+OBJECT Codeunit 7009993 Cotizacion habitacion coste
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/01/13;
+    Time=17:02:46;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cCotCom@1103355001 : Codeunit 7009913;
+      cCalRes@1103355000 : Codeunit 7009707;
+      Text001@1103355003 : TextConst 'ENU=Room;ESP=Habitacion';
+      Text002@1103355002 : TextConst 'ENU=There is no price for the room %1 day %2 in contract %3;ESP=No hay precio para la habitacion %1 el dia %2 en contrato %3.';
+
+    PROCEDURE CalcularHabitacion@1103355005(VAR prCab@1103355007 : TEMPORARY Record 7009735;VAR prHoteles@1103355001 : TEMPORARY Record 7009873;VAR prContratos@1103355004 : TEMPORARY Record 7009873;VAR prHabitaciones@1103355002 : TEMPORARY Record 7009873;VAR prPersonas@1103355008 : TEMPORARY Record 7009873);
+    VAR
+      lrPrecioC@1103355000 : Record 7009738;
+      lrLinCal@1103355006 : Record 7009736;
+      lwPaxes@1103355003 : Integer;
+      lwDia@1103355005 : Date;
+      lwAcaba@1103355009 : Boolean;
+      lwCantidad@1103355010 : Decimal;
+    BEGIN
+      // CalcularHabitacion
+      //:
+
+      prHabitaciones.RESET;
+
+      IF prHabitaciones.FINDSET THEN BEGIN
+        REPEAT
+
+          IF prHabitaciones."Aplicacion coste manual" IN [0,3] THEN BEGIN
+
+            //-$001BuscarPreciosHabitacion(prHabitaciones, lrPrecioCTMP);
+
+            prPersonas.RESET;
+            prPersonas.SETRANGE(Contrato  , prHabitaciones.Contrato);
+            prPersonas.SETRANGE(Habitacion, prHabitaciones.Habitacion);
+
+            IF prPersonas.FINDSET THEN BEGIN
+              REPEAT
+
+                FOR lwDia := prHabitaciones."Fecha inicio" TO prHabitaciones."Fecha fin" DO BEGIN
+
+                  IF NOT ExistePrecio(prHabitaciones, lrPrecioC, lwDia) THEN BEGIN
+                    cCotCom.InsertaErrorCot(prCab.Usuario,
+                                            STRSUBSTNO(Text002, prHabitaciones.Habitacion, lwDia, prHabitaciones.Contrato));
+                  END
+                  ELSE BEGIN
+
+                    IF lrPrecioC."Tipo Precio" = lrPrecioC."Tipo Precio"::Pax THEN
+                      lwCantidad := 1
+                    ELSE
+                      lwCantidad := prHabitaciones."N§ Habitaciones";
+
+                    cCalRes.inserta_linea_calculo(
+                      lrLinCal, prCab.Usuario, Text001, prHabitaciones.Contrato, lrPrecioC.Importe * lwCantidad,
+                      prPersonas."N§ Persona", lwDia, prHabitaciones.Habitacion, lwCantidad, lrPrecioC.Importe,
+                      lrPrecioC.Garantizable, lrPrecioC."Importe HP");
+                    cCalRes.fijos_linea_calculo(
+                      lrLinCal, lrLinCal."Coste/Ingreso"::Coste, prCab."N§ Bono",
+                      prPersonas."N§ Persona", prHabitaciones.Hotel, 1, prHabitaciones.Hotel,
+                      lrPrecioC.Delegacion, lrPrecioC."Validacion HP especial");
+                  END;
+                END;
+
+                // Si el precio no es por pax solo cogemos a la primera persona, como responsable de la reserva.
+                IF lrPrecioC."Tipo Precio" = lrPrecioC."Tipo Precio"::Pax THEN
+                  lwAcaba := (prPersonas.NEXT = 0)
+                ELSE
+                  lwAcaba := TRUE;
+
+              UNTIL lwAcaba;
+            END;
+
+          END;
+
+        UNTIL prHabitaciones.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE BuscarPreciosHabitacion@1103355000(VAR prHabitacion@1103355001 : TEMPORARY Record 7009873;VAR prPreCTMP@1103355002 : TEMPORARY Record 7009738);
+    VAR
+      lrPreC@1103355003 : Record 7009738;
+    BEGIN
+      // BuscarPreciosHabitacion
+
+      prPreCTMP.RESET;
+      prPreCTMP.DELETEALL;
+
+      lrPreC.SETRANGE ("N§ Contrato"    , prHabitacion.Contrato);
+      lrPreC.SETRANGE ("Codigo Precio"  , lrPreC."Codigo Precio"::Habitacion);
+      lrPreC.SETRANGE (Codigo           , prHabitacion.Habitacion);
+      lrPreC.SETRANGE (Activo           , TRUE);
+
+      lrPreC.SETFILTER("Fecha desde"    , '<%1' , prHabitacion."Fecha inicio");
+      lrPreC.SETFILTER("Fecha hasta"    , '>=%1', prHabitacion."Fecha inicio");
+
+      IF lrPreC.FINDSET THEN BEGIN
+        REPEAT
+          // ** copiamos los precios que solapan por delante.
+          CopiarPrecioaTMP(lrPreC, prPreCTMP);
+        UNTIL lrPreC.NEXT = 0;
+      END;
+
+      lrPreC.SETFILTER("Fecha desde"    , '<%1' , prHabitacion."Fecha fin");
+      lrPreC.SETFILTER("Fecha hasta"    , '>=%1', prHabitacion."Fecha fin");
+
+      IF lrPreC.FINDSET THEN BEGIN
+        REPEAT
+          CopiarPrecioaTMP(lrPreC, prPreCTMP);
+        UNTIL lrPreC.NEXT = 0;
+      END;
+
+      lrPreC.SETFILTER("Fecha desde"    , '>=%1' , prHabitacion."Fecha inicio");
+      lrPreC.SETFILTER("Fecha hasta"    , '<=%1' , prHabitacion."Fecha fin");
+
+      IF lrPreC.FINDSET THEN BEGIN
+        REPEAT
+          CopiarPrecioaTMP(lrPreC, prPreCTMP);
+        UNTIL lrPreC.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExistePrecio@1103355004(VAR prHabitacion@1103355000 : TEMPORARY Record 7009873;VAR prPreC@1103355001 : Record 7009738;pwDia@1103355003 : Date) : Boolean;
+    BEGIN
+      // ExistePrecio
+
+      //+$001 <
+      prPreC.RESET;
+      prPreC.SETRANGE ("N§ Contrato"  , prHabitacion.Contrato);
+      prPreC.SETRANGE ("Codigo Precio", prPreC."Codigo Precio"::Habitacion);
+      prPreC.SETRANGE (Codigo         , prHabitacion.Habitacion);
+      prPreC.SETRANGE (Activo         , TRUE);
+      prPreC.SETFILTER("Fecha desde"  , '<=%1', pwDia);
+      prPreC.SETFILTER("Fecha hasta"  , '>=%1', pwDia);
+      EXIT(prPreC.FINDFIRST);
+      //+$001 >
+
+      //-$001prPreCTMP.RESET;
+      //-$001prPreCTMP.SETFILTER("Fecha desde"    , '<=%1', pwDia);
+      //-$001prPreCTMP.SETFILTER("Fecha hasta"    , '>=%1', pwDia);
+      //-$001prPreCTMP.SETRANGE (Codigo           , prHabitacion.Habitacion);
+
+      //-$001EXIT(prPreCTMP.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE CopiarPrecioaTMP@1103355007(VAR prPreC@1103355000 : Record 7009738;VAR prPreCTMP@1103355001 : TEMPORARY Record 7009738);
+    BEGIN
+      // CopiarPrecioaTMP
+
+      IF NOT prPreCTMP.GET(prPreC.Delegacion, prPreC."N§ Contrato", prPreC."Codigo Precio", prPreC."Orden Precio") THEN BEGIN
+        prPreCTMP := prPreC;
+        prPreCTMP.INSERT;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 09012013 Elimino el paso por tablas temporales de los precios, la variable local lrPrecioCTMP pasa a lrPrecioC
+    }
+    END.
+  }
+}

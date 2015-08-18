@@ -1,0 +1,1974 @@
+OBJECT Report 10743 Make 340 Declaration
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009,NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Make 340 Declaration;
+               ESP=Modelo 340];
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  RBMgt@1100000 : Codeunit 419;
+                BEGIN
+                  CompanyInfo.GET;
+                  IF CompanyInfo."VAT Registration No." = '' THEN
+                    ERROR(Text10700);
+                  IF (FiscalYear = '0000') THEN
+                    ERROR(Text10701);
+                  IF (Month = Month::" ") AND (Quarter = Quarter::" ") THEN
+                    ERROR(Text10713);
+                  IF ContactName = '' THEN
+                    ERROR(Text10702);
+                  IF ContactTelephone = '' THEN
+                    ERROR(Text10703);
+                  IF (DeclarationNum = '') OR (DeclarationNum = '0000')THEN
+                    ERROR(Text10704);
+                  IF ElectectronicCode = '' THEN
+                    ERROR(Text10705);
+                  IF ReplaceDeclaration AND (PrevDeclareNum = '') THEN
+                    ERROR(Text10707);
+
+                  VATEntryTypeFilter := VATEntry.GETFILTER(Type);
+                  IF VATEntryTypeFilter <> '' THEN
+                    VATEntryTypeFilter := '&' + VATEntryTypeFilter;
+                  VATEntryDateFilter := VATEntry.GETFILTER("Posting Date");
+                  IF VATEntryDateFilter <> '' THEN
+                    VATEntryDateFilter := '&' + VATEntryDateFilter;
+
+                  IF ISSERVICETIER THEN
+                    FileName := RBMgt.EnvironFileName('','txt');
+
+                  OutFile.TEXTMODE := TRUE;
+                  OutFile.WRITEMODE := TRUE;
+                  IF NOT ISSERVICETIER THEN
+                    OutFile.QUERYREPLACE(TRUE);
+                  OutFile.CREATE(FileName);
+                  OutFile.CREATEOUTSTREAM(Outstr);
+                  IF Month <> Month::" " THEN
+                    CalcDaysinMonth;
+                  IF Quarter <> Quarter::" " THEN
+                    CalcDaysinQuarter;
+                  IF Month <> Month::" " THEN
+                    PeriodText := GetMonthText
+                  ELSE IF Quarter <> Quarter::" " THEN
+                    PeriodText := GetPeriodText ;
+                  IF FilterString = '' THEN
+                    GetFilterStringFromColumnGPPG;
+                  IF RevChargeFilterString = '' THEN
+                    GetRevChargeFilterFromColGPPG;
+
+                  CompanyVATRegNo := FORMAT(CompanyInfo."VAT Registration No.");
+                  WHILE STRLEN(CompanyVATRegNo) < 9 DO
+                    CompanyVATRegNo := '0' + CompanyVATRegNo;
+
+                  CalcTotals;
+                  TotalBaseAmtText := FormatTextAmt(TotalBaseAmount,TRUE);
+                  TotalVATAmtText :=  FormatTextAmt(TotalVATAmount,TRUE);
+                  TotalInvAmtText :=  FormatTextAmt(TotalInvoiceAmount,TRUE);
+                  IF (TotalBaseAmount <> 0) OR
+                     (TotalVATAmount <> 0) OR
+                     (TotalInvoiceAmount <> 0) OR
+                     (NoofRecords <> 0)
+                  THEN
+                    CreateFileHeader
+                  ELSE BEGIN
+                    OutFile.CLOSE;
+                    ERROR(Text10706);
+                  END;
+                END;
+
+    OnPostReport=BEGIN
+                   OutFile.CLOSE;
+                   IF NOT ISSERVICETIER THEN
+                     MESSAGE(Text10711,FileName);
+
+                   IF ISSERVICETIER THEN BEGIN
+                     ToFile := Text10718 + '.txt';
+                     IF NOT DOWNLOAD(FileName,Text10709,'',Text10708,ToFile) THEN
+                       EXIT;
+                     MESSAGE(Text10711,ToFile);
+                   END;
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        OnPreDataItem=BEGIN
+                        Integer.SETRANGE(Number,1,2);
+                        Counter := 0;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           Counter += 1;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table254;
+        DataItemTableView=SORTING(Type,Posting Date,Document Type,Document No.,Bill-to/Pay-to No.)
+                          WHERE(Type=FILTER(Sale|Purchase));
+        DataItemVarName=VATEntry;
+        OnPreDataItem=BEGIN
+                        SETFILTER("Posting Date",'%1..%2' + VATEntryDateFilter,FromDate,ToDate);
+                        IF Counter = 1 THEN
+                          SETFILTER(Type,'%1' + VATEntryTypeFilter,Type::Sale);
+                        IF Counter = 2 THEN
+                          SETFILTER(Type,'%1' + VATEntryTypeFilter,Type::Purchase);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           VATBuffer.DELETEALL;
+                           IF VATEntry.Type = VATEntry.Type::Sale THEN
+                             BookTypeCode := 'E';
+                           IF VATEntry.Type = VATEntry.Type::Purchase THEN
+                             BookTypeCode := 'R';
+                         END;
+
+        ReqFilterFields=Document Type,Document No.;
+        TotalFields=Base,Amount;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table254;
+        DataItemTableView=SORTING(Type,Posting Date,Document Type,Document No.,Bill-to/Pay-to No.);
+        DataItemVarName=VATEntry2;
+        OnPreDataItem=VAR
+                        SourceCodeSetup@1100000 : Record 242;
+                      BEGIN
+                        SalesCrMemoHeader.RESET;
+                        SalesInvHeader.RESET;
+                        Customer.RESET;
+                        PurchCrMemoHeader.RESET;
+                        PurchInvHeader.RESET;
+                        Vendor.RESET;
+                        GLSetup.GET;
+                        VATDeductAmt := 0;
+                        VendorDocumentNo := '';
+                        VATEntryTemporary.RESET;
+                        VATEntryTemporary.DELETEALL;
+                        CASE VATEntry.Type OF
+                          VATEntry.Type::Sale:
+                            BEGIN
+                              Customer.GET(VATEntry."Bill-to/Pay-to No.");
+                              CASE VATEntry."Document Type" OF
+                                VATEntry."Document Type"::Invoice:
+                                  BEGIN
+                                    SourceCodeSetup.GET;
+                                    IF VATEntry."Source Code" = SourceCodeSetup.Sales THEN BEGIN
+                                      IF SalesInvHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                        Customer.Name := SalesInvHeader."Bill-to Name";
+                                        Customer."VAT Registration No." := SalesInvHeader."VAT Registration No.";
+                                        EXIT;
+                                      END;
+                                    END ELSE BEGIN
+                                      IF ServiceInvHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                        Customer.Name := ServiceInvHeader."Bill-to Name";
+                                        Customer."VAT Registration No." := ServiceInvHeader."VAT Registration No.";
+                                        EXIT;
+                                      END;
+                                    END;
+                                  END;
+                                VATEntry."Document Type"::"Credit Memo":
+                                  BEGIN
+                                    SourceCodeSetup.GET;
+                                    IF VATEntry."Source Code" = SourceCodeSetup.Sales THEN BEGIN
+                                      IF SalesCrMemoHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                        Customer.Name := SalesCrMemoHeader."Bill-to Name";
+                                        Customer."VAT Registration No." := SalesCrMemoHeader."VAT Registration No.";
+                                        EXIT;
+                                      END;
+                                    END ELSE BEGIN
+                                      IF ServiceCrMemoHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                        Customer.Name := ServiceCrMemoHeader."Bill-to Name";
+                                        Customer."VAT Registration No." := ServiceCrMemoHeader."VAT Registration No.";
+                                        EXIT;
+                                      END;
+                                    END;
+                                  END;
+                              END;
+                            END;
+                          VATEntry.Type::Purchase:
+                            BEGIN
+                              Vendor.GET(VATEntry."Bill-to/Pay-to No.");
+                              VendorDocumentNo := VATEntry."External Document No.";
+                              CASE VATEntry."Document Type" OF
+                                VATEntry."Document Type"::Invoice:
+                                  BEGIN
+                                    IF PurchInvHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                      Vendor.Name := PurchInvHeader."Pay-to Name";
+                                      Vendor."VAT Registration No." := PurchInvHeader."VAT Registration No.";
+                                      EXIT;
+                                    END;
+                                  END;
+                                VATEntry."Document Type"::"Credit Memo":
+                                  BEGIN
+                                    IF PurchCrMemoHeader.GET(VATEntry."Document No.") THEN BEGIN
+                                      Vendor.Name := PurchCrMemoHeader."Pay-to Name";
+                                      Vendor."VAT Registration No." := PurchCrMemoHeader."VAT Registration No.";
+                                      EXIT;
+                                    END;
+                                  END;
+                              END;
+                            END;
+                        END;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           OperationCode := GetOperationCode(VATEntry2);
+
+                           IF (("VAT Calculation Type" = "VAT Calculation Type"::"Reverse Charge VAT") AND (OperationCode ='I')) THEN BEGIN
+                             VATBuffer."VAT %" := 0;
+                             VATBuffer."EC %" := 0;
+                           END ELSE BEGIN
+                             VATBuffer."VAT %" := "VAT %";
+                             VATBuffer."EC %" := "EC %";
+                           END;
+                           VATBuffer."EC Amount" := 0;
+
+                           IF VATEntry2."VAT Calculation Type" = VATEntry2."VAT Calculation Type"::"Full VAT" THEN
+                             Base := 0;
+                           IF VATBuffer.FIND THEN BEGIN
+                             IF (VATEntry.Type = VATEntry.Type::Sale) THEN BEGIN
+                               VATBuffer.Base := VATBuffer.Base - Base;
+                               IF VATBuffer."VAT %" <> 0 THEN
+                                 VATBuffer.Amount := VATBuffer.Amount - Amount
+                             END;
+                             IF (VATEntry.Type = VATEntry.Type::Purchase) THEN BEGIN
+                               VATBuffer.Base := VATBuffer.Base + Base;
+                               IF VATBuffer."VAT %" <> 0 THEN
+                                 VATBuffer.Amount := VATBuffer.Amount + Amount
+                             END;
+                             VATBuffer.MODIFY;
+                           END ELSE BEGIN
+                             IF (VATEntry.Type = VATEntry.Type::Sale) THEN BEGIN
+                               VATBuffer.Base := -Base;
+                               IF VATBuffer."VAT %" = 0 THEN
+                                 VATBuffer.Amount :=0
+                               ELSE
+                                 VATBuffer.Amount := -Amount;
+                             END;
+                             IF (VATEntry.Type = VATEntry.Type::Purchase) THEN BEGIN
+                               VATBuffer.Base := Base;
+                               IF VATBuffer."VAT %" = 0 THEN
+                                 VATBuffer.Amount := 0
+                               ELSE
+                                 VATBuffer.Amount := Amount;
+                             END;
+                             VATBuffer.INSERT;
+
+                             IF (VATEntry2.Type = VATEntry.Type::Purchase) AND
+                                ((VATEntry2."VAT Calculation Type" <> VATEntry2."VAT Calculation Type"::"Reverse Charge VAT") OR IsGoodsTradeEU(VATEntry2))
+                             THEN BEGIN
+                               VATEntryTemporary := VATEntry2;
+                               VATEntryTemporary.INSERT;
+                             END;
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         VATEntry := VATEntry2;
+                       END;
+
+        TotalFields=Base,Amount;
+        DataItemLink=Type=FIELD(Type),
+                     Document Type=FIELD(Document Type),
+                     Document No.=FIELD(Document No.);
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=<Integer2>;
+        OnPreDataItem=BEGIN
+                        VATBuffer.FIND('-');
+                        VATEntryTemporary.SETCURRENTKEY("VAT %","EC %");
+                        IF VATEntryTemporary.FINDFIRST THEN;
+                        CurrReport.CREATETOTALS(VATBuffer2.Base,VATBuffer2.Amount);
+                        Fin := FALSE;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Fin THEN
+                             CurrReport.BREAK;
+                           IF (VATEntry.Type = VATEntry.Type :: Sale) AND (VATBuffer."EC %" <> 0) THEN
+                             VATBuffer."EC Amount" := ROUND(VATBuffer.Base * VATBuffer."EC %" / 100);
+                           VATBuffer2 := VATBuffer;
+                           IF VATBuffer2.Amount = 0  THEN BEGIN
+                             VATBuffer2."VAT %" := 0;
+                             VATBuffer2."EC %" := 0;
+                           END;
+                           IF VATEntry.Type = VATEntry.Type::Sale THEN
+                             RecordTypeSale;
+                           IF VATEntry.Type = VATEntry.Type::Purchase THEN BEGIN
+                             VATEntryTemporary.Amount :=  VATBuffer.Amount;
+                             VATDeductAmt := CheckDeductibleVAT(VATEntryTemporary);
+                             VATEntryTemporary.NEXT;
+                             RecordTypePurchase(VATEntry2);
+                           END;
+                           Fin := VATBuffer.NEXT = 0;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table254;
+        DataItemTableView=SORTING(Type,Posting Date,Document Type,Document No.,Bill-to/Pay-to No.)
+                          WHERE(Type=CONST(Purchase));
+        DataItemVarName=VATEntry4;
+        OnPreDataItem=BEGIN
+                        IF (Counter = 1) AND (NOT ShowSalesAutoInv) THEN
+                          SETRANGE(Type,Type::Sale);
+                        IF (Counter = 2) AND (NOT ShowPurchAutoInv) THEN
+                          SETRANGE(Type,Type::Sale);
+
+                        SETRANGE("Generated Autodocument",TRUE);
+                        IF FINDFIRST THEN;
+                          SETFILTER("Posting Date",VATEntry.GETFILTER("Posting Date"));
+                          IF VATEntry.GETFILTER("Document No.") <> '' THEN
+                            SETFILTER("Document No.",VATEntry.GETFILTER("Document No."));
+                          IF VATEntry.GETFILTER("Document Type") <> '' THEN
+                            SETFILTER("Document Type",VATEntry.GETFILTER("Document Type"));
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           VATBuffer.DELETEALL;
+                           IF Counter = 1 THEN
+                             BookTypeCode := 'E'
+                           ELSE
+                             BookTypeCode := 'R';
+                         END;
+
+        TotalFields=Base,Amount;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table254;
+        DataItemTableView=SORTING(Type,Posting Date,Document Type,Document No.,Bill-to/Pay-to No.);
+        DataItemVarName=VATEntry5;
+        OnPreDataItem=BEGIN
+                        PurchInvHeader.RESET;
+                        PurchCrMemoHeader.RESET;
+                        Vendor.RESET;
+                        VATDeductAmt := 0;
+                        VATEntryTemporary.RESET;
+                        VATEntryTemporary.DELETEALL;
+
+                        VendLedgEntry.RESET;
+                        VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                        VendLedgEntry.SETRANGE(VendLedgEntry."Document No.",VATEntry4."Document No.");
+                        VendLedgEntry.SETRANGE("Document Type",VATEntry4."Document Type");
+                        IF VendLedgEntry.FINDFIRST THEN
+                          AutoDocNo := VendLedgEntry."Autodocument No.";
+
+                        IF Counter = 1 THEN
+                          VendorDocumentNo := AutoDocNo
+                        ELSE
+                          VendorDocumentNo := VATEntry4."Document No.";
+                        Vendor.GET(VATEntry4."Bill-to/Pay-to No.");
+                        CASE VATEntry4."Document Type" OF
+                          VATEntry4."Document Type"::"Credit Memo":
+                            IF PurchCrMemoHeader.GET(VATEntry4."Document No.") THEN BEGIN
+                              Vendor.Name := PurchCrMemoHeader."Pay-to Name";
+                              Vendor."VAT Registration No." := PurchCrMemoHeader."VAT Registration No.";
+                              EXIT;
+                            END;
+                          VATEntry4."Document Type"::Invoice:
+                            IF PurchInvHeader.GET(VATEntry4."Document No.") THEN BEGIN
+                              Vendor.Name := PurchInvHeader."Pay-to Name";
+                              Vendor."VAT Registration No." := PurchInvHeader."VAT Registration No.";
+                              EXIT;
+                            END;
+                        END;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           VATBuffer."VAT %" := "VAT %";
+                           VATBuffer."EC %" := "EC %";
+                           VATBuffer."EC Amount" := 0;
+
+                           IF "VAT Calculation Type" = "VAT Calculation Type"::"Reverse Charge VAT" THEN BEGIN
+                             IF VATBuffer.FIND THEN BEGIN
+                               IF (VATEntry5.Type = VATEntry5.Type::Sale) THEN BEGIN
+                                 VATBuffer.Base := VATBuffer.Base - Base;
+                                 VATBuffer.Amount := VATBuffer.Amount - Amount
+                               END;
+                               IF (VATEntry5.Type = VATEntry5.Type::Purchase) THEN BEGIN
+                                 VATBuffer.Base := VATBuffer.Base + Base;
+                                 VATBuffer.Amount := VATBuffer.Amount + Amount
+                               END;
+                               VATBuffer.MODIFY;
+                             END ELSE BEGIN
+                               IF (VATEntry5.Type = VATEntry5.Type::Sale) THEN BEGIN
+                                 VATBuffer.Base := -Base;
+                                 VATBuffer.Amount := -Amount;
+                               END;
+                               IF (VATEntry5.Type = VATEntry5.Type::Purchase) THEN BEGIN
+                                 VATBuffer.Base := Base;
+                                 VATBuffer.Amount := Amount;
+                               END;
+                               VATBuffer.INSERT;
+                               VATEntryTemporary := VATEntry5;
+                               VATEntryTemporary.INSERT;
+                             END
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         VATEntry4 := VATEntry5;
+                       END;
+
+        TotalFields=Base,Amount;
+        DataItemLink=Type=FIELD(Type),
+                     Posting Date=FIELD(Posting Date),
+                     Document Type=FIELD(Document Type),
+                     Document No.=FIELD(Document No.);
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=<Integer3>;
+        OnPreDataItem=BEGIN
+                        VATBuffer.FIND('-');
+                        VATEntryTemporary.SETCURRENTKEY("VAT %","EC %");
+                        VATEntryTemporary.FINDFIRST;
+                        CurrReport.CREATETOTALS(VATBuffer2.Base,VATBuffer2.Amount);
+                        Fin := FALSE;
+                        Vendor."Country/Region Code" := CompanyInfo."Country/Region Code" ;
+                        Vendor."VAT Registration No." :=  CompanyInfo."VAT Registration No.";
+                        Vendor.Name :=  CompanyInfo.Name;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Fin THEN BEGIN
+                             Vendor.RESET;
+                             CurrReport.BREAK;
+                           END;
+                           VATBuffer2 := VATBuffer;
+                           IF VATBuffer2.Amount = 0  THEN BEGIN
+                             VATBuffer2."VAT %" := 0;
+                             VATBuffer2."EC %" := 0;
+                           END;
+                           VATEntryTemporary.Amount :=  VATBuffer.Amount;
+                           VATDeductAmt := CheckDeductibleVAT(VATEntryTemporary);
+                           OperationCode := GetOperationCode(VATEntryTemporary);
+                           VATEntryTemporary.NEXT;
+                           VATEntry5."Document No." := AutoDocNo;
+                           IF OperationCode = 'I' THEN
+                             RecordTypePurchase(VATEntry5);
+                           Fin := VATBuffer.NEXT = 0;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8910;
+      Height=7700;
+      SaveValues=Yes;
+      OnInit=BEGIN
+               IF FiscalYear = '' THEN
+                 FiscalYear := '0000';
+               DeclarationNum := '0000';
+               Quarter := Quarter::"1T";
+             END;
+
+      OnOpenForm=BEGIN
+                   IF ReplaceDeclaration THEN
+                     RequestOptionsForm.PrevDeclarationNum.ENABLED(TRUE)
+                   ELSE
+                     RequestOptionsForm.PrevDeclarationNum.ENABLED(FALSE);
+
+                   RequestOptionsForm.FileNameTextBox.VISIBLE := NOT ISSERVICETIER;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1100000;TextBox   ;3410 ;0    ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Fiscal Year;
+                                                              ESP=Ejercicio];
+                                                   Numeric=Yes;
+                                                   SourceExpr=FiscalYear;
+                                                   OnValidate=BEGIN
+                                                                FiscalYearText := FiscalYear;
+                                                                IF STRLEN(FiscalYearText) <> MAXSTRLEN(FiscalYearText) THEN
+                                                                  ERROR(Text10716,MAXSTRLEN(FiscalYearText));
+                                                              END;
+                                                               }
+      { 1100001;Label     ;0    ;0    ;3300 ;440  ;ParentControl=1100000;
+                                                   InPage=-1 }
+      { 1100002;Label     ;0    ;550  ;3300 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Period;
+                                                              ESP=Periodo] }
+      { 1100003;TextBox   ;3410 ;1100 ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Month;
+                                                              ESP=Mes];
+                                                   OptionCaptionML=[ENU=" ,January,February,March,April,May,June,July,August,September,October,November,December";
+                                                                    ESP=" ,Enero,Febrero,Marzo,Abril,Mayo,Junio,Julio,Agosto,Septiembre,Octubre,Noviembre,Diciembre"];
+                                                   OptionString=[ ,January,February,March,April,May,June,July,August,September,October,November,December];
+                                                   SourceExpr=Month;
+                                                   OnValidate=BEGIN
+                                                                IF (Month <> Month::" ") AND (Quarter <> Quarter::" ") THEN
+                                                                  ERROR(Text10712);
+                                                              END;
+                                                               }
+      { 1100004;Label     ;220  ;1100 ;3080 ;440  ;ParentControl=1100003;
+                                                   InPage=-1 }
+      { 1100005;TextBox   ;3410 ;1650 ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Quarter;
+                                                              ESP=Trimestre];
+                                                   OptionCaptionML=[ENU=" ,1st Quarter,2nd Quarter,3rd Quarter,4th Quarter";
+                                                                    ESP=" ,1er trimestre,2o trimestre,3er trimestre,4o trimestre"];
+                                                   OptionString=[ ,1st Quarter,2nd Quarter,3rd Quarter,4th Quarter];
+                                                   SourceExpr=Quarter;
+                                                   OnValidate=BEGIN
+                                                                IF (Month <> Month::" ") AND (Quarter <> Quarter::" ") THEN
+                                                                  ERROR(Text10712);
+                                                              END;
+                                                               }
+      { 1100006;Label     ;220  ;1650 ;3080 ;440  ;ParentControl=1100005;
+                                                   InPage=-1 }
+      { 1100007;TextBox   ;3410 ;2200 ;5500 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Contact Name;
+                                                              ESP=Nombre contacto];
+                                                   SourceExpr=ContactName }
+      { 1100008;Label     ;0    ;2200 ;3300 ;440  ;ParentControl=1100007;
+                                                   InPage=-1 }
+      { 1100009;TextBox   ;3410 ;2750 ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Telephone Number;
+                                                              ESP=N£mero de telÇfono];
+                                                   Numeric=Yes;
+                                                   SourceExpr=ContactTelephone;
+                                                   OnValidate=BEGIN
+                                                                IF STRLEN(ContactTelephone) <> MAXSTRLEN(ContactTelephone) THEN
+                                                                  ERROR(Text10710,MAXSTRLEN(ContactTelephone));
+                                                              END;
+                                                               }
+      { 1100010;Label     ;0    ;2750 ;3300 ;440  ;ParentControl=1100009;
+                                                   InPage=-1 }
+      { 1100011;TextBox   ;3410 ;3300 ;5500 ;440  ;Editable=No;
+                                                   InPage=-1;
+                                                   PermanentAssist=Yes;
+                                                   CaptionML=[ENU=Non Deduct. Gen. Prod. Post. Groups;
+                                                              ESP=Grupos reg. prod. gen. no deduc.];
+                                                   SourceExpr=ColumnGPPG;
+                                                   OnAssistEdit=VAR
+                                                                  GPPGSelectionBuf@1100000 : Record 10730;
+                                                                BEGIN
+                                                                  GPPGSelectionBuf.SetNonDedGPPGSelectMultiple340(ColumnGPPG,FilterString);
+                                                                END;
+                                                                 }
+      { 1100012;Label     ;0    ;3300 ;3300 ;440  ;ParentControl=1100011;
+                                                   InPage=-1 }
+      { 1100013;TextBox   ;3410 ;3850 ;5500 ;440  ;Editable=No;
+                                                   InPage=-1;
+                                                   PermanentAssist=Yes;
+                                                   CaptionML=[ENU=Rev. Charge Gen. Prod. Post. Groups;
+                                                              ESP=Grupos reg. prod. gen. revers.];
+                                                   SourceExpr=ColumnRevCharge;
+                                                   OnAssistEdit=VAR
+                                                                  GPPGSelectionBuf@1100000 : Record 10730;
+                                                                BEGIN
+                                                                  GPPGSelectionBuf.SetRevChgGPPGSelectMultiple340(ColumnRevCharge,RevChargeFilterString);
+                                                                END;
+                                                                 }
+      { 1100014;Label     ;0    ;3850 ;3300 ;440  ;ParentControl=1100013;
+                                                   InPage=-1 }
+      { 1100015;TextBox   ;3410 ;4400 ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Declaration Number;
+                                                              ESP=Nß modelo];
+                                                   Numeric=Yes;
+                                                   SourceExpr=DeclarationNum;
+                                                   OnValidate=BEGIN
+                                                                WHILE STRLEN(DeclarationNum) < MAXSTRLEN(DeclarationNum) DO
+                                                                  DeclarationNum := '0' + DeclarationNum;
+                                                              END;
+                                                               }
+      { 1100016;Label     ;0    ;4400 ;3300 ;440  ;ParentControl=1100015;
+                                                   InPage=-1 }
+      { 1100017;TextBox   ;3410 ;4950 ;1700 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Electronic Code;
+                                                              ESP=C¢digo electr¢nico];
+                                                   SourceExpr=ElectectronicCode;
+                                                   OnValidate=BEGIN
+                                                                IF STRLEN(ElectectronicCode) <> MAXSTRLEN(ElectectronicCode) THEN
+                                                                  ERROR(Text10714,MAXSTRLEN(ElectectronicCode));
+                                                              END;
+                                                               }
+      { 1100018;Label     ;0    ;4950 ;3300 ;440  ;ParentControl=1100017;
+                                                   InPage=-1 }
+      { 1100019;TextBox   ;3410 ;5500 ;1700 ;440  ;CaptionML=[ENU=Declaration Media Type;
+                                                              ESP=Tipo de medio modelo];
+                                                   OptionCaptionML=[ENU=Telematic,CD-R;
+                                                                    ESP=Telem†tica,CD-R];
+                                                   OptionString=Telematic,CD-R;
+                                                   SourceExpr=DeclarationMediaType }
+      { 1100020;Label     ;0    ;5500 ;3300 ;440  ;ParentControl=1100019;
+                                                   InPage=-1 }
+      { 1100021;CheckBox  ;3410 ;6050 ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Replacement Declaration;
+                                                              ESP=Modelo de sustituci¢n];
+                                                   SourceExpr=ReplaceDeclaration;
+                                                   OnPush=BEGIN
+                                                            IF ReplaceDeclaration THEN
+                                                              RequestOptionsForm.PrevDeclarationNum.ENABLED(TRUE)
+                                                            ELSE
+                                                              RequestOptionsForm.PrevDeclarationNum.ENABLED(FALSE);
+                                                          END;
+                                                           }
+      { 1100022;Label     ;0    ;6050 ;3300 ;440  ;ParentControl=1100021;
+                                                   InPage=-1 }
+      { 1100023;TextBox   ;3410 ;6600 ;1700 ;440  ;Name=PrevDeclarationNum;
+                                                   InPage=-1;
+                                                   CaptionML=[ENU=Previous Declaration Number;
+                                                              ESP=N£mero de modelo anterior];
+                                                   Numeric=Yes;
+                                                   SourceExpr=PrevDeclareNum;
+                                                   OnValidate=BEGIN
+                                                                IF (STRLEN(PrevDeclareNum) <> MAXSTRLEN(PrevDeclareNum)) OR (STRPOS(PrevDeclareNum, ' ') <> 0) THEN
+                                                                  ERROR(Text10715,MAXSTRLEN(PrevDeclareNum));
+                                                              END;
+                                                               }
+      { 1100024;Label     ;0    ;6600 ;3300 ;440  ;ParentControl=1100023;
+                                                   InPage=-1 }
+      { 1100025;TextBox   ;3410 ;7150 ;5500 ;440  ;Name=FileNameTextBox;
+                                                   InPage=-1;
+                                                   CaptionML=[ENU=File Name;
+                                                              ESP=Nombre archivo];
+                                                   SourceExpr=FileName;
+                                                   OnAssistEdit=BEGIN
+                                                                  FileName := CommonDialogMgt.OpenFile(Text10709,FileName,1,Text10708,1);
+                                                                END;
+                                                                 }
+      { 1100026;Label     ;0    ;7150 ;3300 ;440  ;ParentControl=1100025;
+                                                   InPage=-1 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=BEGIN
+               PrevDeclarationNumEnable := TRUE;
+               FileNameTextBoxVisible := TRUE;
+               IF FiscalYear = '' THEN
+                 FiscalYear := '0000';
+               DeclarationNum := '0000';
+               Quarter := Quarter::"1T";
+             END;
+
+      OnOpenPage=BEGIN
+                   IF ReplaceDeclaration THEN
+                     PrevDeclarationNumEnable := TRUE
+                   ELSE
+                     PrevDeclarationNumEnable := FALSE;
+
+                   FileNameTextBoxVisible := NOT ISSERVICETIER;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1100000;2;Field     ;
+                  CaptionML=[ENU=Fiscal Year;
+                             ESP=Ejercicio];
+                  Numeric=Yes;
+                  SourceExpr=FiscalYear;
+                  OnValidate=BEGIN
+                               FiscalYearText := FiscalYear;
+                               IF STRLEN(FiscalYearText) <> MAXSTRLEN(FiscalYearText) THEN
+                                 ERROR(Text10716,MAXSTRLEN(FiscalYearText));
+                             END;
+                              }
+
+      { 1100002;2;Group     ;
+                  CaptionML=[ENU=Period;
+                             ESP=Periodo] }
+
+      { 1100003;3;Field     ;
+                  CaptionML=[ENU=Month;
+                             ESP=Mes];
+                  OptionCaptionML=[ENU=" ,January,February,March,April,May,June,July,August,September,October,November,December";
+                                   ESP=" ,Enero,Febrero,Marzo,Abril,Mayo,Junio,Julio,Agosto,Septiembre,Octubre,Noviembre,Diciembre"];
+                  SourceExpr=Month;
+                  OnValidate=BEGIN
+                               IF (Month <> Month::" ") AND (Quarter <> Quarter::" ") THEN
+                                 ERROR(Text10712);
+                             END;
+                              }
+
+      { 1100005;3;Field     ;
+                  CaptionML=[ENU=Quarter;
+                             ESP=Trimestre];
+                  OptionCaptionML=[ENU=" ,1st Quarter,2nd Quarter,3rd Quarter,4th Quarter";
+                                   ESP=" ,1er trimestre,2o trimestre,3er trimestre,4o trimestre"];
+                  SourceExpr=Quarter;
+                  OnValidate=BEGIN
+                               IF (Month <> Month::" ") AND (Quarter <> Quarter::" ") THEN
+                                 ERROR(Text10712);
+                             END;
+                              }
+
+      { 1100007;2;Field     ;
+                  CaptionML=[ENU=Contact Name;
+                             ESP=Nombre contacto];
+                  SourceExpr=ContactName }
+
+      { 1100009;2;Field     ;
+                  CaptionML=[ENU=Telephone Number;
+                             ESP=N£mero de telÇfono];
+                  Numeric=Yes;
+                  SourceExpr=ContactTelephone;
+                  OnValidate=BEGIN
+                               IF STRLEN(ContactTelephone) <> MAXSTRLEN(ContactTelephone) THEN
+                                 ERROR(Text10710,MAXSTRLEN(ContactTelephone));
+                             END;
+                              }
+
+      { 1100011;2;Field     ;
+                  CaptionML=[ENU=Non Deduct. Gen. Prod. Post. Groups;
+                             ESP=Grupos reg. prod. gen. no deduc.];
+                  SourceExpr=ColumnGPPG;
+                  Editable=FALSE;
+                  OnAssistEdit=VAR
+                                 GPPGSelectionBuf@1100000 : Record 10730;
+                               BEGIN
+                                 GPPGSelectionBuf.SetNonDedGPPGSelectMultiple340(ColumnGPPG,FilterString);
+                               END;
+                                }
+
+      { 1100013;2;Field     ;
+                  CaptionML=[ENU=Rev. Charge Gen. Prod. Post. Groups;
+                             ESP=Grupos reg. prod. gen. revers.];
+                  SourceExpr=ColumnRevCharge;
+                  Editable=FALSE;
+                  OnAssistEdit=VAR
+                                 GPPGSelectionBuf@1100000 : Record 10730;
+                               BEGIN
+                                 GPPGSelectionBuf.SetRevChgGPPGSelectMultiple340(ColumnRevCharge,RevChargeFilterString);
+                               END;
+                                }
+
+      { 1100015;2;Field     ;
+                  CaptionML=[ENU=Declaration Number;
+                             ESP=Nß modelo];
+                  Numeric=Yes;
+                  SourceExpr=DeclarationNum;
+                  OnValidate=BEGIN
+                               WHILE STRLEN(DeclarationNum) < MAXSTRLEN(DeclarationNum) DO
+                                 DeclarationNum := '0' + DeclarationNum;
+                             END;
+                              }
+
+      { 1100017;2;Field     ;
+                  CaptionML=[ENU=Electronic Code;
+                             ESP=C¢digo electr¢nico];
+                  SourceExpr=ElectectronicCode;
+                  OnValidate=BEGIN
+                               IF STRLEN(ElectectronicCode) <> MAXSTRLEN(ElectectronicCode) THEN
+                                 ERROR(Text10714,MAXSTRLEN(ElectectronicCode));
+                             END;
+                              }
+
+      { 1100019;2;Field     ;
+                  CaptionML=[ENU=Declaration Media Type;
+                             ESP=Tipo de medio modelo];
+                  OptionCaptionML=[ENU=Telematic,CD-R;
+                                   ESP=Telem†tica,CD-R];
+                  SourceExpr=DeclarationMediaType }
+
+      { 1100021;2;Field     ;
+                  CaptionML=[ENU=Replacement Declaration;
+                             ESP=Modelo de sustituci¢n];
+                  SourceExpr=ReplaceDeclaration;
+                  OnValidate=BEGIN
+                               ReplaceDeclarationOnPush;
+                             END;
+                              }
+
+      { 1100023;2;Field     ;
+                  Name=PrevDeclarationNum;
+                  CaptionML=[ENU=Previous Declaration Number;
+                             ESP=N£mero de modelo anterior];
+                  Numeric=Yes;
+                  SourceExpr=PrevDeclareNum;
+                  Enabled=PrevDeclarationNumEnable;
+                  OnValidate=BEGIN
+                               IF (STRLEN(PrevDeclareNum) <> MAXSTRLEN(PrevDeclareNum)) OR (STRPOS(PrevDeclareNum, ' ') <> 0) THEN
+                                 ERROR(Text10715,MAXSTRLEN(PrevDeclareNum));
+                             END;
+                              }
+
+      { 1100025;2;Field     ;
+                  Name=FileNameTextBox;
+                  CaptionML=[ENU=File Name;
+                             ESP=Nombre archivo];
+                  SourceExpr=FileName;
+                  Visible=FileNameTextBoxVisible;
+                  OnAssistEdit=BEGIN
+                                 FileName := CommonDialogMgt.OpenFile(Text10709,FileName,1,Text10708,1);
+                               END;
+                                }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      SalesInvHeader@1100000 : Record 112;
+      SalesCrMemoHeader@1100001 : Record 114;
+      Customer@1100002 : Record 18;
+      CompanyInfo@1100003 : Record 79;
+      VATBuffer@1100004 : TEMPORARY Record 10704;
+      VATBuffer2@1100005 : Record 10704;
+      GLSetup@1100006 : Record 98;
+      Currency@1100007 : Record 4;
+      PurchCrMemoHeader@1100008 : Record 124;
+      PurchInvHeader@1100009 : Record 122;
+      Vendor@1100010 : Record 23;
+      SalesInvLine@1100011 : Record 113;
+      ServiceInvHeader@1100012 : Record 5992;
+      ServiceCrMemoHeader@1100013 : Record 5994;
+      VATEntryTemporary@1100078 : TEMPORARY Record 254;
+      VendLedgEntry@1100079 : Record 25;
+      CommonDialogMgt@1100015 : Codeunit 412;
+      OutFile@1100016 : File;
+      DeclarationNum@1100017 : Text[4];
+      FileName@1100018 : Text[250];
+      ContactName@1100019 : Text[30];
+      BookTypeCode@1100020 : Text[1];
+      OperationCode@1100021 : Text[1];
+      ColumnGPPG@1100022 : Text[1024];
+      TotalNoofRecords@1100023 : Text[9];
+      Text10700@1100057 : TextConst 'ENU=Please specify the VAT Registration No. of your Company in the Company Information window.;ESP=Especifique el CIF/NIF de su empresa en la ventana Informaci¢n empresa.';
+      FilterString@1100024 : Text[1024];
+      ColumnRevCharge@1100025 : Text[1024];
+      RevChargeFilterString@1100026 : Text[1024];
+      PrevDeclareNumText@1100027 : Text[13];
+      CorreInvoiceText@1100028 : Text[40];
+      TotalBaseAmtText@1100029 : Text[18];
+      TotalVATAmtText@1100030 : Text[18];
+      TotalInvAmtText@1100031 : Text[18];
+      VendorDocumentNo@1100032 : Text[40];
+      PeriodText@1100033 : Text[2];
+      ToFile@1100034 : Text[1024];
+      CompanyVATRegNo@1100035 : Text[9];
+      NoofRegistersText@1100077 : Text[2];
+      FiscalYearText@1100055 : Text[4];
+      FiscalYear@1100036 : Code[4];
+      ContactTelephone@1100037 : Code[9];
+      PrevDeclareNum@1100038 : Code[13];
+      ElectectronicCode@1100039 : Code[16];
+      Text10701@1100058 : TextConst 'ENU=Incorrect Fiscal Year.;ESP=Ejercicio incorrecto.';
+      Text10702@1100059 : TextConst 'ENU=Contact Name must be entered.;ESP=Debe introducirse nombre contacto.';
+      Text10703@1100060 : TextConst 'ENU=Contact Telephone must be entered.;ESP=Debe introducirse telÇfono contacto.';
+      Text10704@1100061 : TextConst 'ENU=Declaration Number must be entered.;ESP=Debe introducirse n£mero de modelo.';
+      Text10705@1100062 : TextConst 'ENU=Electronic Code must be entered.;ESP=Debe introducirse c¢digo electr¢nico.';
+      Text10706@1100063 : TextConst 'ENU=No records were found to be included in the declaration. The process has been aborted. No file will be created.;ESP=No se han encontrado registros para incluir en la declaraci¢n. Se ha cancelado el proceso. No se crear† el archivo.';
+      Text10707@1100064 : TextConst 'ENU="Please specify the Previous Declaration No. if this is a replacement declaration. ";ESP="Especifique el n£mero de modelo anterior, si es una declaraci¢n de sustituci¢n. "';
+      Text10708@1100065 : TextConst 'ENU=Text Files (*.txt)|*.txt|All Files (*.*)|*.*;ESP=Fich. texto (*.txt)|*.txt|Todos fich. (*.*)|*.*';
+      Text10709@1100066 : TextConst 'ENU=Path to export 340 file.;ESP=Ruta para exportar el archivo 340.';
+      AutoDocNo@1100014 : Code[20];
+      NumFiscalYear@1100040 : Integer;
+      Counter@1100041 : Integer;
+      NoofRegisters@1100076 : Integer;
+      TotalBaseAmount@1100042 : Decimal;
+      TotalInvoiceAmount@1100043 : Decimal;
+      TotalVATAmount@1100044 : Decimal;
+      DeclarationMediaType@1100045 : 'Telematic,CD-R';
+      Month@1100046 : ' ,Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec';
+      Quarter@1100047 : ' ,1T,2T,3T,4T';
+      VATDeductAmt@1100048 : Decimal;
+      ReplaceDeclaration@1100049 : Boolean;
+      Fin@1100050 : Boolean;
+      FromDate@1100051 : Date;
+      ToDate@1100052 : Date;
+      Text10710@1100067 : TextConst 'ENU=Contact Telephone must be %1 digits without spaces or special characters.;ESP=El telÇfono de contacto debe tener %1 d°gitos sin espacios o caracteres especiales.';
+      Text10711@1100068 : TextConst 'ENU=340 Declaration has been exported successfully under %1.;ESP=El modelo 340 se ha exportado correctamente bajo %1.';
+      Text10712@1100069 : TextConst 'ENU=The declaration can include either a month or a quarter but not both at the same time.;ESP=El modelo puede incluir un mes o un trimestre, pero no ambos a la vez.';
+      Text10713@1100070 : TextConst 'ENU=Please specify the Period: Month or Quarter.;ESP=Especifique el periodo: mes o trimestre.';
+      Text10714@1100071 : TextConst 'ENU=Electronic Code must be %1 digits without spaces or special characters.;ESP=El c¢digo electr¢nico debe tener %1 d°gitos sin espacios o caracteres especiales.';
+      Text10715@1100072 : TextConst 'ENU=Previous Declaration Number must be %1 digits without spaces or special characters.;ESP=El n£mero de modelo anterior debe tener %1 d°gitos sin espacios o caracteres especiales.';
+      Text10716@1100073 : TextConst 'ENU=Fiscal Year must be %1 digits without spaces or special characters.;ESP=El ejercicio debe tener %1 d°gitos sin espacios o caracteres especiales.';
+      Text10717@1100074 : TextConst 'ENU=µ∑ê‘÷ﬁ‡„ÈÎ•öÄ()"&Ôé”ÿô˚ö$''ß¶;ESP=µ∑ê‘÷ﬁ‡„ÈÎ•öÄ()"&Ôé”ÿô˚ö$''ß¶';
+      Outstr@1100053 : OutStream;
+      NoofRecords@1100054 : Integer;
+      Text10718@1100075 : TextConst 'ENU=Default;ESP=GenÇrico';
+      VATEntryTypeFilter@1100083 : Text[30];
+      VATEntryDateFilter@1100082 : Text[30];
+      ShowSalesAutoInv@1100081 : Boolean;
+      ShowPurchAutoInv@1100080 : Boolean;
+      wTicketDesde@1103355000 : Code[20];
+      wTicketHasta@1103355001 : Code[20];
+      wNumTiques@1103355002 : Integer;
+      wEsTiques@1103355003 : Boolean;
+      FileNameTextBoxVisible@19077241 : Boolean INDATASET;
+      PrevDeclarationNumEnable@19078655 : Boolean INDATASET;
+
+    PROCEDURE CalcDaysinMonth@1100000();
+    BEGIN
+      IF NOT EVALUATE(NumFiscalYear,FiscalYear) THEN
+        ERROR(Text10701);
+      CASE Month OF
+         Month::Jan:
+           BEGIN
+             FromDate := DMY2DATE(1,1,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,1,NumFiscalYear));
+           END;
+         Month::Feb:
+           BEGIN
+             FromDate := DMY2DATE(1,2,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,2,NumFiscalYear));
+           END;
+         Month::Mar:
+           BEGIN
+             FromDate := DMY2DATE(1,3,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,3,NumFiscalYear));
+           END;
+        Month::Apr:
+           BEGIN
+             FromDate := DMY2DATE(1,4,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,4,NumFiscalYear));
+           END;
+        Month::May:
+           BEGIN
+             FromDate := DMY2DATE(1,5,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,5,NumFiscalYear));
+           END;
+        Month::Jun:
+           BEGIN
+             FromDate := DMY2DATE(1,6,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,6,NumFiscalYear));
+           END;
+        Month::Jul:
+           BEGIN
+             FromDate := DMY2DATE(1,7,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,7,NumFiscalYear));
+           END;
+        Month::Aug:
+           BEGIN
+             FromDate := DMY2DATE(1,8,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,8,NumFiscalYear));
+           END;
+        Month::Sep:
+           BEGIN
+             FromDate := DMY2DATE(1,9,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,9,NumFiscalYear));
+           END;
+        Month::Oct:
+           BEGIN
+             FromDate := DMY2DATE(1,10,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,10,NumFiscalYear));
+           END;
+        Month::Nov:
+           BEGIN
+             FromDate := DMY2DATE(1,11,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,11,NumFiscalYear));
+           END;
+        Month::Dec:
+           BEGIN
+             FromDate := DMY2DATE(1,12,NumFiscalYear);
+             ToDate := CALCDATE('<CM>',DMY2DATE(1,12,NumFiscalYear));
+           END;
+      END;
+    END;
+
+    PROCEDURE CheckVATType@1100001(VATEntryRec@1100000 : Record 254) : Boolean;
+    VAR
+      VATEntries@1100001 : Record 254;
+    BEGIN
+      VATEntries.RESET;
+      VATEntries.SETCURRENTKEY("Document No.");
+      VATEntries.SETRANGE("Document No.",VATEntryRec."Document No.");
+      VATEntries.SETRANGE("Document Type",VATEntryRec."Document Type");
+      VATEntries.SETRANGE(Type,VATEntryRec.Type);
+      IF VATEntries.FINDFIRST THEN
+        REPEAT
+          IF (VATEntries."VAT %" <> VATEntryRec."VAT %") OR
+             (VATEntries."EC %" <> VATEntryRec."EC %") THEN
+            EXIT(TRUE);
+        UNTIL VATEntries.NEXT = 0;
+    END;
+
+    PROCEDURE CalcECAmount@1100002(VATEntryRec@1100000 : Record 254;VAR VATBuffer3@1100001 : TEMPORARY Record 10704);
+    VAR
+      SalesInvHdr@1100003 : Record 112;
+      Currency@1100004 : Record 4;
+    BEGIN
+      Currency.RESET;
+      Currency.InitRoundingPrecision;
+      VATBuffer3."EC Amount" := -ROUND(VATEntryRec.Base * VATEntryRec."EC %" / 100,
+        GLSetup."Inv. Rounding Precision (LCY)");
+    END;
+
+    PROCEDURE CreateFileHeader@1100003();
+    VAR
+      DeclarationMT@1101100000 : Text[1];
+      ReplacementText@1100000 : Text[1];
+      DeclareNumText@1100002 : Text[13];
+      Txt1@1100003 : Text[500];
+    BEGIN
+      CASE DeclarationMediaType OF
+        DeclarationMediaType::Telematic: DeclarationMT := 'T';
+        DeclarationMediaType::"CD-R": DeclarationMT := 'C';
+      END;
+
+      IF ReplaceDeclaration THEN BEGIN
+        ReplacementText := 'S';
+        PrevDeclareNumText := FORMAT(PrevDeclareNum);
+      END ELSE BEGIN
+        ReplacementText := ' ';
+        PrevDeclareNumText := '0000000000000';
+      END;
+
+      TotalNoofRecords := FORMAT(NoofRecords);
+      WHILE STRLEN(TotalNoofRecords) < MAXSTRLEN(TotalNoofRecords) DO
+        TotalNoofRecords := '0' + TotalNoofRecords;
+      DeclareNumText := '340' + FiscalYear + PeriodText + DeclarationNum;
+
+      CASE Quarter OF
+        Quarter::"1T":
+          PeriodText := '1T';
+        Quarter::"2T":
+          PeriodText := '2T';
+        Quarter::"3T":
+          PeriodText := '3T';
+        Quarter::"4T":
+          PeriodText := '4T';
+      END;
+
+      Txt1 :=
+        '1' + '340' + FiscalYear + CompanyVATRegNo +
+        PADSTR(FormatTextName(CompanyInfo.Name),40,' ') +
+        DeclarationMT + CONVERTSTR(FORMAT(ContactTelephone,9),' ','0') +
+        PADSTR(FormatTextName(ContactName),40,' ') +
+        DeclareNumText + PADSTR('',1,' ') + ReplacementText + PrevDeclareNumText + PeriodText +
+        TotalNoofRecords + TotalBaseAmtText + TotalVATAmtText + TotalInvAmtText +
+        PADSTR('',199,' ') + ElectectronicCode + PADSTR('',85,' ');
+
+      Outstr.WRITETEXT(Txt1);
+    END;
+
+    PROCEDURE GetMonthText@1100004() : Text[2];
+    BEGIN
+      CASE Month OF
+        Month::Jan :
+          EXIT('01');
+        Month::Feb :
+          EXIT('02');
+        Month::Mar :
+          EXIT('03');
+        Month::Apr :
+          EXIT('04');
+        Month::May :
+          EXIT('05');
+        Month::Jun :
+          EXIT('06');
+        Month::Jul :
+          EXIT('07');
+        Month::Aug :
+          EXIT('08');
+        Month::Sep :
+          EXIT('09');
+        Month::Oct :
+          EXIT('10');
+        Month::Nov :
+          EXIT('11');
+        Month::Dec :
+          EXIT('12');
+      END;
+    END;
+
+    PROCEDURE FormatTextAmt@1100005(Amt@1100000 : Decimal;Total@1100001 : Boolean) : Text[18];
+    VAR
+      AmtText@1100003 : Text[17];
+      Sign@1101100000 : Text[1];
+      MaxLength@1101100001 : Integer;
+    BEGIN
+      IF Amt < 0 THEN
+        Sign := 'N'
+      ELSE
+        Sign := ' ';
+      IF Total THEN
+        MaxLength := MAXSTRLEN(AmtText)
+      ELSE
+        MaxLength := 13;
+
+
+      Amt := Amt * 100;
+      AmtText := CONVERTSTR(FORMAT(Amt),' ','0');
+      AmtText := DELCHR(AmtText,'=','.,');
+
+      IF STRPOS(AmtText,'-') = 0 THEN
+        AmtText := AmtText
+      ELSE
+        AmtText := DELCHR(AmtText,'=','-');
+
+      WHILE STRLEN(AmtText) <  MaxLength DO
+        AmtText   := '0' + AmtText;
+      EXIT(Sign + AmtText);
+    END;
+
+    PROCEDURE FormatDate@1100006(PostingDate@1100000 : Date) : Text[8];
+    VAR
+      DayText@1100001 : Text[2];
+      MonText@1100002 : Text[2];
+      Year@1100003 : Integer;
+    BEGIN
+      IF PostingDate <> 0D THEN BEGIN
+        DayText := FORMAT(DATE2DMY(PostingDate,1));
+        MonText := FORMAT(DATE2DMY(PostingDate,2));
+        Year := DATE2DMY(PostingDate,3);
+        WHILE STRLEN(DayText) < 2 DO
+          DayText :='0' + DayText;
+        WHILE STRLEN(MonText) < 2 DO
+          MonText :='0' + MonText;
+        EXIT(FORMAT(Year) + MonText + DayText);
+      END ELSE
+        EXIT('00000000');
+    END;
+
+    PROCEDURE FormatPerText@1100007(Amt@1100000 : Decimal) : Text[5];
+    VAR
+      AmtText@1100003 : Text[5];
+    BEGIN
+
+      Amt := Amt * 100;
+      AmtText := CONVERTSTR(FORMAT(Amt),' ','0');
+      AmtText := DELCHR(AmtText,'=','.,');
+
+      WHILE STRLEN(AmtText) < 5 DO
+        AmtText := '0' + AmtText;
+      EXIT(AmtText);
+    END;
+
+    PROCEDURE FindEUCountryRegionCode@1100008(CountryCode@1100000 : Code[10]) : Code[10];
+    VAR
+      Country@1101100000 : Record 9;
+    BEGIN
+      IF Country.GET(CountryCode) THEN
+        EXIT(Country."EU Country/Region Code")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE RecordTypeSale@1100009();
+    VAR
+      SalesInvHeader@1100002 : Record 112;
+      Txt1@1100001 : Text[500];
+      VATNoPermanentResidentCountry@1100003 : Text[20];
+      CostGrpText@1100004 : Text[14];
+      CustVATNumber@1100005 : Text[9];
+      ResidentIDText@1100007 : Text[1];
+      OperationDateText@1100008 : Text[8];
+      CountryCode@1100006 : Code[10];
+    BEGIN
+      CostGrpText := ' 0000000000000';
+      VATNoPermanentResidentCountry := '';
+      OperationDateText := '';
+      CountryCode := '';
+      ResidentIDText := '';
+      CorreInvoiceText := '';
+
+      IF OperationCode = 'C' THEN BEGIN
+        IF VATBuffer.COUNT >= 10 THEN
+          NoofRegistersText := FORMAT(VATBuffer.COUNT)
+        ELSE
+          NoofRegistersText := '0' + FORMAT(VATBuffer.COUNT);
+      END ELSE
+        NoofRegistersText := '01';
+
+      IF Customer."Country/Region Code" = CompanyInfo."Country/Region Code" THEN
+        CustVATNumber := PADSTR(Customer."VAT Registration No.",9,' ')
+      ELSE
+        CustVATNumber := '';
+
+      // JPT 05/12/11 Modificacion Standard ***
+      {
+      IF FindEUCountryRegionCode(Customer."Country/Region Code") <> '' THEN
+        CountryCode := FindEUCountryRegionCode(Customer."Country/Region Code")
+      ELSE
+        CountryCode := Customer."Country/Region Code";
+      }
+      CountryCode := Customer."Country/Region Code";
+      // ***
+
+      IF Customer."Country/Region Code" = CompanyInfo."Country/Region Code" THEN
+        ResidentIDText := '1'
+      ELSE IF FindEUCountryRegionCode(Customer."Country/Region Code") <> '' THEN
+        ResidentIDText := '2'
+      ELSE
+        ResidentIDText := '6';
+
+      // JPT 20/04/09 Si no tiene CIF suponemos que es contado
+      IF (DELCHR(CustVATNumber,'<>') = '') THEN BEGIN
+        ResidentIDText := '6'; // Otro documento probatorio
+        CountryCode := CompanyInfo."Country/Region Code";
+      END;
+
+      IF Customer."Country/Region Code" <> CompanyInfo."Country/Region Code" THEN BEGIN
+        IF FindEUCountryRegionCode(Customer."Country/Region Code") <> '' THEN
+          VATNoPermanentResidentCountry := PADSTR(FORMAT(FindEUCountryRegionCode(Customer."Country/Region Code")) +
+                                           PADSTR(Customer."VAT Registration No.",15,' '),20,' ')
+        ELSE
+          VATNoPermanentResidentCountry := PADSTR('',20,' ');
+      END ELSE
+        VATNoPermanentResidentCountry := PADSTR('',20,' ');
+
+      IF VATEntry."Document Type" = VATEntry."Document Type"::"Credit Memo" THEN BEGIN
+        OperationDateText := FormatDate(VATEntry."Posting Date");
+        IF SalesCrMemoHeader.GET(VATEntry."Document No.") THEN BEGIN
+          IF SalesCrMemoHeader."Corrected Invoice No." <> '' THEN BEGIN
+            IF SalesInvHeader.GET(SalesCrMemoHeader."Corrected Invoice No.") THEN  BEGIN
+              OperationDateText := FormatDate(SalesInvHeader."Posting Date");
+              CorreInvoiceText := FORMAT(SalesCrMemoHeader."Corrected Invoice No.");
+            END;
+          END ELSE BEGIN
+            IF  GetSalesReturnReciptDate(VATEntry."Document No.") <> 0D THEN
+              OperationDateText := FormatDate(GetSalesReturnReciptDate(VATEntry."Document No."))
+            ELSE
+              OperationDateText := FormatDate(VATEntry."Posting Date");
+            CorreInvoiceText := '';
+          END;
+        END ELSE
+          IF ServiceCrMemoHeader.GET(VATEntry."Document No.") THEN BEGIN
+            IF ServiceCrMemoHeader."Corrected Invoice No." <> '' THEN BEGIN
+              IF ServiceInvHeader.GET(ServiceCrMemoHeader."Corrected Invoice No.") THEN BEGIN
+                OperationDateText := FormatDate(ServiceInvHeader."Posting Date");
+                CorreInvoiceText := FORMAT(ServiceCrMemoHeader."Corrected Invoice No.");
+              END;
+            END ELSE
+              OperationDateText := FormatDate(ServiceCrMemoHeader."Posting Date");
+          END;
+      END ELSE IF VATEntry."Document Type" = VATEntry."Document Type"::Invoice THEN BEGIN
+        IF GetSalesShipmentDate(VATEntry."Document No.") <> 0D THEN
+          OperationDateText := FormatDate(GetSalesShipmentDate(VATEntry."Document No."))
+          ELSE
+          OperationDateText := FormatDate(VATEntry."Posting Date");
+        END ELSE
+          OperationDateText := FormatDate(VATEntry."Posting Date");
+
+      Txt1 :=
+         '2' + '340' + FiscalYear + CompanyVATRegNo + PADSTR(CustVATNumber,9,' ') +
+          PADSTR('',9,' ') + PADSTR(CONVERTSTR(UPPERCASE(Customer.Name),Text10717,'AAEEIIOOUU—U«     AEIOOU    '),40,' ')
+          + PADSTR(CountryCode,2,' ') + ResidentIDText + VATNoPermanentResidentCountry + BookTypeCode + OperationCode +
+          FormatDate(VATEntry."Document Date") + OperationDateText+
+          FormatPerText(VATBuffer2."VAT %") + FormatTextAmt(VATBuffer2.Base,FALSE) +
+          FormatTextAmt(VATBuffer2.Amount - VATBuffer."EC Amount",FALSE) +
+          FormatTextAmt(VATBuffer2.Base+VATBuffer2.Amount,FALSE) + CostGrpText +
+          PADSTR(VATEntry."Document No.",40,' ') + PADSTR(VATEntry."Document No.",18,' ') + '00000001' +NoofRegistersText+ // PS new
+          PADSTR('',80,' ') + PADSTR(CorreInvoiceText,40,' ') +
+          FormatPerText(VATBuffer2."EC %") + FormatTextAmt(VATBuffer2."EC Amount",FALSE) + PADSTR('',116,' ');
+      {
+
+      Txt1 :=
+         '2' + '340' + FiscalYear + CompanyVATRegNo + PADSTR(CustVATNumber,9,' ') +
+          PADSTR('',9,' ') + PADSTR(CONVERTSTR(UPPERCASE(Customer.Name),Text10717,'AAEEIIOOUU—U«     AEIOOU    '),40,' ')
+          + PADSTR(CountryCode,2,' ') + ResidentIDText + VATNoPermanentResidentCountry + BookTypeCode + OperationCode +
+          FormatDate(VATEntry."Document Date") + OperationDateText+
+          FormatPerText(VATBuffer2."VAT %") + FormatTextAmt(VATBuffer2.Base,FALSE) +
+          FormatTextAmt(VATBuffer2.Amount - VATBuffer."EC Amount",FALSE) +
+          FormatTextAmt(VATBuffer2.Base+VATBuffer2.Amount,FALSE) + CostGrpText +
+          PADSTR(VATEntry."Document No.",40,' ') + PADSTR(VATEntry."Document No.",18,' ');
+
+      Txt1 +=
+          // JPT 04/05/09 No se pone el numero de tiques ya que se trata de una factura
+          //PonCeros(FORMAT(wNumTiques),8) + NoofRegistersText +
+          '00000001' + NoofRegistersText +
+          PADSTR(wTicketDesde,40,' ') + PADSTR(wTicketHasta,40,' ') + PADSTR(CorreInvoiceText,40,' ') +
+          FormatPerText(VATBuffer2."EC %") + FormatTextAmt(VATBuffer2."EC Amount",FALSE) + PADSTR('',116,' ');
+      }
+      Outstr.WRITETEXT;
+      Outstr.WRITETEXT(Txt1);
+    END;
+
+    PROCEDURE RecordTypePurchase@1100010(VATEntryRec@1100000 : Record 254);
+    VAR
+      PurchSetup@1100005 : Record 312;
+      Txt1@1100004 : Text[500];
+      CostGrpText@1100002 : Text[14];
+      VATNoPermanentResidentCountry@1100001 : Text[20];
+      ResidentIDText@1100006 : Text[1];
+      OperationDateText@1100007 : Text[8];
+      VendVATNumber@1100008 : Text[9];
+      CountryCode@1100003 : Code[10];
+    BEGIN
+      ResidentIDText := '';
+      OperationDateText := '';
+      CorreInvoiceText := '';
+      CostGrpText := ' 0000000000000';
+
+      IF OperationCode = 'C' THEN BEGIN
+        IF VATBuffer.COUNT >= 10 THEN
+          NoofRegistersText := FORMAT(VATBuffer.COUNT)
+        ELSE
+          NoofRegistersText := '0' + FORMAT(VATBuffer.COUNT);
+      END ELSE
+        NoofRegistersText := '01';
+
+      IF Vendor."Country/Region Code" = CompanyInfo."Country/Region Code" THEN
+        VendVATNumber := PADSTR(Vendor."VAT Registration No.",9,' ')
+      ELSE
+        VendVATNumber := '';
+
+      // JPT 05/12/11 Modificacion Standard ***
+      {
+      IF FindEUCountryRegionCode(Vendor."Country/Region Code") <> '' THEN
+        CountryCode := FindEUCountryRegionCode(Vendor."Country/Region Code")
+      ELSE
+        CountryCode := PADSTR(Vendor."Country/Region Code",2,' ');
+      }
+      CountryCode := PADSTR(Vendor."Country/Region Code",2,' ');
+
+      // ***
+      IF Vendor."Country/Region Code" <> CompanyInfo."Country/Region Code" THEN BEGIN
+        IF FindEUCountryRegionCode(Vendor."Country/Region Code") <> '' THEN
+          VATNoPermanentResidentCountry := PADSTR(FORMAT(FindEUCountryRegionCode(Vendor."Country/Region Code"))
+                                         + PADSTR(Vendor."VAT Registration No.",15,' '),20,' ')
+        ELSE
+          VATNoPermanentResidentCountry := PADSTR('',20,' ');
+      END ELSE
+        VATNoPermanentResidentCountry := PADSTR('',20,' ');
+
+      IF Vendor."Country/Region Code" = CompanyInfo."Country/Region Code" THEN
+        ResidentIDText := '1'
+      ELSE IF FindEUCountryRegionCode(Vendor."Country/Region Code") <> '' THEN
+        ResidentIDText := '2'
+      ELSE
+        ResidentIDText := '6';
+
+      IF VATEntryRec."Document Type" = VATEntryRec."Document Type"::"Credit Memo" THEN BEGIN
+        IF PurchCrMemoHeader."Corrected Invoice No."  <> '' THEN BEGIN
+          IF PurchInvHeader.GET(PurchCrMemoHeader."Corrected Invoice No.") THEN BEGIN
+            OperationDateText := FormatDate(PurchInvHeader."Posting Date");
+            CorreInvoiceText := ''
+          END;
+        END ELSE BEGIN
+          IF GetPurchReturnShipmentDate(VATEntryRec."Document No.") <> 0D THEN
+            OperationDateText := FormatDate(GetPurchReturnShipmentDate(VATEntryRec."Document No."))
+          ELSE
+          OperationDateText :=  FormatDate(VATEntryRec."Posting Date");
+          CorreInvoiceText := '';
+        END;
+      END ELSE IF VATEntryRec."Document Type" = VATEntryRec."Document Type"::Invoice THEN BEGIN
+        IF NOT PurchSetup."Receipt on Invoice" THEN BEGIN
+          IF GetShipmentDate(VATEntryRec."Document No.") <> 0D THEN
+            OperationDateText := FormatDate(GetShipmentDate(VATEntryRec."Document No."))
+          ELSE
+            OperationDateText := FormatDate(VATEntryRec."Posting Date")
+        END ELSE
+          OperationDateText := FormatDate(VATEntryRec."Posting Date");
+      END ELSE
+        OperationDateText := FormatDate(VATEntryRec."Posting Date");
+
+      IF Counter = 1 THEN BEGIN
+        VATBuffer2."EC %" := 0;
+        Txt1 :=
+          '2' + '340' +FiscalYear + CompanyVATRegNo + PADSTR(VendVATNumber,9,' ') +
+           PADSTR('',9,' ') + PADSTR(FormatTextName(Vendor.Name),40,' ')
+           + PADSTR(CountryCode,2,' ') + ResidentIDText + VATNoPermanentResidentCountry+BookTypeCode +
+           OperationCode + FormatDate(VATEntryRec."Document Date") + OperationDateText+ FormatPerText(VATBuffer2."VAT %") +
+           FormatTextAmt(VATBuffer2.Base,FALSE) + FormatTextAmt(VATBuffer2.Amount,FALSE) +
+           FormatTextAmt(VATBuffer2.Base+VATBuffer2.Amount,FALSE) +
+           CostGrpText + PADSTR(VendorDocumentNo,40,' ') + PADSTR(VATEntryRec."Document No.",18,' ')+'00000001'+NoofRegistersText+
+           PADSTR('',80,' ') + PADSTR(CorreInvoiceText,40,' ') +
+           FormatPerText(VATBuffer2."EC %") + FormatTextAmt(VATBuffer2."EC Amount",FALSE) + PADSTR('',116,' ')
+      END ELSE
+        Txt1 :=
+          '2' + '340' +FiscalYear + CompanyVATRegNo + PADSTR(VendVATNumber,9,' ') +
+           PADSTR('',9,' ') + PADSTR(FormatTextName(Vendor.Name),40,' ')
+           + PADSTR(CountryCode,2,' ') + ResidentIDText + VATNoPermanentResidentCountry+BookTypeCode +
+           OperationCode + FormatDate(VATEntryRec."Document Date") + OperationDateText+ FormatPerText(VATBuffer2."VAT %") +
+           FormatTextAmt(VATBuffer2.Base,FALSE) + FormatTextAmt(VATBuffer2.Amount,FALSE) +
+           FormatTextAmt(VATBuffer2.Base+VATBuffer2.Amount,FALSE) +
+           CostGrpText + PADSTR(VendorDocumentNo,40,' ') + PADSTR(VATEntryRec."Document No.",18,' ') +
+           '000000000000000001' +NoofRegistersText+PADSTR('',80,' ') +  FormatTextAmt(VATDeductAmt,FALSE) + PADSTR('',151,' ');
+      Outstr.WRITETEXT;
+      Outstr.WRITETEXT(Txt1);
+    END;
+
+    PROCEDURE CalcDaysinQuarter@1100011();
+    BEGIN
+      IF NOT EVALUATE(NumFiscalYear,FiscalYear) THEN
+        ERROR(Text10701);
+      CASE Quarter OF
+        Quarter::"1T":
+          BEGIN
+            FromDate := DMY2DATE(1,1,NumFiscalYear);
+            ToDate := DMY2DATE(31,3,NumFiscalYear);
+          END;
+        Quarter::"2T":
+          BEGIN
+            FromDate := DMY2DATE(1,4,NumFiscalYear);
+            ToDate := DMY2DATE(30,6,NumFiscalYear);
+           END;
+        Quarter::"3T":
+          BEGIN
+            FromDate := DMY2DATE(1,7,NumFiscalYear);
+            ToDate := DMY2DATE(30,9,NumFiscalYear);
+          END;
+        Quarter::"4T":
+          BEGIN
+            FromDate := DMY2DATE(1,10,NumFiscalYear);
+            ToDate := DMY2DATE(31,12,NumFiscalYear);
+          END;
+      END;
+    END;
+
+    PROCEDURE GetPeriodText@1100012() : Text[2];
+    BEGIN
+      CASE Quarter OF
+        Quarter::"1T":
+          EXIT('03');
+        Quarter::"2T":
+          EXIT('06');
+        Quarter::"3T":
+          EXIT('09');
+        Quarter::"4T":
+          EXIT('12');
+      END;
+    END;
+
+    PROCEDURE CheckDeductibleVAT@1100013(VATEntryRec@1100001 : Record 254) : Decimal;
+    VAR
+      VATEntries@1100000 : Record 254;
+    BEGIN
+      VATEntries.RESET;
+      IF VATEntryRec.Amount <> 0 THEN BEGIN
+        VATEntries.SETCURRENTKEY("Document No.","Document Type","Gen. Prod. Posting Group","VAT Prod. Posting Group",Type);
+        VATEntries.SETRANGE("Document Type",VATEntryRec."Document Type");
+        VATEntries.SETRANGE("Document No.",VATEntryRec."Document No.");
+        VATEntries.SETRANGE(Type,VATEntryRec.Type);
+        VATEntries.SETRANGE("VAT Prod. Posting Group",VATEntryRec."VAT Prod. Posting Group");
+      VATEntries.SETFILTER("Gen. Prod. Posting Group",FilterString);
+        VATEntries.CALCSUMS(Amount);
+        EXIT(VATEntries.Amount);
+      END ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE GetFilterStringFromColumnGPPG@1100014();
+    VAR
+      GPPGCode@1100003 : Text[250];
+      Position@1100002 : Integer;
+    BEGIN
+      GPPGCode := ColumnGPPG;
+      REPEAT
+        Position := STRPOS(GPPGCode,';');
+        IF GPPGCode <> '' THEN BEGIN
+          IF Position <> 0 THEN BEGIN
+            FilterString := FilterString + '<>' + COPYSTR(GPPGCode,1,Position - 1);
+            GPPGCode := COPYSTR(GPPGCode,Position + 1);
+          END ELSE BEGIN
+            FilterString := FilterString + '<>' + COPYSTR(GPPGCode,1);
+            GPPGCode := '';
+          END;
+          IF GPPGCode <> '' THEN
+            FilterString := FilterString + '&';
+        END;
+      UNTIL GPPGCode = '';
+    END;
+
+    PROCEDURE GetRevChargeFilterFromColGPPG@1100015();
+    VAR
+      RevGPPGCode@1100000 : Text[1024];
+      Position@1100001 : Integer;
+    BEGIN
+      RevGPPGCode := ColumnRevCharge;
+      REPEAT
+        Position := STRPOS(RevGPPGCode,';');
+        IF RevGPPGCode <> '' THEN BEGIN
+          IF Position <> 0 THEN BEGIN
+            RevChargeFilterString := RevChargeFilterString + COPYSTR(RevGPPGCode,1,Position - 1);
+            RevGPPGCode := COPYSTR(RevGPPGCode,Position + 1);
+          END ELSE BEGIN
+            RevChargeFilterString := RevChargeFilterString + COPYSTR(RevGPPGCode,1);
+            RevGPPGCode := '';
+          END;
+          IF RevGPPGCode <> '' THEN
+            RevChargeFilterString := RevChargeFilterString + '|';
+        END;
+      UNTIL RevGPPGCode = '';
+    END;
+
+    PROCEDURE GetOperationCode@1100016(VATEntryRec@1100000 : Record 254) : Text[1];
+    VAR
+      VATEntries@1100001 : Record 254;
+    BEGIN
+      CLEAR(wEsTiques); // JPT 20/04/09 Determinamos si es una venta contado tiques
+      IF VATEntryRec.Type = VATEntryRec.Type ::Sale THEN
+        wEsTiques := (Customer."Country/Region Code" = CompanyInfo."Country/Region Code") AND (Customer."VAT Registration No."='');
+
+      IF ((VATEntryRec.Type = VATEntryRec.Type :: Purchase) OR
+          (VATEntryRec."Generated Autodocument")) AND
+          (RevChargeFilterString <> '') THEN
+      BEGIN
+        VATEntries.RESET;
+        VATEntries.SETCURRENTKEY("Document No.","Document Type","Gen. Prod. Posting Group","VAT Prod. Posting Group");
+        VATEntries.SETRANGE("Document Type",VATEntryRec."Document Type");
+        VATEntries.SETRANGE("Document No.",VATEntryRec."Document No.");
+        VATEntries.SETRANGE("VAT Prod. Posting Group",VATEntryRec."VAT Prod. Posting Group");
+        VATEntries.SETRANGE("Gen. Prod. Posting Group",VATEntryRec."Gen. Prod. Posting Group");
+        VATEntries.SETRANGE("Generated Autodocument", TRUE);
+        VATEntries.SETFILTER("Gen. Prod. Posting Group",RevChargeFilterString);
+        IF ((VATEntries.FINDFIRST) AND (NOT IsGoodsTradeEU(VATEntryRec))) THEN
+          EXIT('I')
+        ELSE IF VATEntryRec."Document Type" IN [VATEntryRec."Document Type" :: "Credit Memo",VATEntryRec."Document Type" :: Refund] THEN
+          EXIT('D')
+        ELSE IF CheckVATType(VATEntryRec) THEN
+          EXIT('C')
+        ELSE
+          EXIT(' ')
+      END ELSE IF VATEntryRec."Document Type" IN [VATEntryRec."Document Type" :: "Credit Memo",VATEntryRec."Document Type" :: Refund]
+      THEN
+        EXIT('D')
+      ELSE IF CheckVATType(VATEntryRec) THEN
+        EXIT('C')
+      // JPT 20/04/09 Si es cliente contado lo insertamos como ticket
+      ELSE IF wEsTiques THEN
+        EXIT('J')
+      ELSE
+        EXIT(' ')
+    END;
+
+    PROCEDURE IsGoodsTradeEU@1100023(VATEntryRec@1100000 : Record 254) : Boolean;
+    VAR
+      VATEntries@1100001 : Record 254;
+    BEGIN
+      IF ((VATEntryRec.Type = VATEntryRec.Type :: Purchase) AND
+           (VATEntryRec."Generated Autodocument")) THEN
+      BEGIN
+        VATEntries.RESET;
+        VATEntries.SETCURRENTKEY("Document No.","Document Type","Gen. Prod. Posting Group","VAT Prod. Posting Group");
+        VATEntries.SETRANGE("Document Type",VATEntryRec."Document Type");
+        VATEntries.SETRANGE("Document No.",VATEntryRec."Document No.");
+        VATEntries.SETRANGE("VAT Prod. Posting Group",VATEntryRec."VAT Prod. Posting Group");
+        VATEntries.SETRANGE("Gen. Prod. Posting Group",VATEntryRec."Gen. Prod. Posting Group");
+        VATEntries.SETRANGE("Generated Autodocument", TRUE);
+        VATEntries.SETFILTER("Gen. Prod. Posting Group",RevChargeFilterString);
+        IF VATEntries.FINDFIRST AND (RevChargeFilterString <> '') THEN
+          EXIT(FALSE)
+        ELSE
+          EXIT(TRUE)
+      END;
+    END;
+
+    PROCEDURE GetShipmentDate@1100017(DocumentNo@1100000 : Code[20]) : Date;
+    VAR
+      PurchInvLine@1100001 : Record 123;
+      ValueEntry@1100002 : Record 5802;
+      ItemLedgEntry@1100003 : Record 32;
+      PurchRcptLine@1100004 : Record 121;
+      PurchRcptHeader@1100005 : Record 120;
+    BEGIN
+      PurchInvLine.RESET;
+      PurchInvLine.SETRANGE("Document No.",DocumentNo);
+      IF PurchInvLine.FINDFIRST THEN
+        REPEAT
+          ValueEntry.RESET;
+          ValueEntry.SETCURRENTKEY("Document No.");
+          ValueEntry.SETRANGE("Document No.",PurchInvLine."Document No.");
+          ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Purchase Invoice");
+          ValueEntry.SETRANGE("Document Line No.",PurchInvLine."Line No.");
+          ValueEntry.SETFILTER("Invoiced Quantity",'<>0');
+          IF ValueEntry.FINDFIRST THEN
+            REPEAT
+              ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+              IF ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Purchase Receipt" THEN
+                IF PurchRcptLine.GET(ItemLedgEntry."Document No.",ItemLedgEntry."Document Line No.") THEN BEGIN
+                  IF PurchRcptHeader.GET(PurchRcptLine."Document No.") THEN BEGIN
+                    IF PurchRcptHeader."Order No." <> '' THEN BEGIN
+                      PurchRcptHeader.SETCURRENTKEY("Posting Date");
+                      PurchRcptHeader.SETRANGE("Order No.", PurchRcptHeader."Order No.");
+                        IF PurchRcptHeader.FINDFIRST THEN
+                          EXIT(PurchRcptHeader."Posting Date");
+                    END ELSE
+                      EXIT(PurchRcptHeader."Posting Date");
+                  END;
+                END;
+            UNTIL ValueEntry.NEXT = 0;
+        UNTIL PurchInvLine.NEXT = 0;
+    END;
+
+    PROCEDURE CalcTotals@1100018();
+    VAR
+      VATEntry6@1100000 : Record 254;
+      AutoInvVATEntries1@1100001 : Record 254;
+      VATEntry7@1100002 : Record 254;
+      TempVATBuffer@1100003 : TEMPORARY Record 10704;
+    BEGIN
+      VATEntryTemporary.DELETEALL;
+      VATEntry6.RESET;
+      VATEntry6.SETCURRENTKEY("Document Type","Posting Date","Document No.");
+      VATEntry6.COPYFILTERS(VATEntry);
+      VATEntryTemporary.SETCURRENTKEY("Document No.");
+      VATEntry6.SETFILTER(Type,'%1|%2',VATEntry6.Type::Sale,VATEntry6.Type::Purchase);
+      IF VATEntry.GETFILTER("Document Type") <> '' THEN
+        VATEntry6.SETFILTER("Document Type",VATEntry.GETFILTER("Document Type"))
+      ELSE
+        VATEntry6.SETFILTER("Document Type",'%1|%2|%3|%4',VATEntry6."Document Type"::Invoice,VATEntry6."Document Type"::"Credit Memo",
+          VATEntry6."Document Type"::Payment,VATEntry6."Document Type"::Refund);
+      VATEntry6.SETFILTER("Posting Date",'%1..%2' + VATEntryDateFilter,FromDate,ToDate);
+      IF VATEntry.GETFILTER("Document No.") <> '' THEN
+        VATEntry6.SETFILTER("Document No.",VATEntry.GETFILTER("Document No."));
+      IF VATEntry6.FINDFIRST THEN
+        REPEAT
+          VATEntryTemporary.SETRANGE("Document No.",VATEntry6."Document No.");
+          VATEntryTemporary.SETRANGE("Document Type",VATEntry6."Document Type");
+          VATEntryTemporary.SETRANGE(Type,VATEntry6.Type);
+          IF NOT VATEntryTemporary.FINDFIRST THEN
+            BEGIN
+              VATEntryTemporary.INIT;
+              VATEntryTemporary.COPY(VATEntry6);
+              VATEntryTemporary.INSERT;
+              VATEntryTemporary.NEXT;
+            END;
+        UNTIL VATEntry6.NEXT = 0;
+
+      VATEntryTemporary.RESET;
+      IF VATEntryTypeFilter <> '' THEN
+        VATEntryTemporary.SETFILTER(Type,VATEntry.GETFILTER(Type));
+      IF VATEntryTemporary.FINDFIRST THEN
+      REPEAT
+        VATEntry7.RESET;
+        VATEntry7.SETCURRENTKEY("Document No.");
+        VATEntry7.SETRANGE(VATEntry7."Document No.",VATEntryTemporary."Document No.");
+        VATEntry7.SETRANGE(VATEntry7."Document Type",VATEntryTemporary."Document Type");
+        VATEntry7.SETRANGE(VATEntry7.Type,VATEntryTemporary.Type);
+        IF VATEntry7.FINDFIRST THEN
+          VATBuffer.DELETEALL;
+          REPEAT
+            IF ((VATEntry7."VAT Calculation Type" = VATEntry7."VAT Calculation Type"::"Reverse Charge VAT")
+              AND (NOT IsGoodsTradeEU(VATEntry7)))
+            THEN BEGIN
+              VATBuffer."VAT %" := 0;
+              VATBuffer."EC %" := 0;
+              VATEntry7.Amount := 0;
+            END ELSE BEGIN
+              VATBuffer."VAT %" := VATEntry7."VAT %";
+              VATBuffer."EC %" := VATEntry7."EC %";
+            END;
+            IF VATEntry7.Type = VATEntry7.Type::Sale THEN BEGIN
+              VATEntry7.Base := -VATEntry7.Base;
+              VATEntry7.Amount := -VATEntry7.Amount;
+            END;
+              IF VATBuffer.FIND THEN BEGIN
+                VATBuffer.Base := VATBuffer.Base + VATEntry7.Base;
+                VATBuffer.Amount := VATBuffer.Amount + VATEntry7.Amount;
+                IF (VATEntry7.Type = VATEntry7.Type::Sale) AND (VATEntry7."EC %" <> 0) THEN
+                  VATBuffer."EC Amount" := VATBuffer."EC Amount" + ROUND(VATEntry7.Base * VATEntry7."EC %" / 100);
+                VATBuffer.MODIFY;
+              END ELSE BEGIN
+                VATBuffer.Base := VATEntry7.Base;
+                VATBuffer.Amount := VATEntry7.Amount;
+                VATBuffer."EC Amount" := 0;
+                IF (VATEntry7.Type = VATEntry7.Type::Sale) AND (VATEntry7."EC %" <> 0) THEN
+                  VATBuffer."EC Amount" := ROUND(VATEntry7.Base * VATEntry7."EC %" / 100);
+                VATBuffer.INSERT;
+              END;
+          UNTIL VATEntry7.NEXT = 0;
+          IF VATBuffer.FINDFIRST THEN
+            NoofRecords := NoofRecords + VATBuffer.COUNT;
+              REPEAT
+                TotalBaseAmount := TotalBaseAmount + VATBuffer.Base;
+                TotalVATAmount := TotalVATAmount + VATBuffer.Amount - VATBuffer."EC Amount";
+                TotalInvoiceAmount := TotalInvoiceAmount + (VATBuffer.Base + VATBuffer.Amount);
+              UNTIL VATBuffer.NEXT = 0;
+      UNTIL VATEntryTemporary.NEXT = 0;
+
+
+      VATEntryTemporary.RESET;
+      VATEntryTemporary.SETCURRENTKEY("Generated Autodocument");
+      VATEntryTemporary.SETRANGE("Generated Autodocument",TRUE);
+      IF VATEntryTypeFilter <> '' THEN
+        VATEntryTemporary.SETFILTER(Type,VATEntry.GETFILTER(Type));
+      IF VATEntryTemporary.COUNT > 0 THEN
+        ShowPurchAutoInv := TRUE;
+      VATEntryTemporary.SETRANGE(Type);
+
+      IF VATEntryTemporary.FINDSET THEN
+        REPEAT
+          VATEntryTemporary.Type := VATEntryTemporary.Type::Sale;
+          VATEntryTemporary.MODIFY;
+        UNTIL VATEntryTemporary.NEXT = 0;
+
+      IF VATEntryTypeFilter <> '' THEN
+        VATEntryTemporary.SETFILTER(Type,VATEntry.GETFILTER(Type));
+      IF VATEntryTemporary.COUNT > 0 THEN
+        ShowSalesAutoInv := TRUE;
+      VATEntryTemporary.SETRANGE(Type);
+
+      IF VATEntryTemporary.FINDSET THEN
+        REPEAT
+          VATEntryTemporary.Type := VATEntryTemporary.Type::Purchase;
+          VATEntryTemporary.MODIFY;
+        UNTIL VATEntryTemporary.NEXT = 0;
+
+      IF VATEntryTemporary.FINDFIRST AND (ShowSalesAutoInv OR ShowPurchAutoInv)THEN
+      REPEAT
+        IF NOT IsGoodsTradeEU(VATEntryTemporary) THEN BEGIN
+        AutoInvVATEntries1.RESET;
+        AutoInvVATEntries1.SETCURRENTKEY("Document No.");
+        AutoInvVATEntries1.SETRANGE("Document No.",VATEntryTemporary."Document No.");
+        AutoInvVATEntries1.SETRANGE("Document Type",VATEntryTemporary."Document Type");
+        AutoInvVATEntries1.SETRANGE("Generated Autodocument",TRUE);
+        IF AutoInvVATEntries1.FINDFIRST THEN
+          VATBuffer.DELETEALL;
+          TempVATBuffer.DELETEALL;
+          REPEAT
+          IF AutoInvVATEntries1."VAT Calculation Type" = AutoInvVATEntries1."VAT Calculation Type"::"Reverse Charge VAT" THEN BEGIN
+            VATBuffer."VAT %" := 0;
+            VATBuffer."EC %" := 0;
+            TempVATBuffer."VAT %" := AutoInvVATEntries1."VAT %";
+            TempVATBuffer."EC %" := AutoInvVATEntries1."EC %";
+            IF NOT TempVATBuffer.FIND THEN
+              TempVATBuffer.INSERT;
+          END ELSE BEGIN
+            VATBuffer."VAT %" := AutoInvVATEntries1."VAT %";
+            VATBuffer."EC %" := AutoInvVATEntries1."EC %";
+          END;
+          IF AutoInvVATEntries1.Type = AutoInvVATEntries1.Type::Sale THEN BEGIN
+            AutoInvVATEntries1.Base := -AutoInvVATEntries1.Base;
+            AutoInvVATEntries1.Amount := -AutoInvVATEntries1.Amount;
+          END;
+          IF VATBuffer.FIND THEN BEGIN
+            VATBuffer.Base := VATBuffer.Base + AutoInvVATEntries1.Base;
+            VATBuffer.Amount := VATBuffer.Amount + AutoInvVATEntries1.Amount;
+            VATBuffer.MODIFY;
+          END ELSE BEGIN
+            VATBuffer.Base := AutoInvVATEntries1.Base;
+            VATBuffer.Amount := AutoInvVATEntries1.Amount;
+            VATBuffer.INSERT;
+          END;
+        UNTIL AutoInvVATEntries1.NEXT = 0;
+        IF VATBuffer.FINDFIRST THEN
+          IF AutoInvVATEntries1."VAT Calculation Type" <> AutoInvVATEntries1."VAT Calculation Type"::"Reverse Charge VAT" THEN
+              IF ShowSalesAutoInv AND ShowPurchAutoInv THEN
+            NoofRecords := NoofRecords + (2 * VATBuffer.COUNT)
+          ELSE
+                NoofRecords := NoofRecords + VATBuffer.COUNT
+            ELSE
+              IF ShowSalesAutoInv AND ShowPurchAutoInv THEN
+                NoofRecords := NoofRecords + (2 * TempVATBuffer.COUNT)
+              ELSE
+                NoofRecords := NoofRecords + TempVATBuffer.COUNT;
+          REPEAT
+              IF ShowSalesAutoInv AND ShowPurchAutoInv THEN BEGIN
+            TotalBaseAmount := TotalBaseAmount + (2 * VATBuffer.Base);
+            TotalVATAmount := TotalVATAmount + (2 * VATBuffer.Amount);
+            TotalInvoiceAmount := TotalInvoiceAmount + (2 * (VATBuffer.Base + VATBuffer.Amount));
+              END ELSE BEGIN
+                TotalBaseAmount := TotalBaseAmount + VATBuffer.Base;
+                TotalVATAmount := TotalVATAmount + VATBuffer.Amount;
+                TotalInvoiceAmount := TotalInvoiceAmount + VATBuffer.Base + VATBuffer.Amount;
+              END;
+          UNTIL VATBuffer.NEXT = 0;
+        END;
+      UNTIL VATEntryTemporary.NEXT = 0;
+    END;
+
+    PROCEDURE GetSalesShipmentDate@1100022(DocumentNo@1100000 : Code[20]) : Date;
+    VAR
+      SalesShipmentHeader@1100001 : Record 110;
+      SalesInvLine@1100002 : Record 113;
+      ValueEntry@1100003 : Record 5802;
+      ItemLedgEntry@1100004 : Record 32;
+      SalesShipmentLine@1100005 : Record 111;
+    BEGIN
+      SalesInvLine.RESET;
+      SalesInvLine.SETRANGE("Document No.",DocumentNo);
+      IF SalesInvLine.FINDFIRST THEN
+        REPEAT
+          ValueEntry.RESET;
+          ValueEntry.SETCURRENTKEY("Document No.");
+          ValueEntry.SETRANGE("Document No.",SalesInvLine."Document No.");
+          ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Sales Invoice");
+          ValueEntry.SETRANGE("Document Line No.",SalesInvLine."Line No.");
+          ValueEntry.SETFILTER("Invoiced Quantity",'<>0');
+          IF ValueEntry.FINDFIRST THEN
+            REPEAT
+              ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+              IF ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Sales Shipment" THEN
+                IF SalesShipmentLine.GET(ItemLedgEntry."Document No.",ItemLedgEntry."Document Line No.") THEN BEGIN
+                  IF SalesShipmentHeader.GET(SalesShipmentLine."Document No.") THEN BEGIN
+                    IF SalesShipmentHeader."Order No." <> '' THEN BEGIN
+                      SalesShipmentHeader.SETCURRENTKEY("Posting Date");
+                      SalesShipmentHeader.SETRANGE("Order No.", SalesShipmentHeader."Order No.");
+                      IF SalesShipmentHeader.FINDFIRST THEN
+                        EXIT(SalesShipmentHeader."Posting Date");
+                    END ELSE
+                      EXIT(SalesShipmentHeader."Posting Date");
+                  END;
+                END;
+            UNTIL ValueEntry.NEXT = 0;
+        UNTIL SalesInvLine.NEXT = 0;
+    END;
+
+    PROCEDURE GetSalesReturnReciptDate@1100019(DocumentNo@1101100000 : Code[20]) : Date;
+    VAR
+      SalesCrMemoLine@1100001 : Record 115;
+      ValueEntry@1100002 : Record 5802;
+      ItemLedgEntry@1100003 : Record 32;
+      SalesReturnRcptLine@1100004 : Record 6661;
+      SalesReturnRcptHeader@1100005 : Record 6660;
+    BEGIN
+      SalesCrMemoLine.RESET;
+      SalesCrMemoLine.SETRANGE("Document No.",DocumentNo);
+      IF SalesCrMemoLine.FINDFIRST THEN
+        REPEAT
+          ValueEntry.RESET;
+          ValueEntry.SETCURRENTKEY("Document No.");
+          ValueEntry.SETRANGE("Document No.",SalesCrMemoLine."Document No.");
+          ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Sales Credit Memo");
+          ValueEntry.SETRANGE("Document Line No.",SalesCrMemoLine."Line No.");
+          ValueEntry.SETFILTER("Invoiced Quantity",'<>0');
+          IF ValueEntry.FINDFIRST THEN
+            REPEAT
+              ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+              IF ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Sales Return Receipt" THEN
+                IF SalesReturnRcptLine.GET(ItemLedgEntry."Document No.",ItemLedgEntry."Document Line No.") THEN BEGIN
+                  IF SalesReturnRcptHeader.GET(SalesReturnRcptLine."Document No.") THEN BEGIN
+                    IF SalesReturnRcptHeader."Return Order No." <> '' THEN BEGIN
+                      SalesReturnRcptHeader.SETCURRENTKEY("Posting Date");
+                      SalesReturnRcptHeader.SETRANGE("Return Order No.", SalesReturnRcptHeader."Return Order No.");
+                        IF SalesReturnRcptHeader.FINDFIRST THEN
+                          EXIT(SalesReturnRcptHeader."Posting Date");
+                    END ELSE
+                      EXIT(SalesReturnRcptHeader."Posting Date");
+                  END;
+                END;
+            UNTIL ValueEntry.NEXT = 0;
+        UNTIL SalesCrMemoLine.NEXT = 0;
+    END;
+
+    PROCEDURE GetPurchReturnShipmentDate@1100021(DocumentNo@1101100000 : Code[20]) : Date;
+    VAR
+      PurchCrMemoLine@1100001 : Record 125;
+      ValueEntry@1100002 : Record 5802;
+      ItemLedgEntry@1100003 : Record 32;
+      PurchReturnShipmentLine@1100004 : Record 6651;
+      purchReturnShipmentHeader@1100005 : Record 6650;
+    BEGIN
+      PurchCrMemoLine.RESET;
+      PurchCrMemoLine.SETRANGE("Document No.",DocumentNo);
+      IF PurchCrMemoLine.FINDFIRST THEN
+        REPEAT
+          ValueEntry.RESET;
+          ValueEntry.SETCURRENTKEY("Document No.");
+          ValueEntry.SETRANGE("Document No.",PurchCrMemoLine."Document No.");
+          ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Purchase Credit Memo");
+          ValueEntry.SETRANGE("Document Line No.",PurchCrMemoLine."Line No.");
+          ValueEntry.SETFILTER("Invoiced Quantity",'<>0');
+          IF ValueEntry.FINDFIRST THEN
+            REPEAT
+              ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+              IF ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Purchase Return Shipment" THEN
+                IF PurchReturnShipmentLine.GET(ItemLedgEntry."Document No.",ItemLedgEntry."Document Line No.") THEN BEGIN
+                  IF purchReturnShipmentHeader.GET(PurchReturnShipmentLine."Document No.") THEN BEGIN
+                    IF purchReturnShipmentHeader."Return Order No." <> '' THEN BEGIN
+                      purchReturnShipmentHeader.SETCURRENTKEY("Posting Date");
+                      purchReturnShipmentHeader.SETRANGE("Return Order No.", purchReturnShipmentHeader."Return Order No.");
+                        IF purchReturnShipmentHeader.FINDFIRST THEN
+                          EXIT(purchReturnShipmentHeader."Posting Date");
+                    END ELSE
+                      EXIT(purchReturnShipmentHeader."Posting Date");
+                  END;
+                END;
+            UNTIL ValueEntry.NEXT = 0;
+        UNTIL PurchCrMemoLine.NEXT = 0;
+    END;
+
+    PROCEDURE FormatTextName@1100020(NameString@1100000 : Text[50]) Result : Text[50];
+    VAR
+      TempString@1100002 : Text[50];
+      TempString1@1100003 : Text[1];
+    BEGIN
+      CLEAR(Result);
+      TempString := CONVERTSTR(UPPERCASE(NameString),Text10717,'AAEEIIOOUU—U«     AEIOOU    ');
+      IF (STRLEN(TempString) > 0) THEN
+        REPEAT
+          TempString1 := COPYSTR(TempString,1,1);
+          IF TempString1 IN ['A'..'Z','0'..'9'] THEN
+            Result := Result + TempString1
+          ELSE
+            Result := Result + ' ';
+          TempString := DELSTR(TempString,1,1);
+        UNTIL STRLEN(TempString) = 0;
+
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE ReplaceDeclarationOnPush@19070179();
+    BEGIN
+      IF ReplaceDeclaration THEN
+        PrevDeclarationNumEnable := TRUE
+      ELSE
+        PrevDeclarationNumEnable := FALSE;
+    END;
+
+    BEGIN
+    {
+      JPT 05/12/11 Modificacion Standard ***
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

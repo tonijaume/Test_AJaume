@@ -1,0 +1,329 @@
+OBJECT Codeunit 8701 Mobile Document Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 8705=d;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1001 : TextConst 'ENU=The user %1 could not be found as a valid mobile user.;ESP=El usuario %1 no se pudo encontrar como usuario m¢vil v lido.';
+      Text001@1002 : TextConst 'ENU=Document type %1 was not found.;ESP=No se ha encontrado el tipo de documento %1.';
+      Text002@1003 : TextConst 'ENU=Document type %1 has no permission groups.;ESP=El tipo de documento %1 no tiene grupos de permisos.';
+      Text003@1004 : TextConst 'ENU=The user %1 was not found in any document group for the request documents.;ESP=No se ha encontrado el usuario %1 en ning£n grupo de documentos para los documentos solicitados.';
+      MobXMLMgt@1000 : Codeunit 8704;
+      Text004@1005 : TextConst 'ENU=Message already exists.;ESP=El mensaje ya existe.';
+      Text005@1006 : TextConst 'ENU=Unable to return an answer for the request %1 because it has not been processed yet.;ESP=No se puede devolver una respuesta para la solicitud %1 porque a£n no se ha procesado.';
+      Text006@1007 : TextConst 'ENU=The request has been received and queued for later processing.;ESP=La solicitud se ha recibido y est  en cola para su posterior procesamiento.';
+
+    PROCEDURE ProcessDocument@35(VAR MobDocQueue@1017 : Record 8705);
+    VAR
+      MobDocProcessor@1002 : Report 8700;
+      XMLRequestDoc@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        CASE "Process Type" OF
+          "Process Type"::Direct:
+            BEGIN
+              LoadXMLRequestDoc(XMLRequestDoc);
+              MobXMLMgt.SchemaValidation("Document Type",XMLRequestDoc);
+              MobDocProcessor.ProcessDocumentDirect(MobDocQueue);
+            END;
+          "Process Type"::Queue:
+            BEGIN
+              Status := Status::Error;
+              MODIFY;
+              COMMIT;
+
+              ValidateUser("Mobile User ID");
+
+              LoadXMLRequestDoc(XMLRequestDoc);
+              ValidateXMLLAX(XMLRequestDoc);
+
+              ValidateDocumentType("Document Type");
+
+              ValidateUserDocumentType("Mobile User ID","Document Type");
+
+              MobXMLMgt.SchemaValidation("Document Type",XMLRequestDoc);
+
+              MobDocProcessor.ProcessDocumentQueue(MobDocQueue);
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessDocumentManual@10(VAR MobDocQueue@1017 : Record 8705);
+    VAR
+      MobDocProcessor@1004 : Report 8700;
+      XMLRequestDoc@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        Status := Status::Error;
+        MODIFY;
+        COMMIT;
+
+        ValidateUser("Mobile User ID");
+
+        LoadXMLRequestDoc(XMLRequestDoc);
+        ValidateXMLLAX(XMLRequestDoc);
+
+        ValidateDocumentType("Document Type");
+
+        ValidateUserDocumentType("Mobile User ID","Document Type");
+
+        MobXMLMgt.SchemaValidation("Document Type",XMLRequestDoc);
+
+        MobDocProcessor.ProcessDocumentQueue(MobDocQueue);
+      END;
+    END;
+
+    PROCEDURE DeleteDocument@21(VAR MobDocQueue@1000 : Record 8705);
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE ResetDocument@20(VAR MobDocQueue@1000 : Record 8705);
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        Status := Status::New;
+        MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE ValidateUser@12(MobileUserID@1001 : Text[65]);
+    VAR
+      MobUser@1000 : Record 8700;
+    BEGIN
+      MobUser.SETFILTER("User ID",'@' + MobileUserID);
+      IF MobUser.ISEMPTY THEN
+        ERROR(Text000,MobileUserID);
+    END;
+
+    PROCEDURE ValidateXMLLAX@14(VAR XMLDoc@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60");
+    BEGIN
+      MobXMLMgt.SchemaValidation('',XMLDoc);
+    END;
+
+    PROCEDURE GetDocumentType@1(VAR XMLRequestDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60") : Text[50];
+    VAR
+      XMLRootNode@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v6.0'.IXMLDOMNode";
+      DocumentType@1001 : Text[50];
+    BEGIN
+      XMLRootNode := XMLRequestDoc.documentElement;
+      IF MobXMLMgt.GetAttribute(XMLRootNode,'name',DocumentType) THEN
+        EXIT(DocumentType);
+      EXIT('');
+    END;
+
+    PROCEDURE ValidateDocumentType@15(DocumentType@1006 : Text[50]);
+    VAR
+      MobDocType@1005 : Record 8704;
+    BEGIN
+      IF NOT MobDocType.GET(DocumentType) THEN
+        ERROR(Text001,DocumentType);
+    END;
+
+    PROCEDURE ValidateUserDocumentType@13(MobileUserID@1001 : Text[65];DocumentType@1002 : Text[50]);
+    VAR
+      MobDocGroup@1003 : Record 8703;
+      MobGroup@1004 : Record 8701;
+      MobGroupUser@1005 : Record 8702;
+    BEGIN
+      MobDocGroup.SETRANGE("Mobile Document Type",DocumentType);
+      IF MobDocGroup.FINDSET THEN BEGIN
+        REPEAT
+          MobGroup.SETRANGE(Code,MobDocGroup."Group Code");
+          IF MobGroup.FINDSET THEN
+            REPEAT
+              MobGroupUser.SETFILTER("Mobile User ID",'@' + MobileUserID);
+              MobGroupUser.SETRANGE("Group Code",MobGroup.Code);
+              IF NOT MobGroupUser.ISEMPTY THEN
+                EXIT;
+            UNTIL MobGroup.NEXT = 0;
+        UNTIL MobDocGroup.NEXT = 0;
+      END ELSE
+        ERROR(Text002,DocumentType);
+      ERROR(Text003,MobileUserID);
+    END;
+
+    PROCEDURE ReceivedBefore@6(VAR MobDocQueue@1015 : Record 8705;VAR XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60") : Boolean;
+    VAR
+      MobDocQueue2@1007 : Record 8705;
+      XMLRequestDoc@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";
+      XMLAnswerDoc@1006 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        IF MobDocQueue2.GET("Message ID") THEN BEGIN
+
+          IF LOWERCASE("Mobile User ID") <> LOWERCASE(MobDocQueue2."Mobile User ID") THEN
+            ERROR(Text004);
+
+          IF "Device ID" <> MobDocQueue2."Device ID" THEN
+            ERROR(Text004);
+
+          IF NOT MobDocQueue2.LoadXMLAnswerDoc(XMLAnswerDoc) THEN
+            ERROR(Text005,"Message ID");
+
+          XMLResponseDoc := XMLAnswerDoc;
+          EXIT(TRUE);
+        END;
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateXMLResponseDocError@7(VAR XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MessageID@1001 : Code[100];Description@1004 : Text[250]);
+    VAR
+      Status@1002 : 'Completed,Error,Received';
+    BEGIN
+      CreateXMLResponseDoc(XMLResponseDoc,MessageID,Description,Status::Error);
+    END;
+
+    PROCEDURE CreateXMLResponseDocReceived@3(VAR XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MessageID@1001 : Code[100]);
+    VAR
+      Status@1002 : 'Completed,Error,Received';
+    BEGIN
+      CreateXMLResponseDoc(XMLResponseDoc,MessageID,Text006,Status::Received);
+    END;
+
+    PROCEDURE CreateXMLResponseDoc@8(VAR XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";MessageID@1001 : Code[100];Description@1004 : Text[250];Status@1003 : 'Completed,Error,Received');
+    VAR
+      XMLRootNode@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v6.0'.IXMLDOMNode";
+    BEGIN
+      InitializeResponseDoc(XMLResponseDoc);
+      XMLRootNode := XMLResponseDoc.documentElement;
+      MobXMLMgt.AddAttribute(XMLRootNode,'messageid',MessageID);
+      CASE Status OF
+        Status::Error:
+          MobXMLMgt.AddAttribute(XMLRootNode,'status','Error');
+        Status::Received:
+          MobXMLMgt.AddAttribute(XMLRootNode,'status','Received');
+      END;
+
+      MobXMLMgt.AddElement(XMLRootNode,'description',Description,XMLRootNode.namespaceURI,XMLRootNode);
+    END;
+
+    PROCEDURE InitializeResponseDoc@18(VAR XMLResponseDoc@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60");
+    BEGIN
+      IF NOT ISCLEAR(XMLResponseDoc) THEN
+          CLEAR(XMLResponseDoc);
+      CREATE(XMLResponseDoc);
+
+      XMLResponseDoc.loadXML(
+        '<?xml version="1.0" encoding="utf-8" ?>' +
+        '<response xmlns="http://schemas.microsoft.com/Dynamics/Mobile/2007/04/Documents/Response" />');
+    END;
+
+    PROCEDURE GetParamPart@2(Parameter@1000 : Text[1024];Name@1002 : Text[1024]) : Text[1024];
+    BEGIN
+      IF COPYSTR(Name,STRLEN(Name)) <> '=' THEN
+        Name := Name + '=';
+      IF STRPOS(Parameter,Name) > 0 THEN BEGIN
+        Parameter := COPYSTR(Parameter,STRPOS(Parameter,Name) + STRLEN(Name));
+        IF STRPOS(Parameter,' ') > 0 THEN
+          EXIT(COPYSTR(Parameter,1,STRPOS(Parameter,' ') - 1))
+        ELSE
+          EXIT(COPYSTR(Parameter,1));
+      END;
+      EXIT('');
+    END;
+
+    PROCEDURE LogInsertion@9(MobileUserID@1003 : Text[65];VAR RecRef@1001 : RecordRef);
+    VAR
+      ChangeLogMgt@1000 : Codeunit 423;
+      MobDocQueue@1002 : Record 8705;
+    BEGIN
+      ChangeLogMgt.SetLogEmployeePortalActivity(MobDocQueue.ShortUserID(MobileUserID));
+      ChangeLogMgt.LogInsertion(RecRef);
+    END;
+
+    PROCEDURE LogModification@11(MobileUserID@1004 : Text[65];VAR RecRef@1001 : RecordRef;VAR xRecRef@1003 : RecordRef);
+    VAR
+      ChangeLogMgt@1000 : Codeunit 423;
+      MobDocQueue@1002 : Record 8705;
+    BEGIN
+      ChangeLogMgt.SetLogEmployeePortalActivity(MobDocQueue.ShortUserID(MobileUserID));
+      ChangeLogMgt.LogModification(RecRef,xRecRef);
+    END;
+
+    PROCEDURE LogRename@16(MobileUserID@1004 : Text[65];VAR RecRef@1001 : RecordRef;VAR xRecRef@1003 : RecordRef);
+    VAR
+      ChangeLogMgt@1000 : Codeunit 423;
+      MobDocQueue@1002 : Record 8705;
+    BEGIN
+      ChangeLogMgt.SetLogEmployeePortalActivity(MobDocQueue.ShortUserID(MobileUserID));
+      ChangeLogMgt.LogRename(RecRef,xRecRef);
+    END;
+
+    PROCEDURE LogDeletion@17(MobileUserID@1003 : Text[65];VAR RecRef@1001 : RecordRef);
+    VAR
+      ChangeLogMgt@1000 : Codeunit 423;
+      MobDocQueue@1002 : Record 8705;
+    BEGIN
+      ChangeLogMgt.SetLogEmployeePortalActivity(MobDocQueue.ShortUserID(MobileUserID));
+      ChangeLogMgt.LogDeletion(RecRef);
+    END;
+
+    PROCEDURE GetBigTextFromXML@5(VAR XMLDocIn@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60";VAR BigTextOut@1000 : BigText);
+    VAR
+      TempBlob@1004 : Record 99008535;
+      ostream@1006 : OutStream;
+      istream@1002 : InStream;
+    BEGIN
+      TempBlob.Blob.CREATEOUTSTREAM(ostream);
+      XMLDocIn.save(ostream);
+
+      TempBlob.CALCFIELDS(Blob);
+      TempBlob.Blob.CREATEINSTREAM(istream);
+
+      BigTextOut.READ(istream);
+    END;
+
+    PROCEDURE GetXMLFromBigText@24(VAR BigTextIn@1000 : BigText;VAR XMLDocOut@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60");
+    VAR
+      TempBlob@1004 : Record 99008535;
+      istream@1003 : InStream;
+      ostream@1002 : OutStream;
+    BEGIN
+      IF NOT ISCLEAR(XMLDocOut) THEN
+          CLEAR(XMLDocOut);
+      CREATE(XMLDocOut);
+      XMLDocOut.async := FALSE;
+
+      TempBlob.Blob.CREATEOUTSTREAM(ostream);
+      BigTextIn.WRITE(ostream);
+
+      TempBlob.CALCFIELDS(Blob);
+      TempBlob.Blob.CREATEINSTREAM(istream);
+      XMLDocOut.loadXML(FORMAT(BigTextIn));
+    END;
+
+    PROCEDURE UpdateResult@19(VAR MobDocQueue@1000 : Record 8705;VAR XMLResponse@1001 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60");
+    VAR
+      XMLRootNode@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v6.0'.IXMLDOMNode";
+    BEGIN
+      WITH MobDocQueue DO BEGIN
+        XMLRootNode := XMLResponse.documentElement;
+        MobXMLMgt.AddAttribute(XMLRootNode,'messageid', "Message ID");
+        MobXMLMgt.AddAttribute(XMLRootNode,'status','Completed');
+
+        SaveXMLResultDoc(XMLResponse);
+        Status := Status::Completed;
+        MODIFY;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

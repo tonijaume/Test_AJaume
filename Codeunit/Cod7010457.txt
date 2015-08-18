@@ -1,0 +1,466 @@
+OBJECT Codeunit 7010457 Cancel transactions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009,AF3.10.01;
+  }
+  PROPERTIES
+  {
+    TableNo=45;
+    Permissions=TableData 17=rimd,
+                TableData 21=rimd,
+                TableData 25=rimd,
+                TableData 81=rimd,
+                TableData 232=rimd,
+                TableData 254=rimd,
+                TableData 271=rimd,
+                TableData 272=rimd,
+                TableData 356=rimd,
+                TableData 7000002=rimd;
+    OnRun=BEGIN
+            IF NOT CONFIRM(Text90000,FALSE) THEN
+              EXIT;
+
+            CrearAsiento := CONFIRM(Text90001);
+
+            IF USERID <> '' THEN
+              IF ConfUsuario.GET(USERID) THEN BEGIN
+                FechaDesde := ConfUsuario."Allow Posting From";
+                FechaHasta := ConfUsuario."Allow Posting To";
+              END;
+            IF (FechaDesde = 0D) AND (FechaHasta = 0D) THEN BEGIN
+              ConfContabilidad.GET;
+              FechaDesde := ConfContabilidad."Allow Posting From";
+              FechaHasta := ConfContabilidad."Allow Posting To";
+            END;
+            IF FechaHasta = 0D THEN
+              FechaHasta := 31129999D;
+
+            IF ("Posting Date" < FechaDesde) OR ("Posting Date" > FechaHasta) THEN
+              ERROR(Text90002);
+
+            PeriodoContable.SETFILTER("Starting Date",'>=%1',"Posting Date");
+            PeriodoContable.SETRANGE(Closed,TRUE);
+            IF PeriodoContable.FIND THEN  ERROR(Text90003);
+
+            HistCompFechas.SETFILTER("Ending Date",'>=%1',"Posting Date");
+            IF HistCompFechas.FIND('-') THEN
+              ERROR(Text90004+
+                    Text90005);
+
+            IF CrearAsiento THEN BEGIN
+              LinDiarioGeneral.INIT;
+              LinDiarioGeneral.SETCURRENTKEY(LinDiarioGeneral."Journal Template Name",
+                                             LinDiarioGeneral."Journal Batch Name",
+                                             LinDiarioGeneral."Line No.");
+              LinDiarioGeneral.SETRANGE(LinDiarioGeneral."Journal Template Name",Text90006);
+              LinDiarioGeneral.SETRANGE(LinDiarioGeneral."Journal Batch Name",Text90007);
+              IF LinDiarioGeneral.FIND('+') THEN;
+              LinInicialDiarioGeneral := LinDiarioGeneral."Line No." + 10000;
+
+              IF NOT SeccionDiarioGeneral.GET(Text90006,Text90007) THEN BEGIN
+                SeccionDiarioGeneral.INIT;
+                SeccionDiarioGeneral."Journal Template Name" := Text90006;
+                SeccionDiarioGeneral.Name := Text90007;
+                SeccionDiarioGeneral.Description := Text90008;
+                SeccionDiarioGeneral.INSERT;
+              END;
+            END;
+
+            AstoAutomatico := TRUE;
+
+            FOR i := "From VAT Entry No." TO "To VAT Entry No." DO BEGIN
+              IF MovIVA.GET(i) THEN
+                IF MovIVA.Closed THEN
+                  ERROR(Text90009+
+                        Text90010);
+            END;
+
+
+            MovContabilidad.SETRANGE("Entry No.","From Entry No.","To Entry No.");
+            MovContabilidad.FIND('-');
+            REPEAT
+              //$001 AstoAutomatico := TRUE;
+              IF AstoAutomatico THEN
+                AstoAutomatico := MovContabilidad."System-Created Entry" ;
+
+               //$001 -
+               {MNC IF AstoAutomatico THEN
+                ERROR(Text90023); }
+               //$001+
+
+              IF Doc.GET(MovContabilidad."Entry No.") THEN
+                IF Doc."Bill Gr./Pmt. Order No." <> '' THEN
+                  ERROR(Text90011+
+                        Text90012);
+              IF MovCliente.GET(MovContabilidad."Entry No.") THEN BEGIN             //FCL-07/05/04 (begin)
+                MovCliente.CALCFIELDS(Amount,"Remaining Amount","Amount (LCY)");    //FCL-07/05/04
+                IF MovCliente.Amount <> MovCliente."Remaining Amount" THEN
+                  ERROR(Text90013+
+                        Text90014);
+              END;                                                                  //FCL-07/05/04
+              IF MovProveedor.GET(MovContabilidad."Entry No.") THEN BEGIN           //FCL-07/05/04 (begin)
+                MovProveedor.CALCFIELDS(Amount,"Remaining Amount","Amount (LCY)");  //FCL-07/05/04
+                IF MovProveedor.Amount <> MovProveedor."Remaining Amount" THEN
+                  ERROR(Text90015+
+                        Text90014);
+              END;                                                                  //FCL-07/05/04
+            //*************************************1
+              // IF MovIVA.GET(MovContabilidad."N§ mov.") THEN BEGIN
+              RegMovContabilidad.SETFILTER("From Entry No.",'<=%1',MovContabilidad."Entry No.");
+              RegMovContabilidad.SETFILTER("To Entry No.",'>=%1',MovContabilidad."Entry No.");
+              RegMovContabilidad.FIND('-');
+              IF NOT (RegMovContabilidad."From VAT Entry No." > RegMovContabilidad."To VAT Entry No.") THEN
+              BEGIN
+                MovIVA.SETRANGE(MovIVA."Entry No.",RegMovContabilidad."From VAT Entry No.");
+                IF MovIVA.FIND('-') THEN
+                BEGIN
+            //*****************1
+                  IF MovIVA.Closed THEN
+                  ERROR(Text90009+
+                        Text90010);
+                  IF CrearAsiento THEN
+                    ERROR(Text90016+
+                        Text90017);
+            //************************************2
+                 END;
+              END;
+            //*****************2
+              IF MovBanco.GET(MovContabilidad."Entry No.") THEN
+                IF MovBanco.Amount <> MovBanco."Remaining Amount" THEN
+                  ERROR(Text90018+
+                        Text90014);
+              IF MovCheque.GET(MovContabilidad."Entry No.") THEN
+                IF MovCheque."Statement Status" <> MovCheque."Statement Status"::Open  THEN
+                  ERROR(Text90019+
+                        Text90014);
+              IF Doc.GET(MovContabilidad."Entry No.") THEN BEGIN
+                IF Doc."Original Amount" <> Doc."Remaining Amount" THEN
+                  ERROR(Text90020+
+                        Text90021);
+                IF Doc."Bill Gr./Pmt. Order No."<>'' THEN
+                  ERROR(Text90020+
+                        Text90022);
+                END;
+
+                IF CrearAsiento THEN CrearLinDiario;
+
+            UNTIL MovContabilidad.NEXT = 0;
+
+            //$001-
+              IF AstoAutomatico THEN
+                ERROR(Text90023);
+            //$001+
+
+            IF CrearAsiento THEN BEGIN
+              LinDiarioGeneral.SETRANGE("Line No.",LinInicialDiarioGeneral,LinDiarioGeneral."Line No.");
+              LinDiarioGeneral2.COPYFILTERS(LinDiarioGeneral);
+              LinDiarioGeneral2.SETRANGE("Gen. Bus. Posting Group",'');
+              LinDiarioGeneral2.SETRANGE("Gen. Prod. Posting Group",'');
+              IF LinDiarioGeneral.FIND('-') THEN
+                REPEAT
+                  LinDiarioGeneral2.SETRANGE(Amount,LinDiarioGeneral."VAT Amount");
+                  IF LinDiarioGeneral2.FIND('-') THEN
+                    LinDiarioGeneral2.DELETE;
+                UNTIL LinDiarioGeneral.NEXT() = 0;
+            END;
+
+            MovContabilidad.FIND('-');
+            AnularMovs.RUN(MovContabilidad);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text90000@1100030 : TextConst 'ENU=Do you wish to continue?;ESP=¨Confirma que desea anular el asiento ?';
+      Text90001@1100031 : TextConst 'ENU=Create new transaction?;ESP=¨Generar un nuevo asiento?';
+      Text90002@1100032 : TextConst 'ENU=Posting date is out of range;ESP=La fecha de contabilizaci¢n est  fuera del rango de fechas';
+      Text90003@1100033 : TextConst 'ENU=You can not cancel a register previous a closing date;ESP=No se puede anular un asiento anterior a un cierre';
+      Text90004@1100034 : TextConst 'ENU=Previous date compression \;ESP=Compresi¢n de datos previa \';
+      Text90005@1100035 : TextConst 'ENU=executed to date.;ESP=efectuada para esa fecha.';
+      Text90006@1100036 : TextConst 'ENU=GENERAL;ESP=GENERAL';
+      Text90007@1100037 : TextConst 'ENU=CANCEL;ESP=ANULACION';
+      Text90008@1100038 : TextConst 'ENU=Cancels;ESP=Anulaciones';
+      Text90009@1100039 : TextConst 'ENU=Current ledg. entry is linked to a VAT Entry\;ESP=Este movimiento est  relacionado con un mov. IVA\';
+      Text90010@1100040 : TextConst 'ENU=is closed.;ESP=que se encuentra cerrado.';
+      Text90011@1100041 : TextConst 'ENU=This entry is linked to a document\;ESP=Este movimiento est  relacionado con un documento\';
+      Text90012@1100042 : TextConst 'ENU=incluided in bill group.;ESP=que est  incluido en una remesa.';
+      Text90013@1100043 : TextConst 'ENU=This entry is linked to a Cust. ledg. entry\;ESP=Este movimiento est  relacionado con un mov. Cliente\';
+      Text90014@1100044 : TextConst 'ENU=is applied.;ESP=que ya est  liquidado.';
+      Text90015@1100045 : TextConst 'ENU=This entry is linked to a Vendor ledg. Entry\;ESP=Este movimiento est  relacionado con un mov. Proveedor\';
+      Text90016@1100046 : TextConst 'ENU=This entry is linked to a VAT ledg. Entry\;ESP=Este movimiento est  relacionado con un mov. IVA.\';
+      Text90017@1100047 : TextConst 'ENU=New register can not  be created.;ESP=No puede generarse el nuevo asiento.';
+      Text90018@1100048 : TextConst 'ENU=This entry is linked to a Bank ledg. Entry\;ESP=Este movimiento est  relacinado con un mov. Banco\';
+      Text90019@1100049 : TextConst 'ENU=This entry is linked to a Check ledg. Entry\;ESP=Este movimiento est  relacinado con un mov. Cheque\';
+      Text90020@1100050 : TextConst 'ENU=This entry is linked to a document\;ESP=Este movimiento est  relacinado con un documento\';
+      Text90021@1100051 : TextConst 'ENU=is applied.;ESP=que se encuentra est  liquidado.';
+      Text90022@1100052 : TextConst 'ENU=is in a posted bill group.;ESP=que se encuentra remesado.';
+      Text90023@1100053 : TextConst 'ENU=Automatic register.;ESP=Este asiento no se puede anular porque todas sus l¡neas estan marcadas como "Asiento Autom tico".';
+      FechaDesde@1100000 : Date;
+      FechaHasta@1100001 : Date;
+      LinDiarioGeneral@1100002 : Record 81;
+      LinDiarioGeneral2@1100003 : Record 81;
+      SeccionDiarioGeneral@1100004 : Record 232;
+      LinInicialDiarioGeneral@1100005 : Integer;
+      PeriodoContable@1100006 : Record 50;
+      ConfContabilidad@1100007 : Record 98;
+      ConfUsuario@1100008 : Record 91;
+      CrearAsiento@1100009 : Boolean;
+      HistCompFechas@1100010 : Record 87;
+      MovContabilidad@1100011 : Record 17;
+      MovContabilidadAnulado@1100012 : Record 7010456;
+      Doc@1100013 : Record 7000002;
+      MovCliente@1100014 : Record 21;
+      MovClienteAnulado@1100015 : Record 7010457;
+      MovProveedor@1100016 : Record 25;
+      MovProveedorAnulado@1100017 : Record 7010458;
+      MovIVA@1100018 : Record 254;
+      MovIvaAnulado@1100019 : Record 7010472;
+      MovBanco@1100020 : Record 271;
+      MovBancoAnulado@1100021 : Record 7010473;
+      MovCheque@1100022 : Record 272;
+      MovChequeAnulado@1100023 : Record 7010475;
+      LinDiaDim@1100054 : Record 356;
+      MovDimensiones@1100055 : Record 355;
+      AnularMovs@1100024 : Codeunit 7010458;
+      AstoAutomatico@1100025 : Boolean;
+      FormaPagoTemp@1100026 : Code[10];
+      TermPagoTemp@1100027 : Code[10];
+      i@1100028 : Integer;
+      RegMovContabilidad@1100029 : Record 45;
+
+    PROCEDURE CrearLinDiario@5();
+    BEGIN
+      LinDiarioGeneral.INIT;
+      LinDiarioGeneral."Journal Batch Name" := Text90007;
+      LinDiarioGeneral."Journal Template Name" := Text90006;
+      LinDiarioGeneral."Line No." := LinDiarioGeneral."Line No." + 10000;
+
+      IF MovCliente."Entry No." = MovContabilidad."Entry No." THEN BEGIN
+        LinDiarioGeneral."Account Type" := LinDiarioGeneral."Account Type"::Customer;
+        LinDiarioGeneral."Posting Date" := MovCliente."Posting Date";
+        LinDiarioGeneral."Document Type" := MovCliente."Document Type";
+        LinDiarioGeneral."Document No." := MovCliente."Document No.";
+        //************************************ En la anulaci¢n de movimientos se elimina el n§ de doc externo
+        LinDiarioGeneral."External Document No.":= MovCliente."External Document No.";
+        //***********************
+        LinDiarioGeneral.VALIDATE("Account No." , MovCliente."Customer No.");
+        LinDiarioGeneral.Description := MovCliente.Description;
+        LinDiarioGeneral."Currency Code" := MovCliente."Currency Code";
+        LinDiarioGeneral.VALIDATE(Amount,MovCliente.Amount);
+        LinDiarioGeneral.VALIDATE("Debit Amount",MovContabilidad."Debit Amount");
+        LinDiarioGeneral.VALIDATE("Credit Amount",MovContabilidad."Credit Amount");
+        LinDiarioGeneral.VALIDATE("Amount (LCY)",MovCliente."Amount (LCY)");
+        LinDiarioGeneral.VALIDATE("Balance (LCY)",MovCliente."Amount (LCY)");
+        IF (MovCliente."Currency Code" <> '') AND (MovCliente.Amount <> 0) THEN
+          LinDiarioGeneral."Currency Factor" := 100 * MovCliente."Amount (LCY)" / MovCliente.Amount;
+        LinDiarioGeneral."Sales/Purch. (LCY)" := MovCliente."Sales (LCY)";
+        LinDiarioGeneral."Profit (LCY)" := MovCliente."Profit (LCY)";
+        LinDiarioGeneral."Inv. Discount (LCY)" := MovCliente."Inv. Discount (LCY)";
+        LinDiarioGeneral."Bill-to/Pay-to No." := MovCliente."Sell-to Customer No.";
+        LinDiarioGeneral."Posting Group" := MovCliente."Customer Posting Group";
+        LinDiarioGeneral."Shortcut Dimension 1 Code" := MovCliente."Global Dimension 1 Code";
+        LinDiarioGeneral."Shortcut Dimension 2 Code" := MovCliente."Global Dimension 2 Code";
+        LinDiarioGeneral."Salespers./Purch. Code" := MovCliente."Salesperson Code";
+        LinDiarioGeneral."Source Code" := MovCliente."Source Code";
+        LinDiarioGeneral."System-Created Entry" := MovContabilidad."System-Created Entry";
+        LinDiarioGeneral."On Hold" := MovCliente."On Hold";
+        LinDiarioGeneral."Due Date" := MovCliente."Due Date";
+        LinDiarioGeneral."Job No." := MovContabilidad."Job No.";
+        LinDiarioGeneral.Quantity := MovContabilidad.Quantity;
+        LinDiarioGeneral."Bill No." := MovCliente."Bill No.";
+        LinDiarioGeneral."Transaction No." := MovCliente."Transaction No.";
+        LinDiarioGeneral."Pmt. Discount Given/Rec. (LCY)" := MovCliente."Pmt. Disc. Given (LCY)";
+        LinDiarioGeneral."Pmt. Discount Date" := MovCliente."Pmt. Discount Date";
+        LinDiarioGeneral."Document Date" := MovCliente."Document Date";
+        LinDiarioGeneral."External Document No." := MovCliente."External Document No.";
+        FormaPagoTemp := LinDiarioGeneral."Payment Method Code";
+        TermPagoTemp := LinDiarioGeneral."Payment Terms Code";
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Cust. Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovCliente."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          REPEAT
+            LinDiaDim.INIT;
+            LinDiaDim."Table ID" := DATABASE::"Gen. Journal Line";
+            LinDiaDim."Journal Template Name" := Text90006;
+            LinDiaDim."Journal Batch Name" := Text90007;
+            LinDiaDim."Journal Line No." := LinDiarioGeneral."Line No.";
+            LinDiaDim."Dimension Code" := MovDimensiones."Dimension Code";
+            LinDiaDim."Dimension Value Code" := MovDimensiones."Dimension Value Code";
+            IF NOT LinDiaDim.GET(DATABASE::"Gen. Journal Line",Text90006,Text90007,LinDiarioGeneral."Line No.",
+              0,MovDimensiones."Dimension Code") THEN
+              LinDiaDim.INSERT;
+          UNTIL MovDimensiones.NEXT = 0;
+      END ELSE IF MovProveedor."Entry No." = MovContabilidad."Entry No." THEN BEGIN
+        LinDiarioGeneral."Account Type" := LinDiarioGeneral."Account Type"::Vendor;
+        LinDiarioGeneral."Posting Date" := MovProveedor."Posting Date";
+        LinDiarioGeneral."Document Type" := MovProveedor."Document Type";
+        LinDiarioGeneral."Document No." := MovProveedor."Document No.";
+        LinDiarioGeneral.VALIDATE("Account No." , MovProveedor."Vendor No.");
+        LinDiarioGeneral.Description := MovProveedor.Description;
+        LinDiarioGeneral."Currency Code" := MovProveedor."Currency Code";
+        LinDiarioGeneral.VALIDATE(Amount,MovProveedor.Amount);
+        LinDiarioGeneral.VALIDATE("Debit Amount",MovContabilidad."Debit Amount");
+        LinDiarioGeneral.VALIDATE("Credit Amount",MovContabilidad."Credit Amount");
+        LinDiarioGeneral.VALIDATE("Amount (LCY)",MovProveedor."Amount (LCY)");
+        LinDiarioGeneral.VALIDATE("Balance (LCY)",MovProveedor."Amount (LCY)");
+        IF (MovProveedor."Currency Code" <> '') AND (MovProveedor.Amount <> 0) THEN
+          LinDiarioGeneral."Currency Factor" := 100 * MovProveedor."Amount (LCY)" / MovProveedor.Amount;
+        LinDiarioGeneral."Sales/Purch. (LCY)" := MovProveedor."Purchase (LCY)";
+        LinDiarioGeneral."Inv. Discount (LCY)" := MovProveedor."Inv. Discount (LCY)";
+        LinDiarioGeneral."Bill-to/Pay-to No." := MovProveedor."Buy-from Vendor No.";
+        LinDiarioGeneral."Posting Group" := MovProveedor."Vendor Posting Group";
+        LinDiarioGeneral."Shortcut Dimension 1 Code" := MovProveedor."Global Dimension 1 Code";
+        LinDiarioGeneral."Shortcut Dimension 2 Code" := MovProveedor."Global Dimension 2 Code";
+        LinDiarioGeneral."Salespers./Purch. Code" := MovProveedor."Purchaser Code";
+        LinDiarioGeneral."Source Code" := MovProveedor."Source Code";
+        LinDiarioGeneral."System-Created Entry" := MovContabilidad."System-Created Entry";
+        LinDiarioGeneral."On Hold" := MovProveedor."On Hold";
+        LinDiarioGeneral."Due Date" := MovProveedor."Due Date";
+        LinDiarioGeneral."Job No." := MovContabilidad."Job No.";
+        LinDiarioGeneral.Quantity := MovContabilidad.Quantity;
+        LinDiarioGeneral."Bill No." := MovProveedor."Bill No.";
+        LinDiarioGeneral."Transaction No." := MovProveedor."Transaction No.";
+        LinDiarioGeneral."Pmt. Discount Given/Rec. (LCY)" := MovProveedor."Pmt. Disc. Rcd.(LCY)";
+        LinDiarioGeneral."Pmt. Discount Date" := MovProveedor."Pmt. Discount Date";
+        LinDiarioGeneral."Document Date" := MovProveedor."Document Date";
+        LinDiarioGeneral."External Document No." := MovProveedor."External Document No.";
+        FormaPagoTemp := LinDiarioGeneral."Payment Method Code";
+        TermPagoTemp := LinDiarioGeneral."Payment Terms Code";
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Vendor Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovProveedor."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          REPEAT
+            LinDiaDim.INIT;
+            LinDiaDim."Table ID" := DATABASE::"Gen. Journal Line";
+            LinDiaDim."Journal Template Name" := Text90006;
+            LinDiaDim."Journal Batch Name" := Text90007;
+            LinDiaDim."Journal Line No." := LinDiarioGeneral."Line No.";
+            LinDiaDim."Dimension Code" := MovDimensiones."Dimension Code";
+            LinDiaDim."Dimension Value Code" := MovDimensiones."Dimension Value Code";
+            IF NOT LinDiaDim.GET(DATABASE::"Gen. Journal Line",Text90006,Text90007,LinDiarioGeneral."Line No.",
+              0,MovDimensiones."Dimension Code") THEN
+              LinDiaDim.INSERT;
+          UNTIL MovDimensiones.NEXT = 0;
+      END ELSE IF MovBanco."Entry No." = MovContabilidad."Entry No." THEN BEGIN
+        LinDiarioGeneral."Account Type" := LinDiarioGeneral."Account Type"::"Bank Account";
+        LinDiarioGeneral."Posting Date" := MovBanco."Posting Date";
+        LinDiarioGeneral."Document Type" := MovBanco."Document Type";
+        LinDiarioGeneral."Document No." := MovBanco."Document No.";
+       //****************************************************Linea introducida para generar N§ documento externo en los movs de bancos
+        LinDiarioGeneral."External Document No." := MovBanco."External Document No.";
+       //***************************
+        LinDiarioGeneral.VALIDATE("Account No.",MovBanco."Bank Account No.");
+        LinDiarioGeneral.Description := MovBanco.Description;
+        LinDiarioGeneral."Currency Code" := MovBanco."Currency Code";
+        LinDiarioGeneral.VALIDATE(Amount,MovBanco.Amount);
+        LinDiarioGeneral.VALIDATE("Debit Amount",MovContabilidad."Debit Amount");
+        LinDiarioGeneral.VALIDATE("Credit Amount",MovContabilidad."Credit Amount");
+        LinDiarioGeneral.VALIDATE("Amount (LCY)",MovBanco."Amount (LCY)");
+        LinDiarioGeneral.VALIDATE("Balance (LCY)",MovBanco."Amount (LCY)");
+        IF (MovBanco."Currency Code" <> '') AND (MovBanco.Amount <> 0) THEN
+          LinDiarioGeneral."Currency Factor" := 100 * MovBanco."Amount (LCY)" / MovBanco.Amount;
+        LinDiarioGeneral."Posting Group" := MovBanco."Bank Acc. Posting Group";
+        LinDiarioGeneral."Shortcut Dimension 1 Code" := MovBanco."Global Dimension 1 Code";
+        LinDiarioGeneral."Shortcut Dimension 2 Code" := MovBanco."Global Dimension 2 Code";
+        LinDiarioGeneral."Source Code" := MovBanco."Source Code";
+        LinDiarioGeneral."System-Created Entry" := MovContabilidad."System-Created Entry";
+        LinDiarioGeneral.Quantity := MovContabilidad.Quantity;
+        LinDiarioGeneral."Bill No." := MovBanco."Bill No.";
+        LinDiarioGeneral."Transaction No." := MovBanco."Transaction No.";
+        LinDiarioGeneral."Document Date" := MovBanco."Document Date";
+        LinDiarioGeneral."External Document No." := MovBanco."External Document No.";
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Bank Account Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovBanco."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          REPEAT
+            LinDiaDim.INIT;
+            LinDiaDim."Table ID" := DATABASE::"Gen. Journal Line";
+            LinDiaDim."Journal Template Name" := Text90006;
+            LinDiaDim."Journal Batch Name" := Text90007;
+            LinDiaDim."Journal Line No." := LinDiarioGeneral."Line No.";
+            LinDiaDim."Dimension Code" := MovDimensiones."Dimension Code";
+            LinDiaDim."Dimension Value Code" := MovDimensiones."Dimension Value Code";
+            IF NOT LinDiaDim.GET(DATABASE::"Gen. Journal Line",Text90006,Text90007,LinDiarioGeneral."Line No.",
+              0,MovDimensiones."Dimension Code") THEN
+              LinDiaDim.INSERT;
+          UNTIL MovDimensiones.NEXT = 0;
+
+      END ELSE BEGIN
+        LinDiarioGeneral."Account Type" := LinDiarioGeneral."Account Type"::"G/L Account";
+        LinDiarioGeneral."Posting Date" := MovContabilidad."Posting Date";
+        LinDiarioGeneral."Document Type" := MovContabilidad."Document Type";
+        LinDiarioGeneral."Document No." := MovContabilidad."Document No.";
+        //**************************************Linea para introducir el n§ documento externo parche 2 Junio 2000
+        LinDiarioGeneral."External Document No." := MovContabilidad."External Document No.";
+        //***************************
+        LinDiarioGeneral.VALIDATE("Account No." , MovContabilidad."G/L Account No.");
+        LinDiarioGeneral.Description := MovContabilidad.Description;
+
+        LinDiarioGeneral.VALIDATE(Amount,MovContabilidad.Amount + MovContabilidad."VAT Amount");
+        IF MovContabilidad."Debit Amount" <> 0 THEN
+          LinDiarioGeneral.VALIDATE("Debit Amount",MovContabilidad.Amount + MovContabilidad."VAT Amount")
+        ELSE
+          LinDiarioGeneral.VALIDATE("Credit Amount",-(MovContabilidad.Amount + MovContabilidad."VAT Amount"));
+        LinDiarioGeneral.VALIDATE("Amount (LCY)",MovContabilidad.Amount + MovContabilidad."VAT Amount");
+        LinDiarioGeneral.VALIDATE("Balance (LCY)",MovContabilidad.Amount + MovContabilidad."VAT Amount");
+
+        LinDiarioGeneral."Shortcut Dimension 1 Code" := MovContabilidad."Global Dimension 1 Code";
+        LinDiarioGeneral."Shortcut Dimension 2 Code" := MovContabilidad."Global Dimension 2 Code";
+        LinDiarioGeneral."Source Code" := MovContabilidad."Source Code";
+        LinDiarioGeneral."System-Created Entry" := MovContabilidad."System-Created Entry";
+        LinDiarioGeneral."Job No." := MovContabilidad."Job No.";
+        LinDiarioGeneral.Quantity := MovContabilidad.Quantity;
+        LinDiarioGeneral."VAT Amount" := MovContabilidad."VAT Amount";
+        LinDiarioGeneral."Bill No." := MovContabilidad."Bill No.";
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"G/L Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovContabilidad."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          REPEAT
+            LinDiaDim.INIT;
+            LinDiaDim."Table ID" := DATABASE::"Gen. Journal Line";
+            LinDiaDim."Journal Template Name" := Text90006;
+            LinDiaDim."Journal Batch Name" := Text90007;
+            LinDiaDim."Journal Line No." := LinDiarioGeneral."Line No.";
+            LinDiaDim."Dimension Code" := MovDimensiones."Dimension Code";
+            LinDiaDim."Dimension Value Code" := MovDimensiones."Dimension Value Code";
+            IF NOT LinDiaDim.GET(DATABASE::"Gen. Journal Line",Text90006,Text90007,LinDiarioGeneral."Line No.",
+              0,MovDimensiones."Dimension Code") THEN
+              LinDiaDim.INSERT;
+          UNTIL MovDimensiones.NEXT = 0;
+
+      END;
+      IF MovIVA."Entry No." = MovContabilidad."Entry No." THEN BEGIN
+        LinDiarioGeneral."Gen. Bus. Posting Group" := MovIVA."Gen. Bus. Posting Group";
+        LinDiarioGeneral."Gen. Prod. Posting Group" := MovIVA."Gen. Prod. Posting Group";
+        LinDiarioGeneral."VAT Calculation Type" := MovIVA."VAT Calculation Type";
+        LinDiarioGeneral."EU 3-Party Trade" := MovIVA."EU 3-Party Trade";
+        LinDiarioGeneral."VAT Base Amount" := MovIVA.Base;
+        LinDiarioGeneral."VAT Posting" := MovIVA.Type;
+        LinDiarioGeneral."VAT %" :=  ROUND((MovIVA.Amount*100/MovIVA.Base),0.5);
+      END;
+      IF Doc."Entry No." = MovContabilidad."Entry No." THEN BEGIN
+        LinDiarioGeneral."Payment Method Code" := Doc."Payment Method Code";
+        LinDiarioGeneral."Due Date" := Doc."Due Date";
+        LinDiarioGeneral."Bill No." := Doc."No.";
+      END;
+
+      LinDiarioGeneral."Document No." := MovContabilidad."Document No.";
+      LinDiarioGeneral."Transaction No."   := MovContabilidad."Transaction No.";
+      LinDiarioGeneral."Payment Method Code" := FormaPagoTemp;
+      LinDiarioGeneral."Payment Terms Code" := TermPagoTemp;
+
+      LinDiarioGeneral.INSERT;
+    END;
+
+    BEGIN
+    {
+      // $001 MNC 250609 Cambios en la manera de saber si es un asiento automatico
+    }
+    END.
+  }
+}

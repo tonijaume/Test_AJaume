@@ -1,0 +1,228 @@
+OBJECT Codeunit 97 Blanket Purch. Order to Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=38;
+    OnRun=VAR
+            FromDocDim@1000 : Record 357;
+            ToDocDim@1002 : Record 357;
+            Vend@1001 : Record 23;
+            PrepmtMgt@1003 : Codeunit 441;
+          BEGIN
+            TESTFIELD("Document Type","Document Type"::"Blanket Order");
+            Vend.GET("Buy-from Vendor No.");
+            Vend.CheckBlockedVendOnDocs(Vend,FALSE);
+
+            PurchSetup.GET;
+
+            PurchOrderHeader := Rec;
+            PurchOrderHeader."Document Type" := PurchOrderHeader."Document Type"::Order;
+            PurchOrderHeader."No. Printed" := 0;
+            PurchOrderHeader.Status := PurchOrderHeader.Status::Open;
+            PurchOrderHeader."No." := '';
+
+            PurchOrderLine.LOCKTABLE;
+            PurchOrderHeader.INSERT(TRUE);
+
+            FromDocDim.SETRANGE("Table ID",DATABASE::"Purchase Header");
+            FromDocDim.SETRANGE("Document Type","Document Type");
+            FromDocDim.SETRANGE("Document No.","No.");
+
+            ToDocDim.SETRANGE("Table ID",DATABASE::"Purchase Header");
+            ToDocDim.SETRANGE("Document Type",PurchOrderHeader."Document Type");
+            ToDocDim.SETRANGE("Document No.",PurchOrderHeader."No.");
+            ToDocDim.DELETEALL;
+
+            DocDim.MoveDocDimToDocDim(
+              FromDocDim,
+              DATABASE::"Purchase Header",
+              PurchOrderHeader."No.",
+              PurchOrderHeader."Document Type",
+              0);
+
+            IF "Order Date" = 0D THEN
+              PurchOrderHeader."Order Date" := WORKDATE
+            ELSE
+              PurchOrderHeader."Order Date" := "Order Date";
+            IF "Posting Date" <> 0D THEN
+              PurchOrderHeader."Posting Date" := "Posting Date";
+            PurchOrderHeader."Document Date" := "Document Date";
+            PurchOrderHeader."Expected Receipt Date" := "Expected Receipt Date";
+            PurchOrderHeader."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+            PurchOrderHeader."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+            PurchOrderHeader."Inbound Whse. Handling Time" := "Inbound Whse. Handling Time";
+            PurchOrderHeader."Location Code" := "Location Code";
+            PurchOrderHeader."Ship-to Name" := "Ship-to Name";
+            PurchOrderHeader."Ship-to Name 2" := "Ship-to Name 2";
+            PurchOrderHeader."Ship-to Address" := "Ship-to Address";
+            PurchOrderHeader."Ship-to Address 2" := "Ship-to Address 2";
+            PurchOrderHeader."Ship-to City" := "Ship-to City";
+            PurchOrderHeader."Ship-to Post Code" := "Ship-to Post Code";
+            PurchOrderHeader."Ship-to County" := "Ship-to County";
+            PurchOrderHeader."Ship-to Country/Region Code" := "Ship-to Country/Region Code";
+            PurchOrderHeader."Ship-to Contact" := "Ship-to Contact";
+
+            PurchOrderHeader."Prepayment %" := Vend."Prepayment %";
+            IF PurchOrderHeader."Posting Date" = 0D THEN
+              PurchOrderHeader."Posting Date" := WORKDATE;
+
+            PurchOrderHeader.MODIFY;
+
+            PurchBlanketOrderLine.RESET;
+            PurchBlanketOrderLine.SETRANGE("Document Type","Document Type");
+            PurchBlanketOrderLine.SETRANGE("Document No.","No.");
+
+            FromDocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+            ToDocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+
+            IF PurchBlanketOrderLine.FINDSET THEN
+              REPEAT
+                PurchLine.SETCURRENTKEY("Document Type","Blanket Order No.","Blanket Order Line No.");
+                PurchLine.SETRANGE("Blanket Order No.",PurchBlanketOrderLine."Document No.");
+                PurchLine.SETRANGE("Blanket Order Line No.",PurchBlanketOrderLine."Line No.");
+                QuantityOnOrders := 0;
+                IF PurchLine.FINDSET THEN
+                  REPEAT
+                    IF PurchLine."Document Type" IN
+                        [PurchLine."Document Type"::"Return Order",
+                         PurchLine."Document Type"::"Credit Memo"] THEN
+                      QuantityOnOrders := QuantityOnOrders - PurchLine."Outstanding Qty. (Base)"
+                    ELSE
+                      QuantityOnOrders := QuantityOnOrders + PurchLine."Outstanding Qty. (Base)";
+                  UNTIL PurchLine.NEXT = 0;
+                IF (ABS(PurchBlanketOrderLine."Qty. to Receive (Base)" + QuantityOnOrders +
+                        PurchBlanketOrderLine."Qty. Received (Base)") >
+                    ABS(PurchBlanketOrderLine."Quantity (Base)")) OR
+                   (PurchBlanketOrderLine."Quantity (Base)" * PurchBlanketOrderLine."Outstanding Qty. (Base)" < 0)
+                THEN
+                  ERROR(
+                    Text000 +
+                    '%6\' +
+                    '%7 - %8 = %9',
+                    PurchBlanketOrderLine.FIELDCAPTION("Qty. to Receive (Base)"),
+                    PurchBlanketOrderLine.Type,PurchBlanketOrderLine."No.",
+                    PurchBlanketOrderLine.FIELDCAPTION("Line No."),PurchBlanketOrderLine."Line No.",
+                    STRSUBSTNO(
+                      Text001,
+                      PurchBlanketOrderLine.FIELDCAPTION("Outstanding Qty. (Base)"),
+                      PurchBlanketOrderLine.FIELDCAPTION("Qty. to Receive (Base)")),
+                    PurchBlanketOrderLine."Outstanding Qty. (Base)",QuantityOnOrders,
+                    PurchBlanketOrderLine."Outstanding Qty. (Base)" - QuantityOnOrders);
+
+                PurchOrderLine := PurchBlanketOrderLine;
+                ResetQuantityFields(PurchOrderLine);
+                PurchOrderLine."Document Type" := PurchOrderHeader."Document Type";
+                PurchOrderLine."Document No." := PurchOrderHeader."No.";
+                PurchOrderLine."Blanket Order No." := "No.";
+                PurchOrderLine."Blanket Order Line No." := PurchBlanketOrderLine."Line No.";
+
+                IF (PurchOrderLine."No." <> '') AND (PurchOrderLine.Type <> 0)THEN BEGIN
+                  PurchOrderLine.Amount := 0;
+                  PurchOrderLine."Amount Including VAT" := 0;
+                  PurchOrderLine.VALIDATE(Quantity,PurchBlanketOrderLine."Qty. to Receive");
+                  IF PurchBlanketOrderLine."Expected Receipt Date" <> 0D THEN
+                    PurchOrderLine.VALIDATE("Expected Receipt Date",PurchBlanketOrderLine."Expected Receipt Date")
+                  ELSE
+                    PurchOrderLine.VALIDATE("Order Date",PurchOrderHeader."Order Date");
+                  PurchOrderLine.VALIDATE("Direct Unit Cost",PurchBlanketOrderLine."Direct Unit Cost");
+                  PurchOrderLine.VALIDATE("Line Discount %",PurchBlanketOrderLine."Line Discount %");
+                  IF PurchOrderLine.Quantity <> 0 THEN
+                    PurchOrderLine.VALIDATE("Inv. Discount Amount",PurchBlanketOrderLine."Inv. Discount Amount");
+                  PurchBlanketOrderLine.CALCFIELDS("Reserved Qty. (Base)");
+                  IF PurchBlanketOrderLine."Reserved Qty. (Base)" <> 0 THEN
+                    ReservePurchLine.TransferPurchLineToPurchLine(
+                      PurchBlanketOrderLine,PurchOrderLine,-PurchBlanketOrderLine."Qty. to Receive (Base)");
+                END;
+
+                IF Vend."Prepayment %" <> 0 THEN
+                  PurchOrderLine."Prepayment %" := Vend."Prepayment %";
+                PrepmtMgt.SetPurchPrepaymentPct(PurchOrderLine,PurchOrderHeader."Posting Date");
+                PurchOrderLine.VALIDATE("Prepayment %");
+
+                PurchOrderLine."Shortcut Dimension 1 Code" := PurchBlanketOrderLine."Shortcut Dimension 1 Code";
+                PurchOrderLine."Shortcut Dimension 2 Code" := PurchBlanketOrderLine."Shortcut Dimension 2 Code";
+                PurchOrderLine.INSERT;
+
+                FromDocDim.SETRANGE("Line No.",PurchBlanketOrderLine."Line No.");
+
+                ToDocDim.SETRANGE("Line No.",PurchOrderLine."Line No.");
+                ToDocDim.DELETEALL;
+
+                DocDim.MoveDocDimToDocDim(
+                  FromDocDim,
+                  DATABASE::"Purchase Line",
+                  PurchOrderHeader."No.",
+                  PurchOrderHeader."Document Type",
+                  PurchOrderLine."Line No.");
+
+                IF PurchBlanketOrderLine."Qty. to Receive" <> 0 THEN BEGIN
+                  PurchBlanketOrderLine.VALIDATE("Qty. to Receive",0);
+                  PurchBlanketOrderLine.MODIFY;
+                END;
+              UNTIL PurchBlanketOrderLine.NEXT = 0;
+
+            IF PurchSetup."Default Posting Date" = PurchSetup."Default Posting Date"::"No Date" THEN BEGIN
+              PurchOrderHeader."Posting Date" := WORKDATE;
+              PurchOrderHeader.MODIFY;
+            END;
+
+            IF PurchSetup."Copy Comments Blanket to Order" THEN BEGIN
+              PurchCommentLine.SETRANGE("Document Type",PurchCommentLine."Document Type"::"Blanket Order");
+              PurchCommentLine.SETRANGE("No.","No.");
+              IF PurchCommentLine.FINDSET THEN
+                REPEAT
+                  PurchCommentLine2 := PurchCommentLine;
+                  PurchCommentLine2."Document Type" := PurchOrderHeader."Document Type";
+                  PurchCommentLine2."No." := PurchOrderHeader."No.";
+                  PurchCommentLine2.INSERT;
+                UNTIL PurchCommentLine.NEXT = 0;
+              PurchOrderHeader.COPYLINKS(Rec);
+            END;
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=%1 of %2 %3 in %4 %5 cannot be more than %9.\;ESP=%1 de %2 %3 en %4 %5 no pueder ser m s que/de %9.\';
+      Text001@1001 : TextConst 'ENU="%1 - Unposted %1 = Possible %2";ESP="%1 - No registrado %1 = Posible %2"';
+      PurchBlanketOrderLine@1003 : Record 39;
+      PurchOrderHeader@1004 : Record 38;
+      PurchOrderLine@1005 : Record 39;
+      PurchCommentLine@1006 : Record 43;
+      PurchCommentLine2@1007 : Record 43;
+      PurchSetup@1008 : Record 312;
+      PurchLine@1009 : Record 39;
+      ReservePurchLine@1010 : Codeunit 99000834;
+      DocDim@1013 : Codeunit 408;
+      QuantityOnOrders@1012 : Decimal;
+
+    PROCEDURE ResetQuantityFields@1(VAR TempPurchLine@1000 : Record 39);
+    BEGIN
+      TempPurchLine.Quantity := 0;
+      TempPurchLine."Quantity (Base)" := 0;
+      TempPurchLine."Qty. Rcd. Not Invoiced" := 0;
+      TempPurchLine."Quantity Received" := 0;
+      TempPurchLine."Quantity Invoiced" := 0;
+      TempPurchLine."Qty. Rcd. Not Invoiced (Base)" := 0;
+      TempPurchLine."Qty. Received (Base)" := 0;
+      TempPurchLine."Qty. Invoiced (Base)" := 0;
+    END;
+
+    PROCEDURE GetPurchOrderHeader@2(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      PurchHeader := PurchOrderHeader;
+    END;
+
+    BEGIN
+    END.
+  }
+}

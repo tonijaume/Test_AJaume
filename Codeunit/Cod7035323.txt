@@ -1,0 +1,716 @@
+OBJECT Codeunit 7035323 Autofactura proveedor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:35:37;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+
+            llamar_ventana_autofacturacion;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244013 : TextConst 'ESP=VEHICULO';
+      Text001@1100244014 : TextConst 'ESP="ABONO "';
+      Text002@1100244015 : TextConst 'ESP=MANUAL';
+      Text0001@1100244000 : TextConst 'ESP=%1 de #2###### a #3######';
+      Text0002@1100244001 : TextConst 'ESP=CREANDO LINEAS DE PREFACTURA\';
+      Text0003@1100244002 : TextConst 'ESP=No se han rellenado los datos de facturacion del proveedor.';
+      Text0004@1100244003 : TextConst 'ESP=Tiene que procesar los filtros antes de facturar.';
+      wVentana@1100244004 : Dialog;
+      Text0005@1100244005 : TextConst 'ESP=PROCESO DE AUTOFACTURACION PROVEEDOR\';
+      Text0006@1100244006 : TextConst 'ESP=COMPROBACIONES PREVIAS';
+      Text0007@1100244007 : TextConst 'ESP=CREANDO FACTURA DE COMPRA';
+      wTotal@1100244008 : Integer;
+      wActual@1100244009 : Integer;
+      Text0008@1100244010 : TextConst 'ESP=CREANDO VALIDACIONES';
+      Text0009@1100244011 : TextConst 'ESP=%1 BUS #2## de #3###### a #4######';
+      Text0010@1100244012 : TextConst 'ESP=Se ha seleccionado un parte %1 que se ha borrado.';
+      cValProv@1103350000 : Codeunit 7010320;
+      rPar@1103350001 : Record 7010311;
+
+    PROCEDURE marca_lineas@1(VAR prPref@1100244000 : Record 7035348;VAR prPC@1100244001 : Record 7035393);
+    VAR
+      lrPC@1100244002 : Record 7035393;
+      lrContCmp@1100244003 : Record 7010408;
+      lrVeh@1100244004 : Record 7010346;
+      lrParte@1100244005 : Record 7010360;
+      lrPar@1100244006 : Record 7010311;
+      lwImp@1103355000 : Decimal;
+    BEGIN
+      // marca_lineas
+      //
+      rPar.FINDFIRST;
+
+      IF prPC.FINDFIRST THEN
+        prPC.MODIFYALL(Marca, '');
+
+      lrPC.RESET;
+
+      // AJS 22.07.2008
+      // Cambiamos la clave activa
+      //lrPC.SETCURRENTKEY(Garaje,Proveedor,Fecha,"Tipo servicio","Codigo servicio");
+
+      lrPC.SETCURRENTKEY("N§ Factura",
+                         Proveedor,
+                         Fecha,
+                         Cliente,
+                         Facturable);
+
+      IF prPref.Garaje <> '' THEN
+        lrPC.SETRANGE(Garaje      , prPref.Garaje);
+
+      lrPC.SETRANGE(Proveedor   , prPref.Proveedor);
+
+      // AJS 15.01.2004
+      // Si se pone filtro por numero de parte hay que chequear que existe y no lo hayan borrado
+
+      IF prPref."Num Parte" <> '' THEN BEGIN
+        IF NOT lrParte.GET(prPref."Num Parte") THEN
+          ERROR(Text0010);
+
+        lrPC.SETRANGE("N§ Parte", prPref."Num Parte");
+      END;
+
+      // ----  AJS 12.06.2003 El filtro por cliente es opcional  ----
+
+      IF prPref.Cliente <> '' THEN
+        lrPC.SETRANGE(Cliente     , prPref.Cliente);
+
+      // ---- FIN AJS 12.06.2003  ----
+
+      IF prPref.Touroperador <> '' THEN
+        lrPC.SETRANGE(Touroperador, prPref.Touroperador);
+      lrPC.SETRANGE(Fecha       , prPref."Fecha desde", prPref."Fecha hasta");
+      lrPC.SETRANGE("N§ Factura", '');
+
+      // AJS 26.08.2008
+      // Se elimina el filtro de facturable porque hace referencia a ingresos
+      //lrPC.SETRANGE(Facturable  , TRUE);
+
+      IF prPref."Tipos Servicio" <> '' THEN
+        lrPC.SETFILTER("Tipo servicio" , prPref."Tipos Servicio");
+
+      IF prPref."Codigos Servicio" <> '' THEN
+        lrPC.SETFILTER("Codigo servicio", '%1', prPref."Codigos Servicio");
+
+      IF prPref."Tipos Vehiculo" <> '' THEN
+        lrPC.SETFILTER("Tipo Vehiculo"  , '%1', prPref."Tipos Vehiculo");
+
+      IF prPref.Vehiculo <> '' THEN
+        lrPC.SETRANGE(Vehiculo, prPref.Vehiculo);
+
+      IF prPref."Zonas de Precio" <> '' THEN
+        lrPC.SETFILTER("Zona Precios", '%1', prPref."Zonas de Precio");
+
+      IF lrPC.FINDSET(TRUE) THEN BEGIN
+        lrPC.MODIFYALL(Marca          , USERID);
+        lrPC.MODIFYALL("N§ Prefactura", USERID);
+
+        // JPT 25/07/08 esto genera un error dependiendo del filtro
+        //lrPC.CALCSUMS("Importe sin impuesto DL");
+        CLEAR(lwImp);
+        REPEAT
+          lwImp += lrPC."Importe sin impuesto DL";
+        UNTIL lrPC.NEXT =0;
+        lrPC.FINDFIRST;
+
+        // AJS 06.02.2004
+        // El contrato puede ir contra el garaje del parte o contra el garaje TODOS
+
+        lrPar.FINDFIRST;
+        lrContCmp.SETFILTER(Garaje, '%1|%2', lrPC.Garaje, lrPar."Todos los garajes");
+        lrContCmp.SETRANGE ("N§ Contrato" , lrPC."N§ Contrato");
+        IF lrContCmp.FINDFIRST THEN
+          prPref."Precios impuestos incluidos" := lrContCmp."Impuestos incluidos";
+
+        prPref."% Impuestos"         := lrPC."% IVA";
+        prPref."Num contrato compra" := lrPC."N§ Contrato";
+        prPref."Total neto Factura"  := ROUND(lwImp);
+
+        // ----  AJS 09.06.2003 Jordi ha pedido que el texto de registro incluya el numero de vehiculo y el alias en  ----
+        // ----  lugar del nombre del proveedor
+
+        IF prPref.Vehiculo = '' THEN
+          prPref."Texto Registro"      := STRSUBSTNO(Text0001, COPYSTR(prPref.alias_proveedor, 1, 20), prPref."Fecha desde",
+                                                     prPref."Fecha hasta")
+        ELSE BEGIN
+
+          lrVeh.GET(prPref.Vehiculo);
+
+          prPref."Texto Registro"      := STRSUBSTNO(Text0009, COPYSTR(prPref.alias_proveedor, 1, 16),
+                                                     COPYSTR(lrVeh.Numero, 1 , 4), prPref."Fecha desde", prPref."Fecha hasta");
+        END;
+
+        // ----  FIN AJS 09.06.2003  ----
+
+        prPref.Procesada        := TRUE;
+        prPref.MODIFY;
+      END
+      ELSE BEGIN
+        prPref."Precios impuestos incluidos" := FALSE;
+        prPref."% Impuestos"                 := 0;
+        prPref."Num contrato compra"         := '';
+        prPref."Total neto Factura"          := 0;
+        prPref."Texto Registro"              := '';
+        prPref.MODIFY;
+      END;
+
+      prPref.borra_prefactura;
+
+      crear_lineas_prefactura;
+    END;
+
+    PROCEDURE crear_lineas_prefactura@2();
+    VAR
+      lrPC@1100244000 : Record 7035393;
+      lrLinPre@1100244001 : Record 7035349;
+      lrTipEle@1100244002 : Record 7010318;
+      lrCodSer@1100244003 : Record 7010320;
+      lrCodExtra@1100244004 : Record 7010321;
+      lrPar@1100244005 : Record 7010311;
+      lrZonPre@1100244006 : Record 7035350;
+      lrSupPre@1100244007 : Record 7035351;
+      lwVentana@1100244008 : Dialog;
+      lwActual@1100244009 : Integer;
+      lwTotal@1100244010 : Integer;
+    BEGIN
+      // crear_lineas_prefactura
+      //
+
+      lrPar.FINDFIRST;
+      lrPC.RESET;
+      lrPC.SETCURRENTKEY(Marca);
+
+      lrPC.SETRANGE(Marca   , USERID);
+      IF lrPC.FINDSET THEN BEGIN
+        lwVentana.OPEN(Text0002 + '\' +
+                       '@1@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+        lwActual := 0;
+        lwTotal := lrPC.COUNT;
+
+        REPEAT
+          lwActual += 1;
+          lwVentana.UPDATE(1, ROUND(lwActual / lwTotal * 10000, 1));
+
+          // ----  Trataremos las lineas segun su tipo porque las maletas se guardan aparte  ----
+
+          CASE lrPC."Tipo linea" OF
+            lrPC."Tipo linea"::Base, lrPC."Tipo linea"::Manual:
+            BEGIN
+              comunes_linea_prefactura(lrLinPre, lrPC);
+
+              IF lrPC."Tipo elemento" = Text000 THEN
+                lrLinPre.Cantidad := 1
+              ELSE
+                lrLinPre.Cantidad := lrPC."Pax Real";
+
+              lrLinPre."Pax transportados" := lrPC."Pax Transportados";
+              lrLinPre."Pax facturados"    := lrPC."Pax Facturados";
+              lrLinPre.Codigo              := lrPC."Tipo elemento";
+
+              IF lrCodSer.GET(lrPC."Codigo servicio") THEN BEGIN
+                IF lrPC."Linea abono" THEN
+                  lrLinPre.Descripcion         := Text001 + lrCodSer.Descripcion + ' (' + lrLinPre.Zona + ')'
+                ELSE
+                  lrLinPre.Descripcion         := lrCodSer.Descripcion + ' (' + lrLinPre.Zona + ')';
+              END;
+
+              // ----  Crear / Actualizar el registro de zona x parte prefactura  ----
+
+              IF NOT lrZonPre.GET(USERID, lrPC."N§ Parte", lrPC."Zona Precios", lrPC."Linea abono") THEN BEGIN
+                CLEAR(lrZonPre);
+                lrZonPre."Num prefactura" := USERID;
+                lrZonPre.Parte            := lrPC."N§ Parte";
+                lrZonPre."Cod zona"       := lrPC."Zona Precios";
+                lrZonPre."Es abono"       := lrPC."Linea abono";
+                lrZonPre.INSERT;
+              END;
+
+              CASE lrPC."Tipo elemento" OF
+                Text002: lrZonPre.Adultos += ABS(lrPC."Pax Transportados");
+
+                lrPar."Codigo Adulto": lrZonPre.Adultos += ABS(lrPC."Pax Transportados");
+
+                lrPar."Codigo Ni¤o": lrZonPre.Ni¤os += ABS(lrPC."Pax Transportados");
+
+                Text000: lrZonPre.Adultos += ABS(lrPC."Pax Transportados");
+              END;
+              lrZonPre.MODIFY;
+
+            END;
+
+            lrPC."Tipo linea"::Suplemento:
+            BEGIN
+
+              IF lrPC."Tipo elemento" <> lrPar."Codigo Maletas" THEN BEGIN
+                comunes_linea_prefactura(lrLinPre, lrPC);
+
+                lrLinPre.Cantidad            := lrPC."Pax Real";
+                lrLinPre."Pax transportados" := 0;
+                lrLinPre."Pax facturados"    := 0;
+                lrLinPre.Codigo              := lrPC."Tipo elemento";
+                IF lrTipEle.GET(lrPC."Tipo elemento") THEN BEGIN
+                  IF lrPC."Linea abono" THEN
+                    lrLinPre.Descripcion := Text001 + lrTipEle.Descripcion
+                  ELSE
+                    lrLinPre.Descripcion := lrTipEle.Descripcion;
+                END;
+              END
+              ELSE BEGIN
+                comunes_linea_prefactura(lrLinPre, lrPC);
+
+                lrLinPre."No imprimir"       := TRUE;
+                lrLinPre.Cantidad            := lrPC."Pax Real";
+                lrLinPre."Pax transportados" := 0;
+                lrLinPre."Pax facturados"    := 0;
+                lrLinPre.Codigo              := lrPC."Tipo elemento";
+                IF lrTipEle.GET(lrPC."Tipo elemento") THEN BEGIN
+                  IF lrPC."Linea abono" THEN
+                    lrLinPre.Descripcion := Text001 + lrTipEle.Descripcion
+                  ELSE
+                    lrLinPre.Descripcion := lrTipEle.Descripcion;
+                END;
+                // ----  Crear / Actualizar el registro de suplementos prefactura  ----
+
+                IF NOT lrSupPre.GET(USERID, lrPC."Tipo elemento") THEN BEGIN
+                  CLEAR(lrSupPre);
+                  lrSupPre."Num Prefactura" := USERID;
+                  lrSupPre.Suplemento       := lrPC."Tipo elemento";
+                  lrSupPre.INSERT;
+                END;
+                lrSupPre.Cantidad                += lrPC."Pax Real";
+                lrSupPre."Importe con impuestos" += ROUND(lrPC."Importe con impuesto DL");
+                lrSupPre."Importe sin impuestos" += ROUND(lrPC."Importe sin impuesto DL");
+                lrSupPre.MODIFY;
+
+              END;
+            END;
+            lrPC."Tipo linea"::Extra:
+            BEGIN
+              comunes_linea_prefactura(lrLinPre, lrPC);
+
+              lrLinPre.Cantidad            := lrPC."Pax Real";
+              lrLinPre."Pax transportados" := 0;
+              lrLinPre."Pax facturados"    := 0;
+              lrLinPre.Codigo              := lrPC."Tipo elemento";
+
+              IF lrCodExtra.GET(lrPC."Tipo elemento") THEN BEGIN
+                IF lrPC."Linea abono" THEN
+                  lrLinPre.Descripcion := Text001 + lrCodExtra.Descripcion
+                ELSE
+                  lrLinPre.Descripcion := lrCodExtra.Descripcion;
+              END;
+            END;
+
+          END;
+
+          lrLinPre.MODIFY;
+
+        UNTIL lrPC.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE facturar@4(prPref@1100244000 : Record 7035348);
+    VAR
+      lrCont@1100244001 : Record 7010408;
+      lrProv@1100244002 : Record 23;
+      lrPar@1100244003 : Record 7010311;
+      lwTipoServicio@1100244004 : Code[10];
+    BEGIN
+      // facturar
+      //
+      IF NOT prPref.Procesada THEN
+        ERROR(Text0004);
+
+      wVentana.OPEN(Text0005 + '\' +
+                    '#1##################################\' + '\' +
+                    '@2@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+
+      // ----  Comprobar los datos previos  ----
+
+      wVentana.UPDATE(1, Text0006);
+      comprobar_datos(prPref, lrCont, lwTipoServicio, lrProv, lrPar);
+
+      // ----  Crear la factura estandar  ----
+
+      crea_factura_estandar(lrCont, lrProv, lwTipoServicio, prPref, lrPar."Cuenta Compras");
+    END;
+
+    PROCEDURE comprobar_datos@5(prPref@1100244000 : Record 7035348;VAR prCont@1100244001 : Record 7010408;VAR pwTipoServicio@1100244002 : Code[10];VAR prProv@1100244003 : Record 23;VAR prPar@1100244004 : Record 7010311);
+    VAR
+      lrLineas@1100244005 : Record 7035349;
+    BEGIN
+      // comprobar_datos
+      //
+      {*
+      IF ( prPref."Num factura proveedor" = '' ) OR ( prPref."Fecha emision proveedor" = 0D ) THEN BEGIN
+        wVentana.CLOSE;
+        ERROR(Text0003);
+      END;
+      *}
+
+      prPref.TESTFIELD("Fecha Registro factura");
+      prPref.TESTFIELD("Texto Registro");
+      prPref.TESTFIELD("Total neto Factura");
+
+      prPref.TESTFIELD(Proveedor);
+
+      prProv.GET(prPref.Proveedor);
+      prProv.TESTFIELD("Gen. Bus. Posting Group");
+      prProv.TESTFIELD("VAT Bus. Posting Group");
+
+      // AJS 06.02.2004
+      // El contrato puede ir contra el garaje del parte o contra el garaje TODOS
+
+      prPar.FINDFIRST;
+      prCont.SETFILTER(Garaje, '%1|%2', prPref.Garaje, prPar."Todos los garajes");
+      prCont.SETRANGE ("N§ Contrato" , prPref."Num contrato compra");
+      prCont.FINDFIRST;
+
+      //prCont.GET(prPref.Garaje, prPref."Num contrato compra");
+      prCont.TESTFIELD("Cod. Serie");
+
+      // ----  Si la factura solo es de un tipo de servicio, este se traspasara a la cabecera de factura compra  ----
+
+      lrLineas.SETRANGE("Num prefactura", prPref."Num prefactura");
+      IF lrLineas.FINDFIRST THEN BEGIN
+        pwTipoServicio := lrLineas."Tipo servicio";
+        lrLineas.SETFILTER("Tipo servicio", '<>%1', pwTipoServicio);
+        IF lrLineas.FINDFIRST THEN
+          pwTipoServicio := '';
+      END;
+
+      prPar.FINDFIRST;
+      prPar.TESTFIELD("Cuenta Compras");
+    END;
+
+    PROCEDURE crea_factura_estandar@19(prCont@1100244000 : Record 7010408;prProv@1100244001 : Record 23;pwTipoServicio@1100244002 : Code[10];prPref@1100244003 : Record 7035348;pwNumCuenta@1100244004 : Text[20]);
+    VAR
+      lrCabCmp@1100244005 : Record 38;
+      lrLinCmp@1100244006 : Record 39;
+      lrLin@1100244007 : Record 7035349;
+      lrLin2@1100244008 : Record 7035349;
+      lrLinAnt@1103350000 : Record 7035349;
+      lrPref@1100244009 : Record 7035348;
+      lfFactura@1100244010 : Report 7010427;
+      lwImporteLinea@1100244012 : Decimal;
+      lwNumLinea@1100244013 : Integer;
+    BEGIN
+      // crea_factura_estandar
+      //
+      wVentana.UPDATE(1, Text0007);
+
+      rPar.FINDFIRST;
+      CLEAR(lrCabCmp);
+      IF prPref."Total neto Factura" < 0 THEN
+        lrCabCmp.VALIDATE("Document Type"    , lrCabCmp."Document Type"::"Credit Memo")
+      ELSE
+        lrCabCmp.VALIDATE("Document Type"      , lrCabCmp."Document Type"::Invoice);
+      lrCabCmp.VALIDATE("No. Series", prCont."Cod. Serie");
+      lrCabCmp.INSERT(TRUE);
+
+      IF prPref."Total neto Factura" < 0 THEN
+        lrCabCmp.VALIDATE("Vendor Cr. Memo No.", lrCabCmp."No.")
+      ELSE
+        lrCabCmp.VALIDATE("Vendor Invoice No.", lrCabCmp."No.");
+
+      lrCabCmp.VALIDATE("Posting No. Series"    , prCont."Cod. Serie");
+      lrCabCmp.VALIDATE("Buy-from Vendor No.", prPref.Proveedor);
+      IF (prProv."Pay-to Vendor No." <> '') AND (prProv."Pay-to Vendor No." <> prPref.Proveedor) THEN BEGIN
+        lrCabCmp.SetHideValidationDialog(TRUE);
+        lrCabCmp.VALIDATE("Pay-to Vendor No.", prProv."Pay-to Vendor No.");
+        lrCabCmp.SetHideValidationDialog(FALSE);
+      END;
+      lrCabCmp.VALIDATE("Posting Date"         , prPref."Fecha Registro factura");
+      lrCabCmp.VALIDATE("Posting Description"      , prPref."Texto Registro");
+      //lrCabCmp.VALIDATE("Fecha emisi¢n documento", prPref."Fecha Registro factura");
+
+      IF lrCabCmp."Payment Method Code" <> prCont."Cod. Formas Pago" THEN
+        lrCabCmp.VALIDATE("Payment Method Code", prCont."Cod. Formas Pago");
+
+      IF lrCabCmp."Payment Terms Code" <> prCont."Cod. Terminos Pago" THEN
+        lrCabCmp.VALIDATE("Payment Terms Code", prCont."Cod. Terminos Pago");
+
+      lrCabCmp.VALIDATE("Shortcut Dimension 1 Code", prPref.Garaje);
+      lrCabCmp.VALIDATE("Shortcut Dimension 2 Code"    , '');
+
+      // JPT 20/12/04 Entramos el tipo de servicio como dimension
+      //lrCabCmp.VALIDATE("Tipo servicio"    , pwTipoServicio);
+
+      IF rPar."Tipo Servicio Como Dimension" THEN BEGIN
+        IF pwTipoServicio <> '' THEN BEGIN
+          rPar.TESTFIELD("Dimensi¢n Tipo Servicio");
+          cValProv.InsertaDimCab(lrCabCmp, rPar."Dimensi¢n Tipo Servicio", pwTipoServicio);
+        END;
+      END;
+
+      lrCabCmp.MODIFY(TRUE);
+
+      // ----  Crear una linea de factura para cada grupo registro IVA producto distinto  ----
+
+      lrLin.RESET;
+      lrLin.SETCURRENTKEY("Num prefactura",
+                          "Grupo reg impuestos producto",
+                          Garaje,
+                          Touroperador,
+                          "Tipo servicio");
+      lrLin.SETRANGE("Num prefactura", prPref."Num prefactura");
+      IF lrLin.FINDSET THEN BEGIN
+        lwNumLinea := 0;
+        CLEAR(lrLinAnt);
+        wTotal     := lrLin.COUNT;
+        wActual    := 0;
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(2, ROUND(wActual / wTotal * 10000, 1));
+
+
+          IF (lrLin."Grupo reg impuestos producto" <> lrLinAnt."Grupo reg impuestos producto") OR
+            (lrLin.Garaje           <> lrLinAnt.Garaje) OR
+            (lrLin.Touroperador     <> lrLinAnt.Touroperador) OR
+            (lrLin."Tipo servicio"  <> lrLinAnt."Tipo servicio") THEN BEGIN
+            lrLinAnt := lrLin;
+
+
+            lrLin2.COPY(lrLin);
+            lrLin2.SETRANGE("Grupo reg impuestos producto", lrLinAnt."Grupo reg impuestos producto");
+            lrLin2.CALCSUMS("Importe sin impuestos");
+
+            IF lrCabCmp."Document Type" = lrCabCmp."Document Type"::Invoice THEN
+              lwImporteLinea := lrLin2."Importe sin impuestos"
+            ELSE
+              lwImporteLinea := - lrLin2."Importe sin impuestos";
+
+            CLEAR(lrLinCmp);
+            lrLinCmp.VALIDATE("Document Type", lrCabCmp."Document Type");
+            lrLinCmp.VALIDATE("Document No."  , lrCabCmp."No.");
+            lwNumLinea += 10;
+            lrLinCmp.VALIDATE("Line No."             , lwNumLinea);
+            lrLinCmp.VALIDATE("Buy-from Vendor No.", lrCabCmp."Buy-from Vendor No.");
+            lrLinCmp.INSERT(TRUE);
+
+            lrLinCmp.VALIDATE(Type                        , lrLinCmp.Type::"G/L Account");
+            lrLinCmp.VALIDATE("No."                       , pwNumCuenta);
+            lrLinCmp.VALIDATE("Shortcut Dimension 1 Code" , lrLinAnt.Garaje);
+            lrLinCmp.VALIDATE("Shortcut Dimension 2 Code" , lrLinAnt.Touroperador);
+
+            // JPT 20/12/04 Entramos el tipo de servicio como dimension
+            IF rPar."Tipo Servicio Como Dimension" THEN
+              cValProv.InsertaDimLin(lrLinCmp, rPar."Dimensi¢n Tipo Servicio",lrLinAnt."Tipo servicio");
+
+            lrLinCmp.VALIDATE(Quantity                  , 1);
+            lrLinCmp.VALIDATE("Gen. Bus. Posting Group"  , prProv."Gen. Bus. Posting Group");
+            lrLinCmp.VALIDATE("VAT Bus. Posting Group" , prProv."VAT Bus. Posting Group");
+            lrLinCmp.VALIDATE("VAT Prod. Posting Group", lrLinAnt."Grupo reg impuestos producto");
+            lrLinCmp.VALIDATE("Direct Unit Cost"           , lwImporteLinea);
+            lrLinCmp.MODIFY(TRUE);
+          END;
+        UNTIL lrLin.NEXT = 0;
+      END;
+
+      // ----  Vamos a guardar los registros de validaciones para mantener la integridad con el sistema de validacion  ----
+      // ----  Guardaremos las prefacturas con el numero de factura para facilitar las reimpresiones                   ----
+
+      crea_validaciones(prPref, lrCabCmp."No.");
+
+      // ----  Impresion de la factura de compra  ----
+
+      COMMIT;
+
+      wVentana.CLOSE;
+
+      IF lrPref.GET(lrCabCmp."No.") THEN BEGIN
+        lrPref.SETRECFILTER;
+        CLEAR(lfFactura);
+        lfFactura.SETTABLEVIEW(lrPref);
+        lfFactura.RUNMODAL;
+      END;
+    END;
+
+    PROCEDURE crea_validaciones@31(prPref@1100244000 : Record 7035348;pwNumFra@1100244001 : Code[10]);
+    VAR
+      lrLin@1100244002 : Record 7035349;
+      lrLin2@1100244003 : Record 7035349;
+      lrLin3@1100244004 : Record 7035349;
+      lrZonPre@1100244005 : Record 7035350;
+      lrZonPre2@1100244006 : Record 7035350;
+      lrZonPre3@1100244007 : Record 7035350;
+      lrSupPre@1100244008 : Record 7035351;
+      lrSupPre2@1100244009 : Record 7035351;
+      lrSupPre3@1100244010 : Record 7035351;
+      lrPC@1100244011 : Record 7035393;
+      lrVal@1100244012 : Record 7010410;
+      lrPref@1100244013 : Record 7035348;
+    BEGIN
+      // crea_validaciones
+      //
+      lrLin.SETRANGE("Num prefactura", prPref."Num prefactura");
+      IF lrLin.FINDSET(TRUE) THEN BEGIN
+        wVentana.UPDATE(1, Text0008);
+        wTotal     := lrLin.COUNT;
+        wActual    := 0;
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(2, ROUND(wActual / wTotal * 10000, 1));
+
+          IF lrPC.GET(lrLin."Num parte", lrLin."Linea coste-ingreso") THEN BEGIN
+
+            CLEAR(lrVal);
+            lrVal."N§ Parte"         := lrPC."N§ Parte";
+            lrVal."N§ Linea"         := lrPC."N§ Linea";
+            lrVal."N§ Factura"       := pwNumFra;
+            lrVal."Importe Validado" := ROUND(lrPC."Importe sin impuesto DL");
+            lrVal."Paxes Validados"  := lrPC."Pax Real";
+            lrVal.INSERT;
+
+            lrPC."N§ Factura" := pwNumFra;
+            lrPC.Marca        := '';
+            lrPC.MODIFY;
+          END;
+
+          // ----  Guardar el numero de factura nuevo en las lineas de prefactura  ----
+
+          lrLin2 := lrLin;
+          lrLin2."Num prefactura" := pwNumFra;
+          lrLin2.INSERT;
+
+          lrLin3 := lrLin;
+          lrLin3.DELETE;
+
+        UNTIL lrLin.NEXT = 0;
+      END;
+
+      // ----  Guardar el numero de factura nuevo en las lineas de zona de prefactura  ----
+
+      lrZonPre.SETRANGE("Num prefactura", prPref."Num prefactura");
+      IF lrZonPre.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          lrZonPre2 := lrZonPre;
+          lrZonPre2."Num prefactura" := pwNumFra;
+          lrZonPre2.INSERT;
+
+          lrZonPre3 := lrZonPre;
+          lrZonPre3.DELETE;
+        UNTIL lrZonPre.NEXT = 0;
+      END;
+
+      // ----  Guardar el numero de factura nuevo en las lineas de suplemento de prefactura  ----
+
+      lrSupPre.SETRANGE("Num Prefactura", prPref."Num prefactura");
+      IF lrSupPre.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          lrSupPre2 := lrSupPre;
+          lrSupPre2."Num Prefactura" := pwNumFra;
+          lrSupPre2.INSERT;
+
+          lrSupPre3 := lrSupPre;
+          lrSupPre3.DELETE;
+        UNTIL lrSupPre.NEXT = 0;
+      END;
+
+      lrPref := prPref;
+      lrPref."Num prefactura" := pwNumFra;
+      lrPref.Facturada        := TRUE;
+      lrPref.INSERT;
+
+      prPref.DELETE;
+    END;
+
+    PROCEDURE comunes_linea_prefactura@7(VAR prLinPre@1100244000 : Record 7035349;prPC@1100244001 : Record 7035393);
+    VAR
+      lrTipSer@1100244002 : Record 7010319;
+      lrProv@1100244003 : Record 23;
+      lrCta@1100244004 : Record 15;
+      lrPar@1100244005 : Record 7010311;
+      lrParte@1100244006 : Record 7010360;
+    BEGIN
+      // comunes_linea_prefactura
+      //
+
+      lrPar.FINDFIRST;
+
+      CLEAR(prLinPre);
+      prLinPre."Num prefactura" := USERID;
+      prLinPre.INSERT(TRUE);
+
+      prLinPre."Tipo linea"    := prPC."Tipo linea";
+      prLinPre."Num parte"     := prPC."N§ Parte";
+
+      // AJS 07.07.2004
+      // La fecha de parte la obtenemos desde el parte de trabajo
+
+      IF lrParte.GET(prLinPre."Num parte") THEN
+        prLinPre."Fecha parte"   := lrParte.Fecha
+      ELSE
+        prLinPre."Fecha parte"   := prPC.Fecha;
+
+      prLinPre."Tipo servicio" := prPC."Tipo servicio";
+      IF lrTipSer.GET(prPC."Tipo servicio") THEN
+        prLinPre."Tipo servicio fijo" := lrTipSer."Tipo fijo";
+
+      prLinPre."Codigo servicio" := prPC."Codigo servicio";
+      prLinPre.Zona              := prPC."Zona Precios";
+      prLinPre.Touroperador      := prPC.Touroperador;
+      prLinPre.Garaje            := prPC.Garaje;
+
+      IF prPC."Precio Pax DL" <> 0 THEN BEGIN
+        prLinPre."Precio con impuestos"  := prPC."Precio Pax DL";
+        prLinPre."Precio sin impuestos"  := prPC."Precio Pax DL sin impuestos";
+      END
+      ELSE BEGIN
+        prLinPre."Precio con impuestos"  := prPC."Precio Vehiculo DL";
+        prLinPre."Precio sin impuestos"  := prPC."Precio Vehiculo DL sin imp";
+      END;
+
+      prLinPre."Importe con impuestos" := ROUND(prPC."Importe con impuesto DL");
+      prLinPre."Importe sin impuestos" := ROUND(prPC."Importe sin impuesto DL");
+
+      lrCta.GET(lrPar."Cuenta Compras");
+      prLinPre."Grupo contable producto"      := lrCta."Gen. Prod. Posting Group";
+      prLinPre."Grupo reg impuestos producto" := lrPar."Grupo Registro IVA Producto";
+
+      IF lrProv.GET(prPC.Proveedor) THEN BEGIN
+        lrProv.TESTFIELD("Gen. Bus. Posting Group");
+        lrProv.TESTFIELD("VAT Bus. Posting Group");
+
+        prLinPre."Grupo contable negocio"      := lrProv."Gen. Bus. Posting Group";
+        prLinPre."Grupo reg impuestos negocio" := lrProv."VAT Bus. Posting Group";
+      END;
+
+      prLinPre."Linea coste-ingreso" := prPC."N§ Linea";
+      prLinPre."Linea abono"         := prPC."Linea abono";
+      prLinPre."Tipo elemento"       := prPC."Tipo elemento";
+    END;
+
+    PROCEDURE llamar_ventana_autofacturacion@6();
+    VAR
+      lrPref@1100244000 : Record 7035348;
+      lfFichaPref@1100244001 : Form 7035368;
+    BEGIN
+      // llamar_ventana_autofacturacion
+      //
+
+      IF NOT lrPref.GET(USERID) THEN BEGIN
+        lrPref."Num prefactura" := USERID;
+        lrPref.INSERT;
+      END;
+      lrPref.SETRECFILTER;
+      COMMIT;
+
+      CLEAR(lfFichaPref);
+      lfFichaPref.SETTABLEVIEW(lrPref);
+      lfFichaPref.RUNMODAL;
+    END;
+
+    BEGIN
+    END.
+  }
+}

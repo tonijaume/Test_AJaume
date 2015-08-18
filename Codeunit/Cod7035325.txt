@@ -1,0 +1,491 @@
+OBJECT Codeunit 7035325 Funciones autofactura
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20/01/15;
+    Time=13:07:10;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244012 : TextConst 'ESP=¨ Desea crear la factura %1 ?';
+      rPar@1100244000 : Record 7010311;
+      Text00001@1100244001 : TextConst 'ESP=Debe situarse sobre una linea con numero de factura.';
+      Text00002@1100244002 : TextConst 'ESP=No hay ingresos pendientes de facturar para el cliente %1 Touroperador %2,  con la marca del usuario %3.';
+      Text00003@1100244003 : TextConst 'ESP=Hay que generar las previsiones de coste e ingreso antes de facturar.';
+      Text00004@1100244004 : TextConst 'ESP=No puede incluir servicios de dos contratos en una misma factura.';
+      Text00005@1100244005 : TextConst 'ESP=Este parte ya ha sido prefacturado.';
+      Text00006@1100244006 : TextConst 'ESP=El parte %1 no esta confirmado.';
+      Text00007@1100244007 : TextConst 'ESP=Solo se puede hacer una factura cada vez.';
+      Text00008@1100244008 : TextConst 'ESP=Solo se puede facturar una prefactura cada vez.';
+      Text00009@1100244009 : TextConst 'ESP=Se ha borrado el contrato %1 - %2.';
+      Text00010@1100244010 : TextConst 'ESP=Situese sobre un parte de los que quiere facturar.';
+      Text00011@1100244011 : TextConst 'ESP=El parte %1 ya esta facturado.';
+      cAuto@1100244017 : Codeunit 7035326;
+      wVentana@1100244013 : Dialog;
+      wActual@1100244014 : Integer;
+      wTotal@1100244015 : Integer;
+      Text00012@1100244016 : TextConst 'ESP=REVISANDO SERVICIOS @1@@@@@@@@@@@@@';
+      Text00013@1100244018 : TextConst 'ESP=Indique Fecha Factura #1########';
+      Text00014@1100244019 : TextConst 'ESP=¨Desea realmente dejar %1 como Fecha de Registro de la factura?';
+      Text00015@1100244020 : TextConst 'ESP=No puede dejar la fecha de facturaci¢n en blanco';
+
+    PROCEDURE prefactura_autofactura@1(VAR prToPar@1100244000 : Record 7010365);
+    VAR
+      lrPreFact@1100244001 : Record 7010415;
+      lrZonPref@1100244002 : Record 7010418;
+      lrToPar@1100244003 : Record 7010365;
+      lrToPar2@1100253005 : Record 7010365;
+      lrPI@1100244004 : Record 7035392;
+      lrPI2@1100253004 : Record 7035392;
+      lrCon@1100244005 : Record 7010403;
+      lrLista@1100244006 : Record 7035384;
+      lrCondFra@1100253000 : Record 7010416;
+      lrLinPrefTEMP@1100253002 : TEMPORARY Record 7010417;
+      lrLinPref@1100253001 : Record 7010417;
+      lcFacturacion@1100244007 : Codeunit 7010321;
+      lcFacturacionCli@1100244011 : Codeunit 7010406;
+      lw_importe_maletas@1100244008 : Decimal;
+      lw_importe_maletas_sin@1100244009 : Decimal;
+      lw_grupo_iva_maletas@1100244010 : Code[10];
+      lwFechaFac@1100244012 : Date;
+      ventana@1100253003 : Dialog;
+    BEGIN
+      // prefactura_autofactura
+      //
+
+      IF prToPar."N§ Factura" = '' THEN
+        ERROR(Text00001);
+
+      rPar.FINDFIRST;
+
+      // Pide la fecha de factura
+      lwFechaFac := cAuto.BuscaFechaFactura;
+      wVentana.OPEN(Text00013);
+      wVentana.UPDATE(1,lwFechaFac);
+      wVentana.INPUT(1,lwFechaFac);
+      IF lwFechaFac= 0D THEN
+        ERROR(Text00015);
+      IF NOT CONFIRM (Text00014,TRUE,lwFechaFac) THEN
+        EXIT;
+
+      // ----  Marcar los registros de coste ingreso  ----
+
+      lrPI.RESET;
+      lrPI.SETCURRENTKEY("N§ Parte",Touroperador);
+
+      //lrToPar.COPY(prToPar);
+
+
+      lrToPar.RESET;
+      lrToPar.SETCURRENTKEY(Confirmado,
+                            "Cliente operativo",
+                            Touroperador,
+                            "N§ Factura");
+      lrToPar.SETRANGE(Confirmado  , TRUE);
+      lrToPar.SETRANGE("Cliente operativo"     , prToPar."Cliente operativo");
+      lrToPar.SETRANGE(Touroperador, prToPar.Touroperador);
+      lrToPar.SETRANGE("N§ Factura", prToPar."N§ Factura");
+
+      IF lrToPar.FINDSET THEN BEGIN
+        wVentana.OPEN(Text00012);
+        wActual := 0;
+        wTotal := lrToPar.COUNT;
+        REPEAT
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND(wActual / wTotal * 10000, 1));
+
+          // AJS 07.07.2004
+          // Elimino este control por si hay que prefacturar 2 veces el mismo parte de trabajo
+          //IF lrToPar."N§ Prefactura" <> '' THEN
+          //  ERROR(Text00005);
+
+          lrPI.SETRANGE ("N§ Parte"  , lrToPar."N§ Parte");
+          lrPI.SETRANGE (Touroperador, lrToPar.Touroperador);
+          lrPI.SETFILTER("N§ Prefactura", '=%1', '');
+          IF lrPI.FINDSET(TRUE) THEN BEGIN
+            REPEAT
+              lrPI2 := lrPI;
+              lrPI2.Marca := USERID;
+              lrPI2.MODIFY;
+            UNTIL lrPI.NEXT = 0;
+          END;
+
+        UNTIL lrToPar.NEXT = 0;
+        wVentana.CLOSE;
+      END;
+      COMMIT;
+
+      errores_previos(lrPI, lrToPar, lrCon);
+
+      // ----  Crear un registro en el fichero de prefacturas  ----
+
+      lrPreFact.RESET; lrPreFact.INIT;
+      lrPreFact.INSERT(TRUE);
+      lrPreFact.Cliente                := lrToPar."Cliente operativo";
+      lrPreFact.Touroperador           := lrToPar.Touroperador;
+      lrPreFact."Texto Registro"       := '';
+
+      lrPreFact."Fecha desde" := prToPar.GETRANGEMIN("Fecha Facturacion");
+      lrPreFact."Fecha hasta" := prToPar.GETRANGEMAX("Fecha Facturacion");
+
+      lrPreFact."Facturar sobre marca"   := TRUE;
+      lrPreFact."Tipo prefactura"        := lrPreFact."Tipo prefactura"::"Sin resumen";
+      lrPreFact."Tipo factura"           := lrPreFact."Tipo factura"::"Sin resumen";
+      lrPreFact."Fecha Registro factura" := lwFechaFac;
+      lrPreFact."N§ Contrato"            := lrCon."N§ Contrato";
+      lrPreFact."Cod. Divisa"            := lrCon."Cod. Divisa";
+      lrPreFact.Garaje                   := lrCon.Garaje;
+      lrPreFact.MODIFY;
+
+      // ----  Llamar al proceso de creacion de las lineas de prefactura  ----
+
+      lw_importe_maletas     := 0;
+      lw_importe_maletas_sin := 0;
+      lw_grupo_iva_maletas   := '';
+
+      lrPI.SETCURRENTKEY("Cliente Operativo",Touroperador,Fecha,Facturable,"N§ Prefactura");
+
+
+      CASE rPar."Empresa Real" OF
+        rPar."Empresa Real"::IBZ, rPar."Empresa Real"::SJO : BEGIN
+          lcFacturacion.prefactura_sin_resumen(lrPreFact, lrPI, rPar, lw_importe_maletas, TRUE, lw_importe_maletas_sin,
+                                               lw_grupo_iva_maletas, TRUE, lrZonPref);
+        END
+        ELSE BEGIN
+          // Buscamos las condiciones de facturacion por Cliente - Touroperador - Tipo Servicio
+
+          IF NOT lrCondFra.GET(lrPI."Cliente Operativo", lrPI.Touroperador, lrPI."Tipo Servicio Fijo") THEN
+            lrCondFra.INIT;
+
+          lcFacturacionCli.ParametrosGlobales;
+          lcFacturacionCli.CrearLineasPrefactura(lrPreFact, lrPI, lrCondFra, lrLinPrefTEMP, FALSE);
+          lcFacturacionCli.PasarPrefacturaTemporal(lrPreFact, lrLinPrefTEMP, lrPreFact, lrLinPref, TRUE);
+          lcFacturacionCli.CierraVentana;
+        END;
+      END;
+
+      // ----  Marcar todas las lineas de coste-ingreso con el n§ de prefactura  ----
+
+      IF lrPI.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          lrPI2 := lrPI;
+          lrPI2."N§ Prefactura" := lrPreFact."N§ Prefactura";
+          lrPI2.MODIFY;
+        UNTIL lrPI.NEXT = 0;
+      END;
+
+      // ----  Marcar las lineas de touroperador por parte con el n§ de prefactura  ----
+
+      IF lrToPar.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          lrToPar2 := lrToPar;
+          lrToPar2."N§ Prefactura" := lrPreFact."N§ Prefactura";
+          lrToPar2.MODIFY;
+        UNTIL lrToPar.NEXT = 0;
+      END;
+      COMMIT;
+
+      // ----  Llamar al informe de prefactura
+
+      lrPreFact.SETRECFILTER;
+      rPar.TESTFIELD("Prefactura Sin resumen");
+
+      lrLista.RESET; lrLista.INIT;
+      IF lrLista.GET(50270, rPar."Prefactura Sin resumen") THEN
+        REPORT.RUNMODAL(lrLista."Id. Informe", TRUE, TRUE, lrPreFact);
+
+      // ----  Desmarcar las lineas de coste-ingreso  ----
+
+      lrPI.SETRANGE("N§ Prefactura", lrPreFact."N§ Prefactura");
+      lrPI.MarcaTodo('', lrPI);
+    END;
+
+    PROCEDURE errores_previos@6(VAR prPI@1100244000 : Record 7035392;prToPar@1100244001 : Record 7010365;VAR prCon@1100244002 : Record 7010403);
+    VAR
+      lw_contratofactura@1100244003 : Code[10];
+    BEGIN
+      // errores_previos
+      //
+
+      // Comprobar que existen lineas de servicio que prefacturar con los rangos establecidos.
+      //
+      prPI.RESET;
+      prPI.SETCURRENTKEY("Cliente Operativo",Touroperador,Fecha,Facturable,"N§ Prefactura");
+      prPI.SETRANGE ("Cliente Operativo"        , prToPar."Cliente operativo");
+      prPI.SETRANGE (Touroperador   , prToPar.Touroperador);
+      prPI.SETRANGE ("N§ Prefactura", '');
+      prPI.SETRANGE ("N§ Factura"   , '');
+      prPI.SETRANGE (Facturable     , TRUE);
+      prPI.SETRANGE(Marca, USERID);
+      IF NOT prPI.FINDFIRST THEN
+        ERROR(Text00002, prToPar."Cliente operativo", prToPar.Touroperador, USERID);
+
+      // ---- Comprobar que los servicios tienen la prevision de coste/ingreso generada  ----
+      // ---- si no se ha indicado lo contrario en parametros.                           ----
+
+      IF rPar."Crear prevision antes facturar" THEN BEGIN
+        prPI.SETRANGE("Generada prevision", FALSE);
+        IF prPI.FINDFIRST THEN
+          ERROR(Text00003);
+        prPI.SETRANGE("Generada prevision");
+      END;
+
+      // ---- Comprobar que todos corresponden al mismo contrato y obtener el registro   ----
+      // ---- del contrato                                                               ----
+
+      // AJS 11.05.2004
+      // Puede haber mas de un contrato por factura
+      IF prPI.FINDFIRST THEN BEGIN
+        lw_contratofactura := prPI."N§ Contrato";
+      {*
+        REPEAT
+          IF prPI."N§ Contrato" <> lw_contratofactura THEN
+            ERROR(Text00004);
+        UNTIL prPI.NEXT = 0;
+      *}
+      END;
+
+      // AJS 06.02.2004
+      // El contrato puede ir contra el garaje del parte o contra el garaje TODOS
+
+      prCon.SETFILTER(Garaje, '%1|%2', prPI.Garaje, rPar."Todos los garajes");
+      prCon.SETRANGE ("N§ Contrato" , lw_contratofactura);
+      prCon.FINDFIRST;
+
+      //prCon.GET(prPI.Garaje, lw_contratofactura);
+    END;
+
+    PROCEDURE crear_autofactura@2(VAR prToPar@1100244000 : Record 7010365);
+    VAR
+      lrToPar@1100244001 : Record 7010365;
+      lw_fechadesde@1100244002 : Date;
+      lw_fechahasta@1100244003 : Date;
+    BEGIN
+      // crear_autofactura
+      //
+
+      rPar.FINDFIRST;
+
+      IF prToPar."N§ Prefactura" = '' THEN
+        ERROR(Text00010);
+
+      lrToPar.COPY(prToPar);
+      lrToPar.SETRANGE("N§ Prefactura", prToPar."N§ Prefactura");
+      IF lrToPar.FINDFIRST THEN BEGIN
+        comprueba_lineasfactura(lrToPar, lw_fechadesde, lw_fechahasta);
+        crear_facturaventa(lrToPar, lw_fechadesde, lw_fechahasta);
+      END;
+    END;
+
+    PROCEDURE comprueba_lineasfactura@3(VAR prToPar@1100244000 : Record 7010365;pw_fechadesde@1100244001 : Date;pw_fechahasta@1100244002 : Date);
+    VAR
+      lrToPar@1100244003 : Record 7010365;
+      lw_NumFact@1100244004 : Code[20];
+      lw_NumPreFact@1100244005 : Code[20];
+    BEGIN
+      // comprueba_lineasfactura
+      //
+      // Comprueba que todos las lineas seleccionadas con el usuario, pertenecen al mismo
+      // cliente y touroperador, que no estan facturadas, y que tienen el mismo n£mero de factura
+      // que todos los partes est n confirmados y que esten prefacturados
+      lrToPar.RESET;
+      lrToPar.COPY(prToPar);
+      IF lrToPar.FINDSET THEN BEGIN
+        lw_NumFact    := lrToPar."N§ Factura";
+        lw_NumPreFact := lrToPar."N§ Prefactura";
+        pw_fechadesde := lrToPar."Fecha Facturacion";
+        pw_fechahasta := lrToPar."Fecha Facturacion";
+        REPEAT
+          IF parte_facturado(lrToPar) THEN
+            ERROR(Text00011, lrToPar."N§ Parte");
+
+          IF lrToPar.Confirmado = FALSE THEN
+            ERROR(Text00006, lrToPar."N§ Parte");
+
+          IF  lw_NumFact  <> lrToPar."N§ Factura" THEN
+            ERROR (Text00007);
+
+          IF lw_NumPreFact  <> lrToPar."N§ Prefactura" THEN
+            ERROR(Text00008);
+
+          IF lrToPar."Fecha Facturacion" < pw_fechadesde THEN
+            pw_fechadesde := lrToPar."Fecha Facturacion";
+
+          IF lrToPar."Fecha Facturacion" > pw_fechahasta THEN
+            pw_fechahasta := lrToPar."Fecha Facturacion";
+        UNTIL lrToPar.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE crear_facturaventa@7(VAR prToPar@1100244000 : Record 7010365;pw_fechadesde@1100244001 : Date;pw_fechahasta@1100244002 : Date);
+    VAR
+      lrCabVenta@1100244003 : Record 36;
+      lrLinVenta@1100244004 : Record 37;
+      lrCliTo@1100244005 : Record 7010313;
+      lrCli@1100244006 : Record 18;
+      lrCon@1100244007 : Record 7010403;
+      lrPreFact@1100244008 : Record 7010415;
+      lrToPar@1100244009 : Record 7010365;
+      lrPI@1100244010 : Record 7035392;
+      lcRelease@1000000000 : Codeunit 414;
+      lw_textoregistro@1100244011 : Text[50];
+      lw_importecon@1100244012 : Decimal;
+      lw_importesin@1100244013 : Decimal;
+      lwFechaFact@1100244014 : Date;
+    BEGIN
+      // crear_facturaventa
+      //
+      IF NOT CONFIRM(Text000, FALSE, prToPar."N§ Factura") THEN
+        EXIT;
+
+      rPar.FINDFIRST;
+
+      lrCliTo.GET(prToPar."Cliente operativo", prToPar.Touroperador);
+
+      lrCli.GET(lrCliTo."Cliente facturacion");
+
+      // AJS 06.02.2004
+      // El contrato puede ir contra el garaje del parte o contra el garaje TODOS
+
+      lrCon.SETFILTER(Garaje, '%1|%2', prToPar.Garaje, rPar."Todos los garajes");
+      lrCon.SETRANGE ("N§ Contrato" , prToPar."N§ Contrato venta");
+      IF NOT lrCon.FINDFIRST THEN
+        ERROR(Text00009, prToPar.Garaje, prToPar."N§ Contrato venta");
+
+      // Crea la cabecera
+      lrCabVenta.INIT;
+      lrCabVenta.VALIDATE("Document Type"         , lrCabVenta."Document Type"::Invoice);
+      lrCabVenta.VALIDATE("No."                     , prToPar."N§ Factura");
+      IF lrPreFact.GET(prToPar."N§ Prefactura") THEN
+        lwFechaFact := lrPreFact."Fecha Registro factura"
+      ELSE
+        lwFechaFact := TODAY;
+      lrCabVenta.VALIDATE("Document Date"        , lwFechaFact);
+      lrCabVenta.VALIDATE("Posting Date"         , lwFechaFact);
+      lrCabVenta.VALIDATE("Sell-to Customer No." , lrCon.Cliente);
+      lrCabVenta.SetHideValidationDialog(TRUE);                    //  Ocultamos el dialogo para cambiar
+      lrCabVenta.VALIDATE("Bill-to Customer No.", lrCli."No."); //  el cliente de facturacion.
+      IF lrCon."Cod. Terminos Pago" <> '' THEN
+        lrCabVenta.VALIDATE("Payment Terms Code", lrCon."Cod. Terminos Pago");
+      IF lrCon."Cod. Formas Pago" <> '' THEN
+        lrCabVenta.VALIDATE("Payment Method Code"   , lrCon."Cod. Formas Pago");
+      //lrCabVenta.VALIDATE("Shortcut Dimension 1 Code"   , prToPar.Garaje);
+      //lrCabVenta.VALIDATE("Shortcut Dimension 2 Code"       , prToPar.Touroperador);
+      lrCabVenta.VALIDATE("Posting Description"   , STRSUBSTNO(lw_textoregistro, pw_fechadesde,
+                                                             pw_fechahasta));
+      lrCabVenta.VALIDATE("Prices Including VAT", lrCon."Impuestos incluidos");
+      lrCabVenta.VALIDATE("Currency Code"         , lrCon."Cod. Divisa");
+      // El campo Traspasado lo utilizamos para saber que esta factura proviene de una autofactura
+      // Se utiliza en la exportaci¢n de facturas para contabilidad Oracle. (No la exportamos);
+
+      IF rPar."Empresa Real" IN [rPar."Empresa Real"::UEX, rPar."Empresa Real"::TRN] THEN
+        lrCabVenta.VALIDATE(Traspasado            , TRUE);
+      lrCabVenta.INSERT(TRUE);
+
+      // Crea una sola l¡nea
+      lrToPar.COPY(prToPar);
+      IF lrToPar.FINDSET THEN
+      BEGIN
+        lrPI.RESET;
+        lrPI.INIT;
+        lrPI.SETCURRENTKEY(Garaje, Touroperador, "Tipo servicio", Fecha, "Tipo elemento", "Generada prevision");
+        REPEAT
+          lrPI.SETRANGE ("N§ Parte"  , lrToPar."N§ Parte");
+          lrPI.SETRANGE (Touroperador, lrToPar.Touroperador);
+          lrPI.SETFILTER("N§ Factura", '=%1', '');
+          IF lrPI.FINDSET THEN
+          BEGIN
+            REPEAT
+              lw_importecon := lw_importecon + lrPI."Importe con impuesto";
+              lw_importesin := lw_importesin + lrPI."Importe sin impuesto";
+            UNTIL lrPI.NEXT = 0;
+            lrPI.MODIFYALL("N§ Factura", prToPar."N§ Factura",TRUE);
+          END;
+          // Modificamos la prefactura
+          IF lrPreFact.GET(lrToPar."N§ Prefactura") THEN
+          BEGIN
+            lrPreFact."Tipo Documento"         := lrCabVenta."Document Type";
+            lrPreFact."N§ Factura"             := prToPar."N§ Factura";
+            lrPreFact.Facturada                := TRUE;
+            lrPreFact."Fecha Registro factura" := lrCabVenta."Posting Date";
+            lrPreFact.Imprimir                 := lrPreFact.Imprimir::Factura;
+            lrPreFact.MODIFY;
+          END;
+        UNTIL lrToPar.NEXT = 0;
+      END;
+
+      lrLinVenta.RESET; lrLinVenta.INIT;
+      lrLinVenta.VALIDATE("Document Type"       , lrLinVenta."Document Type"::Invoice);
+      lrLinVenta.VALIDATE("Document No."        , prToPar."N§ Factura");
+      lrLinVenta.VALIDATE("Line No."            , 10000);
+      lrLinVenta.VALIDATE("Sell-to Customer No.", prToPar."Cliente operativo");
+      lrLinVenta.VALIDATE(Type                  , lrLinVenta.Type::"G/L Account");
+      lrLinVenta.INSERT(TRUE);
+
+      lrLinVenta.VALIDATE("No."                      , rPar."Cuenta Ventas");
+      lrLinVenta.VALIDATE(Quantity                   , 1);
+      lrLinVenta.VALIDATE("Shortcut Dimension 1 Code", lrCabVenta."Shortcut Dimension 1 Code");
+      lrLinVenta.VALIDATE("Shortcut Dimension 2 Code", lrCabVenta."Shortcut Dimension 2 Code");
+      lrLinVenta.VALIDATE("Allow Invoice Disc." , FALSE);
+      IF lrCon."Impuestos incluidos" THEN BEGIN
+        lrLinVenta.VALIDATE("Unit Price", lw_importecon);
+        lrLinVenta."Amount Including VAT" := lw_importecon;
+      END
+      ELSE BEGIN
+        lrLinVenta.VALIDATE("Unit Price", lw_importesin);
+        lrLinVenta.Amount := lw_importesin;
+      END;
+      lrLinVenta."Line Discount %"      := 0;
+      lrLinVenta.MODIFY(TRUE);
+
+      prToPar.MODIFYALL(Marca,'');
+
+      //. Recuperamos la cabecera de factura para ejecutar el proceso Lanzar factura
+      //+$001 <
+      lrCabVenta.GET(lrCabVenta."Document Type", lrCabVenta."No.");
+      lcRelease.RUN(lrCabVenta);
+      //+$001 <
+    END;
+
+    PROCEDURE parte_facturado@5(prTTOOxParte@1100244000 : Record 7010365) : Boolean;
+    VAR
+      lrPI@1100244001 : Record 7035392;
+      err1@1100244002 : TextConst 'ESP=El Parte %1 del TTOO %2 ya esta facturado';
+    BEGIN
+      // parte_facturado
+      //
+      // INPUT:
+      //    prTTOOxParte: Parte del que queremos comprobar si esta facturado
+      // OUTPUT:
+      //    Boolean: Retorna verdadero si el parte esta facturado
+      //
+
+      lrPI.RESET;
+      lrPI.SETCURRENTKEY("N§ Parte",Touroperador,"Tipo linea","Linea abono","Tipo elemento");
+
+      lrPI.SETRANGE ("N§ Parte"  , prTTOOxParte."N§ Parte");
+      lrPI.SETRANGE (Touroperador, prTTOOxParte.Touroperador);
+      lrPI.SETFILTER("N§ Factura", '=%1', '');
+      IF lrPI.FINDFIRST THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 20012015 Ejecutar el proceso estandar Lanzar factura
+    }
+    END.
+  }
+}

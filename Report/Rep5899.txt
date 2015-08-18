@@ -1,0 +1,855 @@
+OBJECT Report 5899 Calculate Inventory Value
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Calculate Inventory Value;
+               ESP=Calcular valor inventario];
+    ProcessingOnly=Yes;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table27;
+        DataItemTableView=SORTING(No.);
+        OnPreDataItem=VAR
+                        ItemLedgEntryErrBuf@1000 : TEMPORARY Record 32;
+                      BEGIN
+                        ItemJnlTemplate.GET(ItemJnlLine."Journal Template Name");
+                        ItemJnlTemplate.TESTFIELD(Type,ItemJnlTemplate.Type::Revaluation);
+
+                        ItemJnlBatch.GET(ItemJnlLine."Journal Template Name",ItemJnlLine."Journal Batch Name");
+                        IF NextDocNo = '' THEN BEGIN
+                          IF ItemJnlBatch."No. Series" <> '' THEN BEGIN
+                            ItemJnlLine.SETRANGE("Journal Template Name",ItemJnlLine."Journal Template Name");
+                            ItemJnlLine.SETRANGE("Journal Batch Name",ItemJnlLine."Journal Batch Name");
+                            IF NOT ItemJnlLine.FIND('-') THEN
+                              NextDocNo := NoSeriesMgt.GetNextNo(ItemJnlBatch."No. Series",PostingDate,FALSE);
+                            ItemJnlLine.INIT;
+                          END;
+                          IF NextDocNo = '' THEN
+                            ERROR(Text003);
+                        END;
+
+                        CalcInvtValCheck.SetProperties(PostingDate,CalculatePer,ByLocation,ByVariant,FALSE,ShowDialog);
+                        CalcInvtValCheck.RunCheck(Item,ItemLedgEntryErrBuf);
+
+                        ItemLedgEntry.SETCURRENTKEY("Item No.",Positive,"Location Code","Variant Code");
+
+                        NextLineNo := 0;
+
+                        IF ShowDialog THEN
+                          Window.OPEN(Text010,Item."No.");
+
+                        GLSetup.GET;
+                        SourceCodeSetup.GET;
+
+                        IF CalcBase IN [CalcBase::"Standard Cost - Assembly List",CalcBase::"Standard Cost - Manufacturing"] THEN BEGIN
+                          CalculateStdCost.SetProperties(PostingDate,TRUE,CalcBase = CalcBase::"Standard Cost - Assembly List",FALSE,'',TRUE);
+                          CalculateStdCost.CalcItems(Item,NewStdCostItem);
+                          CLEAR(CalculateStdCost);
+                        END;
+                      END;
+
+        OnAfterGetRecord=VAR
+                           AppliedAmount@1000 : Decimal;
+                         BEGIN
+                           IF ShowDialog THEN
+                             Window.UPDATE;
+
+                           IF (CalculatePer = CalculatePer::Item) AND ("Costing Method" = "Costing Method"::Average) THEN BEGIN
+                             CalendarPeriod."Period Start" := PostingDate;
+                             AvgCostAdjmtPoint."Valuation Date" := PostingDate;
+                             AvgCostAdjmtPoint.GetValuationPeriod(CalendarPeriod);
+                             IF PostingDate <> CalendarPeriod."Period End" THEN
+                               ERROR(Text011,Item."No.",PostingDate,CalendarPeriod."Period End");
+                           END;
+
+                           ValJnlBuffer.RESET;
+                           ValJnlBuffer.DELETEALL;
+                           IncludeExpectedCost := ("Costing Method" = "Costing Method"::Standard) AND (CalculatePer = CalculatePer::Item);
+                           ItemLedgEntry.SETRANGE("Item No.","No.");
+                           ItemLedgEntry.SETRANGE(Positive,TRUE);
+                           COPYFILTER("Location Filter",ItemLedgEntry."Location Code");
+                           COPYFILTER("Variant Filter",ItemLedgEntry."Variant Code");
+                           IF ItemLedgEntry.FIND('-') THEN
+                             REPEAT
+                               IF IncludeEntryInCalc(ItemLedgEntry,PostingDate,IncludeExpectedCost) THEN BEGIN
+                                 RemQty := CalculateRemQuantity(ItemLedgEntry."Entry No.",PostingDate);
+                                 CASE CalculatePer OF
+                                   CalculatePer::"Item Ledger Entry":
+                                     InsertItemJnlLine(
+                                       ItemLedgEntry."Entry Type",ItemLedgEntry."Item No.",
+                                       ItemLedgEntry."Variant Code",ItemLedgEntry."Location Code",RemQty,
+                                       CalculateRemInvValue(ItemLedgEntry."Entry No.",ItemLedgEntry.Quantity,RemQty,FALSE),
+                                       ItemLedgEntry."Entry No.",0);
+                                   CalculatePer::Item:
+                                     BEGIN
+                                       InsertValJnlBuffer(
+                                         ItemLedgEntry."Item No.",ItemLedgEntry."Variant Code",
+                                         ItemLedgEntry."Location Code",RemQty,
+                                         CalculateRemInvValue(ItemLedgEntry."Entry No.",ItemLedgEntry.Quantity,RemQty,
+                                           IncludeExpectedCost AND NOT ItemLedgEntry."Completely Invoiced"));
+                                     END;
+                                 END;
+                               END;
+                             UNTIL ItemLedgEntry.NEXT = 0;
+
+                           IF (CalculatePer = CalculatePer::Item) THEN BEGIN
+                             IF (Item.GETFILTER("Location Filter") <> '') OR ByLocation
+                             THEN BEGIN
+                               ByLocation2 := TRUE;
+                               Item.COPYFILTER("Location Filter",Location.Code);
+                               IF Location.FIND('-') THEN BEGIN
+                                 CLEAR(ValJnlBuffer);
+                                 ValJnlBuffer.SETCURRENTKEY("Item No.","Location Code","Variant Code");
+                                 ValJnlBuffer.SETRANGE("Item No.","No.");
+                                 REPEAT
+                                   ValJnlBuffer.SETRANGE("Location Code",Location.Code);
+                                   IF (Item.GETFILTER("Variant Filter") <> '') OR ByVariant THEN BEGIN
+                                     ByVariant2 := TRUE;
+                                     ItemVariant.SETRANGE("Item No.","No.");
+                                     Item.COPYFILTER("Variant Filter",ItemVariant.Code);
+                                     IF ItemVariant.FIND('-') THEN
+                                       REPEAT
+                                         ValJnlBuffer.SETRANGE("Variant Code",ItemVariant.Code);
+
+                                         // Location filter and variant filter
+                                         ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                         IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                           AppliedAmount := 0;
+                                           IF "Costing Method" = "Costing Method"::Average THEN
+                                             CalcAverageUnitCost(
+                                               ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                           InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                             "No.",ItemVariant.Code,Location.Code,
+                                             ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                             0,AppliedAmount);
+                                         END;
+                                       UNTIL ItemVariant.NEXT = 0;
+                                     ValJnlBuffer.SETRANGE("Variant Code",'');
+                                     ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                     IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                       AppliedAmount := 0;
+                                       IF "Costing Method" = "Costing Method"::Average THEN
+                                         CalcAverageUnitCost(
+                                           ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                       InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                         "No.",'',Location.Code,ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                         0,AppliedAmount);
+                                     END
+                                   END ELSE BEGIN
+
+                                     // Location filter only
+                                     ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                     IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                       AppliedAmount := 0;
+                                       IF "Costing Method" = "Costing Method"::Average THEN
+                                         CalcAverageUnitCost(
+                                           ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                       InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                         "No.",'',Location.Code,ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                         0,AppliedAmount);
+                                     END;
+                                   END;
+                                 UNTIL Location.NEXT = 0;
+                               END;
+                               ValJnlBuffer.SETRANGE("Location Code",'');
+                               IF ByVariant THEN BEGIN
+                                 ItemVariant.SETRANGE("Item No.","No.");
+                                 Item.COPYFILTER("Variant Filter",ItemVariant.Code);
+                                 IF ItemVariant.FIND('-') THEN
+                                   REPEAT
+                                     ValJnlBuffer.SETRANGE("Variant Code",ItemVariant.Code);
+                                     ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                     IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                       AppliedAmount := 0;
+                                       IF "Costing Method" = "Costing Method"::Average THEN
+                                         CalcAverageUnitCost(
+                                           ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                       InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                         "No.",ItemVariant.Code,'',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                         0,AppliedAmount);
+                                     END;
+                                   UNTIL ItemVariant.NEXT = 0;
+                                 ValJnlBuffer.SETRANGE("Variant Code",'');
+                                 ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                 IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                   AppliedAmount := 0;
+                                   IF "Costing Method" = "Costing Method"::Average THEN
+                                     CalcAverageUnitCost(
+                                       ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                   InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                     "No.",'','',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                     0,AppliedAmount);
+                                 END
+                               END ELSE BEGIN
+                                 ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                 IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                   AppliedAmount := 0;
+                                   IF "Costing Method" = "Costing Method"::Average THEN
+                                     CalcAverageUnitCost(
+                                       ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                   InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                     "No.",'','',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                     0,AppliedAmount);
+                                 END;
+                               END;
+                             END ELSE BEGIN
+                               IF (Item.GETFILTER("Variant Filter") <> '') OR ByVariant THEN BEGIN
+
+                                 // Variant filter only
+                                 ByVariant2 := TRUE;
+                                 ItemVariant.SETRANGE("Item No.","No.");
+                                 Item.COPYFILTER("Variant Filter",ItemVariant.Code);
+                                 IF ItemVariant.FIND('-') THEN BEGIN
+                                   ValJnlBuffer.RESET;
+                                   ValJnlBuffer.SETCURRENTKEY("Item No.","Variant Code");
+                                   ValJnlBuffer.SETRANGE("Item No.","No.");
+                                   REPEAT
+                                     ValJnlBuffer.SETRANGE("Variant Code",ItemVariant.Code);
+                                     ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                     IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                       AppliedAmount := 0;
+                                       IF "Costing Method" = "Costing Method"::Average THEN
+                                         CalcAverageUnitCost(
+                                           ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                       InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                         "No.",ItemVariant.Code,'',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                         0,AppliedAmount);
+                                     END;
+                                   UNTIL ItemVariant.NEXT = 0;
+                                 END;
+                                 ValJnlBuffer.SETRANGE("Variant Code",'');
+                                 ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                 IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                   AppliedAmount := 0;
+                                   IF "Costing Method" = "Costing Method"::Average THEN
+                                     CalcAverageUnitCost(
+                                       ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                   InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                     "No.",'','',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                     0,AppliedAmount);
+                                 END
+                               END ELSE BEGIN
+
+                                 // No filter on location and variant
+                                 ValJnlBuffer.RESET;
+                                 ValJnlBuffer.SETCURRENTKEY("Item No.");
+                                 ValJnlBuffer.SETRANGE("Item No.","No.");
+                                 ValJnlBuffer.CALCSUMS(Quantity,"Inventory Value (Calculated)");
+                                 IF ValJnlBuffer.Quantity <> 0 THEN BEGIN
+                                   AppliedAmount := 0;
+                                   IF "Costing Method" = "Costing Method"::Average THEN
+                                     CalcAverageUnitCost(
+                                       ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",AppliedAmount);
+                                   InsertItemJnlLine(ItemJnlLine."Entry Type"::"Positive Adjmt.",
+                                     "No.",'','',ValJnlBuffer.Quantity,ValJnlBuffer."Inventory Value (Calculated)",
+                                     0,0);
+                                 END
+                               END
+                             END
+                           END;
+                         END;
+
+        OnPostDataItem=VAR
+                         SKU@1001 : Record 5700;
+                         ItemCostMgt@1002 : Codeunit 5804;
+                       BEGIN
+                         IF NOT UpdStdCost THEN
+                           EXIT;
+
+                         IF ByLocation THEN
+                           COPYFILTER("Location Filter",SKU."Location Code");
+                         IF ByVariant THEN
+                           COPYFILTER("Variant Filter",SKU."Variant Code");
+
+                         NewStdCostItem.COPYFILTERS(Item);
+                         IF NewStdCostItem.FIND('-') THEN
+                           REPEAT
+                             IF NOT UpdatedStdCostSKU.GET('',NewStdCostItem."No.",'') THEN
+                               ItemCostMgt.UpdateStdCostShares(NewStdCostItem);
+
+                             SKU.SETRANGE("Item No.",NewStdCostItem."No.");
+                             IF SKU.FIND('-') THEN
+                               REPEAT
+                                 IF NOT UpdatedStdCostSKU.GET(SKU."Location Code",NewStdCostItem."No.",SKU."Variant Code") THEN BEGIN
+                                   SKU.VALIDATE("Standard Cost",NewStdCostItem."Standard Cost");
+                                   SKU.MODIFY;
+                                 END;
+                               UNTIL SKU.NEXT = 0;
+                           UNTIL NewStdCostItem.NEXT = 0;
+                       END;
+
+        ReqFilterFields=No.,Costing Method,Location Filter,Variant Filter;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=7370;
+      Height=4510;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF PostingDate = 0D THEN
+                     PostingDate := WORKDATE;
+                   ValidatePostingDate;
+
+                   ValidateCalcLevel;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;660  ;2750 ;440  ;CaptionML=[ENU=Document No.;
+                                                              ESP=N§ documento];
+                                                   SourceExpr=NextDocNo }
+      { 2   ;Label        ;0    ;660  ;3300 ;440  ;ParentControl=1 }
+      { 3   ;OptionButton ;3410 ;1320 ;3960 ;440  ;CaptionML=[ENU=Item Ledger Entry;
+                                                              ESP=Mov. producto];
+                                                   SourceExpr=CalculatePer;
+                                                   OptionValue=Item Ledger Entry;
+                                                   OnValidate=BEGIN
+                                                                ValidateCalcLevel;
+                                                              END;
+                                                               }
+      { 4   ;Label        ;0    ;1320 ;3300 ;440  ;ParentControl=3;
+                                                   CaptionML=[ENU=Calculate Per;
+                                                              ESP=Calcular por] }
+      { 7   ;OptionButton ;3410 ;1870 ;3960 ;440  ;CaptionML=[ENU=Item;
+                                                              ESP=Producto];
+                                                   SourceExpr=CalculatePer;
+                                                   OptionValue=Item;
+                                                   OnValidate=BEGIN
+                                                                ValidateCalcLevel;
+                                                              END;
+                                                               }
+      { 8   ;CheckBox     ;3850 ;2420 ;440  ;440  ;Name=By Location;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=By Location;
+                                                              ESP=Por almac‚n];
+                                                   SourceExpr=ByLocation }
+      { 9   ;Label        ;4400 ;2420 ;2970 ;440  ;ParentControl=8;
+                                                   LeaderDots=No }
+      { 12  ;CheckBox     ;3850 ;2970 ;440  ;440  ;Name=By Variant;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=By Variant;
+                                                              ESP=Por variante];
+                                                   SourceExpr=ByVariant }
+      { 13  ;Label        ;4400 ;2970 ;2970 ;440  ;ParentControl=12;
+                                                   LeaderDots=No }
+      { 15  ;TextBox      ;3410 ;0    ;1650 ;440  ;CaptionML=[ENU=Posting Date;
+                                                              ESP=Fecha registro];
+                                                   SourceExpr=PostingDate }
+      { 16  ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=15 }
+      { 5   ;TextBox      ;3410 ;4070 ;2750 ;440  ;Name=CalcBase;
+                                                   CaptionML=[ENU=Calculation Base;
+                                                              ESP=Base c lculo];
+                                                   OptionCaptionML=[ENU=" ,Last Direct Unit Cost,Standard Cost - Assembly List,Standard Cost - Manufacturing";
+                                                                    ESP=" ,élt. coste unitario,Coste est ndar - Lista montaje,Coste est ndar - Fabricaci¢n"];
+                                                   SourceExpr=CalcBase }
+      { 6   ;Label        ;0    ;4070 ;3300 ;440  ;ParentControl=5 }
+      { 14  ;CheckBox     ;3850 ;3520 ;440  ;440  ;Name=UpdStdCost;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Update Standard Cost;
+                                                              ESP=Actlzr. coste est ndar];
+                                                   SourceExpr=UpdStdCost }
+      { 17  ;Label        ;4400 ;3520 ;2970 ;440  ;ParentControl=14;
+                                                   LeaderDots=No }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=BEGIN
+               UpdStdCostEnable := TRUE;
+               CalcBaseEnable := TRUE;
+               "By VariantEnable" := TRUE;
+               "By LocationEnable" := TRUE;
+             END;
+
+      OnOpenPage=BEGIN
+                   IF PostingDate = 0D THEN
+                     PostingDate := WORKDATE;
+                   ValidatePostingDate;
+
+                   ValidateCalcLevel;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 15  ;2   ;Field     ;
+                  CaptionML=[ENU=Posting Date;
+                             ESP=Fecha registro];
+                  SourceExpr=PostingDate }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Document No.;
+                             ESP=N§ documento];
+                  SourceExpr=NextDocNo }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Calculate Per;
+                             ESP=Calcular por];
+                  OptionCaptionML=[ENU=Item Ledger Entry,Item;
+                                   ESP=Mov. producto,producto];
+                  SourceExpr=CalculatePer;
+                  OnValidate=BEGIN
+                               IF CalculatePer = CalculatePer::Item THEN
+                                 ItemCalculatePerOnValidate;
+                               IF CalculatePer = CalculatePer::"Item Ledger Entry" THEN
+                                 ItemLedgerEntryCalculatePerOnV;
+                             END;
+                              }
+
+      { 8   ;2   ;Field     ;
+                  Name=By Location;
+                  CaptionML=[ENU=By Location;
+                             ESP=Por almac‚n];
+                  SourceExpr=ByLocation;
+                  Enabled="By LocationEnable" }
+
+      { 12  ;2   ;Field     ;
+                  Name=By Variant;
+                  CaptionML=[ENU=By Variant;
+                             ESP=Por variante];
+                  SourceExpr=ByVariant;
+                  Enabled="By VariantEnable" }
+
+      { 14  ;2   ;Field     ;
+                  Name=UpdStdCost;
+                  CaptionML=[ENU=Update Standard Cost;
+                             ESP=Actlzr. coste est ndar];
+                  SourceExpr=UpdStdCost;
+                  Enabled=UpdStdCostEnable }
+
+      { 5   ;2   ;Field     ;
+                  Name=CalcBase;
+                  CaptionML=[ENU=Calculation Base;
+                             ESP=Base c lculo];
+                  OptionCaptionML=[ENU=" ,Last Direct Unit Cost,Standard Cost - Assembly List,Standard Cost - Manufacturing";
+                                   ESP=" ,élt. coste unitario,Coste est ndar - Lista montaje,Coste est ndar - Fabricaci¢n"];
+                  SourceExpr=CalcBase;
+                  Enabled=CalcBaseEnable }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text003@1003 : TextConst 'ENU=You must enter a document number.;ESP=No debe introducir un n£mero de doc.';
+      Text010@1010 : TextConst 'ENU=Processing items #1##########;ESP=Procesando prod. #1##########';
+      NewStdCostItem@1019 : TEMPORARY Record 27;
+      UpdatedStdCostSKU@1020 : TEMPORARY Record 5700;
+      ItemJnlBatch@1021 : Record 233;
+      ItemJnlLine@1022 : Record 83;
+      ValJnlBuffer@1024 : TEMPORARY Record 5803;
+      ItemJnlTemplate@1025 : Record 82;
+      ItemLedgEntry@1026 : Record 32;
+      GLSetup@1027 : Record 98;
+      SourceCodeSetup@1028 : Record 242;
+      Location@1029 : Record 14;
+      ItemVariant@1030 : Record 5401;
+      AvgCostAdjmtPoint@1002 : Record 5804;
+      CalendarPeriod@1005 : Record 2000000007;
+      CalcInvtValCheck@1004 : Codeunit 5899;
+      NoSeriesMgt@1031 : Codeunit 396;
+      CalculateStdCost@1032 : Codeunit 5812;
+      Window@1033 : Dialog;
+      CalculatePer@1034 : 'Item Ledger Entry,Item';
+      CalcBase@1035 : ' ,Last Direct Unit Cost,Standard Cost - Assembly List,Standard Cost - Manufacturing';
+      PostingDate@1036 : Date;
+      NextDocNo@1037 : Code[20];
+      AverageUnitCostLCY@1038 : Decimal;
+      RemQty@1040 : Decimal;
+      NextLineNo@1041 : Integer;
+      NextLineNo2@1042 : Integer;
+      ByLocation@1043 : Boolean;
+      ByVariant@1044 : Boolean;
+      ByLocation2@1045 : Boolean;
+      ByVariant2@1046 : Boolean;
+      UpdStdCost@1048 : Boolean;
+      ShowDialog@1000 : Boolean;
+      IncludeExpectedCost@1001 : Boolean;
+      Text011@1006 : TextConst 'ENU=You cannot revalue by Calculate Per Item for item %1 using posting date %2. You can only use the posting date %3 for this period.;ESP=No puede realizar la revalorizaci¢n por Calcular por producto para el producto %1 utilizando la fecha de registro %2. S¢lo puede utilizar la fecha de registro %3 para este periodo.';
+      Text012@1007 : TextConst 'ENU='''';ESP=''''';
+      "By LocationEnable"@19076268 : Boolean INDATASET;
+      "By VariantEnable"@19005255 : Boolean INDATASET;
+      CalcBaseEnable@19032955 : Boolean INDATASET;
+      UpdStdCostEnable@19076759 : Boolean INDATASET;
+
+    LOCAL PROCEDURE IncludeEntryInCalc@9(ItemLedgEntry@1000 : Record 32;PostingDate@1001 : Date;IncludeExpectedCost@1002 : Boolean) : Boolean;
+    BEGIN
+      WITH ItemLedgEntry DO BEGIN
+        IF IncludeExpectedCost THEN
+          EXIT("Posting Date" IN [0D..PostingDate]);
+        EXIT("Completely Invoiced" AND ("Last Invoice Date" IN [0D..PostingDate]));
+      END;
+    END;
+
+    PROCEDURE SetItemJnlLine@1(VAR NewItemJnlLine@1000 : Record 83);
+    BEGIN
+      ItemJnlLine := NewItemJnlLine;
+    END;
+
+    LOCAL PROCEDURE ValidatePostingDate@4();
+    BEGIN
+      ItemJnlBatch.GET(ItemJnlLine."Journal Template Name",ItemJnlLine."Journal Batch Name");
+      IF ItemJnlBatch."No. Series" = '' THEN
+        NextDocNo := ''
+      ELSE BEGIN
+        NextDocNo := NoSeriesMgt.GetNextNo(ItemJnlBatch."No. Series",PostingDate,FALSE);
+        CLEAR(NoSeriesMgt);
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateCalcLevel@3();
+    BEGIN
+      IF ISSERVICETIER THEN BEGIN
+        PageValidateCalcLevel;
+        EXIT;
+      END;
+      IF CalculatePer = CalculatePer::"Item Ledger Entry" THEN BEGIN
+        ByLocation := FALSE;
+        ByVariant := FALSE;
+        CalcBase := CalcBase::" ";
+        UpdStdCost := FALSE;
+        IF NOT ISSERVICETIER THEN BEGIN
+          RequestOptionsForm."By Location".ENABLED(FALSE);
+          RequestOptionsForm."By Variant".ENABLED(FALSE);
+          RequestOptionsForm.CalcBase.ENABLED(FALSE);
+          RequestOptionsForm.UpdStdCost.ENABLED(FALSE);
+        END;
+      END ELSE BEGIN
+        IF NOT ISSERVICETIER THEN BEGIN
+          RequestOptionsForm."By Location".ENABLED(TRUE);
+          RequestOptionsForm."By Variant".ENABLED(TRUE);
+          RequestOptionsForm.CalcBase.ENABLED(TRUE);
+          RequestOptionsForm.UpdStdCost.ENABLED(TRUE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertValJnlBuffer@2(ItemNo2@1000 : Code[20];VariantCode2@1001 : Code[10];LocationCode2@1002 : Code[10];Quantity2@1003 : Decimal;Amount2@1004 : Decimal);
+    BEGIN
+      ValJnlBuffer.RESET;
+      ValJnlBuffer.SETCURRENTKEY("Item No.","Location Code","Variant Code");
+      ValJnlBuffer.SETRANGE("Item No.",ItemNo2);
+      ValJnlBuffer.SETRANGE("Location Code",LocationCode2);
+      ValJnlBuffer.SETRANGE("Variant Code",VariantCode2);
+      IF ValJnlBuffer.FIND('-') THEN BEGIN
+        ValJnlBuffer.Quantity := ValJnlBuffer.Quantity + Quantity2;
+        ValJnlBuffer."Inventory Value (Calculated)" :=
+          ValJnlBuffer."Inventory Value (Calculated)" + Amount2;
+        ValJnlBuffer.MODIFY;
+      END ELSE BEGIN
+        IF Quantity2 <> 0 THEN BEGIN
+          NextLineNo2 := NextLineNo2 + 10000;
+          ValJnlBuffer.INIT;
+          ValJnlBuffer."Line No." := NextLineNo2;
+          ValJnlBuffer."Item No." := ItemNo2;
+          ValJnlBuffer."Variant Code" := VariantCode2;
+          ValJnlBuffer."Location Code" := LocationCode2;
+          ValJnlBuffer.Quantity := Quantity2;
+          ValJnlBuffer."Inventory Value (Calculated)" := Amount2;
+          ValJnlBuffer.INSERT;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcAverageUnitCost@8(BufferQty@1000 : Decimal;VAR InvtValueCalc@1001 : Decimal;VAR AppliedAmount@1002 : Decimal);
+    VAR
+      ValueEntry@1003 : Record 5802;
+      AverageQty@1004 : Decimal;
+      AverageCost@1005 : Decimal;
+      NotComplInvQty@1007 : Decimal;
+      NotComplInvValue@1008 : Decimal;
+    BEGIN
+      WITH ValueEntry DO BEGIN
+        "Item No." := Item."No.";
+        "Valuation Date" := PostingDate;
+        IF ValJnlBuffer.GETFILTER("Location Code") <> Text012 THEN
+          "Location Code" := ValJnlBuffer.GETFILTER("Location Code");
+        IF ValJnlBuffer.GETFILTER("Variant Code") <> Text012 THEN
+          "Variant Code" := ValJnlBuffer.GETFILTER("Variant Code");
+        SumCostsTillValuationDate(ValueEntry);
+        AverageQty := "Item Ledger Entry Quantity";
+        AverageCost := "Cost Amount (Actual)" + "Cost Amount (Expected)";
+
+        CalcNotComplInvcdTransfer(NotComplInvQty,NotComplInvValue);
+        AverageQty := AverageQty - NotComplInvQty;
+        IF (AverageQty > 0) AND (NotComplInvValue < 0) THEN
+          AverageCost := AverageCost + (InvtValueCalc / BufferQty * AverageQty + NotComplInvValue);
+
+        RESET;
+        SETRANGE("Item No.",Item."No.");
+        SETRANGE("Valuation Date",0D,PostingDate);
+        SETFILTER("Location Code",ValJnlBuffer.GETFILTER("Location Code"));
+        SETFILTER("Variant Code",ValJnlBuffer.GETFILTER("Variant Code"));
+        SETRANGE(Inventoriable,TRUE);
+        SETRANGE("Item Charge No.",'');
+        SETFILTER("Posting Date",'>%1',PostingDate);
+        IF FIND('-') THEN
+          REPEAT
+            IF "Entry Type" <> "Entry Type"::Revaluation THEN BEGIN
+              AverageQty := AverageQty - "Item Ledger Entry Quantity";
+              AverageCost := AverageCost - "Cost Amount (Actual)" - "Cost Amount (Expected)";
+            END;
+          UNTIL NEXT = 0;
+      END;
+
+      IF AverageQty <> 0 THEN BEGIN
+        AverageUnitCostLCY := AverageCost / AverageQty;
+        IF (AverageUnitCostLCY < 0) THEN
+          AverageUnitCostLCY := 0;
+      END ELSE
+        AverageUnitCostLCY := 0;
+
+      AppliedAmount :=  InvtValueCalc;
+      InvtValueCalc := BufferQty * AverageUnitCostLCY;
+    END;
+
+    LOCAL PROCEDURE CalcNotComplInvcdTransfer@7(VAR NotComplInvQty@1001 : Decimal;VAR NotComplInvValue@1002 : Decimal);
+    VAR
+      ItemLedgEntry@1000 : Record 32;
+      RemQty@1003 : Decimal;
+      RemInvValue@1004 : Decimal;
+      i@1005 : Integer;
+    BEGIN
+      FOR i := 1 TO 2 DO
+        WITH ItemLedgEntry DO BEGIN
+          SETCURRENTKEY("Item No.",Positive,"Location Code","Variant Code");
+          SETRANGE("Item No.",Item."No.");
+          SETRANGE(Positive,i = 1);
+          Item.COPYFILTER("Location Filter","Location Code");
+          Item.COPYFILTER("Variant Filter","Variant Code");
+          IF FIND('-') THEN
+            REPEAT
+              IF (Quantity = "Invoiced Quantity") AND
+                 NOT "Completely Invoiced" AND
+                 ("Last Invoice Date" IN [0D..PostingDate]) AND
+                 ("Invoiced Quantity" <> 0)
+              THEN BEGIN
+                RemQty := Quantity;
+                RemInvValue := CalculateRemInvValue("Entry No.",Quantity,RemQty,FALSE);
+                NotComplInvQty := NotComplInvQty + RemQty;
+                NotComplInvValue := NotComplInvValue + RemInvValue;
+              END;
+            UNTIL ItemLedgEntry.NEXT = 0;
+        END;
+    END;
+
+    LOCAL PROCEDURE InsertItemJnlLine@6(EntryType2@1000 : Option;ItemNo2@1001 : Code[20];VariantCode2@1002 : Code[10];LocationCode2@1003 : Code[10];Quantity2@1005 : Decimal;Amount2@1006 : Decimal;ApplyToEntry2@1007 : Integer;AppliedAmount@1008 : Decimal);
+    VAR
+      Item@1009 : Record 27;
+      SKU@1010 : Record 5700;
+    BEGIN
+      IF Quantity2 = 0 THEN
+        EXIT;
+
+      WITH ItemJnlLine DO BEGIN
+        IF NextLineNo = 0 THEN BEGIN
+          LOCKTABLE;
+          SETRANGE("Journal Template Name","Journal Template Name");
+          SETRANGE("Journal Batch Name","Journal Batch Name");
+          IF FIND('+') THEN
+            NextLineNo := "Line No.";
+        END;
+
+        NextLineNo := NextLineNo + 10000;
+        INIT;
+        "Line No." := NextLineNo;
+        "Value Entry Type" := "Value Entry Type"::Revaluation;
+        VALIDATE("Posting Date",PostingDate);
+        VALIDATE("Entry Type",EntryType2);
+        VALIDATE("Document No.",NextDocNo);
+        VALIDATE("Item No.",ItemNo2);
+        "Reason Code" := ItemJnlBatch."Reason Code";
+        "Variant Code" := VariantCode2;
+        "Location Code" := LocationCode2;
+        "Source Code" := SourceCodeSetup."Revaluation Journal";
+        VALIDATE("Unit Amount",0);
+        IF ApplyToEntry2 <> 0 THEN
+          "Inventory Value Per" := "Inventory Value Per"::" "
+        ELSE
+          IF ByLocation2 AND ByVariant2 THEN
+            "Inventory Value Per" := "Inventory Value Per"::"Location and Variant"
+          ELSE
+            IF ByLocation2 THEN
+              ItemJnlLine."Inventory Value Per" := "Inventory Value Per"::Location
+            ELSE
+              IF ByVariant2 THEN
+                "Inventory Value Per" := "Inventory Value Per"::Variant
+              ELSE
+                "Inventory Value Per" := "Inventory Value Per"::Item;
+        IF CalculatePer = CalculatePer::"Item Ledger Entry" THEN
+          "Applies-to Entry" := ApplyToEntry2;
+        VALIDATE(Quantity,Quantity2);
+        VALIDATE("Inventory Value (Calculated)",ROUND(Amount2,GLSetup."Amount Rounding Precision"));
+        CASE CalcBase OF
+          CalcBase::" ":
+            VALIDATE("Inventory Value (Revalued)","Inventory Value (Calculated)");
+          CalcBase::"Last Direct Unit Cost":
+            BEGIN
+              IF SKU.GET("Location Code","Item No.","Variant Code") THEN
+                VALIDATE("Unit Cost (Revalued)",SKU."Last Direct Cost")
+              ELSE BEGIN
+                Item.GET("Item No.");
+                VALIDATE("Unit Cost (Revalued)",Item."Last Direct Cost");
+              END;
+            END;
+          CalcBase::"Standard Cost - Assembly List",
+          CalcBase::"Standard Cost - Manufacturing":
+            BEGIN
+              IF NewStdCostItem.GET(ItemNo2) THEN BEGIN
+                VALIDATE("Unit Cost (Revalued)",NewStdCostItem."Standard Cost");
+                "Single-Level Material Cost" := NewStdCostItem."Single-Level Material Cost";
+                "Single-Level Capacity Cost" := NewStdCostItem."Single-Level Capacity Cost";
+                "Single-Level Subcontrd. Cost" := NewStdCostItem."Single-Level Subcontrd. Cost";
+                "Single-Level Cap. Ovhd Cost" := NewStdCostItem."Single-Level Cap. Ovhd Cost";
+                "Single-Level Mfg. Ovhd Cost" := NewStdCostItem."Single-Level Mfg. Ovhd Cost";
+                "Rolled-up Material Cost" := NewStdCostItem."Rolled-up Material Cost";
+                "Rolled-up Capacity Cost" := NewStdCostItem."Rolled-up Capacity Cost";
+                "Rolled-up Subcontracted Cost" := NewStdCostItem."Rolled-up Subcontracted Cost";
+                "Rolled-up Mfg. Ovhd Cost" := NewStdCostItem."Rolled-up Mfg. Ovhd Cost";
+                "Rolled-up Cap. Overhead Cost" := NewStdCostItem."Rolled-up Cap. Overhead Cost";
+                UpdatedStdCostSKU."Item No." := ItemNo2;
+                UpdatedStdCostSKU."Location Code" := LocationCode2;
+                UpdatedStdCostSKU."Variant Code" := VariantCode2;
+                UpdatedStdCostSKU.INSERT;
+              END ELSE
+                VALIDATE("Inventory Value (Revalued)","Inventory Value (Calculated)");
+            END;
+        END;
+        "Update Standard Cost" := UpdStdCost;
+        "Partial Revaluation" := TRUE;
+        "Applied Amount" := AppliedAmount;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE InitializeRequest@5(NewPostingDate@1000 : Date;NewDocNo@1004 : Code[20];NewCalculatePer@1001 : Option;NewByLocation@1002 : Boolean;NewByVariant@1003 : Boolean;NewUpdStdCost@1005 : Boolean;NewCalcBase@1006 : Option;NewShowDialog@1007 : Boolean);
+    BEGIN
+      PostingDate := NewPostingDate;
+      NextDocNo := NewDocNo;
+      CalculatePer := NewCalculatePer;
+      ByLocation := NewByLocation;
+      ByVariant := NewByVariant;
+      UpdStdCost := NewUpdStdCost;
+      CalcBase := NewCalcBase;
+      ShowDialog := NewShowDialog;
+    END;
+
+    PROCEDURE CalculateRemQuantity@10(ItemLedgEntryNo@1000 : Integer;PostingDate@1001 : Date) : Decimal;
+    VAR
+      ItemApplnEntry@1002 : Record 339;
+      RemQty@1003 : Decimal;
+    BEGIN
+      WITH ItemApplnEntry DO BEGIN
+        SETCURRENTKEY("Inbound Item Entry No.");
+        SETRANGE("Inbound Item Entry No.",ItemLedgEntryNo);
+        RemQty := 0;
+        IF FIND('-') THEN
+          REPEAT
+            IF "Posting Date" <= PostingDate THEN
+              RemQty := RemQty + Quantity;
+          UNTIL NEXT = 0;
+        EXIT(RemQty);
+      END;
+    END;
+
+    PROCEDURE CalculateRemInvValue@11(ItemLedgEntryNo@1000 : Integer;ItemLedgEntryQty@1004 : Decimal;RemQty@1005 : Decimal;IncludeExpectedCost2@1001 : Boolean) : Decimal;
+    VAR
+      ValueEntry@1002 : Record 5802;
+      AdjustedCost@1003 : Decimal;
+    BEGIN
+      WITH ValueEntry DO BEGIN
+        SETCURRENTKEY("Item Ledger Entry No.");
+        SETRANGE("Item Ledger Entry No.",ItemLedgEntryNo);
+        IF NOT IncludeExpectedCost2 THEN
+          SETRANGE("Expected Cost",FALSE);
+        IF FIND('-') THEN
+          REPEAT
+            IF "Entry Type" <> "Entry Type"::Revaluation THEN
+              "Valued Quantity" := ItemLedgEntryQty;
+            IF "Entry Type" <> "Entry Type"::Rounding THEN
+              IF IncludeExpectedCost2 THEN
+                AdjustedCost := AdjustedCost + RemQty / "Valued Quantity" * ("Cost Amount (Actual)" + "Cost Amount (Expected)")
+              ELSE
+                AdjustedCost := AdjustedCost + RemQty / "Valued Quantity" * "Cost Amount (Actual)";
+          UNTIL NEXT = 0;
+        EXIT(AdjustedCost);
+      END;
+    END;
+
+    LOCAL PROCEDURE PageValidateCalcLevel@19046229();
+    BEGIN
+      IF CalculatePer = CalculatePer::"Item Ledger Entry" THEN BEGIN
+        ByLocation := FALSE;
+        ByVariant := FALSE;
+        CalcBase := CalcBase::" ";
+        UpdStdCost := FALSE;
+        IF NOT ISSERVICETIER THEN BEGIN
+          "By LocationEnable" := FALSE;
+          "By VariantEnable" := FALSE;
+          CalcBaseEnable := FALSE;
+          UpdStdCostEnable := FALSE;
+        END;
+      END ELSE BEGIN
+        IF NOT ISSERVICETIER THEN BEGIN
+          "By LocationEnable" := TRUE;
+          "By VariantEnable" := TRUE;
+          CalcBaseEnable := TRUE;
+          UpdStdCostEnable := TRUE;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ItemLedgerEntryCalculatePerOnV@19059582();
+    BEGIN
+      ValidateCalcLevel;
+    END;
+
+    LOCAL PROCEDURE ItemCalculatePerOnValidate@19037447();
+    BEGIN
+      ValidateCalcLevel;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

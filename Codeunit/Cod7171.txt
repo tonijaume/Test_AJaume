@@ -1,0 +1,345 @@
+OBJECT Codeunit 7171 Sales Info-Pane Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Cust@1000 : Record 18;
+      Item@1001 : Record 27;
+      SalesHeader@1003 : Record 36;
+      SalesPriceCalcMgt@1002 : Codeunit 7000;
+      Text000@1004 : TextConst 'ENU=The Ship-to Address has been changed.;ESP=La direcci¢n de env¡o ha cambiado.';
+
+    PROCEDURE CalcNoOfDocuments@1(VAR Cust@1000 : Record 18);
+    BEGIN
+      Cust.CALCFIELDS(
+        "No. of Quotes","No. of Blanket Orders","No. of Orders","No. of Invoices",
+        "No. of Return Orders","No. of Credit Memos","No. of Pstd. Shipments",
+        "No. of Pstd. Invoices","No. of Pstd. Return Receipts","No. of Pstd. Credit Memos",
+        "Sell-to No. Of Archived Doc.");
+    END;
+
+    PROCEDURE CalcTotalNoOfDocuments@2(CustNo@1000 : Code[20]) : Integer;
+    BEGIN
+      GetCust(CustNo);
+      WITH Cust DO BEGIN
+        CalcNoOfDocuments(Cust);
+        EXIT(
+          "No. of Quotes" + "No. of Blanket Orders" + "No. of Orders" + "No. of Invoices" +
+          "No. of Return Orders" + "No. of Credit Memos" + "No. of Pstd. Shipments" +
+          "No. of Pstd. Invoices" + "No. of Pstd. Return Receipts" + "No. of Pstd. Credit Memos" +
+          "Sell-to No. Of Archived Doc.");
+      END;
+    END;
+
+    PROCEDURE CalcNoOfShipToAddr@5(CustNo@1000 : Code[20]) : Integer;
+    BEGIN
+      GetCust(CustNo);
+      Cust.CALCFIELDS("No. of Ship-to Addresses");
+      EXIT(Cust."No. of Ship-to Addresses");
+    END;
+
+    PROCEDURE CalcNoOfContacts@3(SalesHeader@1002 : Record 36) : Integer;
+    VAR
+      Cont@1000 : Record 5050;
+      ContBusRelation@1001 : Record 5054;
+    BEGIN
+      Cont.SETCURRENTKEY("Company No.");
+      WITH SalesHeader DO
+        IF "Sell-to Customer No." <> '' THEN BEGIN
+          IF Cont.GET("Sell-to Contact No.") THEN BEGIN
+            Cont.SETRANGE("Company No.",Cont."Company No.");
+            EXIT(Cont.COUNT);
+          END ELSE BEGIN
+            ContBusRelation.RESET;
+            ContBusRelation.SETCURRENTKEY("Link to Table","No.");
+            ContBusRelation.SETRANGE("Link to Table",ContBusRelation."Link to Table"::Customer);
+            ContBusRelation.SETRANGE("No.","Sell-to Customer No.");
+            IF ContBusRelation.FINDFIRST THEN BEGIN
+              Cont.SETRANGE("Company No.",ContBusRelation."Contact No.");
+              EXIT(Cont.COUNT);
+            END ELSE
+              EXIT(0)
+          END;
+        END;
+    END;
+
+    PROCEDURE CalcAvailableCredit@4(CustNo@1002 : Code[20]) : Decimal;
+    VAR
+      TotalAmountLCY@1000 : Decimal;
+    BEGIN
+      GetCust(CustNo);
+      WITH Cust DO BEGIN
+        SETRANGE("Date Filter",0D,WORKDATE);
+        CALCFIELDS("Balance (LCY)","Outstanding Orders (LCY)","Shipped Not Invoiced (LCY)","Outstanding Invoices (LCY)");
+        TotalAmountLCY := "Balance (LCY)" + "Outstanding Orders (LCY)" + "Shipped Not Invoiced (LCY)" + "Outstanding Invoices (LCY)";
+
+        IF "Credit Limit (LCY)" <> 0 THEN
+          EXIT("Credit Limit (LCY)" - TotalAmountLCY);
+      END;
+    END;
+
+    PROCEDURE CalcAvailability@18(VAR SalesLine@1000 : Record 37) : Decimal;
+    VAR
+      AvailableToPromise@1001 : Codeunit 5790;
+      GrossRequirement@1002 : Decimal;
+      ScheduledReceipt@1003 : Decimal;
+      PeriodType@1006 : 'Day,Week,Month,Quarter,Year';
+      AvailabilityDate@1004 : Date;
+      LookaheadDateformula@1005 : DateFormula;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        IF SalesLine."Shipment Date" <> 0D THEN
+          AvailabilityDate := SalesLine."Shipment Date"
+        ELSE
+          AvailabilityDate := WORKDATE;
+
+        Item.RESET;
+        Item.SETRANGE("Date Filter",0D,AvailabilityDate);
+        Item.SETRANGE("Variant Filter",SalesLine."Variant Code");
+        Item.SETRANGE("Location Filter",SalesLine."Location Code");
+        Item.SETRANGE("Drop Shipment Filter",FALSE);
+
+        EXIT(
+          AvailableToPromise.QtyAvailabletoPromise(
+            Item,
+            GrossRequirement,
+            ScheduledReceipt,
+            AvailabilityDate,
+            PeriodType,
+            LookaheadDateformula));
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSubstitutions@20(VAR SalesLine@1000 : Record 37) : Integer;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        Item.CALCFIELDS("No. of Substitutes");
+        EXIT(Item."No. of Substitutes");
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSalesPrices@19(VAR SalesLine@1000 : Record 37) : Integer;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        GetSalesHeader(SalesLine);
+        EXIT(SalesPriceCalcMgt.NoOfSalesLinePrice(SalesHeader,SalesLine,TRUE));
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSalesLineDisc@22(VAR SalesLine@1001 : Record 37) : Integer;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        GetSalesHeader(SalesLine);
+        EXIT(SalesPriceCalcMgt.NoOfSalesLineLineDisc(SalesHeader,SalesLine,TRUE));
+      END;
+    END;
+
+    PROCEDURE DocExist@16(CurrentSalesHeader@1005 : Record 36;CustNo@1000 : Code[20]) : Boolean;
+    VAR
+      SalesInvHeader@1001 : Record 112;
+      SalesShptHeader@1002 : Record 110;
+      SalesCrMemoHeader@1003 : Record 114;
+      ReturnReceipt@1006 : Record 6660;
+      SalesHeader@1004 : Record 36;
+    BEGIN
+      IF CustNo = '' THEN
+        EXIT(FALSE);
+      WITH SalesInvHeader DO BEGIN
+        SETCURRENTKEY("Sell-to Customer No.");
+        SETRANGE("Sell-to Customer No.",CustNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH SalesShptHeader DO BEGIN
+        SETCURRENTKEY("Sell-to Customer No.");
+        SETRANGE("Sell-to Customer No.",CustNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH SalesCrMemoHeader DO BEGIN
+        SETCURRENTKEY("Sell-to Customer No.");
+        SETRANGE("Sell-to Customer No.",CustNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+      WITH SalesHeader DO BEGIN
+        SETCURRENTKEY("Sell-to Customer No.");
+        SETRANGE("Sell-to Customer No.",CustNo);
+        IF FINDFIRST THEN BEGIN
+          IF ("Document Type" <> CurrentSalesHeader."Document Type") OR
+             ("No." <> CurrentSalesHeader."No.")
+          THEN
+            EXIT(TRUE);
+          IF FIND('>') THEN
+            EXIT(TRUE);
+        END;
+      END;
+      WITH ReturnReceipt DO BEGIN
+        SETCURRENTKEY("Sell-to Customer No.");
+        SETRANGE("Sell-to Customer No.",CustNo);
+        IF NOT ISEMPTY THEN
+          EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE CustCommentExists@8(CustNo@1000 : Code[20]) : Boolean;
+    BEGIN
+      GetCust(CustNo);
+      Cust.CALCFIELDS(Comment);
+      EXIT(Cust.Comment);
+    END;
+
+    PROCEDURE ItemCommentExists@12(SalesLine@1000 : Record 37) : Boolean;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        Item.CALCFIELDS(Comment);
+        EXIT(Item.Comment);
+      END;
+    END;
+
+    PROCEDURE LookupCustSalesHistory@9(VAR SalesHeader@1001 : Record 36;CustNo@1000 : Code[20];UseBillTo@1003 : Boolean);
+    VAR
+      CustSalesHistory@1002 : Form 7171;
+    BEGIN
+      GetCust(CustNo);
+      CustSalesHistory.SetToSalesHeader(SalesHeader,UseBillTo);
+      CustSalesHistory.SETRECORD(Cust);
+      CustSalesHistory.LOOKUPMODE := TRUE;
+      CustSalesHistory.RUNMODAL;
+    END;
+
+    PROCEDURE LookupShipToAddr@10(VAR SalesHeader@1000 : Record 36);
+    VAR
+      ShipToAddr@1001 : Record 222;
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        ShipToAddr.SETRANGE("Customer No.","Sell-to Customer No.");
+        IF FORM.RUNMODAL(0,ShipToAddr) = ACTION::LookupOK THEN BEGIN
+          VALIDATE("Ship-to Code",ShipToAddr.Code);
+          MODIFY(TRUE);
+          MESSAGE(Text000);
+        END;
+      END;
+    END;
+
+    PROCEDURE LookupContacts@11(VAR SalesHeader@1000 : Record 36);
+    VAR
+      Cont@1002 : Record 5050;
+      ContBusRelation@1001 : Record 5054;
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        IF "Sell-to Customer No." <> '' THEN BEGIN
+          IF Cont.GET("Sell-to Contact No.") THEN
+            Cont.SETRANGE("Company No.",Cont."Company No.")
+          ELSE BEGIN
+            ContBusRelation.RESET;
+            ContBusRelation.SETCURRENTKEY("Link to Table","No.");
+            ContBusRelation.SETRANGE("Link to Table",ContBusRelation."Link to Table"::Customer);
+            ContBusRelation.SETRANGE("No.","Sell-to Customer No.");
+            IF ContBusRelation.FINDFIRST THEN
+              Cont.SETRANGE("Company No.",ContBusRelation."Contact No.")
+            ELSE
+              Cont.SETRANGE("No.",'');
+          END;
+          IF Cont.GET("Sell-to Contact No.") THEN ;
+        END ELSE
+          Cont.SETRANGE("No.",'');
+        IF FORM.RUNMODAL(0,Cont) = ACTION::LookupOK THEN BEGIN
+          VALIDATE("Sell-to Contact No.",Cont."No.");
+          MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE LookupAvailCredit@15(CustNo@1000 : Code[20]);
+    BEGIN
+      Cust.RESET;
+      Cust.SETRANGE("No.",CustNo);
+      FORM.RUNMODAL(FORM::"Available Credit",Cust);
+    END;
+
+    PROCEDURE LookupItem@7(SalesLine@1000 : Record 37);
+    BEGIN
+      SalesLine.TESTFIELD(Type,SalesLine.Type::Item);
+      SalesLine.TESTFIELD("No.");
+      GetItem(SalesLine);
+      FORM.RUNMODAL(FORM::"Item Card",Item);
+    END;
+
+    PROCEDURE LookupItemComment@14(SalesLine@1000 : Record 37);
+    VAR
+      CommentLine@1001 : Record 97;
+    BEGIN
+      IF GetItem(SalesLine) THEN BEGIN
+        CommentLine.SETRANGE("Table Name",CommentLine."Table Name"::Item);
+        CommentLine.SETRANGE("No.",SalesLine."No.");
+        FORM.RUNMODAL(FORM::"Comment Sheet",CommentLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCust@6(CustNo@1000 : Code[20]);
+    BEGIN
+      IF CustNo <> '' THEN BEGIN
+        IF CustNo <> Cust."No." THEN
+          IF NOT Cust.GET(CustNo) THEN
+            CLEAR(Cust);
+      END ELSE
+        CLEAR(Cust);
+    END;
+
+    LOCAL PROCEDURE GetItem@24(VAR SalesLine@1000 : Record 37) : Boolean;
+    BEGIN
+      WITH Item DO BEGIN
+        IF (SalesLine.Type <> SalesLine.Type::Item) OR (SalesLine."No." = '') THEN
+          EXIT(FALSE);
+
+        IF SalesLine."No." <> "No." THEN
+          GET(SalesLine."No.");
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSalesHeader@13(SalesLine@1000 : Record 37);
+    BEGIN
+      IF (SalesLine."Document Type" <> SalesHeader."Document Type") OR
+         (SalesLine."Document No." <> SalesHeader."No.")
+      THEN
+        SalesHeader.GET(SalesLine."Document Type",SalesLine."Document No.");
+    END;
+
+    PROCEDURE CalcNoOfBillToDocuments@17(VAR Cust@1000 : Record 18);
+    BEGIN
+      Cust.CALCFIELDS(
+        "Bill-To No. of Quotes","Bill-To No. of Blanket Orders","Bill-To No. of Orders","Bill-To No. of Invoices",
+        "Bill-To No. of Return Orders","Bill-To No. of Credit Memos","Bill-To No. of Pstd. Shipments",
+        "Bill-To No. of Pstd. Invoices","Bill-To No. of Pstd. Return R.","Bill-To No. of Pstd. Cr. Memos",
+        "Bill-to No. Of Archived Doc.");
+    END;
+
+    PROCEDURE LookupCustHistory@1102628000(CustNo@1000 : Code[20];UseBillTo@1003 : Boolean);
+    VAR
+      CustSalesHistory@1002 : Form 7171;
+    BEGIN
+      GetCust(CustNo);
+      CustSalesHistory.SetToSalesHeader(SalesHeader,UseBillTo);
+      CustSalesHistory.SETRECORD(Cust);
+      CustSalesHistory.LOOKUPMODE := TRUE;
+      CustSalesHistory.RUNMODAL;
+    END;
+
+    BEGIN
+    END.
+  }
+}

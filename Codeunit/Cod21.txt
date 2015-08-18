@@ -1,0 +1,386 @@
+OBJECT Codeunit 21 Item Jnl.-Check Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01,NAVES4.00;
+  }
+  PROPERTIES
+  {
+    TableNo=83;
+    OnRun=VAR
+            TempJnlLineDim@1000 : TEMPORARY Record 356;
+          BEGIN
+            GLSetup.GET;
+            IF "Shortcut Dimension 1 Code" <> '' THEN BEGIN
+              TempJnlLineDim."Table ID" := DATABASE::"Item Journal Line";
+              TempJnlLineDim."Journal Template Name" := "Journal Template Name";
+              TempJnlLineDim."Journal Batch Name" := "Journal Batch Name";
+              TempJnlLineDim."Journal Line No." := "Line No.";
+              TempJnlLineDim."Dimension Code" := GLSetup."Global Dimension 1 Code";
+              TempJnlLineDim."Dimension Value Code" := "Shortcut Dimension 1 Code";
+              TempJnlLineDim.INSERT;
+            END;
+            IF "Shortcut Dimension 2 Code" <> '' THEN BEGIN
+              TempJnlLineDim."Table ID" := DATABASE::"Item Journal Line";
+              TempJnlLineDim."Journal Template Name" := "Journal Template Name";
+              TempJnlLineDim."Journal Batch Name" := "Journal Batch Name";
+              TempJnlLineDim."Journal Line No." := "Line No.";
+              TempJnlLineDim."Dimension Code" := GLSetup."Global Dimension 2 Code";
+              TempJnlLineDim."Dimension Value Code" := "Shortcut Dimension 2 Code";
+              TempJnlLineDim.INSERT;
+            END;
+            RunCheck(Rec,TempJnlLineDim);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=cannot be a closing date;ESP=no puede ser una fecha £ltima';
+      Text001@1001 : TextConst 'ENU=is not within your range of allowed posting dates;ESP=no est  dentro del periodo de fechas de registro permitidas';
+      Text003@1002 : TextConst 'ENU=must not be negative when %1 is %2;ESP=no puede ser negativo cuando %1 es %2';
+      Text004@1003 : TextConst 'ENU=must have the same value as %1;ESP=debe tener el mismo valor que %1';
+      Text005@1004 : TextConst 'ENU=must be %1 or %2 when %3 is %4;ESP=debe ser %1 o %2 cuando %3 sea %4.';
+      Text006@1005 : TextConst 'ENU=must equal %1 - %2 when %3 is %4 and %5 is %6;ESP=debe igualar %1 - %2 cuando %3 es %4 y %5 es %6';
+      Text007@1006 : TextConst 'ENU="You cannot post these lines because you have not entered a quantity on one or more of the lines. ";ESP="No puede registrar estas l¡neas porque no ha insertado la cantidad en una o m s l¡neas. "';
+      Text009@1008 : TextConst 'ENU=The combination of dimensions used in %1 %2, %3, %4 is blocked. %5;ESP=La combin. de dimensiones utilizada en %1 %2, %3, %4 est  bloq. %5';
+      Text010@1009 : TextConst 'ENU=A dimension used in %1 %2, %3, %4 has caused an error. %5;ESP=La dimensi¢n util. en %1 %2, %3, %4 ha causado error. %5';
+      Text011@1019 : TextConst 'ENU=%1 must not be equal to %2;ESP=%1 no debe ser igual a %2';
+      Location@1018 : Record 14;
+      InvtSetup@1010 : Record 313;
+      GLSetup@1011 : Record 98;
+      UserSetup@1012 : Record 91;
+      ItemLedgEntry@1007 : Record 32;
+      ItemJnlLine2@1013 : Record 83;
+      ItemJnlLine3@1014 : Record 83;
+      DimMgt@1015 : Codeunit 408;
+      AllowPostingFrom@1016 : Date;
+      AllowPostingTo@1017 : Date;
+      Text012@1021 : TextConst 'ENU="Warehouse handling is required for %1 = %2, %3 = %4, %5 = %6.";ESP="Manipulaci¢n almac‚n requerido para %1 = %2, %3 = %4, %5 = %6."';
+      CalledFromInvtPutawayPick@1022 : Boolean;
+      CalledFromAdjustment@1020 : Boolean;
+      TransportMethod@1100000 : Record 259;
+
+    PROCEDURE RunCheck@1(VAR ItemJnlLine@1000 : Record 83;VAR JnlLineDim@1001 : Record 356);
+    VAR
+      TableID@1002 : ARRAY [10] OF Integer;
+      No@1003 : ARRAY [10] OF Code[20];
+      InvtPeriod@1004 : Record 5814;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        IF EmptyLine THEN BEGIN
+          IF NOT IsValueEntryForDeletedItem THEN
+            EXIT;
+        END ELSE
+          IF NOT OnlyStopTime THEN
+            TESTFIELD("Item No.");
+
+        TESTFIELD("Posting Date");
+        TESTFIELD("Document No.");
+        IF "Posting Date" <> NORMALDATE("Posting Date") THEN
+          FIELDERROR("Posting Date",Text000);
+
+        CheckAllowedPostingDate(ItemJnlLine);
+
+        IF NOT InvtPeriod.IsValidDate("Posting Date") THEN
+          InvtPeriod.ShowError("Posting Date");
+
+        IF ("Document Date" <> 0D) THEN
+          IF ("Document Date" <> NORMALDATE("Document Date")) THEN
+            FIELDERROR("Document Date",Text000);
+
+        TESTFIELD("Gen. Prod. Posting Group");
+
+        IF (InvtSetup."Location Mandatory") AND
+           ("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND
+           (Quantity <> 0) AND
+           NOT Adjustment
+        THEN BEGIN
+          TESTFIELD("Location Code");
+          IF "Entry Type" = "Entry Type"::Transfer THEN
+            TESTFIELD("New Location Code");
+        END;
+
+        IF TransportMethod.GET("Transport Method") AND TransportMethod."Port/Airport" THEN
+          TESTFIELD("Entry/Exit Point");
+
+        IF ("Item Charge No." = '') AND
+           ("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND
+           (Quantity <> 0) AND
+           NOT Adjustment
+        THEN BEGIN
+          GetLocation("Location Code");
+          IF Location."Bin Mandatory" AND
+             NOT Location."Directed Put-away and Pick" AND
+             NOT "Drop Shipment"
+          THEN BEGIN
+            IF ("Entry Type" <> "Entry Type"::Output) OR
+               ItemJnlLine.LastOutputOperation(ItemJnlLine)
+            THEN
+              TESTFIELD("Bin Code");
+          END;
+          IF "Entry Type" = "Entry Type"::Transfer THEN BEGIN
+            GetLocation("New Location Code");
+            IF Location."Bin Mandatory" AND NOT Location."Directed Put-away and Pick" THEN
+              TESTFIELD("New Bin Code");
+          END;
+        END;
+
+        IF "Entry Type" IN ["Entry Type"::"Positive Adjmt.","Entry Type"::"Negative Adjmt."] THEN
+          TESTFIELD("Discount Amount",0);
+
+        IF "Entry Type" = "Entry Type"::Transfer THEN BEGIN
+          IF ("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND
+             ("Item Charge No." = '') AND
+             NOT Adjustment
+          THEN
+            TESTFIELD(Amount,0);
+          TESTFIELD("Discount Amount",0);
+          IF Quantity < 0 THEN
+            FIELDERROR(Quantity,STRSUBSTNO(Text003,FIELDCAPTION("Entry Type"),"Entry Type"));
+          IF Quantity <> "Invoiced Quantity" THEN
+            FIELDERROR("Invoiced Quantity",STRSUBSTNO(Text004,FIELDCAPTION(Quantity)));
+        END;
+
+        IF NOT "Phys. Inventory" THEN BEGIN
+          IF "Entry Type" = "Entry Type"::Output THEN BEGIN
+            IF ("Output Quantity (Base)" = 0) AND ("Scrap Quantity (Base)" = 0) AND
+               TimeIsEmpty AND ("Invoiced Qty. (Base)" = 0)
+            THEN
+              ERROR(Text007)
+          END ELSE BEGIN
+            IF ("Quantity (Base)" = 0) AND ("Invoiced Qty. (Base)" = 0) THEN
+              ERROR(Text007);
+          END;
+          TESTFIELD("Qty. (Calculated)",0);
+          TESTFIELD("Qty. (Phys. Inventory)",0);
+        END ELSE BEGIN
+          IF NOT
+             ("Entry Type" IN
+              ["Entry Type"::"Positive Adjmt.",
+               "Entry Type"::"Negative Adjmt."])
+          THEN BEGIN
+            ItemJnlLine2."Entry Type" := ItemJnlLine2."Entry Type"::"Positive Adjmt.";
+            ItemJnlLine3."Entry Type" := ItemJnlLine3."Entry Type"::"Negative Adjmt.";
+            FIELDERROR(
+              "Entry Type",
+              STRSUBSTNO(
+                Text005,
+                ItemJnlLine2."Entry Type",
+                ItemJnlLine3."Entry Type",
+                FIELDCAPTION("Phys. Inventory"),
+                TRUE));
+          END;
+          IF ("Entry Type" = "Entry Type"::"Positive Adjmt.") AND
+             ("Qty. (Phys. Inventory)" - "Qty. (Calculated)" <> Quantity)
+          THEN
+            FIELDERROR(
+              Quantity,
+              STRSUBSTNO(
+                Text006,
+                FIELDCAPTION("Qty. (Phys. Inventory)"),
+                FIELDCAPTION("Qty. (Calculated)"),
+                FIELDCAPTION("Entry Type"),
+                "Entry Type",
+                FIELDCAPTION("Phys. Inventory"),
+                TRUE));
+          IF ("Entry Type" = "Entry Type"::"Negative Adjmt.") AND
+             ("Qty. (Calculated)" - "Qty. (Phys. Inventory)" <> Quantity)
+          THEN
+            FIELDERROR(
+              Quantity,
+              STRSUBSTNO(
+                Text006,
+                FIELDCAPTION("Qty. (Calculated)"),
+                FIELDCAPTION("Qty. (Phys. Inventory)"),
+                FIELDCAPTION("Entry Type"),
+                "Entry Type",
+                FIELDCAPTION("Phys. Inventory"),
+                TRUE));
+        END;
+
+        IF "Entry Type" <> "Entry Type"::Output THEN BEGIN
+          TESTFIELD("Run Time",0);
+          TESTFIELD("Setup Time",0);
+          TESTFIELD("Stop Time",0);
+          TESTFIELD("Output Quantity",0);
+          TESTFIELD("Scrap Quantity",0);
+        END;
+
+        IF "Applies-from Entry" <> 0 THEN BEGIN
+          ItemLedgEntry.GET("Applies-from Entry");
+          ItemLedgEntry.TESTFIELD("Item No.","Item No.");
+          ItemLedgEntry.TESTFIELD("Variant Code","Variant Code");
+          ItemLedgEntry.TESTFIELD(Positive,FALSE);
+          IF "Applies-to Entry" = "Applies-from Entry" THEN
+            ERROR(
+              Text011,
+              FIELDCAPTION("Applies-to Entry"),
+              FIELDCAPTION("Applies-from Entry"));
+        END;
+
+        IF ("Entry Type" IN ["Entry Type"::Consumption,"Entry Type"::Output]) AND
+           NOT ("Value Entry Type" = "Value Entry Type"::Revaluation) AND
+           NOT OnlyStopTime
+        THEN BEGIN
+          TESTFIELD("Source No.");
+          CheckFindProdOrderLine("Prod. Order No.","Prod. Order Line No.");
+          IF ("Entry Type" = "Entry Type"::Output) AND ("Output Quantity" < 0) AND (NOT Adjustment) THEN
+            IF LastOutputOperation(ItemJnlLine) THEN
+              TESTFIELD("Applies-to Entry");
+          IF NOT CalledFromInvtPutawayPick THEN
+            CheckWarehouse(ItemJnlLine);
+        END;
+
+        IF ("Value Entry Type" <> "Value Entry Type"::"Direct Cost") OR ("Item Charge No." <> '') THEN
+          IF "Inventory Value Per" = "Inventory Value Per"::" " THEN
+            TESTFIELD("Applies-to Entry");
+
+        IF NOT DimMgt.CheckJnlLineDimComb(JnlLineDim) THEN
+          ERROR(
+            Text009,
+            TABLECAPTION,"Journal Template Name","Journal Batch Name","Line No.",
+            DimMgt.GetDimCombErr);
+
+        IF NOT IsValueEntryForDeletedItem AND NOT Correction AND NOT CalledFromAdjustment THEN BEGIN
+          TableID[1] := DATABASE::Item;
+          No[1] := "Item No.";
+          TableID[2] := DATABASE::"Salesperson/Purchaser";
+          No[2] := "Salespers./Purch. Code";
+          TableID[3] := DATABASE::"Work Center";
+          No[3] := "Work Center No.";
+          IF NOT DimMgt.CheckJnlLineDimValuePosting(JnlLineDim,TableID,No) THEN
+            IF "Line No." <> 0 THEN
+              ERROR(
+                Text010,
+                TABLECAPTION,"Journal Template Name","Journal Batch Name","Line No.",
+                DimMgt.GetDimValuePostingErr)
+            ELSE
+              ERROR(DimMgt.GetDimValuePostingErr);
+          IF (ItemJnlLine."Entry Type" = ItemJnlLine."Entry Type"::Transfer) AND
+             (ItemJnlLine."Value Entry Type" <> ItemJnlLine."Value Entry Type"::Revaluation)
+          THEN
+            IF NOT DimMgt.CheckJnlLineNewDimValuePosting(JnlLineDim,TableID,No) THEN
+              IF "Line No." <> 0 THEN
+                ERROR(
+                  Text010,
+                  TABLECAPTION,"Journal Template Name","Journal Batch Name","Line No.",
+                  DimMgt.GetDimValuePostingErr)
+              ELSE
+                ERROR(DimMgt.GetDimValuePostingErr);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7300(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        CLEAR(Location)
+      ELSE
+        IF Location.Code <> LocationCode THEN
+          Location.GET(LocationCode);
+    END;
+
+    LOCAL PROCEDURE CheckFindProdOrderLine@11(ProdOrderNo@1000 : Code[20];LineNo@1001 : Integer);
+    VAR
+      ProdOrderLine@1002 : Record 5406;
+    BEGIN
+      ProdOrderLine.RESET;
+      ProdOrderLine.SETFILTER(Status,'>=%1',ProdOrderLine.Status::Released);
+      ProdOrderLine.SETRANGE("Prod. Order No.",ProdOrderNo);
+      ProdOrderLine.SETRANGE("Line No.",LineNo);
+      ProdOrderLine.FINDFIRST;
+    END;
+
+    PROCEDURE SetCalledFromInvtPutawayPick@47(NewCalledFromInvtPutawayPick@1000 : Boolean);
+    BEGIN
+      CalledFromInvtPutawayPick := NewCalledFromInvtPutawayPick;
+    END;
+
+    LOCAL PROCEDURE CheckWarehouse@7301(ItemJnlLine@1000 : Record 83);
+    VAR
+      WhseValidateSourceLine@1003 : Codeunit 5777;
+      ShowError@1002 : Boolean;
+    BEGIN
+      IF (ItemJnlLine.Quantity = 0) OR
+         (ItemJnlLine."Item Charge No." <> '') OR
+         (ItemJnlLine."Value Entry Type" IN
+           [ItemJnlLine."Value Entry Type"::Revaluation,ItemJnlLine."Value Entry Type"::Rounding]) OR
+         ItemJnlLine.Adjustment
+      THEN
+        EXIT;
+
+      GetLocation(ItemJnlLine."Location Code");
+      IF Location."Directed Put-away and Pick" THEN
+        EXIT;
+
+      CASE ItemJnlLine."Entry Type" OF
+        ItemJnlLine."Entry Type"::Output:
+          IF ((NOT Location."Require Receive" AND Location."Require Put-away") AND
+              (ItemJnlLine.Quantity >= 0)) OR
+             ((NOT Location."Require Shipment" AND Location."Require Pick") AND
+              (ItemJnlLine.Quantity < 0))
+          THEN
+            IF ItemJnlLine.LastOutputOperation(ItemJnlLine) THEN
+              ShowError := TRUE;
+        ItemJnlLine."Entry Type"::Consumption:
+          IF ((NOT Location."Require Receive" AND Location."Require Put-away") AND
+              (ItemJnlLine.Quantity < 0)) OR
+             ((NOT Location."Require Shipment" AND Location."Require Pick") AND
+              (ItemJnlLine.Quantity >= 0))
+          THEN
+            IF WhseValidateSourceLine.WhseLinesExist(
+                 DATABASE::"Prod. Order Component",
+                 3,
+                 ItemJnlLine."Prod. Order No.",
+                 ItemJnlLine."Prod. Order Line No.",
+                 ItemJnlLine."Prod. Order Comp. Line No.",
+                 ItemJnlLine.Quantity)
+            THEN
+              ShowError := TRUE;
+      END;
+      IF ShowError THEN
+        ERROR(
+          Text012,
+          ItemJnlLine.FIELDCAPTION("Entry Type"),
+          ItemJnlLine."Entry Type",
+          ItemJnlLine.FIELDCAPTION("Document No."),
+          ItemJnlLine."Document No.",
+          ItemJnlLine.FIELDCAPTION("Line No."),
+          ItemJnlLine."Line No.");
+    END;
+
+    PROCEDURE CheckAllowedPostingDate@2(ItemJnlLine@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        IF (AllowPostingFrom = 0D) AND (AllowPostingTo = 0D) THEN BEGIN
+          InvtSetup.GET;
+          GLSetup.GET;
+          IF USERID <> '' THEN
+            IF UserSetup.GET(USERID) THEN BEGIN
+              AllowPostingFrom := UserSetup."Allow Posting From";
+              AllowPostingTo := UserSetup."Allow Posting To";
+            END;
+          IF (AllowPostingFrom = 0D) AND (AllowPostingTo = 0D) THEN BEGIN
+            AllowPostingFrom := GLSetup."Allow Posting From";
+            AllowPostingTo := GLSetup."Allow Posting To";
+          END;
+          IF AllowPostingTo = 0D THEN
+            AllowPostingTo := 31129999D;
+        END;
+        IF ("Posting Date" < AllowPostingFrom) OR ("Posting Date" > AllowPostingTo) THEN
+          FIELDERROR("Posting Date",Text001)
+      END;
+    END;
+
+    PROCEDURE SetCalledFromAdjustment@49(NewCalledFromAdjustment@1000 : Boolean);
+    BEGIN
+      CalledFromAdjustment := NewCalledFromAdjustment;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,596 @@
+OBJECT Page 302 Customer Entry Statistics
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00,NAVES6.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[ENU=Customer Entry Statistics;
+               ESP=Estad¡stica docs. cliente];
+    LinksAllowed=No;
+    SourceTable=Table18;
+    PageType=Card;
+    OnAfterGetRecord=BEGIN
+                       CLEARALL;
+
+                       FOR j := 1 TO 7 DO BEGIN
+                         CustLedgEntry[j].SETCURRENTKEY("Document Type","Customer No.","Posting Date");
+                         CustLedgEntry[j].SETRANGE("Document Type",j); // Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund
+                         CustLedgEntry[j].SETRANGE("Customer No.","No.");
+                         IF CustLedgEntry[j].FIND('+') THEN
+                         CustLedgEntry[j].CALCFIELDS(Amount,"Remaining Amount");
+                       END;
+
+                       CustLedgEntry[21].SETCURRENTKEY("Document Type","Customer No.","Posting Date");
+                       CustLedgEntry[21].SETRANGE("Document Type",21); // Bill = 21
+                       CustLedgEntry[21].SETRANGE("Customer No.","No.");
+                       IF CustLedgEntry[21].FIND('+') THEN
+                       CustLedgEntry[21].CALCFIELDS(Amount,"Remaining Amount");
+
+                       CustLedgEntry2.SETCURRENTKEY("Customer No.",Open);
+                       CustLedgEntry2.SETRANGE("Customer No.","No.");
+                       CustLedgEntry2.SETRANGE(Open,TRUE);
+                       IF CustLedgEntry2.FIND('+') THEN
+                         REPEAT
+                           j := CustLedgEntry2."Document Type";
+                           IF j > 0 THEN BEGIN
+                             CustLedgEntry2.CALCFIELDS("Remaining Amt. (LCY)");
+                             TotalRemainAmountLCY[j] := TotalRemainAmountLCY[j] + CustLedgEntry2."Remaining Amt. (LCY)";
+                           END;
+                         UNTIL CustLedgEntry2.NEXT(-1) = 0;
+
+                       DateFilterCalc.CreateAccountingPeriodFilter(CustDateFilter[1],CustDateName[1],WORKDATE,0);
+                       DateFilterCalc.CreateFiscalYearFilter(CustDateFilter[2],CustDateName[2],WORKDATE,0);
+                       DateFilterCalc.CreateFiscalYearFilter(CustDateFilter[3],CustDateName[3],WORKDATE,-1);
+
+                       FOR i := 1 TO 3 DO BEGIN
+                         CustLedgEntry2.RESET;
+                         CustLedgEntry2.SETCURRENTKEY("Customer No.","Posting Date");
+                         CustLedgEntry2.SETRANGE("Customer No.","No.");
+
+                         CustLedgEntry2.SETFILTER("Posting Date",CustDateFilter[i]);
+                         CustLedgEntry2.SETRANGE("Posting Date",0D,CustLedgEntry2.GETRANGEMAX("Posting Date"));
+                         DtldCustLedgEntry2.SETCURRENTKEY("Customer No.","Posting Date");
+                         CustLedgEntry2.COPYFILTER("Customer No.",DtldCustLedgEntry2."Customer No.");
+                         CustLedgEntry2.COPYFILTER("Posting Date",DtldCustLedgEntry2."Posting Date");
+                         DtldCustLedgEntry2.CALCSUMS("Amount (LCY)");
+                         CustBalanceLCY := DtldCustLedgEntry2."Amount (LCY)";
+                         HighestBalanceLCY[i] := CustBalanceLCY;
+                         DaysToPay := 0;
+                         NoOfInv := 0;
+
+                         CustLedgEntry2.SETFILTER("Posting Date",CustDateFilter[i]);
+                         IF CustLedgEntry2.FIND('+') THEN
+                           REPEAT
+                             j := CustLedgEntry2."Document Type";
+                             IF j > 0 THEN
+                               NoOfDoc[i][j] := NoOfDoc[i][j] + 1;
+
+                             CustLedgEntry2.CALCFIELDS("Amount (LCY)");
+                             CustBalanceLCY := CustBalanceLCY - CustLedgEntry2."Amount (LCY)";
+                             IF CustBalanceLCY > HighestBalanceLCY[i] THEN
+                               HighestBalanceLCY[i] := CustBalanceLCY;
+
+                             // Optimized Approximation
+                             IF (CustLedgEntry2."Document Type" = CustLedgEntry2."Document Type"::Invoice) AND
+                                NOT CustLedgEntry2.Open
+                             THEN
+                               IF CustLedgEntry2."Closed at Date" > CustLedgEntry2."Posting Date" THEN
+                                 UpdateDaysToPay(CustLedgEntry2."Closed at Date" - CustLedgEntry2."Posting Date")
+                               ELSE
+                                 IF CustLedgEntry2."Closed by Entry No." <> 0 THEN BEGIN
+                                   IF CustLedgEntry3.GET(CustLedgEntry2."Closed by Entry No.") THEN
+                                     UpdateDaysToPay(CustLedgEntry3."Posting Date" - CustLedgEntry2."Posting Date");
+                                 END ELSE BEGIN
+                                   CustLedgEntry3.SETCURRENTKEY("Closed by Entry No.");
+                                   CustLedgEntry3.SETRANGE("Closed by Entry No.",CustLedgEntry2."Entry No.");
+                                   IF CustLedgEntry3.FIND('+') THEN
+                                     UpdateDaysToPay(CustLedgEntry3."Posting Date" - CustLedgEntry2."Posting Date");
+                                 END;
+                           UNTIL CustLedgEntry2.NEXT(-1) = 0;
+                         IF NoOfInv <> 0 THEN
+                           AvgDaysToPay[i] := DaysToPay / NoOfInv;
+                       END;
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 1   ;1   ;Group     ;
+                CaptionML=[ENU=Last Documents;
+                           ESP=éltimos documentos] }
+
+    { 1903895301;2;Group  ;
+                GroupType=FixedLayout }
+
+    { 1900724601;3;Group  ;
+                CaptionML=[ENU=Date;
+                           ESP=Fecha] }
+
+    { 7   ;4   ;Field     ;
+                CaptionML=[ENU=Payment;
+                           ESP=Pago];
+                SourceExpr=CustLedgEntry[1]."Posting Date" }
+
+    { 13  ;4   ;Field     ;
+                CaptionML=[ENU=Invoice;
+                           ESP=Factura];
+                SourceExpr=CustLedgEntry[2]."Posting Date" }
+
+    { 19  ;4   ;Field     ;
+                CaptionML=[ENU=Credit Memo;
+                           ESP=Abono];
+                SourceExpr=CustLedgEntry[3]."Posting Date" }
+
+    { 25  ;4   ;Field     ;
+                CaptionML=[ENU=Reminder;
+                           ESP=Recordatorio];
+                SourceExpr=CustLedgEntry[5]."Posting Date" }
+
+    { 69  ;4   ;Field     ;
+                CaptionML=[ENU=Finance Charge Memo;
+                           ESP=Documento inter‚s];
+                SourceExpr=CustLedgEntry[4]."Posting Date" }
+
+    { 1100001;4;Field     ;
+                CaptionML=[ENU=Bill;
+                           ESP=Efecto];
+                SourceExpr=CustLedgEntry[21]."Posting Date" }
+
+    { 9   ;4   ;Field     ;
+                CaptionML=[ENU=Refund;
+                           ESP=Reembolso];
+                SourceExpr=CustLedgEntry[6]."Posting Date" }
+
+    { 1900724501;3;Group  ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento] }
+
+    { 8   ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[1]."Document No." }
+
+    { 14  ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[2]."Document No." }
+
+    { 20  ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[3]."Document No." }
+
+    { 26  ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[5]."Document No." }
+
+    { 70  ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[4]."Document No." }
+
+    { 1100002;4;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[21]."Document No." }
+
+    { 15  ;4   ;Field     ;
+                CaptionML=[ENU=Document No.;
+                           ESP=N§ documento];
+                SourceExpr=CustLedgEntry[6]."Document No." }
+
+    { 1902760801;3;Group  ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa] }
+
+    { 77  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[1]."Currency Code" }
+
+    { 76  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[2]."Currency Code" }
+
+    { 75  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[3]."Currency Code" }
+
+    { 27  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[5]."Currency Code" }
+
+    { 80  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[4]."Currency Code" }
+
+    { 1100003;4;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[21]."Currency Code" }
+
+    { 21  ;4   ;Field     ;
+                CaptionML=[ENU=Currency Code;
+                           ESP=C¢d. divisa];
+                SourceExpr=CustLedgEntry[6]."Currency Code" }
+
+    { 1900724301;3;Group  ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe] }
+
+    { 10  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=-CustLedgEntry[1].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[1]."Currency Code" }
+
+    { 16  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=CustLedgEntry[2].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[2]."Currency Code" }
+
+    { 22  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=-CustLedgEntry[3].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[3]."Currency Code" }
+
+    { 28  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=CustLedgEntry[5].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[5]."Currency Code" }
+
+    { 72  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=CustLedgEntry[4].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[4]."Currency Code" }
+
+    { 1100004;4;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=CustLedgEntry[21].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[21]."Currency Code" }
+
+    { 71  ;4   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESP=Importe];
+                SourceExpr=CustLedgEntry[6].Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[6]."Currency Code" }
+
+    { 1900724201;3;Group  ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente] }
+
+    { 11  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=-CustLedgEntry[1]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[1]."Currency Code" }
+
+    { 17  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=CustLedgEntry[2]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[2]."Currency Code" }
+
+    { 23  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=-CustLedgEntry[3]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[3]."Currency Code" }
+
+    { 29  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=CustLedgEntry[5]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[5]."Currency Code" }
+
+    { 73  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=CustLedgEntry[4]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[4]."Currency Code" }
+
+    { 1100005;4;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=CustLedgEntry[21]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[21]."Currency Code" }
+
+    { 78  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amount;
+                           ESP=Importe pendiente];
+                SourceExpr=CustLedgEntry[6]."Remaining Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=CustLedgEntry[6]."Currency Code" }
+
+    { 1907032201;1;Group  ;
+                CaptionML=[ENU=No. of Documents;
+                           ESP=N§ documentos] }
+
+    { 1904230801;2;Group  ;
+                GroupType=FixedLayout }
+
+    { 1900296801;3;Group  ;
+                CaptionML=[ENU=This Period;
+                           ESP=Periodo actual] }
+
+    { 31  ;4   ;Field     ;
+                SourceExpr=CustDateName[1] }
+
+    { 35  ;4   ;Field     ;
+                CaptionML=[ENU=Payments;
+                           ESP=Pagos];
+                SourceExpr=NoOfDoc[1][1] }
+
+    { 40  ;4   ;Field     ;
+                CaptionML=[ENU=Invoices;
+                           ESP=Facturas];
+                SourceExpr=NoOfDoc[1][2] }
+
+    { 45  ;4   ;Field     ;
+                CaptionML=[ENU=Credit Memos;
+                           ESP=Abonos];
+                SourceExpr=NoOfDoc[1][3] }
+
+    { 64  ;4   ;Field     ;
+                CaptionML=[ENU=Reminder;
+                           ESP=Recordatorio];
+                SourceExpr=NoOfDoc[1][5] }
+
+    { 50  ;4   ;Field     ;
+                CaptionML=[ENU=Finance Charge Memos;
+                           ESP=Docs. inter‚s];
+                SourceExpr=NoOfDoc[1][4] }
+
+    { 1100007;4;Field     ;
+                CaptionML=[ENU=Bills;
+                           ESP=Efectos];
+                SourceExpr=NoOfDoc[1][21] }
+
+    { 81  ;4   ;Field     ;
+                CaptionML=[ENU=Refund;
+                           ESP=Reembolso];
+                SourceExpr=NoOfDoc[1][6] }
+
+    { 55  ;4   ;Field     ;
+                CaptionML=[ENU=Avg. Collection Period (Days);
+                           ESP=Periodo de pago (d¡as)];
+                DecimalPlaces=0:0;
+                SourceExpr=AvgDaysToPay[1] }
+
+    { 59  ;4   ;Field     ;
+                CaptionML=[ENU=Largest Balance (LCY);
+                           ESP=Mayor saldo (DL)];
+                SourceExpr=HighestBalanceLCY[1];
+                AutoFormatType=1 }
+
+    { 1902759701;3;Group  ;
+                CaptionML=[ENU=This Year;
+                           ESP=A¤o actual] }
+
+    { 86  ;4   ;Field     ;
+                SourceExpr=Text000;
+                Visible=FALSE }
+
+    { 36  ;4   ;Field     ;
+                CaptionML=[ENU=Payments;
+                           ESP=Pagos];
+                SourceExpr=NoOfDoc[2][1] }
+
+    { 41  ;4   ;Field     ;
+                CaptionML=[ENU=Invoices;
+                           ESP=Facturas];
+                SourceExpr=NoOfDoc[2][2] }
+
+    { 46  ;4   ;Field     ;
+                CaptionML=[ENU=Credit Memos;
+                           ESP=Abonos];
+                SourceExpr=NoOfDoc[2][3] }
+
+    { 65  ;4   ;Field     ;
+                CaptionML=[ENU=Reminder;
+                           ESP=Recordatorio];
+                SourceExpr=NoOfDoc[2][5] }
+
+    { 51  ;4   ;Field     ;
+                CaptionML=[ENU=Finance Charge Memos;
+                           ESP=Docs. inter‚s];
+                SourceExpr=NoOfDoc[2][4] }
+
+    { 1100008;4;Field     ;
+                CaptionML=[ENU=Finance Charge Memos;
+                           ESP=Docs. inter‚s];
+                SourceExpr=NoOfDoc[2][21] }
+
+    { 83  ;4   ;Field     ;
+                CaptionML=[ENU=Refund;
+                           ESP=Reembolso];
+                SourceExpr=NoOfDoc[2][6] }
+
+    { 56  ;4   ;Field     ;
+                CaptionML=[ENU=Avg. Collection Period (Days);
+                           ESP=Periodo de pago (d¡as)];
+                DecimalPlaces=0:0;
+                SourceExpr=AvgDaysToPay[2] }
+
+    { 60  ;4   ;Field     ;
+                CaptionML=[ENU=Largest Balance;
+                           ESP=Mayor saldo];
+                SourceExpr=HighestBalanceLCY[2];
+                AutoFormatType=1 }
+
+    { 1900206101;3;Group  ;
+                CaptionML=[ENU=Last Year;
+                           ESP=A¤o anterior] }
+
+    { 87  ;4   ;Field     ;
+                SourceExpr=Text000;
+                Visible=FALSE }
+
+    { 37  ;4   ;Field     ;
+                CaptionML=[ENU=Payments;
+                           ESP=Pagos];
+                SourceExpr=NoOfDoc[3][1] }
+
+    { 42  ;4   ;Field     ;
+                CaptionML=[ENU=Invoices;
+                           ESP=Facturas];
+                SourceExpr=NoOfDoc[3][2] }
+
+    { 47  ;4   ;Field     ;
+                CaptionML=[ENU=Credit Memos;
+                           ESP=Abonos];
+                SourceExpr=NoOfDoc[3][3] }
+
+    { 66  ;4   ;Field     ;
+                CaptionML=[ENU=Reminder;
+                           ESP=Recordatorio];
+                SourceExpr=NoOfDoc[3][5] }
+
+    { 52  ;4   ;Field     ;
+                CaptionML=[ENU=Finance Charge Memos;
+                           ESP=Docs. inter‚s];
+                SourceExpr=NoOfDoc[3][4] }
+
+    { 1100009;4;Field     ;
+                CaptionML=[ENU=Finance Charge Memos;
+                           ESP=Docs. inter‚s];
+                SourceExpr=NoOfDoc[3][21] }
+
+    { 84  ;4   ;Field     ;
+                CaptionML=[ENU=Refund;
+                           ESP=Reembolso];
+                SourceExpr=NoOfDoc[3][6] }
+
+    { 57  ;4   ;Field     ;
+                CaptionML=[ENU=Avg. Collection Period (Days);
+                           ESP=Periodo de pago (d¡as)];
+                DecimalPlaces=0:0;
+                SourceExpr=AvgDaysToPay[3] }
+
+    { 61  ;4   ;Field     ;
+                CaptionML=[ENU=Largest Balance;
+                           ESP=Mayor saldo];
+                SourceExpr=HighestBalanceLCY[3];
+                AutoFormatType=1 }
+
+    { 1901652501;3;Group  ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)] }
+
+    { 93  ;4   ;Field     ;
+                SourceExpr=Text000;
+                Visible=FALSE }
+
+    { 38  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=-TotalRemainAmountLCY[1];
+                AutoFormatType=1 }
+
+    { 43  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=TotalRemainAmountLCY[2];
+                AutoFormatType=1 }
+
+    { 48  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=-TotalRemainAmountLCY[3];
+                AutoFormatType=1 }
+
+    { 67  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=TotalRemainAmountLCY[5];
+                AutoFormatType=1 }
+
+    { 53  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=TotalRemainAmountLCY[4];
+                AutoFormatType=1 }
+
+    { 1100010;4;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=TotalRemainAmountLCY[21];
+                AutoFormatType=1 }
+
+    { 85  ;4   ;Field     ;
+                CaptionML=[ENU=Remaining Amt. (LCY);
+                           ESP=Importe pendiente (DL)];
+                SourceExpr=TotalRemainAmountLCY[6];
+                AutoFormatType=1 }
+
+    { 89  ;4   ;Field     ;
+                SourceExpr=Text000;
+                Visible=FALSE }
+
+    { 90  ;4   ;Field     ;
+                SourceExpr=Text000;
+                Visible=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      CustLedgEntry2@1000 : Record 21;
+      CustLedgEntry3@1001 : Record 21;
+      DtldCustLedgEntry2@1002 : Record 379;
+      DateFilterCalc@1003 : Codeunit 358;
+      CustLedgEntry@1004 : ARRAY [21] OF Record 21;
+      CustDateFilter@1005 : ARRAY [3] OF Text[30];
+      CustDateName@1006 : ARRAY [3] OF Text[30];
+      TotalRemainAmountLCY@1007 : ARRAY [21] OF Decimal;
+      NoOfDoc@1008 : ARRAY [3,21] OF Integer;
+      AvgDaysToPay@1009 : ARRAY [3] OF Decimal;
+      DaysToPay@1010 : Decimal;
+      NoOfInv@1011 : Integer;
+      HighestBalanceLCY@1012 : ARRAY [3] OF Decimal;
+      CustBalanceLCY@1013 : Decimal;
+      i@1014 : Integer;
+      j@1015 : Integer;
+      Text000@1016 : TextConst 'ENU=Placeholder;ESP=Marcador de posici¢n';
+
+    LOCAL PROCEDURE UpdateDaysToPay@1(NoOfDays@1000 : Integer);
+    BEGIN
+      DaysToPay := DaysToPay + NoOfDays;
+      NoOfInv := NoOfInv + 1;
+    END;
+
+    BEGIN
+    END.
+  }
+}

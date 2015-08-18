@@ -1,0 +1,155 @@
+OBJECT Codeunit 73 Purch.-Explode BOM
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=39;
+    OnRun=VAR
+            FromDocDim@1000 : Record 357;
+            ToDocDim@1001 : Record 357;
+            TempDocDim@1002 : TEMPORARY Record 357;
+            DimMgt@1003 : Codeunit 408;
+            Selection@1004 : Integer;
+          BEGIN
+            TESTFIELD(Type,Type::Item);
+            TESTFIELD("Quantity Received",0);
+            TESTFIELD("Return Qty. Shipped",0);
+            TESTFIELD("Reserved Qty. (Base)",0);
+            IF "Sales Order No." <> '' THEN
+              ERROR(
+                Text000,
+                "Sales Order No.");
+
+            PurchHeader.GET("Document Type","Document No.");
+            PurchHeader.TESTFIELD(Status,PurchHeader.Status::Open);
+            FromBOMComp.SETRANGE("Parent Item No.","No.");
+            NoOfBOMComp := FromBOMComp.COUNT;
+            IF NoOfBOMComp = 0 THEN
+              ERROR(
+                Text001,
+                "No.");
+
+            Selection := STRMENU(Text005,2);
+            IF Selection = 0 THEN
+              EXIT;
+
+            ToPurchLine.RESET;
+            ToPurchLine.SETRANGE("Document Type","Document Type");
+            ToPurchLine.SETRANGE("Document No.","Document No.");
+            ToPurchLine := Rec;
+            IF ToPurchLine.FIND('>') THEN BEGIN
+              LineSpacing := (ToPurchLine."Line No." - "Line No.") DIV (1 + NoOfBOMComp);
+              IF LineSpacing = 0 THEN
+                ERROR(Text003);
+            END ELSE
+              LineSpacing := 10000;
+
+            ToPurchLine := Rec;
+            ToPurchLine.INIT;
+            ToPurchLine.Description := Description;
+            ToPurchLine."Description 2" := "Description 2";
+            ToPurchLine.MODIFY;
+
+            FromDocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+            FromDocDim.SETRANGE("Document Type","Document Type");
+            FromDocDim.SETRANGE("Document No.","Document No.");
+            FromDocDim.SETRANGE("Line No.","Line No.");
+
+            ToDocDim.SETRANGE("Table ID",DATABASE::"Purchase Line");
+            ToDocDim.SETRANGE("Document Type","Document Type");
+            ToDocDim.SETRANGE("Document No.","Document No.");
+
+            DimMgt.CopyDocDimToDocDim(FromDocDim,TempDocDim);
+            CLEAR(TempDocDim);
+            FromDocDim.DELETEALL;
+
+            FromBOMComp.FIND('-');
+            NextLineNo := "Line No.";
+            REPEAT
+              ToPurchLine.INIT;
+              NextLineNo := NextLineNo + LineSpacing;
+              ToPurchLine."Line No." := NextLineNo;
+              CASE FromBOMComp.Type OF
+                FromBOMComp.Type::" ":
+                  ToPurchLine.Type := ToPurchLine.Type::" ";
+                FromBOMComp.Type::Item:
+                  BEGIN
+                    Item.GET(FromBOMComp."No.");
+                    ToPurchLine.Type := ToPurchLine.Type::Item;
+                    ToPurchLine.VALIDATE("No.",FromBOMComp."No.");
+                    ToPurchLine.VALIDATE("Variant Code",FromBOMComp."Variant Code");
+                    ToPurchLine.VALIDATE("Unit of Measure Code",FromBOMComp."Unit of Measure Code");
+                    ToPurchLine."Qty. per Unit of Measure" := UOMMgt.GetQtyPerUnitOfMeasure(Item,ToPurchLine."Unit of Measure Code");
+                    ToPurchLine.VALIDATE(
+                      Quantity,
+                      ROUND(
+                        "Quantity (Base)" * FromBOMComp."Quantity per" *
+                        UOMMgt.GetQtyPerUnitOfMeasure(Item,ToPurchLine."Unit of Measure Code") /
+                        ToPurchLine."Qty. per Unit of Measure",
+                        0.00001));
+                  END;
+                FromBOMComp.Type::Resource:
+                  ToPurchLine.Type := ToPurchLine.Type::"3"; // Resource
+              END;
+              IF PurchHeader."Language Code" = '' THEN
+                ToPurchLine.Description := FromBOMComp.Description
+              ELSE
+                IF NOT ItemTranslation.GET(FromBOMComp."No.",FromBOMComp."Variant Code",PurchHeader."Language Code") THEN
+                  ToPurchLine.Description := FromBOMComp.Description;
+              IF ToPurchLine.Type = ToPurchLine.Type::"3" THEN // Resource
+                MESSAGE(
+                  Text004,
+                  FromBOMComp."No.")
+              ELSE
+                ToPurchLine.INSERT;
+
+              IF Selection = 1 THEN BEGIN
+                ToPurchLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+                ToPurchLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+                ToPurchLine.MODIFY;
+                ToDocDim.SETRANGE("Line No.",ToPurchLine."Line No.");
+                ToDocDim.DELETEALL;
+                IF TempDocDim.FIND('-') THEN BEGIN
+                  REPEAT
+                    ToDocDim.INIT;
+                    ToDocDim."Table ID" := DATABASE::"Purchase Line";
+                    ToDocDim."Document Type" := ToPurchLine."Document Type";
+                    ToDocDim."Document No." := ToPurchLine."Document No.";
+                    ToDocDim."Line No." := ToPurchLine."Line No.";
+                    ToDocDim."Dimension Code" := TempDocDim."Dimension Code";
+                    ToDocDim."Dimension Value Code" := TempDocDim."Dimension Value Code";
+                    ToDocDim.INSERT;
+                  UNTIL TempDocDim.NEXT = 0;
+                END;
+              END;
+            UNTIL FromBOMComp.NEXT = 0;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=The BOM cannot be exploded on the purchase lines because it is associated with sales order %1.;ESP=La lista de materiales no se puede desplegar en la l¡nea de compras porque est  asociada al pedido de venta %1.';
+      Text001@1001 : TextConst 'ENU=Item %1 is not a bill of materials.;ESP=El producto %1 no es una lista de materiales.';
+      Text003@1002 : TextConst 'ENU=There is not enough space to explode the BOM.;ESP=No hay suficiente espacio para desplegar la lista de materiales.';
+      Text004@1003 : TextConst 'ENU=You cannot purchase resources. Resource %1 was not transferred.;ESP=No se pueden comprar recursos. El recurso %1 no se ha transferido.';
+      Text005@1004 : TextConst 'ENU=&Copy dimensions from BOM,&Retrieve dimensions from components;ESP=&Copiar dim. de L.M.,&Recuperar dimensiones por componentes';
+      ToPurchLine@1005 : Record 39;
+      FromBOMComp@1006 : Record 90;
+      PurchHeader@1007 : Record 38;
+      ItemTranslation@1008 : Record 30;
+      Item@1009 : Record 27;
+      UOMMgt@1010 : Codeunit 5402;
+      LineSpacing@1011 : Integer;
+      NextLineNo@1012 : Integer;
+      NoOfBOMComp@1013 : Integer;
+
+    BEGIN
+    END.
+  }
+}

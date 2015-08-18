@@ -1,0 +1,246 @@
+OBJECT Table 81001 Control de Campos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/12/07;
+    Time=[ 9:00:00];
+    Modified=Yes;
+    Version List=Ctrl2009;
+  }
+  PROPERTIES
+  {
+  }
+  FIELDS
+  {
+    { 1   ;   ;TableNo             ;Integer        }
+    { 3   ;   ;TableName           ;Text30         }
+    { 5   ;   ;Type                ;Text30         }
+    { 7   ;   ;Class               ;Option        ;OptionCaptionML=ESP=Normal,FlowField,FlowFilter;
+                                                   OptionString=Normal,FlowField,FlowFilter }
+    { 11  ;   ;FieldNo             ;Integer        }
+    { 13  ;   ;Nombre campo        ;Text30         }
+    { 15  ;   ;Len                 ;Integer        }
+    { 17  ;   ;Enabled             ;Boolean        }
+    { 19  ;   ;RelationTableNo     ;Integer        }
+    { 21  ;   ;RelationFieldNo     ;Integer        }
+    { 23  ;   ;SQLDataType         ;Option        ;OptionCaptionML=ESP=Varchar,Integer,Variant;
+                                                   OptionString=Varchar,Integer,Variant }
+  }
+  KEYS
+  {
+    {    ;TableNo,FieldNo                         ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      rField@1100253000 : Record 2000000041;
+      rControlCampos@1100253001 : Record 81001;
+      rCambios@1100253006 : Record 81002;
+      dExportControlCampos@1100253002 : Dataport 81000;
+      wVentana@1100253003 : Dialog;
+      wActual@1100253004 : Integer;
+      wTotal@1100253005 : Integer;
+
+    PROCEDURE Exportar@1100253000(pwNomArchivo@1100253000 : Text[1024]);
+    BEGIN
+      rField.RESET;
+      rField.SETFILTER(TableNo, '<%1', 2000000047);
+      IF rField.FIND('-') THEN BEGIN
+
+        // Borramos el fichero temporal de control de campos antes de exportar
+
+        rControlCampos.DELETEALL;
+
+        // Ventana de progreso
+
+        wVentana.OPEN('TRASPASANDO A LA TABLA TEMPORAL\\' +
+                      '@1@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+        wTotal := rField.COUNTAPPROX;
+        wActual  := 0;
+        REPEAT
+          // Actualizar barra de progreso
+
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND( wActual / wTotal * 10000, 1));
+
+          // Guardamos la informacion de los campos de la BBDD en la tabla temporal de control de campos
+
+          rControlCampos.TableNo         := rField.TableNo;
+          rControlCampos.FieldNo         := rField."No.";
+          rControlCampos.TableName       := rField.TableName;
+          rControlCampos.Type            := FORMAT(rField.Type);
+          rControlCampos.Class           := rField.Class;
+          rControlCampos."Nombre campo"  := rField.FieldName;
+          rControlCampos.Len             := rField.Len;
+          rControlCampos.Enabled         := rField.Enabled;
+          rControlCampos.RelationTableNo := rField.RelationTableNo;
+          rControlCampos.RelationFieldNo := rField.RelationFieldNo;
+          rControlCampos.SQLDataType     := rField.SQLDataType;
+          rControlCampos.INSERT;
+        UNTIL rField.NEXT = 0;
+
+        // Cerramos ventana de progreso
+
+        wVentana.CLOSE;
+
+        // Exportamos la informacion de la tabla temporal de control de campos
+
+        CLEAR(dExportControlCampos);
+        dExportControlCampos.IMPORT(FALSE);
+        dExportControlCampos.FILENAME(pwNomArchivo);
+        dExportControlCampos.RUNMODAL();
+
+        // Vaciamos la tabla temporal
+
+        rControlCampos.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE Importar@1100253001(pwNomArchivo@1100253000 : Text[1024]);
+    BEGIN
+      // Importar
+      //
+
+      // Importamos la informacion de la tabla temporal de control de campos
+
+      CLEAR(dExportControlCampos);
+      dExportControlCampos.IMPORT(TRUE);
+      dExportControlCampos.FILENAME(pwNomArchivo);
+      dExportControlCampos.RUNMODAL();
+    END;
+
+    PROCEDURE Comparar@1100253003();
+    BEGIN
+      // Comparar
+      //
+
+      // Vaciamos el fichero de cambios
+
+      rCambios.DELETEALL;
+
+      // Primero hacemos un recorrido los campos que estan en la BBDD para comparar con los importados
+      // de esta manera detectamos los que se han creado nuevos en desarrollo y los que hemos cambiado
+
+      rField.RESET;
+      IF rField.FIND('-') THEN BEGIN
+
+        // Ventana de progreso
+
+        wVentana.OPEN('BUSCANDO CAMPOS NUEVOS/MODIFICADOS\\' +
+                      '@1@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+
+        CLEAR(rControlCampos);
+
+        wTotal := rField.COUNTAPPROX;
+        wActual  := 0;
+        REPEAT
+          // Actualizar barra de progreso
+
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND( wActual / wTotal * 10000, 1));
+
+          IF NOT rControlCampos.GET(rField.TableNo, rField."No.") THEN BEGIN
+            CLEAR(rCambios);
+            rCambios.TableNo       := rField.TableNo;
+            rCambios.FieldNo       := rField."No.";
+            rCambios.TableName     := rField.TableName;
+            rCambios.FieldName     := rField.FieldName;
+            rCambios."Tipo cambio" := rCambios."Tipo cambio"::"Nuevo campo";
+            rCambios.INSERT;
+          END
+          ELSE BEGIN
+            BuscarCambio;
+
+            // Eliminar los registros de la tabla temporal
+
+            rControlCampos.DELETE;
+          END;
+        UNTIL rField.NEXT = 0;
+        wVentana.CLOSE;
+      END;
+
+      // Ahora hacemos un recorrido sobre la tabla temporal para conocer los campos que se han eliminado
+
+      rControlCampos.RESET;
+      IF rControlCampos.FIND('-') THEN BEGIN
+
+        // Ventana de progreso
+
+        wVentana.OPEN('BUSCANDO CAMPOS ELIMINADOS\\' +
+                      '@1@@@@@@@@@@@@@@@@@@@@@@@@');
+
+        wTotal := rControlCampos.COUNTAPPROX;
+        wActual  := 0;
+        REPEAT
+          // Actualizar barra de progreso
+
+          wActual += 1;
+          wVentana.UPDATE(1, ROUND( wActual / wTotal * 10000, 1));
+
+          CLEAR(rCambios);
+          rCambios.TableNo       := rControlCampos.TableNo;
+          rCambios.FieldNo       := rControlCampos.FieldNo;
+          rCambios.TableName     := rControlCampos.TableName;
+          rCambios.FieldName     := rControlCampos."Nombre campo";
+          rCambios."Tipo cambio" := rCambios."Tipo cambio"::"Campo eliminado";
+          rCambios.INSERT;
+
+        UNTIL rControlCampos.NEXT = 0;
+
+        rControlCampos.DELETEALL;
+        wVentana.CLOSE;
+      END;
+    END;
+
+    PROCEDURE BuscarCambio@1100253002();
+    BEGIN
+      // BuscarCambio
+
+      CLEAR(rCambios);
+      rCambios.TableNo       := rField.TableNo;
+      rCambios.FieldNo       := rField."No.";
+      rCambios.TableName     := rField.TableName;
+      rCambios.FieldName     := rField.FieldName;
+      rCambios."Tipo cambio" := rCambios."Tipo cambio"::Cambio;
+
+      IF rControlCampos.TableName <> rField.TableName THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(TableName),
+                                 rControlCampos.TableName, rField.TableName);
+
+      IF rControlCampos.Type <> FORMAT(rField.Type) THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(Type), FORMAT(rControlCampos.Type), FORMAT(rField.Type));
+
+      IF rControlCampos.Class <> rField.Class THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(Class), FORMAT(rControlCampos.Class), FORMAT(rField.Class));
+
+      IF rControlCampos."Nombre campo" <> rField.FieldName THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME("Nombre campo"),
+                                 FORMAT(rControlCampos."Nombre campo"), FORMAT(rField.FieldName));
+
+      IF rControlCampos.Len <> rField.Len THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(Len), FORMAT(rControlCampos.Len), FORMAT(rField.Len));
+
+      IF rControlCampos.Enabled <> rField.Enabled THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(Enabled),
+                                 FORMAT(rControlCampos.Enabled), FORMAT(rField.Enabled));
+
+      IF rControlCampos.RelationTableNo <> rField.RelationTableNo THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(RelationTableNo),
+                                 FORMAT(rControlCampos.RelationTableNo), FORMAT(rField.RelationTableNo));
+
+      IF rControlCampos.RelationFieldNo <> rField.RelationFieldNo THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(RelationFieldNo),
+                                 FORMAT(rControlCampos.RelationFieldNo), FORMAT(rField.RelationFieldNo));
+
+      IF rControlCampos.SQLDataType <> rField.SQLDataType THEN
+        rCambios.InsertaRegistro(rCambios, rControlCampos.FIELDNAME(SQLDataType),
+                                 FORMAT(rControlCampos.SQLDataType), FORMAT(rField.SQLDataType));
+    END;
+
+    BEGIN
+    END.
+  }
+}

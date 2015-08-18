@@ -1,0 +1,1469 @@
+OBJECT Report 7010395 Parte trabajo TRANS Salida
+{
+  OBJECT-PROPERTIES
+  {
+    Date=23/02/10;
+    Time=13:37:19;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    CaptionML=ESP=Parte trabajo TRANS Salida;
+    ShowPrintStatus=No;
+    TopMargin=1000;
+    BottomMargin=1000;
+    LeftMargin=1000;
+    RightMargin=1000;
+    OnPreReport=BEGIN
+                  rPar.FINDFIRST;
+                  rParAux.FINDFIRST;
+
+                  rInfEmp.FINDFIRST;
+                  wFin := FALSE;
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7010360;
+        DataItemTableView=SORTING(Fecha,Cod Conductor,Dia siguiente,Hora inicio);
+        NewPagePerRecord=Yes;
+        OnPreDataItem=VAR
+                        lrParte@1100253000 : Record 7010360;
+                      BEGIN
+
+                        // Si no hay filtro de garaje filtrar por el de trabajo del usuario
+
+                        IF Parte.GETFILTER(Garaje) = '' THEN BEGIN
+                          rUsu.GET(USERID);
+                          IF (rUsu."Garaje de trabajo" <> '') AND (rUsu."Garaje de trabajo" <> rPar."Todos los garajes") THEN
+                            Parte.SETRANGE(Garaje, rUsu."Garaje de trabajo");
+                        END;
+
+                        // Si no se filtra por fecha, consideramos que se van a imprimir los partes de ma¤ana
+
+                        IF Parte.GETFILTER(Fecha) = '' THEN
+                          Parte.SETRANGE(Fecha, CALCDATE(Text50000, TODAY));
+
+                        // AJF 10/03/08
+                        // Filtramos los partes de shuttle si el primero es shuttle.
+                        {------------------------------------------------------------------------------
+                        CLEAR(lrParte);
+                        lrParte.COPY(Parte);
+
+                        IF lrParte.FINDFIRST THEN
+                          IF lrParte."Origen creacion" = lrParte."Origen creacion"::Shuttle THEN BEGIN
+                            bShuttle := TRUE;
+                            Parte.SETRANGE("Origen creacion", Parte."Origen creacion"::Shuttle);
+                          END
+                          ELSE BEGIN
+                            bShuttle := FALSE;
+                            Parte.SETFILTER("Origen creacion", '<>%1', Parte."Origen creacion"::Shuttle);
+                          END;
+                        -------------------------------------------------------------------------------}
+                        // AJS 13.09.2005
+                        // Comprobar si se han establecido rangos de plazas
+
+                        IF wDesdePlazas <> 0 THEN BEGIN
+                          IF wDesdePlazas > wHastaPlazas THEN
+                            ERROR(Text005);
+                        END
+                        ELSE BEGIN
+                          IF wHastaPlazas <> 0 THEN
+                            wDesdePlazas := wHastaPlazas;
+                        END;
+
+                        Parte.LOCKTABLE;
+
+                        // JPT 06/02/06 Mascaras de report
+                        IF NOT wImpMascara THEN BEGIN
+                          IF (rParAux."Partes x Report" = 0) OR CurrReport.PREVIEW  OR (COUNT=1) THEN
+                            wImpMascara := TRUE;
+                        END;
+                        IF NOT wImpMascara THEN BEGIN // Si es mascara
+                          CLEAR(rParteMsk); // JPT 06/02/06 Instancia que utilizaremos para la mascara
+                          CLEAR(wContMask);
+                          CLEAR(wParteMask);
+                        END;
+
+
+                        // JPT 08/03/06 OJO************************
+                        // ************** EN EL REPORT DE SALIDA EL SIGUIENTE CODIGO DEBE DE ELIMINARSE*********************
+                        // ELIMINADO JPT
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lwTextDoc@1100253000 : ARRAY [5] OF Text[250];
+                           lwTieneDoc@1100253002 : Boolean;
+                           lwExt@1100253001 : Code[10];
+                           lwLanza@1103355000 : Boolean;
+                           lwCabioCond@1103355001 : Boolean;
+                           lrLinsParte@1103355002 : Record 7010359;
+                         BEGIN
+                           // AJF 03/04/08
+                           // Si el parte es shuttle reordenamos por DT Vuelo.
+
+
+                           // JPT 06/02/06 Utilizamos una mascara para lanzar otras instancias de este mismo report
+                           // JPT 28/05/07 Cuando hay cambio de conductor tambien hacemos un salto
+                           IF NOT wImpMascara THEN BEGIN
+                             IF wParteMask[1] = '' THEN BEGIN
+                               wParteMask[1] := Parte."N§ Parte";
+                               wCondAnt := "Cod Conductor";
+                             END;
+                             wContMask +=1;
+                             lwTieneDoc  := TieneDocumentosAImp;
+                             lwCabioCond := wCondAnt <> "Cod Conductor"; // Cambio de Conductor
+                             IF (NOT lwTieneDoc) AND (NOT lwCabioCond) THEN
+                               wParteMask[2] := Parte."N§ Parte";
+                             lwLanza := (wContMask >= rParAux."Partes x Report") OR lwTieneDoc OR lwCabioCond;
+                             IF lwLanza THEN  // Lanza todos menos el que tiene doc o cambio cond
+                               EnviaReportMsk;
+                             // Si hay cambio de Conductor en la siguiene vuelta empezamos por este
+                             IF lwTieneDoc OR lwCabioCond THEN BEGIN  // Lanza el que tiene doc
+                               wParteMask[1] := Parte."N§ Parte";
+                               wParteMask[2] := Parte."N§ Parte";
+                               IF lwTieneDoc THEN
+                                 EnviaReportMsk;
+                             END;
+                             wCondAnt := "Cod Conductor";
+                             CurrReport.SKIP;
+                           END
+                           ELSE BEGIN
+                             IF wParteMask[1] <> '' THEN BEGIN // se posiciona en el primer parte
+                               GET(wParteMask[1]);
+                               wParteMask[1]:='';
+                             END;
+                             // Final de la impresi¢n. No utlizamos el break porque no funcina bien. Imprime hoja en blanco con footer
+                             // Para parar utilizamos filtro sobre el mismo parte
+                             wFin:= (wParteMask[2] <>'') AND (wParteMask[2] =  "N§ Parte");
+                             IF wFin THEN
+                               SETRANGE("N§ Parte", "N§ Parte"); // Paramos la impresi¢n en este punto
+                               //CurrReport.BREAK;
+                           END;
+
+                           // AJF 06/10/09
+                           // Muevo este c¢digo para despu‚s de que se gestione la m scara ya que puede dar errores
+                           // en el primer informe del lote.
+                           IF Parte."Origen creacion" = Parte."Origen creacion"::Shuttle THEN BEGIN
+                             // JPT 02/02/10 Datetime a Biginteger
+                             // Recogidas.SETCURRENTKEY("FechaHora Parte");
+                             Recogidas.SETCURRENTKEY("FechaHora Parte BI");
+                             bShuttle := TRUE;
+                           END
+                           ELSE BEGIN
+                             Recogidas.SETCURRENTKEY("N§ Servicio", "N§ Linea");
+                             bShuttle := FALSE;
+                           END;
+
+                           IF NOT rTipoSer.GET("Tipo Servicio") THEN
+                             CurrReport.SKIP;
+
+                           // AJS 13.09.2005
+                           // Se hay rangos de plazas, hay que comprobar si el parte de trabajo cumple con ellos
+
+                           IF wDesdePlazas <> 0 THEN BEGIN
+                             Parte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+                             wPlazas := Parte."Adultos transportados" + Parte."Ni¤os transportados";
+                             IF (wPlazas < wDesdePlazas) OR (wPlazas > wHastaPlazas) THEN
+                               CurrReport.SKIP;
+                           END;
+
+                           IF rTipoSer."Tipo fijo" = rTipoSer."Tipo fijo"::Excursion THEN BEGIN
+                             wTextoCabecera   := Text50001;
+                             wCodigoServicio  := '';
+                             wServicio        := NomServicio;
+                             wServicioGrande  := '';
+                             wImpresionOrigen := '';
+                             wTipoParte       := wTipoParte::Excursion;
+                           END
+                           ELSE BEGIN
+                             wCodigoServicio := "Codigo Servicio";
+
+                             IF Parte."Codigo Servicio" = rPar."Codigo Salidas" THEN BEGIN
+                               wTextoCabecera   := Text50002;
+                               wServicioGrande  := NomServicio;
+                               wServicio        := '';
+                               wImpresionOrigen := Parte."Origen/Destino";
+                               wTipoParte       := wTipoParte::Salida;
+                               wHoras           := FORMAT(Parte."Hora inicio", 0, Text50003);
+                             END
+                             ELSE BEGIN
+                               wTextoCabecera   := Text50004;
+                               wServicio        := NomServicio;
+                               wServicioGrande  := '';
+                               wImpresionOrigen := '';
+                               wTipoParte       := wTipoParte::Entrada;
+                               wHoras           := FORMAT(Parte."Hora inicio", 0, Text50003);
+                             END;
+
+                             // AJF 10/03/08 - En los partes shuttle de llegada metemos la hora de vuelo de la ultima l¡nea.
+
+                             IF bShuttle THEN BEGIN
+                               lrLinsParte.RESET;
+                               // JPT 02/02/10 Datetime a Biginteger
+                               // lrLinsParte.SETCURRENTKEY("FechaHora Parte", "FechaHora Vuelo");
+                               lrLinsParte.SETCURRENTKEY("FechaHora Parte BI", "FechaHora Vuelo BI");
+                               lrLinsParte.SETRANGE("N§ Parte", "N§ Parte");
+                               IF lrLinsParte.FINDLAST THEN BEGIN
+                                 IF Parte."Codigo Servicio" = rPar."Codigo Entradas" THEN
+                                   wHoras   := wHoras + ' - ' + FORMAT(lrLinsParte."Hora recogida", 0, Text50003);
+                                 CargaResumenxHotel(lrLinsParte);
+                               END;
+
+                               // AJF 20/04/09
+                               // Cargo Comentarios para los suplementos.
+                               CargaComentsxHotel(rCommentsTMP);
+
+                             END;
+
+                           END;
+
+                           IF "Codigo Barras" <> '' THEN
+                             wCodigoBarras  := "Codigo Barras"
+                           ELSE
+                             wCodigoBarras := DevuelveCodigoBarra;
+
+                           // AJS 23.03.2005
+                           // Lo guardamos sin codificar porque la pistola ya hace la traduccion del codigo 2 de 5
+
+                           IF NOT CurrReport.PREVIEW THEN BEGIN
+                             rParte.LOCKTABLE;
+                             IF rParte.GET("N§ Parte") THEN BEGIN
+                               rParte."Codigo Barras" := wCodigoBarras;
+                               rParte.VALIDATE("Copias Impresas", rParte."Copias Impresas" +1);
+                               "Copias Impresas"      := rParte."Copias Impresas"; // Le pasamos el valor al puntero actual
+                               rParte.Impreso         := TRUE;
+                               rParte.MODIFY;
+                             END;
+                           END;
+
+
+                           // AJS 21.03.2005
+                           // Pasamos el codigo de barras a la fuente 2 de 5
+
+                           wCodigoBarras := TraduceCodBarrasaHI25S(wCodigoBarras);
+
+                           {JPT 22/07/04 Pruebo de modificar los partes despues de imprimir para evitar el problema de impresion
+                           // Registramos en el historico del parte la impresion
+                           IF NOT CurrReport.PREVIEW THEN
+                             rHist.inserta_registro(1, "N§ Parte", 0, Text0001, Text0002, '');
+                           }
+
+                           CLEAR(wBAL);
+                           IF rCli.GET(Parte.Cliente) THEN BEGIN
+                             wBAL := rCli.BAL;
+                           END;
+
+                           // JPT 17/01/06 Impresi¢n Letreros Parte
+                           IF NOT CurrReport.PREVIEW THEN
+                             ImprimeLetrero(FALSE,FALSE);
+
+                           // AJF 11/03/08 Imprimimos la hoja de desglose de recogida si es un parte shuttle
+
+                           IF NOT CurrReport.PREVIEW AND bShuttle THEN BEGIN
+                            ImprimeDesgloseRecogida;
+                           END;
+
+                           // JPT 03/02/06 Impresi¢n Petici¢n Servicio Cliente
+                           IF NOT CurrReport.PREVIEW THEN BEGIN
+                             IF EXISTS("Peticion Servicio Cliente") THEN BEGIN
+                               lwExt := COPYSTR("Peticion Servicio Cliente",STRLEN("Peticion Servicio Cliente")-2);
+                               IF lwExt = Text50005 THEN BEGIN // Si es un documento de Word
+                                 CLEAR(lwTextDoc);
+                                 lwTextDoc[1] := TextoDoc;
+                                 cFunBas.ImprimeDocumentoWord("Peticion Servicio Cliente", lwTextDoc);
+                               END
+                               ELSE BEGIN // Cualquier otro tipo de documento
+                                 cFunBas.ImprimeDocumento("Peticion Servicio Cliente");
+                               END;
+                             END;
+                           END;
+
+                           // JPT 11/04/06 Captura el texto de cambio y borra los registros si no es previsualizacion
+                           wTextoCambios := rCambs.TextoCambios(Parte, CurrReport.PREVIEW);
+
+                           // JPT 22/07/05 Comento por orden Toni Carvajal. Tarda demasiado
+                           //SLEEP(500);
+                         END;
+
+        OnPostDataItem=BEGIN
+                         // MarcaPartes;
+
+                         IF NOT wImpMascara THEN
+                           EnviaReportMsk;
+                       END;
+
+        ReqFilterFields=Garaje,Fecha,Tipo Servicio,Codigo Servicio,Cliente,Touroperador principal,N§ Parte,Garaje anterior,Usuario,Conductor,Hora inicio,Num cambio garaje,Impreso;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=18900;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1103355010;Label  ;0    ;0    ;18900;846  ;HorzAlign=Center;
+                                                         FontSize=18;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=HOJA DE RUTA }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1100244070;TextBox;0    ;0    ;18900;846  ;HorzAlign=Center;
+                                                         Border=Yes;
+                                                         FontSize=28;
+                                                         FontBold=Yes;
+                                                         SourceExpr=wTextoCabecera }
+            { 1100244068;Shape  ;0    ;0    ;18900;846   }
+            { 1100253005;Label  ;0    ;0    ;300  ;423  ;CaptionML=ESP=S }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=9729;
+            OnPreSection=BEGIN
+                           wImpFoot:= TRUE;
+                         END;
+
+          }
+          CONTROLS
+          {
+            { 1100244000;TextBox;150  ;0    ;7650 ;423  ;FontSize=10;
+                                                         FontUnderline=Yes;
+                                                         SourceExpr=rInfEmp.Name }
+            { 1100244001;TextBox;150  ;423  ;7650 ;423  ;FontSize=10;
+                                                         SourceExpr=rInfEmp.Address }
+            { 1100244002;TextBox;150  ;846  ;4800 ;423  ;FontSize=10;
+                                                         SourceExpr=rInfEmp."Address 2" }
+            { 1100244003;Label  ;150  ;1269 ;1650 ;423  ;FontSize=10;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Telefono }
+            { 1100244004;TextBox;1950 ;1269 ;2250 ;423  ;FontSize=10;
+                                                         SourceExpr=rInfEmp."Phone No." }
+            { 1100244005;TextBox;5550 ;1269 ;2250 ;423  ;HorzAlign=General;
+                                                         FontSize=10;
+                                                         SourceExpr=rInfEmp."Phone No. 2" }
+            { 1100244006;TextBox;150  ;1692 ;5850 ;423  ;FontSize=10;
+                                                         SourceExpr=rInfEmp.City }
+            { 1100244007;TextBox;6150 ;1692 ;1650 ;423  ;HorzAlign=General;
+                                                         FontSize=10;
+                                                         SourceExpr=rInfEmp."Post Code" }
+            { 1100244008;Label  ;8700 ;0    ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Dia }
+            { 1100244009;Label  ;8700 ;846  ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Agencia }
+            { 1100244010;Label  ;8700 ;1692 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Grupo }
+            { 1100244011;Label  ;8700 ;2538 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Letreros }
+            { 1100244012;Label  ;8700 ;2961 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Guia }
+            { 1100244013;Label  ;8700 ;3807 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Servicio }
+            { 1100244015;TextBox;10650;0    ;2100 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         SourceExpr=Fecha }
+            { 1100244016;TextBox;12900;0    ;2100 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         SourceExpr=Fecha;
+                                                         Format=<Weekday Text> }
+            { 1100244017;Label  ;15300;2538 ;1500 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Zona }
+            { 1100244018;TextBox;16950;2538 ;1950 ;423  ;FontSize=10;
+                                                         SourceExpr="Zona parte" }
+            { 1100244019;TextBox;10650;846  ;5400 ;423  ;FontSize=10;
+                                                         SourceExpr=NomCliente }
+            { 1100244020;TextBox;10650;1692 ;8250 ;423  ;FontSize=10;
+                                                         SourceExpr=NomTouroperador }
+            { 1100244021;TextBox;10650;2538 ;4350 ;423  ;FontSize=10;
+                                                         SourceExpr=Letreros }
+            { 1100244022;TextBox;10650;2961 ;4350 ;423  ;FontSize=10;
+                                                         SourceExpr=Guia }
+            { 1100244023;TextBox;10650;3384 ;5400 ;1269 ;Name=TextoServicio;
+                                                         FontSize=16;
+                                                         FontBold=Yes;
+                                                         SourceExpr=wServicioGrande }
+            { 1100244024;TextBox;16200;3807 ;2700 ;423  ;FontSize=10;
+                                                         SourceExpr='(' + "Codigo Servicio" + ')' }
+            { 1100244028;Label  ;0    ;5499 ;2250 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Conductor }
+            { 1100244029;TextBox;2400 ;5499 ;6000 ;423  ;FontSize=10;
+                                                         SourceExpr=NomConductor }
+            { 1100244030;Label  ;0    ;6345 ;2250 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Presentacion }
+            { 1100244031;TextBox;2400 ;6345 ;16500;846  ;HorzAlign=Left;
+                                                         VertAlign=Top;
+                                                         FontSize=10;
+                                                         MultiLine=Yes;
+                                                         SourceExpr=Presentacion }
+            { 1100244032;Label  ;0    ;3807 ;2250 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Referencia }
+            { 1100244033;TextBox;2400 ;3807 ;3150 ;423  ;FontSize=10;
+                                                         SourceExpr=Referencia }
+            { 1100244034;Label  ;0    ;4653 ;2250 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Destino }
+            { 1100244035;TextBox;2400 ;4653 ;3150 ;423  ;FontSize=10;
+                                                         SourceExpr=wImpresionOrigen }
+            { 1100244036;TextBox;2400 ;8037 ;16500;423  ;FontSize=10;
+                                                         SourceExpr=Vuelos }
+            { 1100244037;Label  ;0    ;8037 ;2250 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Vuelos }
+            { 1100244040;Label  ;0    ;8883 ;7200 ;846  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=H O T E L }
+            { 1100244041;Label  ;7350 ;8883 ;900  ;846  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=A D }
+            { 1100244042;Label  ;8400 ;8883 ;900  ;846  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=N I }
+            { 1100244043;Label  ;9450 ;8883 ;9450 ;846  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         CaptionML=ESP=O B S E R V A C I O N E S }
+            { 1100244051;Label  ;8700 ;5922 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Hora }
+            { 1100244058;TextBox;10650;5499 ;1800 ;846  ;HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontSize=14;
+                                                         FontBold=Yes;
+                                                         SourceExpr="Hora inicio";
+                                                         Format=<Hours24,2>:<Minutes,2> }
+            { 1100244059;Shape  ;0    ;0    ;7950 ;2115  }
+            { 1100244060;Shape  ;0    ;8883 ;7200 ;846   }
+            { 1100244061;Shape  ;7350 ;8883 ;900  ;846   }
+            { 1100244062;Shape  ;8400 ;8883 ;900  ;846   }
+            { 1100244063;Shape  ;9450 ;8883 ;9450 ;846   }
+            { 1100244065;TextBox;10650;3807 ;5400 ;423  ;FontSize=10;
+                                                         SourceExpr=wServicio }
+            { 1100244066;Shape  ;17400;0    ;1500 ;846   }
+            { 1100244039;TextBox;0    ;7191 ;18900;846  ;VertAlign=Top;
+                                                         FontSize=10;
+                                                         MultiLine=Yes;
+                                                         SourceExpr=Observaciones }
+            { 1103350010;Label  ;8700 ;1269 ;1800 ;423  ;ParentControl=1103350011;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes }
+            { 1103350011;TextBox;10650;1269 ;6450 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=ESP=BAL;
+                                                         SourceExpr=wBAL }
+            { 1103355008;TextBox;4950 ;846  ;2850 ;423  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         SourceExpr=Text50006 + rInfEmp."VAT Registration No." }
+            { 1103355009;TextBox;16050;846  ;2850 ;423  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         SourceExpr=Text50006 + rCli."VAT Registration No." }
+            { 1103355011;Label  ;8700 ;4653 ;7350 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Matr¡cula }
+            { 1103355012;Label  ;8700 ;5076 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=Autocar }
+            { 1103355013;TextBox;10650;5076 ;2400 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr="N§ Vehiculo" }
+            { 1103355014;TextBox;10650;4653 ;5400 ;423  ;Visible=No;
+                                                         HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=Vehiculo }
+            { 1103355015;Label  ;13050;5076 ;1800 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=N§ Parte }
+            { 1103355016;TextBox;14850;5076 ;4050 ;423  ;HorzAlign=General;
+                                                         FontSize=12;
+                                                         FontBold=Yes;
+                                                         SourceExpr="N§ Parte" }
+            { 1103355021;TextBox;8700 ;423  ;6300 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         SourceExpr=rpReportE.GetFechaReal(Parte) }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            PrintOnEveryPage=Yes;
+            PlaceInBottom=Yes;
+            SectionWidth=18900;
+            SectionHeight=5076;
+            OnPreSection=BEGIN
+                           // Lo siguiente es para evitar que se imprima footer sin contenido en las lineas
+
+                           CurrReport.SHOWOUTPUT(wImpFoot);
+                           wImpFoot:= FALSE;
+                         END;
+
+            OnPostSection=BEGIN
+
+
+                            IF EXISTS(wNombreFichero) THEN
+                              ERASE(wNombreFichero);
+                          END;
+
+          }
+          CONTROLS
+          {
+            { 1103350007;Shape  ;0    ;1692 ;8700 ;846   }
+            { 1103350006;Shape  ;0    ;846  ;8700 ;846   }
+            { 1103350004;Shape  ;0    ;0    ;8700 ;4653  }
+            { 1100244052;Label  ;0    ;0    ;8700 ;846  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=A CUMPLIMENTAR POR EL CONDUCTOR }
+            { 1100244054;Label  ;12450;846  ;4350 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=El Jefe de Grupo }
+            { 1100244055;Shape  ;12450;423  ;4350 ;423  ;ShapeStyle=HorzLine }
+            { 1100244056;Label  ;150  ;846  ;5700 ;846  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=TOTAL PAXES TRANSPORTADOS }
+            { 1100244057;Shape  ;6000 ;2115 ;2550 ;423  ;ShapeStyle=HorzLine }
+            { 1100244064;TextBox;10500;2115 ;8400 ;2115 ;FontName=IDAutomationI25S;
+                                                         FontSize=18;
+                                                         SourceExpr=wCodigoBarras }
+            { 1103350000;Shape  ;10200;2115 ;8700 ;2115  }
+            { 1103350001;Label  ;10200;1692 ;8700 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=no escribir sobre el codigo de barras }
+            { 1103350002;Label  ;150  ;1692 ;5700 ;846  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=HORA FINALIZACIàN SERVICIO }
+            { 1103350003;Label  ;0    ;4230 ;8700 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=No;
+                                                         CaptionML=ESP=FIRMA CONDUCTOR }
+            { 1103350005;Shape  ;0    ;0    ;8700 ;846   }
+            { 1103350008;Shape  ;5250 ;846  ;1200 ;1692 ;ShapeStyle=VertLine }
+            { 1103350009;TextBox;14700;4230 ;4200 ;423  ;HorzAlign=Right;
+                                                         FontSize=7;
+                                                         SourceExpr=FORMAT(TODAY) + ' ' + FORMAT(TIME) + ' - ' + USERID }
+            { 1100253000;TextBox;11400;4230 ;600  ;423  ;HorzAlign=Left;
+                                                         SourceExpr=Version }
+            { 1100253001;Label  ;10200;4230 ;1050 ;423  ;ParentControl=1100253000;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Center;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100253002;Label  ;12150;4230 ;1050 ;423  ;ParentControl=1100253003;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Center;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100253003;TextBox;13350;4230 ;600  ;423  ;HorzAlign=Left;
+                                                         CaptionML=ESP=Copias:;
+                                                         SourceExpr="Copias Impresas" }
+            { 1100253006;TextBox;0    ;4653 ;18900;423  ;HorzAlign=Left;
+                                                         FontSize=7;
+                                                         SourceExpr=wTextoCambios }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table7010359;
+        DataItemTableView=SORTING(N§ Parte,N§ Linea);
+        DataItemVarName=Recogidas;
+        OnPreDataItem=BEGIN
+                        IF (bShuttle) THEN
+                          CurrReport.BREAK;
+
+                        CurrReport.CREATETOTALS("Adultos transportados", "Ni¤os transportados");
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lrElem@1103350000 : Record 7010363;
+                           lwText@1103350001 : Text[150];
+                           lrPunt@1100253000 : Record 7010315;
+                           lwTextDoc@1100253001 : ARRAY [5] OF Text[250];
+                         BEGIN
+                           wHoraImpresion := '';
+                           IF "Hora recogida" <> 0T THEN
+                             wHoraImpresion := ' (' + FORMAT("Hora recogida", 0, Text50007) + ')';
+
+                           // Concatenamos los suplementos
+
+                           CLEAR(lrElem);
+                           lrElem.SETRANGE("N§ Servicio" , "N§ Servicio");
+                           lrElem.SETRANGE("N§ Linea"    , "N§ Linea");
+                           IF lrElem.FINDSET THEN BEGIN
+                             REPEAT
+                               lwText := STRSUBSTNO(Text0003, lrElem.Cantidad, TextoSup(lrElem."Cod. Suplemento"));
+                               IF STRLEN(Observaciones) < MAXSTRLEN(Observaciones) THEN
+                                 Observaciones := Observaciones + COPYSTR(lwText,1,MAXSTRLEN(Observaciones)-STRLEN(Observaciones)-STRLEN(lwText));
+                             UNTIL lrElem.NEXT=0
+                           END;
+
+                           // AJS 31.10.2005
+                           // Vamos a montar un array para mostrar las observaciones
+
+                           MontarObservaciones2(Observaciones);
+
+                           // JPT 16/01/06 Lanzamos la Impresi¢n de documentos descriptivos
+                           IF NOT CurrReport.PREVIEW THEN BEGIN
+                             CLEAR(lwTextDoc);
+                             lwTextDoc[1] := TextoDoc;
+                             IF  "Imprimir Documento Descriptivo" THEN BEGIN
+                               IF lrPunt.GET("Punto recogida") THEN
+                                 lrPunt.ImprimeDocumentoDescriptivo(lwTextDoc);
+                             END;
+                           END;
+                         END;
+
+        GroupTotalFields=N§ Parte;
+        DataItemLink=N§ Parte=FIELD(N§ Parte);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1100244044;TextBox;0    ;0    ;6000 ;423  ;FontSize=10;
+                                                         SourceExpr="Descripcion Punto Recogida" }
+            { 1100244045;TextBox;7350 ;0    ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         SourceExpr="Adultos transportados" }
+            { 1100244046;TextBox;8400 ;0    ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         SourceExpr="Ni¤os transportados" }
+            { 1100244047;TextBox;9450 ;0    ;9450 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Top;
+                                                         FontSize=9;
+                                                         MultiLine=Yes;
+                                                         SourceExpr=wTabObservaciones[1] }
+            { 1100244067;TextBox;6000 ;0    ;1200 ;423  ;FontSize=10;
+                                                         SourceExpr=wHoraImpresion }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=GroupFooter;
+            SectionWidth=18900;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1100244048;TextBox;8400 ;423  ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         SourceExpr=Recogidas."Ni¤os transportados" }
+            { 1100244049;TextBox;7350 ;423  ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         SourceExpr=Recogidas."Adultos transportados" }
+            { 1100244050;Label  ;0    ;423  ;7200 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=T O T A L }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=Observaciones;
+        OnPreDataItem=BEGIN
+                        SETRANGE(Number, 2, 20);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF DELCHR(wTabObservaciones[Number]) = '' THEN
+                             CurrReport.SKIP;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1100253004;TextBox;9450 ;0    ;9450 ;423  ;HorzAlign=Left;
+                                                         VertAlign=Top;
+                                                         FontSize=9;
+                                                         MultiLine=Yes;
+                                                         SourceExpr=wTabObservaciones[Number] }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(1..));
+        DataItemVarName=ResumenxHotel;
+        OnPreDataItem=BEGIN
+                        IF NOT(bShuttle) THEN
+                          CurrReport.BREAK;
+
+                        CurrReport.CREATETOTALS(rLineasTMP."Ni¤os transportados", rLineasTMP."Adultos transportados");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+
+                           IF (Number = 1) THEN BEGIN
+                             IF NOT rLineasTMP.FINDFIRST THEN
+                               CurrReport.BREAK;
+                           END
+                           ELSE BEGIN
+                             IF (rLineasTMP.NEXT = 0) THEN
+                               CurrReport.BREAK;
+                           END;
+
+                           wHoraImpresion := ' (' + FORMAT(rLineasTMP."Hora recogida", 0, Text50007) + ')';
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1103355000;TextBox;0    ;0    ;5850 ;423  ;FontSize=10;
+                                                         SourceExpr=rLineasTMP."Descripcion Punto Recogida" }
+            { 1103355001;TextBox;5850 ;0    ;1350 ;423  ;FontSize=10;
+                                                         SourceExpr=wHoraImpresion }
+            { 1103355002;TextBox;7350 ;0    ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         DecimalPlaces=0:0;
+                                                         SourceExpr=rLineasTMP."Adultos transportados" }
+            { 1103355003;TextBox;8400 ;0    ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         DecimalPlaces=0:0;
+                                                         SourceExpr=rLineasTMP."Ni¤os transportados" }
+            { 1103355004;TextBox;9450 ;0    ;9450 ;423  ;FontSize=10;
+                                                         SourceExpr=rLineasTMP.Observaciones }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=18900;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1103355005;Label  ;0    ;423  ;7200 ;423  ;FontSize=10;
+                                                         FontBold=Yes;
+                                                         LeaderDots=Yes;
+                                                         CaptionML=ESP=T O T A L }
+            { 1103355006;TextBox;7350 ;423  ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         DecimalPlaces=0:0;
+                                                         SourceExpr=rLineasTMP."Adultos transportados" }
+            { 1103355007;TextBox;8400 ;423  ;900  ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         DecimalPlaces=0:0;
+                                                         SourceExpr=rLineasTMP."Ni¤os transportados" }
+          }
+           }
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          WHERE(Number=FILTER(1..));
+        DataItemVarName=Comentarios;
+        OnPreDataItem=BEGIN
+                        rCommentsTMP.RESET;
+                        rCommentsTMP.SETRANGE ("Document Type", 0);
+                        rCommentsTMP.SETRANGE ("No."          , rLineasTMP."N§ Servicio");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+
+                           IF (Number = 1) THEN BEGIN
+                             IF NOT rCommentsTMP.FINDFIRST THEN
+                               CurrReport.BREAK;
+                           END
+                           ELSE BEGIN
+                             IF (rCommentsTMP.NEXT = 0) THEN
+                               CurrReport.BREAK;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=18900;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1103355017;TextBox;9450 ;0    ;9450 ;423  ;FontSize=10;
+                                                         SourceExpr=rCommentsTMP.Comment }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=11660;
+      Height=11000;
+    }
+    CONTROLS
+    {
+      { 1103350000;TextBox;3630 ;220  ;1100 ;440  ;ParentControl=1100244000;
+                                                   InFrame=Yes;
+                                                   CaptionML=ESP=Plazas servicio desde;
+                                                   SourceExpr=wDesdePlazas;
+                                                   MinValue=0 }
+      { 1103350001;Label  ;220  ;220  ;3300 ;440  ;ParentControl=1103350000 }
+      { 1103350002;TextBox;3630 ;770  ;1100 ;440  ;ParentControl=1100244000;
+                                                   InFrame=Yes;
+                                                   CaptionML=ESP=Plazas servicio hasta;
+                                                   SourceExpr=wHastaPlazas;
+                                                   MinValue=0 }
+      { 1103350003;Label  ;220  ;770  ;3300 ;440  ;ParentControl=1103350002 }
+      { 1100244000;Frame  ;0    ;0    ;11660;11000;ShowCaption=No }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355006 : TextConst 'ESP=+1D';
+      Text50001@1103355007 : TextConst 'ESP=E X C U R S I O N';
+      Text50002@1103355008 : TextConst 'ESP=S A L I D A';
+      Text50003@1103355009 : TextConst 'ESP=<Hours24>:<Minutes,2>';
+      Text50004@1103355010 : TextConst 'ESP=E N T R A D A';
+      Text50005@1103355011 : TextConst 'ESP=DOC';
+      Text50006@1103355012 : TextConst 'ESP="CIF "';
+      Text50007@1103355013 : TextConst 'ESP=<Hours24,2>:<Minutes,2>';
+      Text50008@1103355014 : TextConst 'ESP=SHUTTLE TRANSUNION';
+      rUsu@1100244022 : Record 7010420;
+      rPar@1100244006 : Record 7010311;
+      rParAux@1100253004 : Record 7010433;
+      rInfEmp@1100244000 : Record 79;
+      rCli@1100244001 : Record 18;
+      rTTOO@1100244002 : Record 7010312;
+      rCond@1100244003 : Record 7010327;
+      rCodSer@1100244004 : Record 7010320;
+      rPto@1100244007 : Record 7010315;
+      rTipoSer@1100244017 : Record 7010319;
+      rParte@1100244020 : Record 7010360;
+      rParteMsk@1100253005 : Record 7010360;
+      rHist@1100244023 : Record 7010361;
+      rCambs@1100253015 : Record 7035390;
+      cFunBas@1100244010 : Codeunit 7010310;
+      wImpresionOrigen@1100244005 : Code[10];
+      wCodigoServicio@1100244016 : Code[10];
+      wCondAnt@1103355000 : Code[10];
+      wServicio@1100244008 : Text[30];
+      wServicioGrande@1100244009 : Text[30];
+      wCodigoBarras@1100244011 : Text[30];
+      wHoraImpresion@1100244018 : Text[30];
+      wNombreFichero@1100244019 : Text[30];
+      wTextoCabecera@1100244021 : Text[30];
+      Text0001@1100244024 : TextConst 'ESP=Impresion';
+      Text0002@1100244025 : TextConst 'ESP=Impresion Parte';
+      Text0003@1103350000 : TextConst 'ESP=" %1 %2"';
+      wTabObservaciones@1100253000 : ARRAY [20] OF Text[50];
+      wBAL@1103350001 : Code[10];
+      wVentana@1103350002 : Dialog;
+      Text0004@1103350003 : TextConst 'ESP=Marcando Partes @1@@@@@@@@@@@@';
+      wDesdePlazas@1103350004 : Integer;
+      wHastaPlazas@1103350005 : Integer;
+      Text005@1103350006 : TextConst 'ESP=Al indicar rangos de plazas, la cantidad hasta debe ser superior a la cantidad desde.';
+      wPlazas@1103350007 : Integer;
+      Text006@1100253001 : TextConst 'ESP=La palabra "%1" es demasiado larga';
+      Text007@1100253002 : TextConst 'ESP="Parte N§=%1"';
+      wImpMascara@1100253003 : Boolean;
+      wContMask@1100253006 : Integer;
+      wParteMask@1100253007 : ARRAY [3] OF Code[10];
+      rpReportE@1100253008 : Report 7010369;
+      rpReportS@1100253011 : Report 7010395;
+      wFin@1100253009 : Boolean;
+      Text008@1100253010 : TextConst 'ESP=POR FAVOR APUNTEN LAS PLAZAS REALES TRANSPORTADAS';
+      wImpFoot@1103355001 : Boolean;
+      wTipoParte@1100253013 : 'Entrada,Salida,Excursion';
+      Text009@1100253012 : TextConst 'ESP="%1 N§:%2    H.Ini:%3   Pax: %4   "';
+      wTextoCambios@1100253014 : Text[1024];
+      bShuttle@1103355002 : Boolean;
+      wHoras@1103355004 : Text[20];
+      rLineasTMP@1103355003 : TEMPORARY Record 7010359;
+      rCommentsTMP@1103355005 : TEMPORARY Record 43;
+
+    PROCEDURE NomCliente@1100244010() : Text[50];
+    BEGIN
+      // NomCliente
+      //
+      IF rCli.GET(Parte.Cliente) THEN
+        EXIT (rCli.Name)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE NomTouroperador@1100244011() : Text[50];
+    BEGIN
+      // NomTouroperador
+      //
+
+      // AJF 01/04/08
+      // Si El parte es shuttle imprimimos esto en lugar del ttoo principal.
+
+      IF (Parte."Origen creacion" = Parte."Origen creacion"::Shuttle) THEN
+        EXIT(Text50008);
+
+      IF rTTOO.GET(Parte."Touroperador principal") THEN
+        EXIT(rTTOO.Nombre)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE NomConductor@1100244012() : Text[61];
+    BEGIN
+      // NomConductor
+      //
+      IF rCond.GET(Parte."Cod Conductor") THEN
+        EXIT (rCond.Nombre + ' ' + rCond.Apellidos)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE NomServicio@1100244017() : Text[30];
+    BEGIN
+      // NomServicio
+      //
+      IF rCodSer.GET(Parte."Codigo Servicio") THEN
+        EXIT(rCodSer.Descripcion)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE NomHotel@1100244001() : Text[50];
+    BEGIN
+      // NomHotel
+      //
+      IF rPto.GET(Recogidas."Punto recogida") THEN
+        EXIT(rPto.Descripci¢n)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE TextoSup@1103350005(pwCod@1103350001 : Code[20]) : Text[30];
+    VAR
+      lrSup@1103350000 : Record 7010318;
+    BEGIN
+      // TextoSup
+
+      IF lrSup.GET(pwCod) THEN
+        EXIT(lrSup.Descripcion)
+      ELSE
+        EXIT(pwCod);
+    END;
+
+    PROCEDURE MarcaPartes@1103350000();
+    VAR
+      lrParte@1103350000 : Record 7010360;
+      lrParte2@1103350001 : Record 7010360;
+      lwCont@1103350002 : Integer;
+      lwTotal@1103350003 : Integer;
+    BEGIN
+      // MarcaPartes
+      // Marcamos todos los partes al final
+      // JPT 22/07/04 Pruebo de modificar los partes despues de imprimir para evitar el problema de impresion
+
+      IF CurrReport.PREVIEW THEN
+        EXIT;
+
+
+      CLEAR(lrParte);
+      lrParte.COPY(Parte);
+      IF lrParte.FINDSET THEN BEGIN
+        lwTotal := lrParte.COUNT;
+        CLEAR(lwCont);
+        wVentana.OPEN(Text0004);
+        REPEAT
+          IF lrParte."Codigo Barras" <> '' THEN
+            wCodigoBarras  := lrParte."Codigo Barras"
+          ELSE
+            wCodigoBarras := lrParte.DevuelveCodigoBarra;
+
+          lrParte2 := lrParte;
+          lrParte2."Codigo Barras" := wCodigoBarras;
+          lrParte2.Impreso         := TRUE;
+          lrParte2.VALIDATE("Copias Impresas", lrParte2."Copias Impresas" +1);
+          lrParte2.MODIFY;
+          lrParte2.LOCKTABLE;
+          // Registramos en el historico del parte la impresion
+          rHist.inserta_registro(1, lrParte."N§ Parte", 0, Text0001, Text0002, '');
+
+          lwCont +=1;
+          wVentana.UPDATE(1, ROUND(lwCont/lwTotal * 10000 ,1));
+        UNTIL lrParte.NEXT=0;
+        wVentana.CLOSE;
+      END;
+    END;
+
+    PROCEDURE MontarObservaciones@1100253000(pwObservaciones@1100253001 : Text[250]);
+    VAR
+      lwPosicion@1100253000 : Integer;
+      lwLinea@1100253002 : Integer;
+      lwCarLinea@1100253003 : Integer;
+      lwTempLinea@1100253004 : Text[46];
+    BEGIN
+      // MontarObservaciones
+      //
+      // Vamos a montar 7 lineas de texto para distribuir los 250 caracteres de la tabla de observaciones
+
+      CLEAR(wTabObservaciones);
+
+      IF pwObservaciones = '' THEN
+        EXIT;
+
+      lwPosicion := 0;
+      lwLinea    := 1;
+      lwCarLinea := 0;
+      WHILE lwPosicion <> 250 DO BEGIN
+        IF lwCarLinea = 46 THEN BEGIN
+          IF (FORMAT(pwObservaciones[lwPosicion]) <> ' ') AND (FORMAT(pwObservaciones[lwPosicion]) <> '') THEN
+            RetrocedeHastaBlanco(pwObservaciones, lwPosicion, lwLinea, lwCarLinea);
+
+          wTabObservaciones[lwLinea] := COPYSTR(lwTempLinea, 1, lwCarLinea);
+
+          CLEAR(lwTempLinea);
+          lwLinea    += 1;
+          lwCarLinea := 0;
+        END;
+
+        lwPosicion += 1;
+        lwCarLinea += 1;
+        lwTempLinea += FORMAT(pwObservaciones[lwPosicion]);
+      END;
+
+      wTabObservaciones[lwLinea] := COPYSTR(lwTempLinea, 1, lwCarLinea);
+    END;
+
+    PROCEDURE MontarObservaciones2@1100253002(pwObservaciones@1100253001 : Text[250]);
+    VAR
+      lwLinea@1100253002 : Integer;
+      lwChar@1100253005 : Char;
+      lwPalabra@1100253006 : Text[250];
+      lwCont@1100253007 : Integer;
+      lwOk@1100253000 : Boolean;
+      lwSaltoL@1103355000 : Boolean;
+      lwUltima@1103355001 : Integer;
+    BEGIN
+      // MontarObservaciones2
+      //
+      // Vamos a montar n lineas de texto para distribuir los 250 caracteres de la tabla de observaciones
+
+      CLEAR(wTabObservaciones);
+
+      IF pwObservaciones = '' THEN
+        EXIT;
+
+      lwLinea    := 1;
+      CLEAR(lwPalabra);
+      lwUltima := STRLEN(pwObservaciones);
+      FOR lwCont:=1 TO lwUltima DO BEGIN
+        lwChar := pwObservaciones[lwCont];
+        lwSaltoL := (lwChar IN [' ','.',',','-']) OR (lwCont= lwUltima);
+        IF lwCont= lwUltima THEN // La ultima letra
+          lwPalabra += FORMAT(lwChar);
+
+        // JPT 19/06/06 Si una "palabra" es demasiado larga la cortamos
+        IF STRLEN(lwPalabra) >= MAXSTRLEN(wTabObservaciones[lwLinea]) THEN
+          lwSaltoL := TRUE;
+        IF lwSaltoL THEN BEGIN
+          IF STRLEN(wTabObservaciones[lwLinea]) + STRLEN(lwPalabra) > MAXSTRLEN(wTabObservaciones[lwLinea]) THEN
+            lwLinea  += 1;
+          wTabObservaciones[lwLinea] += lwPalabra;
+        END;
+        IF lwSaltoL THEN
+          CLEAR(lwPalabra);
+        lwPalabra += FORMAT(lwChar);
+      END;
+    END;
+
+    PROCEDURE RetrocedeHastaBlanco@1100253001(pwObservaciones@1100253000 : Text[250];VAR pwPosicion@1100253001 : Integer;pwLinea@1100253002 : Integer;VAR pwCarLinea@1100253003 : Integer);
+    BEGIN
+      // RetrocedeHastaBlanco
+      //
+      // Si el salto de linea coincide con una palabra, retrocederemos hasta el primer blanco
+
+      WHILE (FORMAT(pwObservaciones[pwPosicion]) <> ' ') AND
+            (FORMAT(pwObservaciones[pwPosicion]) <> ',') DO BEGIN
+        pwCarLinea -= 1;
+        pwPosicion -= 1;
+      END;
+    END;
+
+    PROCEDURE EnviaReportMsk@1100253009();
+    BEGIN
+      // EnviaReportMsk
+      // JPT 06/02/06 Mascaras de report
+      // Funci¢n que se encarga de enviar las distintas instaci¢n del mismo report para imprimir
+
+      IF (wParteMask[1]='') OR (wParteMask[2]='') THEN
+        EXIT;
+
+      rParteMsk.COPY(Parte);
+
+      IF Parte."Codigo Servicio" = rPar."Codigo Salidas" THEN BEGIN
+        CLEAR(rpReportS);
+        rpReportS.SetMascara(TRUE);
+        rpReportS.SetPartes(wParteMask);
+        rpReportS.SetPlazas(wDesdePlazas,wHastaPlazas);
+
+        rpReportS.SETTABLEVIEW(rParteMsk);
+        rpReportS.USEREQUESTFORM := FALSE;
+
+        rpReportS.RUNMODAL;
+      END
+      ELSE BEGIN
+        CLEAR(rpReportE);
+        rpReportE.SetMascara(TRUE);
+        rpReportE.SetPartes(wParteMask);
+        rpReportE.SetPlazas(wDesdePlazas,wHastaPlazas);
+
+        rpReportE.SETTABLEVIEW(rParteMsk);
+        rpReportE.USEREQUESTFORM := FALSE;
+
+        rpReportE.RUNMODAL;
+      END;
+
+      CLEAR(wContMask);
+      CLEAR(wParteMask);
+    END;
+
+    PROCEDURE SetMascara@1100253015(pwEs@1100253000 : Boolean);
+    BEGIN
+      // SetMascara;
+
+      wImpMascara := pwEs;
+    END;
+
+    PROCEDURE SetPartes@1100253003(pwParteMask@1100253000 : ARRAY [3] OF Code[10]);
+    BEGIN
+      // SetPartes
+      // Es importante tener en cuenta que NO HAY QUE FILTRAR por este rango ya que no vienen ordenados por orden de Partes
+      // Solo sabemos cual va a ser el primero y cual el £ltimo
+
+      COPYARRAY(wParteMask, pwParteMask,1);
+    END;
+
+    PROCEDURE SetPlazas@1100253006(pDesdePlaza@1100253000 : Integer;pHastaPlazas@1100253001 : Integer);
+    BEGIN
+
+      wDesdePlazas := pDesdePlaza;
+      wHastaPlazas := pHastaPlazas;
+    END;
+
+    PROCEDURE TextoDoc@1100253008() : Text[250];
+    VAR
+      lwText@1100253000 : Text[250];
+    BEGIN
+      // TextoDoc
+
+      Parte.CALCFIELDS("Adultos transportados", "Ni¤os transportados");
+      lwText := STRSUBSTNO(Text009, wTipoParte, Parte."N§ Parte", FORMAT(Parte."Hora inicio",0,Text50003),
+                           Parte."Adultos transportados" + Parte."Ni¤os transportados");
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE CargaResumenxHotel@1103355001(VAR prLineas@1103355000 : Record 7010359);
+    VAR
+      ldtFechaAux@1103355001 : DateTime;
+      lwNumLinea@1103355002 : Integer;
+      lwTexto@1103355003 : Text[1024];
+    BEGIN
+      // CargaResumenxHotel
+      // AJF 10/03/08
+      // Cargamos en un temporal un resumen de todas las l¡neas que comparten hotel.
+      // las ordenaremos por recogida con FechaHoraVuelo.
+
+      prLineas.SETCURRENTKEY("N§ Parte", "N§ Linea");
+
+      rLineasTMP.DELETEALL;
+
+      rLineasTMP.RESET;
+
+      IF prLineas.FINDFIRST THEN BEGIN
+
+        lwNumLinea := 0;
+
+        REPEAT
+
+          rLineasTMP.SETRANGE("N§ Servicio", prLineas."Punto recogida");
+
+          IF rLineasTMP.FINDFIRST THEN BEGIN
+
+            rLineasTMP."Adultos transportados"      += prLineas."Adultos transportados";
+            rLineasTMP."Ni¤os transportados"        += prLineas."Ni¤os transportados";
+
+            // JPT 08/09/08 Se producian desbordamientos
+            lwTexto := rLineasTMP.Observaciones;
+            IF lwTexto <> '' THEN
+              lwTexto += ', ';
+            lwTexto += DELCHR(prLineas.Observaciones,'<>', ' ');
+            IF STRLEN(lwTexto) <= MAXSTRLEN(rLineasTMP.Observaciones) THEN
+              rLineasTMP.Observaciones := lwTexto;
+            {
+            IF (prLineas.Observaciones <> '') THEN
+              IF (rLineasTMP.Observaciones = '') THEN
+                rLineasTMP.Observaciones            := DELCHR(prLineas.Observaciones,'<>', ' ')
+              ELSE
+                rLineasTMP.Observaciones            := rLineasTMP.Observaciones + ', ' + DELCHR(prLineas.Observaciones,'<>', ' ');
+            }
+
+            ldtFechaAux := CREATEDATETIME(prLineas.Fecha, prLineas."Hora recogida");
+
+            IF ldtFechaAux < rLineasTMP."FechaHora Vuelo" THEN BEGIN
+              rLineasTMP."Hora recogida"            := prLineas."Hora recogida";
+              rLineasTMP."FechaHora Vuelo"          := ldtFechaAux;
+            END;
+
+            rLineasTMP.MODIFY;
+
+          END
+          ELSE BEGIN
+
+            lwNumLinea += 1;
+            CLEAR(rLineasTMP);
+            rLineasTMP."N§ Servicio"                := prLineas."Punto recogida";
+            rLineasTMP."N§ Linea"                   := lwNumLinea;
+            rLineasTMP."N§ Parte"                   := prLineas."N§ Parte";
+            rLineasTMP."Descripcion Punto Recogida" := prLineas."Descripcion Punto Recogida";
+            rLineasTMP."Adultos transportados"      := prLineas."Adultos transportados";
+            rLineasTMP."Ni¤os transportados"        := prLineas."Ni¤os transportados";
+            rLineasTMP."Hora recogida"              := prLineas."Hora recogida";
+
+            IF (prLineas.Observaciones <> '') THEN
+              rLineasTMP.Observaciones              := DELCHR(prLineas.Observaciones,'<>', ' ');
+
+            // Usamos FechaHora vuelo para mantener ordenadas las l¡neas por recogida.
+
+            rLineasTMP."FechaHora Vuelo"            := CREATEDATETIME(prLineas.Fecha, prLineas."Hora recogida");
+
+            rLineasTMP.INSERT;
+
+          END;
+
+        UNTIL prLineas.NEXT = 0;
+
+        rLineasTMP.SETRANGE("N§ Servicio");
+
+      END;
+
+      rLineasTMP.SETCURRENTKEY("N§ Parte", "N§ Linea");
+    END;
+
+    LOCAL PROCEDURE CargaComentsxHotel@1103355003(VAR prCommentTMP@1103355000 : TEMPORARY Record 43);
+    VAR
+      lrSupls@1103355001 : Record 7010363;
+      lrSuplsxHotelTMP@1103355002 : TEMPORARY Record 205;
+      lrLinParte@1103355003 : Record 7010359;
+      lwComment@1103355004 : Text[250];
+      lwNo@1103355005 : Integer;
+    BEGIN
+      // CargaComentsxHotel
+
+      // Acumulo los Suplementos por punto de recogida.
+
+      lrSupls.SETCURRENTKEY("N§ Parte", "N§ Linea");
+      lrSupls.SETRANGE ("N§ Parte",  Parte."N§ Parte");
+
+      IF lrSupls.FINDSET THEN BEGIN
+        REPEAT
+          IF lrLinParte.GET(lrSupls."N§ Servicio", lrSupls."N§ Linea") THEN BEGIN
+
+            IF NOT lrSuplsxHotelTMP.GET(lrLinParte."Punto recogida", lrSupls."Cod. Suplemento") THEN BEGIN
+              lrSuplsxHotelTMP.INIT;
+              lrSuplsxHotelTMP."Resource No."             := lrLinParte."Punto recogida";
+              lrSuplsxHotelTMP.Code                       := lrSupls."Cod. Suplemento";
+              lrSuplsxHotelTMP."Qty. per Unit of Measure" := 0;
+              lrSuplsxHotelTMP.INSERT;
+
+            END;
+
+            lrSuplsxHotelTMP."Qty. per Unit of Measure" += lrSupls.Cantidad;
+
+            lrSuplsxHotelTMP.MODIFY;
+
+          END;
+        UNTIL lrSupls.NEXT = 0;
+      END;
+
+      prCommentTMP.RESET;
+      prCommentTMP.DELETEALL;
+
+      lrSuplsxHotelTMP.RESET;
+      IF lrSuplsxHotelTMP.FINDSET THEN BEGIN
+        REPEAT
+
+          prCommentTMP.RESET;
+          prCommentTMP.SETCURRENTKEY("Document Type", "No.", "Document Line No.", "Line No.");
+          prCommentTMP.SETRANGE ("Document Type", 0);
+          prCommentTMP.SETRANGE ("No."          , lrSuplsxHotelTMP."Resource No.");
+
+          IF prCommentTMP.FINDLAST THEN BEGIN
+            lwComment := prCommentTMP.Comment + lrSuplsxHotelTMP.Code + ' ' + FORMAT(lrSuplsxHotelTMP."Qty. per Unit of Measure") + ', '
+      ;
+            IF STRLEN(lwComment) > 50 THEN BEGIN
+              lwNo := prCommentTMP."Line No.";
+              prCommentTMP.RESET;
+              prCommentTMP.INIT;
+              prCommentTMP."Document Type" := 0;
+              prCommentTMP."No."           := lrSuplsxHotelTMP."Resource No.";
+              prCommentTMP."Line No."      := lwNo + 1;
+              prCommentTMP.Comment         := lrSuplsxHotelTMP.Code + ' ' + FORMAT(lrSuplsxHotelTMP."Qty. per Unit of Measure") + ', ';
+
+              prCommentTMP.INSERT;
+
+            END
+            ELSE BEGIN
+
+              prCommentTMP.Comment := lwComment;
+              prCommentTMP.MODIFY;
+
+            END;
+
+          END
+          ELSE BEGIN
+
+            prCommentTMP.RESET;
+            prCommentTMP.INIT;
+            prCommentTMP."Document Type" := 0;
+            prCommentTMP."No."           := lrSuplsxHotelTMP."Resource No.";
+            prCommentTMP."Line No."      := 1;
+            prCommentTMP.Comment         := lrSuplsxHotelTMP.Code + ' ' + FORMAT(lrSuplsxHotelTMP."Qty. per Unit of Measure") + ', ';
+
+            prCommentTMP.INSERT;
+
+          END;
+        UNTIL lrSuplsxHotelTMP.NEXT = 0;
+      END;
+
+      // Si cabe el primer comentario lo encasqueto en el comentario del hotel.
+      // Soy grande.
+      rLineasTMP.RESET;
+      IF rLineasTMP.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          prCommentTMP.RESET;
+          prCommentTMP.SETRANGE ("Document Type", 0);
+          prCommentTMP.SETRANGE ("No."          , rLineasTMP."N§ Servicio");
+          IF prCommentTMP.FINDFIRST THEN BEGIN
+            IF STRLEN(rLineasTMP.Observaciones + ', ' + prCommentTMP.Comment) <= 50 THEN BEGIN
+              rLineasTMP.Observaciones := rLineasTMP.Observaciones + ', ' + prCommentTMP.Comment;
+              rLineasTMP.MODIFY;
+              prCommentTMP.DELETE;
+            END;
+          END;
+        UNTIL rLineasTMP.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      JPT 06/02/06
+      wEsMascara determina cuando el report se utiliza como mascara.Eso es, no va a imprimir nada si no que servira como control para
+      ir enviando otras instancias en grupos de 25 (o los que se configuren) para intentar evitar los problemas de impresi¢n de este repor
+      Tambien acabar  el bloque si el parte tiene alg£n documento extra a imprimir con lo cual dicho documente aparecer  justo detr s
+      del parte.
+
+      JPT 02/02/10 Datetime a Biginteger
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

@@ -1,0 +1,316 @@
+OBJECT Codeunit 7010241 Funciones Circuitos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/02/15;
+    Time=11:43:19;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            rCir@1103355000 : Record 7010187;
+          BEGIN
+            IF rCir.FINDFIRST THEN
+              Asignar_Guia_Circuito(rCir);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355001 : TextConst 'ENU=Unable to change cash one time the IBR is generated;ESP=No se puede cambiar el efectivo una vez generado el FPR.';
+      Text001@1103355002 : TextConst 'ENU=Calculating cash @1@@@@@@@@@@@@@@@@@@@@@;ESP=Calculando efectivo @1@@@@@@@@@@@@@@@@@@@@@';
+      Text002@1103355003 : TextConst 'ENU=Cash must be higher than 0;ESP=El efectivo tiene que ser mayor que 0.';
+      Text003@1103355004 : TextConst 'ENU=Must assign a guide for the cash;ESP=Tiene que asignar un gu¡a para el efectivo.';
+      Text004@1103355005 : TextConst 'ENU=Purchase tariff guide %1 was not found neither the generic one;ESP=No se ha encontrado la tarifa de compra del guia %1 ni el gen‚rico';
+      Text005@1103355006 : TextConst 'ENU=Cash;ESP=Efectivo';
+      Text006@1103355007 : TextConst 'ENU=Cash to circuit expenses ledger account;ESP=Efectivo a cuenta gastos circuito';
+      Text007@1103355008 : TextConst 'ENU=Unable to change circuit from circuit one time invoice is done;ESP=No se puede cambiar el circuito de circuito una vez realizada alguna factura.';
+      Finestra@1103355000 : Dialog;
+
+    PROCEDURE Asignar_Guia_Circuito@1(rCir@1103355000 : Record 7010187);
+    VAR
+      rPar@1103355001 : Record 7010185;
+      rCir2@1103355002 : Record 7010187;
+      rPresCir@1103355003 : Record 7010211;
+      rTarCom@1103355004 : Record 7010196;
+      fefe@1103355005 : Form 7010277;
+      cFun@1103355006 : Codeunit 7010150;
+      Paxes@1103355007 : Integer;
+      nRegs@1103355008 : Integer;
+      i@1103355009 : Integer;
+      rCI@1103355010 : Record 7010190;
+    BEGIN
+      // Asignar_Guia_Circuito
+
+      rCir.SETRECFILTER;
+      rCir2 := rCir;
+
+      IF rCir."Efectivo Gu¡a" = 0 THEN
+      BEGIN
+        rPar.GET;
+        //-$001rPar.TESTFIELD("Redondeo Efectivo");
+
+        rCI.RESET;
+        rCI.SETRANGE(Delegacion, rCir.Delegacion);
+        rCI.SETRANGE(Circuito  , rCir.Circuito);
+        rCI.SETRANGE(Orden     , rCir.Orden);
+        IF rCI.FINDSET THEN
+          REPEAT
+            IF rCI.Efectivo THEN
+            BEGIN
+              IF NOT rCI."Pendiente FPR" THEN
+                ERROR(Text000);
+              rCir."Efectivo Gu¡a" := rCir."Efectivo Gu¡a" + rCI."Importe Con Impuesto";
+            END;
+          UNTIL rCI.NEXT = 0
+        ELSE
+        BEGIN
+          CLEAR(cFun);
+          cFun.Establecer_TipoCalculo(1);  // 0 -> costes / ingresos  1 -> Efectivo
+
+          rPresCir.RESET;
+          rPresCir.SETRANGE(Circuito, rCir.Circuito);
+          IF rPresCir.FINDSET THEN
+          BEGIN
+            Paxes := rCir."Paxes Calculo";
+            cFun.Buscar_Hoteles_Circuito(rCir);
+            nRegs := rPresCir.COUNT;
+            i := 0;
+            Finestra.OPEN(Text001);
+            REPEAT
+              i := i + 1;
+              Finestra.UPDATE(1, ROUND((i / nRegs) * 10000, 1));
+              cFun.Buscar_Tarifa_Compra(rPresCir."Tipo Proveedor", rPresCir.Tarifa, rTarCom, rCir);
+              IF rTarCom."N§ Tarifa" <> '' THEN
+                cFun.Buscar_Precio_Compra(rCir, rTarCom, rPresCir);
+            UNTIL rPresCir.NEXT = 0;
+            Finestra.CLOSE;
+          END;
+        END;
+        //-$001rCir."Efectivo Gu¡a" := ROUND(ABS(rCir."Efectivo Gu¡a"), rPar."Redondeo Efectivo", '>');
+        rCir.MODIFY;
+        COMMIT;
+      END;
+
+      CLEAR(fefe);
+      fefe.SETTABLEVIEW := rCir;
+      IF fefe.RUNMODAL <> ACTION::OK THEN
+      BEGIN
+        IF (rCir."Efectivo Gu¡a" <> rCir2."Efectivo Gu¡a") OR (rCir."Guia Efectivo" <> rCir2."Guia Efectivo") THEN
+        BEGIN
+          rCir."Guia Efectivo" := rCir2."Guia Efectivo";
+          rCir."Efectivo Gu¡a" := rCir2."Efectivo Gu¡a";
+          rCir.MODIFY;
+        END;
+        EXIT;
+      END;
+
+      rCir.GET(rCir.Delegacion, rCir.Circuito, rCir.Orden);
+      IF rCir."Efectivo Gu¡a" <= 0 THEN
+      BEGIN
+        IF (rCir."Efectivo Gu¡a" <> rCir2."Efectivo Gu¡a") OR (rCir."Guia Efectivo" <> rCir2."Guia Efectivo") THEN
+        BEGIN
+          rCir."Guia Efectivo" := rCir2."Guia Efectivo";
+          rCir."Efectivo Gu¡a" := rCir2."Efectivo Gu¡a";
+          rCir.MODIFY;
+          COMMIT;
+        END;
+        ERROR(Text002);
+      END;
+
+      IF rCir."Guia Efectivo" = '' THEN
+      BEGIN
+        IF (rCir."Efectivo Gu¡a" <> rCir2."Efectivo Gu¡a") OR (rCir."Guia Efectivo" <> rCir2."Guia Efectivo") THEN
+        BEGIN
+          rCir."Guia Efectivo" := rCir2."Guia Efectivo";
+          rCir."Efectivo Gu¡a" := rCir2."Efectivo Gu¡a";
+          rCir.MODIFY;
+          COMMIT;
+        END;
+        ERROR(Text003);
+      END;
+
+      IF (rCir2."Efectivo Gu¡a" <> rCir."Efectivo Gu¡a") OR (rCir2."Guia Efectivo" <> rCir."Guia Efectivo") THEN
+      BEGIN
+        Crear_Linea_Coste_Efectivo(rCir);
+        Cambiar_Guia_Acompa¤ante(rCir);
+      END;
+    END;
+
+    PROCEDURE Crear_Linea_Coste_Efectivo@2(rCir@1103355000 : Record 7010187);
+    VAR
+      rCI@1103355001 : Record 7010190;
+      rTarGuia@1103355002 : Record 7010196;
+      rExt@1103355003 : Record 7010194;
+      Importe@1103355004 : Decimal;
+      cCalc@1103355005 : Codeunit 7010150;
+    BEGIN
+      // Crear_Linea_Coste_Efectivo
+
+      Importe := 0;
+
+      rCI.RESET;
+      rCI.SETRANGE(Delegacion, rCir.Delegacion);
+      rCI.SETRANGE(Circuito  , rCir.Circuito);
+      rCI.SETRANGE(Orden     , rCir.Orden);
+      rCI.SETRANGE("Coste/Ingreso", rCI."Coste/Ingreso"::Coste);
+      rCI.SETRANGE(Efectivo  , TRUE);
+      IF rCI.FIND('-') THEN BEGIN
+        REPEAT
+          Importe := Importe + rCI."Importe Con Impuesto";
+          IF rCI."Tipo Proveedor" = rCI."Tipo Proveedor"::"Guia Acompa¤ante" THEN BEGIN
+            rCI."Proveedor/Cliente" := rCir."Guia Efectivo";
+            rCI.MODIFY;
+          END;
+        UNTIL rCI.NEXT = 0;
+        IF (Importe <> 0) AND (Importe <> -rCir."Efectivo Gu¡a") THEN BEGIN
+          rTarGuia.SETRANGE (Delegacion    , rCir.Delegacion);
+          rTarGuia.SETRANGE ("Tipo Tarifa" , rTarGuia."Tipo Tarifa"::"Guia Acompa¤ante");
+          rTarGuia.SETFILTER("Fecha inicio", '<=%1', rCir.Fecha);
+          rTarGuia.SETFILTER("Fecha final" , '>=%1', rCir.Fecha);
+          rTarGuia.SETRANGE (Proveedor     , rCir."Guia Efectivo");
+          IF NOT rTarGuia.FIND('-') THEN BEGIN
+            rTarGuia.SETRANGE (Proveedor);
+            IF NOT rTarGuia.FIND('-') THEN
+              ERROR(Text004, rCir."Guia Efectivo");
+          END;
+          rCir.CALCFIELDS("Paxes Calculo");
+          IF NOT rExt.GET(rExt."Tipo Codigo"::Extra, Text005) THEN BEGIN
+            rExt.RESET;
+            rExt.INIT;
+            rExt."Tipo Codigo" := rExt."Tipo Codigo"::Extra;
+            rExt.Codigo        := Text005;
+            rExt.Descripcion   := Text006;
+            rExt.INSERT(TRUE);
+          END;
+          rTarGuia.Proveedor     := rCir."Guia Efectivo";
+          rTarGuia."Tipo Tarifa" := rTarGuia."Tipo Tarifa"::Extra;
+          cCalc.Insertar_Linea_Coste(rCir, rTarGuia, rCir."Paxes Calculo", (rCir."Efectivo Gu¡a" + Importe), 1, rCir.Fecha,
+                                     Text005, TRUE, 0, TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE Cambiar_Guia_Acompa¤ante@3(rCir@1103355000 : Record 7010187);
+    VAR
+      rCI@1103355001 : Record 7010190;
+    BEGIN
+      // Cambiar_Guia_Acompa¤ante
+      //
+      rCI.RESET;
+      rCI.SETRANGE (Delegacion         , rCir.Delegacion);
+      rCI.SETRANGE (Circuito           , rCir.Circuito);
+      rCI.SETRANGE (Orden              , rCir.Orden);
+      rCI.SETRANGE ("Coste/Ingreso"    , rCI."Coste/Ingreso"::Coste);
+      rCI.SETRANGE ("Tipo Proveedor"   , rCI."Tipo Proveedor"::"Guia Acompa¤ante");
+      rCI.SETFILTER("Proveedor/Cliente", '<>%1', rCir."Guia Efectivo");
+      rCI.SETRANGE (Regularizacion     , FALSE);
+      rCI.SETRANGE ("Pendiente FPR"    , TRUE);
+      IF rCI.FIND('-') THEN
+        REPEAT
+          rCI."Proveedor/Cliente" := rCir."Guia Efectivo";
+          rCI.MODIFY;
+        UNTIL rCI.NEXT = 0;
+    END;
+
+    PROCEDURE Cambiar_Circuito_de_Circuito@4(VAR par_Circuito@1103355000 : Record 7010187);
+    VAR
+      rCircuito@1103355001 : Record 7010187;
+      rCI@1103355002 : Record 7010190;
+      rTemp@1103355003 : Record 7010085;
+      rPaxTTOO@1103355004 : Record 7010188;
+      rPaxTTOOb@1103355005 : Record 7010188;
+      rRes@1103355006 : Record 7010186;
+      rResB@1103355007 : Record 7010186;
+    BEGIN
+      // Cambiar_Circuito_de_Circuito
+      //
+      rCI.RESET;
+      rCI.SETRANGE(Delegacion     , par_Circuito.Delegacion);
+      rCI.SETRANGE(Circuito       , par_Circuito.Circuito);
+      rCI.SETRANGE(Orden          , par_Circuito.Orden);
+      rCI.SETRANGE("Pendiente FPR", FALSE);
+      IF rCI.FIND('-') THEN
+        ERROR(Text007);
+
+      rTemp.RESET;
+      IF rTemp.GET(USERID) THEN
+        rTemp.DELETE;
+      CLEAR(rTemp);
+      rTemp.Usuario := USERID;
+      rTemp.Circuito := par_Circuito.Circuito;
+      rTemp.Orden    := par_Circuito.Orden;
+      rTemp.Fecha    := par_Circuito.Fecha;
+      rTemp.INSERT(TRUE);
+
+      COMMIT;
+
+      FORM.RUNMODAL(FORM::"Ficha Cambio Circuito", rTemp);
+
+      rTemp.GET(USERID);
+      IF NOT rTemp.Correcto OR (rTemp.Circuito = '') OR (rTemp.Fecha = 0D) THEN
+        EXIT;
+
+      IF (par_Circuito.Circuito <> rTemp.Circuito) OR (par_Circuito.Fecha <> rTemp.Fecha) THEN BEGIN
+      // borramos costes e ingresos
+        rCI.SETRANGE("Pendiente FPR");
+        rCI.DELETEALL;
+
+      // buscamos el nuevo circuito
+        rCircuito.RESET;
+        rCircuito.SETCURRENTKEY(Circuito, Fecha);
+        rCircuito.SETRANGE(Circuito  , rTemp.Circuito);
+        rCircuito.SETRANGE(Fecha     , rTemp.Fecha);
+        rCircuito.SETRANGE(Delegacion, par_Circuito.Delegacion);
+        IF NOT rCircuito.FIND('-') THEN BEGIN
+          rCircuito.RESET;
+          rCircuito := par_Circuito;
+          rCircuito.Circuito := rTemp.Circuito;
+          rCircuito.Fecha    := rTemp.Fecha;
+          rCircuito.Orden    := 0;
+          rCircuito.INSERT(TRUE);
+        END;
+
+      // buscamos las lineas de TTOO asignadas al circuito
+        rPaxTTOO.RESET;
+        rPaxTTOO.SETRANGE(Delegacion, par_Circuito.Delegacion);
+        rPaxTTOO.SETRANGE(Circuito  , par_Circuito.Circuito);
+        rPaxTTOO.SETRANGE(Orden     , par_Circuito.Orden);
+        IF rPaxTTOO.FIND('-') THEN REPEAT
+          rPaxTTOOb := rPaxTTOO;
+          rPaxTTOOb.Circuito  := rCircuito.Circuito;
+          rPaxTTOOb.Orden     := rCircuito.Orden;
+          rPaxTTOOb."N§ Linea":= 0;
+          rPaxTTOOb.Fecha     := rCircuito.Fecha;
+          rPaxTTOOb.INSERT(TRUE);
+        UNTIL rPaxTTOO.NEXT = 0;
+
+      // buscamos las reservas
+        rRes.SETCURRENTKEY(Delegacion, Circuito, Orden, "N§ linea");
+        rRes.SETRANGE(Delegacion, par_Circuito.Delegacion);
+        rRes.SETRANGE(Circuito  , par_Circuito.Circuito);
+        rRes.SETRANGE(Orden     , par_Circuito.Orden);
+        IF rRes.FIND('-') THEN REPEAT
+          rResB := rRes;
+          rResB.Circuito := rCircuito.Circuito;
+          rResB.Orden    := rCircuito.Orden;
+          rResB.MODIFY;
+        UNTIL rRes.NEXT = 0;
+
+      // borramos las lineas TTOO y el circuito
+        rPaxTTOO.DELETEALL;
+        par_Circuito.DELETE;
+        par_Circuito := rCircuito;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 26022015 Elimino referencias al Parametro general "Redondeo Efectivo" porque esta obsoleto
+    }
+    END.
+  }
+}

@@ -1,0 +1,1136 @@
+OBJECT Codeunit 7010320 Validacion proveedores
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/02/15;
+    Time=13:39:19;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      err1@1100244000 : TextConst 'ESP=No se pueden validar lineas de dos proveedores distintos. Deje marcadas solo las lineas de un solo proveedor.';
+      err2@1100244001 : TextConst 'ESP=No se pueden validar lineas de dos garajes distintos. Deje marcadas solo las lineas de un solo garaje.';
+      err3@1100244002 : TextConst 'ESP=El parte %1 no ha sido facturado al cliente.';
+      err4@1100244003 : TextConst 'ESP=El parte %1 no ha generado su prevision de coste.';
+      err5@1100244004 : TextConst 'ESP=No hay ninguna linea marcada para su validacion.';
+      err6@1100244005 : TextConst 'ESP=El importe introducido por pantalla %1 no coincide con la suma de las lineas marcadas %2.';
+      rProv@1100244006 : Record 23;
+      rConC@1100244007 : Record 7010408;
+      rGrup@1100244008 : Record 93;
+      rPar@1100244009 : Record 7010311;
+      rConf@1100244010 : Record 312;
+      ajuste_coste@1100244011 : TextConst 'ESP=Ajuste FPR #1######## Pro. #2####################';
+      text2@1100244012 : TextConst 'ESP=Servicios de dia %1 a dia %2.';
+      rIVA@1100244013 : Record 325;
+      normal_ingreso@1100244014 : TextConst 'ESP="Prevision ingreso de #1######## "';
+      normal_coste@1100244015 : TextConst 'ESP="Prevision coste de #1######## "';
+      regul_ingreso@1100244016 : TextConst 'ESP=Anulacion prevision ingreso parte #1########';
+      regul_coste@1100244017 : TextConst 'ESP=Anulacion prevision coste parte #1########';
+      ajuste_ingreso@1100244018 : TextConst 'ESP=De momento no existe esta posibilidad';
+      rConfCont@1100244019 : Record 98;
+      rTipo@1000000001 : Record 330;
+      cFunFactV@1103350000 : Codeunit 7010321;
+      GestNoSerie@1103350002 : Codeunit 396;
+      cFunBas@1100253000 : Codeunit 7010310;
+      tab_Tip_Ser@1103350001 : ARRAY [50] OF Code[10];
+      wVentana@1103350003 : Dialog;
+      Text00001@1103350004 : TextConst 'ESP=Indique Numero Contra Recibo\#1#############################';
+      Text00002@1103350005 : TextConst 'ESP=Debe de indicar un n£mero de Contra Recibo';
+      rCond@1103355000 : Record 7010420;
+      Text00003@1103355003 : TextConst 'ESP=Debe de rellenarse una fecha';
+      Text00004@1103355002 : TextConst 'ESP=El proveedor introducido por pantalla %1 no coincide con el de las lineas marcadas %2.';
+      Text00005@1103355001 : TextConst 'ESP=¨Desea Realmente Valiar la Factura %1 del proveedor %2 por un importe de %3?';
+      Text00007@1103355004 : TextConst 'ESP=Debe de indicar un n£mero de Factura';
+      Text00008@1103355005 : TextConst 'ESP=La factura %1 del proveedor %2 ya se ha validado';
+      cGestDia@1103355006 : Codeunit 7035321;
+      Text00009@1103355008 : TextConst 'ESP="Factura Gasoil %1 "';
+      Text00010@1103355007 : TextConst 'ESP="Gasoil %1 "';
+      Text00011@1000000000 : TextConst 'ESP=Hay lineas en Divisa distinta a %1';
+
+    PROCEDURE validar_factura@1(VAR prPC@1100244000 : Record 7035393);
+    VAR
+      rPC@1100244001 : Record 7035393;
+      GestNoSerie@1100244002 : Codeunit 396;
+      w_total_fra@1100244003 : Decimal;
+      w_total_ajustes@1100244004 : Decimal;
+      w_proveedor@1100244005 : Code[20];
+      w_num_documento@1100244006 : Code[20];
+      w_fecha_factura@1100244007 : Date;
+      w_fecha_desde@1100244008 : Date;
+      w_fecha_hasta@1100244009 : Date;
+      w_num_fra@1100244010 : Code[20];
+      w_importe_fra@1100244011 : Decimal;
+      tab_to@1100244012 : ARRAY [50] OF Code[10];
+      tab_importe@1100244013 : ARRAY [50] OF Decimal;
+      i@1100244014 : Integer;
+      w_ultima_linea@1100244015 : Integer;
+      w_ultimo_asiento@1100244016 : Integer;
+      w_opcion@1100244017 : 'Debe,Haber';
+      w_tipo_asiento@1100244018 : 'Normal Ingreso,Normal Coste,Regul Ingreso,Regul Coste,Ajuste Ingreso,Ajuste Coste';
+      w_primera@1100244019 : Boolean;
+      lwTipoServicio@1100244020 : Code[10];
+      lrPC@1100244021 : Record 7035393;
+      lwNoContrRecibo@1103350000 : Code[30];
+      lwFactorDivisa@1103355000 : Decimal;
+    BEGIN
+      // validar_factura
+      //
+      // AJS --> Funcion encargada de crear una factura de compra estandar financials a partir de las
+      //         lineas de coste ingreso de cada parte. Solo se validaran aquellas lineas que tengan
+      //         en el campo Marca el usuario activo (USERID).
+      //
+      rPar.FINDFIRST;
+
+      rPC.COPY(prPC);
+      rPC.SETRANGE(Marca, USERID);
+      IF NOT rPC.FINDFIRST THEN
+        ERROR(err5);
+      // Comprobar que las lineas marcadas pertenecen a un mismo proveedor, y totalizacion de importes
+      //
+      CLEAR(tab_Tip_Ser);
+      comprobar_lineas(rPC, w_total_fra, w_total_ajustes, tab_to, tab_importe, w_fecha_desde,
+                       w_fecha_hasta, tab_Tip_Ser);
+      // Solicitar del usuario los datos para rellenar la factura
+      //
+      pedir_datos(rPC, w_proveedor, w_fecha_factura, w_num_fra, w_importe_fra,lwFactorDivisa);
+      // Comprobacion de que existe la informacion contable necesaria para la validacion de la
+      // factura, como el proveedor, los grupos de IVA y los grupos contables.
+      //
+      comprobar_cuentas(rPC, tab_to);
+      // Comprobar que el usuario ha introducido Fecha y N§ de Factura
+      // tambien que el importe introducido cuadra con el calculo hecho en "comprobar_lineas"
+      // la variable w_importe_fra es la introducida por el usuario
+      //
+      IF (w_fecha_factura = 0D) OR (w_num_fra = '') THEN
+        EXIT;
+
+      IF w_importe_fra <> ROUND(w_total_fra, rConfCont."Amount Rounding Precision") THEN
+        ERROR(err6, w_importe_fra, w_total_fra);
+
+      // Crear los asientos de las lineas de ajuste por touroperador.
+      //
+      i := 1;
+      w_ultima_linea   := busca_ultima_linea(rPar, TRUE);   // TRUE para indicar que es para un asiento
+                                                            // de prevision de coste.
+      w_ultimo_asiento := busca_ultimo_asiento(rPar, TRUE); // TRUE para indicar que es para un asiento
+                                                            // de prevision de coste.
+      w_primera := TRUE; // Variable para tomar el numero de documento solo una vez.
+      WHILE tab_to[i] <> '' DO BEGIN
+        IF tab_importe[i] <> 0 THEN BEGIN
+          IF w_primera THEN BEGIN
+            GestNoSerie.InitSeries(rPar."Serie Previsiones coste", rPar."Serie Previsiones coste", TODAY,
+                                  w_num_documento, rPar."Serie Previsiones coste");
+            w_primera := FALSE;
+          END;
+          w_ultimo_asiento := w_ultimo_asiento + 1;
+          w_ultima_linea := w_ultima_linea + 1000;
+          linea_prevision(w_ultima_linea, w_ultimo_asiento, tab_to[i], rPar."Cuenta Compras", rPC.Fecha,
+                          w_num_documento, rProv.Name, w_opcion::Debe, tab_importe[i], rPar,
+                          rPar."Seccion Previsiones coste", w_tipo_asiento::"Ajuste Coste",tab_Tip_Ser[i], rPC.Garaje,
+                          rPC."N§ Parte", rPC.Proveedor );
+          w_ultima_linea := w_ultima_linea + 1000;
+          linea_prevision(w_ultima_linea, w_ultimo_asiento, tab_to[i], rGrup."Cta facturas pdtes recibir", rPC.Fecha,
+                          w_num_documento, rProv.Name, w_opcion::Haber, tab_importe[i], rPar,
+                          rPar."Seccion Previsiones coste", w_tipo_asiento::"Ajuste Coste",tab_Tip_Ser[i], rPC.Garaje,
+                          rPC."N§ Parte", rPC.Proveedor );
+        END;
+        i := i + 1;
+      END;
+
+      // Si Todas las lineas tienen el mismo Tipo de Servicio, se le asigna este a la cabecera
+      lrPC.RESET; lrPC.INIT;
+      lrPC.COPY  (rPC);
+      IF lrPC.FINDFIRST THEN BEGIN
+        lwTipoServicio := lrPC."Tipo servicio";
+        lrPC.SETFILTER ("Tipo servicio" ,'<> %1', lwTipoServicio);
+        IF  lrPC.FINDFIRST THEN
+          lwTipoServicio := '';
+      END;
+
+
+      // JPT 26/07/04 TER Se Genera el No de Contra recibo a proveedores
+      IF rPar."Empresa Real" = rPar."Empresa Real"::TER THEN BEGIN
+        // Pedimos el numero
+        wVentana.OPEN(Text00001);
+        wVentana.INPUT(1,lwNoContrRecibo);
+        wVentana.CLOSE;
+        IF lwNoContrRecibo='' THEN
+          ERROR(Text00002);
+      END;
+
+
+      // Crear la factura de compra correspondiente a las lineas validadas.
+      //
+      crear_factura(w_fecha_desde, w_fecha_hasta, w_fecha_factura, w_num_fra,
+                    w_total_fra - w_total_ajustes, tab_to, tab_importe, lwTipoServicio,lwNoContrRecibo);
+
+      // Crear los registros en el fichero de validaciones
+      //
+      crear_validaciones(rPC, w_num_fra);
+      // Marcar las lineas con el numero de factura y desmarcar de las lineas el campo Marca
+      //
+      IF rPC.FINDFIRST THEN BEGIN
+        rPC.MODIFYALL("N§ Factura", w_num_fra);
+        rPC.MODIFYALL("Pax validacion", 0);
+        rPC.MODIFYALL("Importe validacion DL", 0);
+        rPC.MODIFYALL("Importe validacion", 0);
+        rPC.MODIFYALL("Concepto facturacion", lwNoContrRecibo);
+        rPC.MODIFYALL(Marca, '');
+      END;
+    END;
+
+    PROCEDURE linea_prevision@20(pw_ultima_linea@1100244000 : Integer;pw_ultimo_asiento@1100244001 : Integer;pw_touroperador@1100244002 : Code[10];pw_cuenta@1100244003 : Code[20];pwFecha@1100244004 : Date;pw_num_documento@1100244005 : Code[20];pw_nombre_pro@1100244006 : Text[50];pw_opcion@1100244007 : 'Debe,Haber';pw_importe@1100244008 : Decimal;prPar@1100244009 : Record 7010311;pw_seccion@1100244010 : Code[20];pw_tipo_asiento@1100244011 : 'Normal Ingreso,Normal Coste,Regul Ingreso,Regul Coste,Ajuste Ingreso,Ajuste Coste';pwTipoServicio@1100244012 : Code[10];pwGaraje@1103355000 : Code[10];pwNumParte@1103355001 : Code[20];pwCodigoOrigen@1103355002 : Code[20]);
+    VAR
+      rLin@1100244013 : Record 81;
+    BEGIN
+      // linea_prevision
+      //
+      // AJS --> Insertar una linea en el diario general para contabilizar las previsiones de coste o ingreso.
+
+      rLin.INIT;
+      rLin."Journal Template Name" := prPar."Libro diario Previsiones";
+      rLin."Journal Batch Name"    := pw_seccion;
+      rLin."Line No."              := pw_ultima_linea;
+
+      rLin.VALIDATE("Posting Date"             , pwFecha);
+      rLin.VALIDATE("Transaction No."          , pw_ultimo_asiento);
+      rLin.VALIDATE("Document No."             , pw_num_documento);
+      rLin.VALIDATE("System-Created Entry"     , TRUE);
+      rLin.VALIDATE("Account Type"             , rLin."Account Type"::"G/L Account");
+      rLin.VALIDATE("Account No."              , pw_cuenta);
+      rLin.VALIDATE("Shortcut Dimension 1 Code", pwGaraje);
+      rLin.VALIDATE("Shortcut Dimension 2 Code", pw_touroperador);
+
+      CASE pw_tipo_asiento OF
+        pw_tipo_asiento::"Normal Ingreso":
+          rLin.VALIDATE(Description, STRSUBSTNO(normal_ingreso, pwTipoServicio));
+        pw_tipo_asiento::"Normal Coste":
+          rLin.VALIDATE(Description, STRSUBSTNO(normal_coste, pwTipoServicio));
+        pw_tipo_asiento::"Regul Ingreso":
+          rLin.VALIDATE(Description, STRSUBSTNO(regul_ingreso, pwNumParte));
+        pw_tipo_asiento::"Regul Coste":
+          rLin.VALIDATE(Description, STRSUBSTNO(regul_coste, pwNumParte));
+        pw_tipo_asiento::"Ajuste Ingreso":
+          rLin.VALIDATE(Description, STRSUBSTNO(ajuste_ingreso, pw_touroperador, pw_nombre_pro));
+        pw_tipo_asiento::"Ajuste Coste":
+          rLin.VALIDATE(Description, STRSUBSTNO(ajuste_coste, pw_touroperador, pw_nombre_pro));
+      END;
+
+      rLin.VALIDATE("Gen. Posting Type"       , 0);
+      rLin.VALIDATE("Gen. Bus. Posting Group" , '');
+      rLin.VALIDATE("Gen. Prod. Posting Group", '');
+      rLin.VALIDATE("VAT Bus. Posting Group"  , '');
+      rLin.VALIDATE("VAT Prod. Posting Group" , '');
+
+      IF pw_opcion = pw_opcion::Debe THEN
+        rLin.VALIDATE("Debit Amount", pw_importe)
+      ELSE
+        rLin.VALIDATE("Credit Amount", pw_importe);
+
+      rLin.VALIDATE ("Source No.", pwCodigoOrigen);
+      //+$002 <
+      IF NOT rPar."Tipo Servicio Como Dimension" THEN
+        rLin.VALIDATE ("Tipo servicio", pwTipoServicio);
+      //+$002 >
+      rLin.INSERT(TRUE);
+
+      // AJS 09.11.2006
+      // Pasamos el tipo de servicio a una dimension
+      //rLin.VALIDATE ("Tipo servicio", pwTipoServicio);
+
+      rPar.FINDFIRST;
+      IF rPar."Tipo Servicio Como Dimension" AND (rPar."Dimensi¢n Tipo Servicio" <> '') THEN
+        InsertaDimDiario(rLin, rPar."Dimensi¢n Tipo Servicio", pwTipoServicio);
+    END;
+
+    PROCEDURE crear_factura@6(pw_fecha_desde@1100244000 : Date;pw_fecha_hasta@1100244001 : Date;pw_fecha_factura@1100244002 : Date;pw_num_factura@1100244003 : Code[20];pw_importe_fra@1100244004 : Decimal;ptab_to@1100244005 : ARRAY [50] OF Code[10];ptab_importe@1100244006 : ARRAY [50] OF Decimal;pwTipoServicio@1100244007 : Code[10];pwContrarecibo@1103350001 : Code[30]);
+    VAR
+      rCab@1100244008 : Record 38;
+      w_linea@1100244009 : Integer;
+      i@1100244010 : Integer;
+      lwNoContrRecibo@1103350000 : Code[30];
+    BEGIN
+      // crear_factura
+      //
+      // AJS --> Crear la cabecera y las lineas de la factura de compra estandar.
+      //
+      // crear_cabecera
+      //
+
+      rPar.FINDFIRST;
+      CLEAR(rCab);
+      rCab.VALIDATE("Document Type", rCab."Document Type"::Invoice);
+      rCab.VALIDATE("No. Series"      , rConf."Posted Invoice Nos.");
+      rCab.INSERT(TRUE);
+
+      rCab.VALIDATE("Posting No. Series"      , rConf."Posted Invoice Nos.");
+      rCab.VALIDATE("Buy-from Vendor No."  , rProv."No.");
+      IF (rProv."Pay-to Vendor No."<>'') AND (rProv."No."<>'') THEN
+        rCab.VALIDATE("Pay-to Vendor No."    , rProv."Pay-to Vendor No.");
+      rCab.VALIDATE("Posting Date"         , TODAY);
+      rCab.VALIDATE("Posting Description"      , STRSUBSTNO(text2, pw_fecha_desde, pw_fecha_hasta));
+      rCab.VALIDATE("Document Date", pw_fecha_factura);
+      rCab.VALIDATE("Vendor Invoice No."   , pw_num_factura);
+      IF rConC."Cod. Terminos Pago" <> '' THEN
+        rCab.VALIDATE("Payment Terms Code", rConC."Cod. Terminos Pago")
+      ELSE
+        rCab.VALIDATE("Payment Terms Code", rProv."Payment Terms Code");
+      IF rConC."Cod. Formas Pago" <> '' THEN
+        rCab.VALIDATE("Payment Method Code", rConC."Cod. Formas Pago")
+      ELSE
+        rCab.VALIDATE("Payment Method Code", rProv."Payment Method Code");
+      rCab.VALIDATE("Shortcut Dimension 1 Code", rConC.Garaje);
+      rCab.VALIDATE("Shortcut Dimension 2 Code"    , '');
+
+      // JPT 20/12/04 Entramos el tipo de servicio como dimension
+      //rCab.VALIDATE("Tipo servicio" , pwTipoServicio);
+
+      IF rPar."Tipo Servicio Como Dimension" THEN BEGIN
+        IF pwTipoServicio <> '' THEN BEGIN
+          rPar.TESTFIELD("Dimensi¢n Tipo Servicio");
+          InsertaDimCab(rCab, rPar."Dimensi¢n Tipo Servicio", pwTipoServicio);
+        END;
+      END;
+
+      IF (rCond."C¢d. Divisa"<>'') AND (NOT rCond."Facturar en DL") THEN BEGIN
+        rCab.VALIDATE("Currency Code"   , rCond."C¢d. Divisa");
+        IF rCond."Factor Divisa" <> 0 THEN
+          rCab.VALIDATE("Currency Factor" , rCond."Factor Divisa");
+      END;
+
+      // JPT 26/07/04 TER Se Genera el No de Contra recibo a proveedores
+      rCab.VALIDATE("Your Reference", pwContrarecibo);
+
+      rCab.MODIFY;
+      // crear_linea
+      //
+      w_linea := 10000;
+      crear_linea(rCab, w_linea, rGrup."Cta facturas pdtes recibir", '', pw_importe_fra, pwTipoServicio);
+      i := 1;
+      WHILE ptab_to[i] <> '' DO BEGIN
+        IF ptab_importe[i] <> 0 THEN BEGIN
+          w_linea := w_linea + 10000;
+          crear_linea(rCab, w_linea, rGrup."Cta facturas pdtes recibir", ptab_to[i], ptab_importe[i], tab_Tip_Ser[i]);
+        END;
+        i := i + 1;
+      END;
+    END;
+
+    PROCEDURE crear_linea@24(prCab@1100244000 : Record 38;pw_linea@1100244001 : Integer;pw_cuenta@1100244002 : Code[20];pw_programa@1100244003 : Code[10];pw_importe@1100244004 : Decimal;pwTipoServ@1103350000 : Code[10]);
+    VAR
+      rLin@1100244005 : Record 39;
+      w_importeSin@1100244006 : Decimal;
+    BEGIN
+      // crear_linea
+      //
+      rLin.RESET; rLin.INIT;
+      rLin.VALIDATE("Document Type"       , prCab."Document Type");
+      rLin.VALIDATE("Document No."        , prCab."No.");
+      rLin.VALIDATE("Line No."            , pw_linea);
+      rLin.VALIDATE("Buy-from Vendor No." , rConC.Proveedor);
+      rLin.INSERT(TRUE);
+
+      rLin.VALIDATE(Type                       , rLin.Type::"G/L Account");
+      rLin.VALIDATE("No."                      , pw_cuenta);
+      rLin.VALIDATE("Shortcut Dimension 1 Code", rConC.Garaje);
+      rLin.VALIDATE("Shortcut Dimension 2 Code", pw_programa);
+      rLin.VALIDATE(Quantity                   , 1);
+      rLin.VALIDATE("Gen. Bus. Posting Group"  , rProv."Gen. Bus. Posting Group");
+      rLin.VALIDATE("VAT Bus. Posting Group"   , rProv."VAT Bus. Posting Group");
+      rLin.VALIDATE("VAT Prod. Posting Group"  , rConC."Grupo Registro IVA Producto");
+      rLin.VALIDATE("Direct Unit Cost", pw_importe);
+      rLin.MODIFY;
+
+      // JPT 20/12/04 Introducimos el tipo de servicio como dimensi¢n
+
+      IF rPar."Tipo Servicio Como Dimension" THEN BEGIN
+        IF pwTipoServ <> '' THEN BEGIN
+          rPar.TESTFIELD("Dimensi¢n Tipo Servicio");
+            InsertaDimLin(rLin,rPar."Dimensi¢n Tipo Servicio", pwTipoServ);
+        END;
+      END;
+    END;
+
+    PROCEDURE crear_validaciones@45(VAR prPC@1100244000 : Record 7035393;pw_num_fra@1100244001 : Code[20]);
+    VAR
+      rVal@1100244002 : Record 7010410;
+    BEGIN
+      // crear_validaciones
+      //
+      IF prPC.FINDSET THEN BEGIN
+        REPEAT
+          prPC.CALCFIELDS("Importe validado", "Paxes validados");
+          rVal.RESET; rVal.INIT;
+          rVal."N§ Parte"         := prPC."N§ Parte";
+          rVal."N§ Linea"         := prPC."N§ Linea";
+          rVal."N§ Factura"       := pw_num_fra;
+          IF prPC."Importe validacion DL" <> 0 THEN
+            rVal."Importe Validado" := prPC."Importe validacion DL"
+          ELSE
+            rVal."Importe Validado" := prPC."Importe sin impuesto DL" - prPC."Importe validado";
+          IF prPC."Pax validacion" <> 0 THEN
+            rVal."Paxes Validados" := prPC."Pax validacion"
+          ELSE
+            rVal."Paxes Validados" := prPC."Pax Real" - prPC."Paxes validados";
+          rVal.INSERT;
+        UNTIL prPC.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE comprobar_lineas@2(VAR prPC@1100244000 : Record 7035393;VAR pw_total_fra@1100244001 : Decimal;VAR pw_total_ajustes@1100244002 : Decimal;VAR ptab_to@1100244003 : ARRAY [50] OF Code[10];VAR ptab_importe@1100244004 : ARRAY [50] OF Decimal;VAR pw_fecha_desde@1100244005 : Date;VAR pw_fecha_hasta@1100244006 : Date;VAR ptab_Tip_Ser@1100244007 : ARRAY [50] OF Code[10]);
+    VAR
+      rPC@1100244008 : Record 7035393;
+      lrDiv@1000000003 : Record 4;
+      ant_proveedor@1100244009 : Code[20];
+      ant_garaje@1100244010 : Code[10];
+      ant_parte@1100244011 : Code[10];
+      lwImp@1000000002 : Decimal;
+      lwEnDivisa@1000000001 : Boolean;
+      lwPre@1000000000 : Decimal;
+    BEGIN
+      // comprobar_lineas
+      //
+      // AJS --> Repasar todas las lineas a validar para comprobar que pertenecen a un solo proveedor,
+      //         que los partes implicados han generado las facturas de venta, que sean de un mismo
+      //         garaje y que todas las lineas menos las manuales han generado su prevision.
+      //         Sumar los importes de ajuste separados por Touroperador pero tambien un total.
+      //         Totalizar las lineas marcadas.
+      //
+      rPar.FINDFIRST;
+
+      pw_total_fra     := 0;
+      pw_total_ajustes := 0;
+      ant_parte        := '';
+      CLEAR(ptab_to);
+      CLEAR(ptab_importe);
+      CLEAR(ptab_Tip_Ser);
+      IF prPC.FINDSET THEN BEGIN
+        ant_proveedor := prPC.Proveedor;
+        ant_garaje    := prPC.Garaje;
+        pw_fecha_desde   := prPC.Fecha;
+        pw_fecha_hasta   := prPC.Fecha;
+        REPEAT
+
+          // ----  Comprobacion de distinto proveedor en las lineas  ----
+
+          IF prPC.Proveedor <> ant_proveedor THEN
+            ERROR(err1);
+
+          // ----  Comprobacion de distinto garaje en las lineas  ----
+
+          IF prPC.Garaje <> ant_garaje THEN
+            ERROR(err2);
+
+          // ----  Comprobacion de que el parte este facturado  ----
+          // JPT 02/03/05 UEX Pued validar antes de facturar
+          IF rPar."Empresa Real" <> rPar."Empresa Real"::UEX THEN BEGIN
+            IF prPC."N§ Parte" <> ant_parte THEN BEGIN
+              rPC.RESET; rPC.INIT;
+              rPC.SETRANGE("N§ Parte"  , prPC."N§ Parte");
+              rPC.SETRANGE("N§ Factura", '');
+              IF rPC.FINDFIRST THEN
+                ERROR(err3, prPC."N§ Parte");
+            END;
+          END;
+
+          // ----  Comprobacion de que se haya generado la prevision salvo en las lineas de ajuste y si se ha marcado  ----
+          // ----  esta comprobacion en parametros                                                                     ----
+
+          IF (prPC."Tipo linea" <> prPC."Tipo linea"::Ajuste) AND (NOT prPC."Generada prevision") AND
+             (rPar."Crear prevision antes facturar") THEN
+            ERROR(err4, prPC."N§ Parte");
+
+          // ----  Tomamos la fecha inicial y la fecha final de servicios  ----
+
+          IF prPC.Fecha < pw_fecha_desde THEN
+            pw_fecha_desde := prPC.Fecha;
+          IF prPC.Fecha > pw_fecha_hasta THEN
+            pw_fecha_hasta := prPC.Fecha;
+
+          // ---- Totalizar Importes, totalizando por separado los ajustes  ----
+
+          // Indicamos si deseamos validar en Divisa.
+          // La divisa que se va a facturar es la que indica rCond."C¢d. Divisa"
+          lwEnDivisa  := ((rCond."C¢d. Divisa" <> '') AND (NOT rCond."Facturar en DL"));
+          prPC.CALCFIELDS("Importe validado");
+          IF prPC."Importe validacion DL" <> 0 THEN BEGIN
+            IF lwEnDivisa THEN BEGIN
+              lwImp := prPC."Importe validacion";
+              IF rCond."C¢d. Divisa" <> prPC."Cod. Divisa" THEN
+                ERROR(Text00011, rCond."C¢d. Divisa");
+            END ELSE
+              lwImp := prPC."Importe validacion DL"
+          END
+          ELSE BEGIN
+            lwImp := prPC."Importe sin impuesto DL" - prPC."Importe validado";
+            IF lwEnDivisa THEN  // El importe validado siempre es en DL
+              IF rCond."Factor Divisa" =0 THEN
+                lwImp := rTipo.ExchangeAmtFCYToFCY(WORKDATE,'', rCond."C¢d. Divisa", lwImp)
+              ELSE
+                lwImp := rTipo.ExchangeAmtLCYToFCY(WORKDATE, rCond."C¢d. Divisa", lwImp, rCond."Factor Divisa");
+          END;
+          pw_total_fra +=  lwImp;
+          IF prPC."Tipo linea" = prPC."Tipo linea"::Ajuste THEN BEGIN
+            pw_total_ajustes := pw_total_ajustes + lwImp;
+            busca_touroperador(prPC.Touroperador, lwImp, ptab_to,
+                               ptab_importe, prPC."Tipo servicio" ,ptab_Tip_Ser);
+          END;
+        UNTIL prPC.NEXT = 0;
+      END;
+
+      // Se redondea a la precisi¢n de la divisa
+      IF rCond."C¢d. Divisa" = '' THEN
+        lwPre := rConfCont."Amount Rounding Precision"
+      ELSE BEGIN
+        lrDiv.GET(rCond."C¢d. Divisa");
+        lwPre := lrDiv."Amount Rounding Precision";
+      END;
+
+      pw_total_fra := ROUND(pw_total_fra, lwPre);
+    END;
+
+    PROCEDURE pedir_datos@11(prPC@1100244000 : Record 7035393;VAR w_proveedor@1100244001 : Code[20];VAR w_fecha_factura@1100244002 : Date;VAR w_num_fra@1100244003 : Code[20];VAR w_importe_fra@1100244004 : Decimal;VAR pwFactorDivisa@1103355000 : Decimal);
+    VAR
+      rCond@1100244005 : Record 7010420;
+      fFicFra@1100244006 : Form 7035255;
+    BEGIN
+      // pedir_datos
+      //
+      // AJS --> Solicitar del usuario la Fecha, Numero e Importe de la factura del proveedor.
+      //
+
+      // AJF 07/01/09
+      // Evito borrar el registro, ya que ahora tiene datos permanentes.
+      IF rCond.GET(USERID) THEN
+        rCond.LimpiaRegistro
+      ELSE BEGIN
+        rCond.INIT;
+        rCond.Usuario := USERID;
+        rCond.INSERT;
+      END;
+
+      rCond.Proveedor := prPC.Proveedor;
+      rCond.Operacion := rCond.Operacion::Ajuste; // Utilizo este campo para que no haga las
+                                                  // comprobacion del Importe.
+      rCond.MODIFY;
+
+      COMMIT;
+      rCond.SETRECFILTER;
+      CLEAR(fFicFra);
+      fFicFra.SETTABLEVIEW(rCond);
+      IF fFicFra.RUNMODAL <> ACTION::OK THEN
+        EXIT;
+      fFicFra.GETRECORD(rCond);
+      w_proveedor     := rCond.Proveedor;
+      w_fecha_factura := rCond."Fecha Factura";
+      w_num_fra       := rCond."N§ Factura";
+      w_importe_fra   := rCond.Importe;
+      pwFactorDivisa  := rCond."Factor Divisa";
+    END;
+
+    PROCEDURE comprobar_cuentas@3(prPC@1100244000 : Record 7035393;ptab_to@1100244001 : ARRAY [50] OF Code[10]);
+    VAR
+      rIvaNeg@1100244002 : Record 323;
+      rIvaProd@1100244003 : Record 324;
+      rSecc@1100244004 : Record 232;
+      rCta@1100244005 : Record 15;
+      rDimVal@1100244006 : Record 349;
+      rLib@1100244007 : Record 80;
+      GLSetup@1100244009 : Record 98;
+      i@1100244008 : Integer;
+    BEGIN
+      // Comprobar_cuentas
+      //
+      // AJS --> Buscar el proveeedor, el contrato de compra, los grupos de IVA, los grupo contables,
+      //         la configuracion de compras, los programas y seccion diario general.
+      //
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Cuenta Compras");
+      rCta.GET(rPar."Cuenta Compras");
+      rPar.TESTFIELD("Libro diario Previsiones");
+      rLib.GET(rPar."Libro diario Previsiones");
+      rPar.TESTFIELD("Seccion Previsiones coste");
+      rSecc.GET(rPar."Libro diario Previsiones", rPar."Seccion Previsiones coste");
+      rPar.TESTFIELD("Serie Previsiones coste");
+
+      rConf.FINDFIRST;
+      rConf.TESTFIELD("Posted Invoice Nos.");
+
+      rProv.GET(prPC.Proveedor);
+      rProv.TESTFIELD("Vendor Posting Group");
+      rGrup.GET(rProv."Vendor Posting Group");
+      rGrup.TESTFIELD("Cta facturas pdtes recibir");
+      rCta.GET(rGrup."Cta facturas pdtes recibir");
+
+      rProv.TESTFIELD("Gen. Bus. Posting Group");
+      rProv.TESTFIELD("VAT Bus. Posting Group");
+      rIvaNeg.GET(rProv."VAT Bus. Posting Group");
+
+      // AJS 09.08.2005
+      // Los contratos de compra pueden ir por garaje o contra el garaje todos
+
+      //rConC.GET(prPC.Garaje, prPC."N§ Contrato");
+
+      rConC.RESET;
+      rConC.SETRANGE("N§ Contrato", prPC."N§ Contrato");
+      rConC.FINDFIRST;
+
+      rConC.TESTFIELD("Grupo Registro IVA Producto");
+      rIvaProd.GET(rConC."Grupo Registro IVA Producto");
+
+      rIVA.GET(rProv."VAT Bus. Posting Group", rConC."Grupo Registro IVA Producto");
+
+      // AJS 26.01.2004
+      // El codigo de touroperador se ha convertido en un valor de la dimension 2
+
+      GLSetup.FINDFIRST;
+
+      i := 1;
+      WHILE ptab_to[i] <> '' DO BEGIN
+        rDimVal.GET(GLSetup."Shortcut Dimension 2 Code", ptab_to[i]);
+        i := i + 1;
+      END;
+
+      rConfCont.FINDFIRST;
+    END;
+
+    PROCEDURE comprobar_cuentas2@1103355002(prCI@1103355001 : Record 7010414;ptab_to@1103355000 : ARRAY [50] OF Code[10]);
+    VAR
+      rIvaNeg@1103355009 : Record 323;
+      rIvaProd@1103355008 : Record 324;
+      rSecc@1103355007 : Record 232;
+      rCta@1103355006 : Record 15;
+      rDimVal@1103355005 : Record 349;
+      rLib@1103355004 : Record 80;
+      GLSetup@1103355003 : Record 98;
+      i@1103355002 : Integer;
+    BEGIN
+      // comprobar_cuentas2
+      // AJF 17/09/08 mantengo la funcionalidad para que no haya problemas de compilacion
+      // AJS --> Buscar el proveeedor, el contrato de compra, los grupos de IVA, los grupo contables,
+      //         la configuracion de compras, los programas y seccion diario general.
+      //
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Cuenta Compras");
+      rCta.GET(rPar."Cuenta Compras");
+      rPar.TESTFIELD("Libro diario Previsiones");
+      rLib.GET(rPar."Libro diario Previsiones");
+      rPar.TESTFIELD("Seccion Previsiones coste");
+      rSecc.GET(rPar."Libro diario Previsiones", rPar."Seccion Previsiones coste");
+      rPar.TESTFIELD("Serie Previsiones coste");
+
+      rConf.FINDFIRST;
+      rConf.TESTFIELD("Posted Invoice Nos.");
+
+      rProv.GET(prCI.Proveedor);
+      rProv.TESTFIELD("Vendor Posting Group");
+      rGrup.GET(rProv."Vendor Posting Group");
+      rGrup.TESTFIELD("Cta facturas pdtes recibir");
+      rCta.GET(rGrup."Cta facturas pdtes recibir");
+
+      rProv.TESTFIELD("Gen. Bus. Posting Group");
+      rProv.TESTFIELD("VAT Bus. Posting Group");
+      rIvaNeg.GET(rProv."VAT Bus. Posting Group");
+
+      // AJS 09.08.2005
+      // Los contratos de compra pueden ir por garaje o contra el garaje todos
+
+      //rConC.GET(prCI.Garaje, prCI."N§ Contrato");
+      IF prCI."N§ Parte" <> '' THEN BEGIN // Esta funci¢n tambi‚n se llama en la validaci¢n de Gasoil
+        rConC.RESET;
+        rConC.SETRANGE("N§ Contrato", prCI."N§ Contrato");
+        rConC.FINDFIRST;
+
+        rConC.TESTFIELD("Grupo Registro IVA Producto");
+        rIvaProd.GET(rConC."Grupo Registro IVA Producto");
+
+        rIVA.GET(rProv."VAT Bus. Posting Group", rConC."Grupo Registro IVA Producto");
+      END;
+
+      // AJS 26.01.2004
+      // El codigo de touroperador se ha convertido en un valor de la dimension 2
+
+      GLSetup.FINDFIRST;
+
+      i := 1;
+      WHILE ptab_to[i] <> '' DO BEGIN
+        rDimVal.GET(GLSetup."Shortcut Dimension 2 Code", ptab_to[i]);
+        i := i + 1;
+      END;
+
+      rConfCont.FINDFIRST;
+    END;
+
+    PROCEDURE busca_touroperador@5(pw_touroperador@1100244000 : Code[10];pw_importe@1100244001 : Decimal;VAR ptab_to@1100244002 : ARRAY [50] OF Code[10];VAR ptab_importe@1100244003 : ARRAY [50] OF Decimal;pw_TipSer@1100244004 : Code[10];VAR Ptab_Tip_Ser@1100244005 : ARRAY [50] OF Code[10]);
+    VAR
+      i@1100244006 : Integer;
+    BEGIN
+      // busca_touroperador
+      //
+      // AJS --> Localizar el codigo de touroperador de la linea en el array de touroperadores para
+      //         totalizar los importes de las lineas de ajuste por touroperador.
+      //
+      i := 0;
+      REPEAT
+        i := i + 1;
+        IF ptab_to[i] = '' THEN BEGIN
+          ptab_to[i]      := pw_touroperador;
+          Ptab_Tip_Ser[i] := pw_TipSer;
+        END;
+      UNTIL (ptab_to[i] = pw_touroperador) AND (Ptab_Tip_Ser[i] = pw_TipSer) ;
+      ptab_importe[i] := ptab_importe[i] + pw_importe;
+    END;
+
+    PROCEDURE busca_ultima_linea@17(prPar@1100244000 : Record 7010311;pw_coste@1100244001 : Boolean) : Integer;
+    VAR
+      rLin@1100244002 : Record 81;
+    BEGIN
+      // busca_ultima_linea
+      //
+      rLin.RESET; rLin.INIT;
+      rLin.SETRANGE("Journal Template Name"  , prPar."Libro diario Previsiones");
+      IF pw_coste THEN
+        rLin.SETRANGE("Journal Batch Name", prPar."Seccion Previsiones coste")
+      ELSE
+        rLin.SETRANGE("Journal Batch Name", prPar."Seccion Previsiones ingreso");
+      IF rLin.FINDLAST THEN
+        EXIT(rLin."Line No.")
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE busca_ultimo_asiento@18(prPar@1100244000 : Record 7010311;pw_coste@1100244001 : Boolean) : Integer;
+    VAR
+      rLin@1100244002 : Record 81;
+    BEGIN
+      // busca_ultimo_asiento
+      //
+      rLin.RESET; rLin.INIT;
+      rLin.SETCURRENTKEY("Journal Template Name",
+                         "Journal Batch Name",
+                         "Posting Date",
+                         "Transaction No.");
+      rLin.SETRANGE("Journal Template Name"  , prPar."Libro diario Previsiones");
+      IF pw_coste THEN
+        rLin.SETRANGE("Journal Batch Name", prPar."Seccion Previsiones coste")
+      ELSE
+        rLin.SETRANGE("Journal Batch Name", prPar."Seccion Previsiones ingreso");
+      rLin.SETRANGE("Posting Date"       , TODAY);
+      IF rLin.FINDLAST THEN
+        EXIT(rLin."Transaction No.")
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE InsertaDimCab@1103350002(VAR prCab@1103350000 : Record 38;pwDimension@1103350001 : Code[20];pwValor@1103350002 : Code[20]);
+    VAR
+      lrDocDim@1103350003 : Record 357;
+    BEGIN
+      // InsertaDimCab
+      // Inserta dimension a la cabecera de factura
+
+      IF pwValor='' THEN
+        EXIT;
+      CLEAR(lrDocDim);
+      lrDocDim.VALIDATE("Table ID"            , DATABASE::"Purchase Header");
+      lrDocDim.VALIDATE("Document Type"       , prCab."Document Type");
+      lrDocDim.VALIDATE("Document No."        , prCab."No.");
+      lrDocDim.VALIDATE("Dimension Code"      , pwDimension);
+      lrDocDim.VALIDATE("Dimension Value Code", pwValor);
+      lrDocDim.INSERT(TRUE);
+    END;
+
+    PROCEDURE InsertaDimLin@1103350005(VAR prLin@1103350000 : Record 39;pwDimension@1103350001 : Code[20];pwValor@1103350002 : Code[20]);
+    VAR
+      lrDocDim@1103350003 : Record 357;
+      lrDocDim2@1103350004 : Record 357;
+    BEGIN
+      // InsertaDimLin
+      // Inserta dimension a la linea de factura
+
+      IF pwValor = '' THEN
+        EXIT;
+
+      CLEAR(lrDocDim);
+      lrDocDim.VALIDATE("Table ID"            , DATABASE::"Purchase Line");
+      lrDocDim.VALIDATE("Document Type"       , prLin."Document Type");
+      lrDocDim.VALIDATE("Document No."        , prLin."Document No.");
+      lrDocDim.VALIDATE("Line No."            , prLin."Line No.");
+      lrDocDim.VALIDATE("Dimension Code"      , pwDimension);
+      lrDocDim.VALIDATE("Dimension Value Code", pwValor);
+
+      lrDocDim2 := lrDocDim;
+      IF lrDocDim.FIND THEN BEGIN
+        IF lrDocDim2."Dimension Value Code" <> lrDocDim."Dimension Value Code" THEN
+          lrDocDim.MODIFY(TRUE)
+      END ELSE
+        lrDocDim.INSERT(TRUE);
+    END;
+
+    PROCEDURE InsertaDimDiario@1103355000(prLinDiario@1103355000 : Record 81;pwCodigoDimension@1103355001 : Code[10];pwValorDimension@1103355002 : Code[20]);
+    VAR
+      lrDocDim@1103355003 : Record 356;
+      lrDocDim2@1103355004 : Record 356;
+    BEGIN
+      IF pwValorDimension = '' THEN
+        EXIT;
+
+      CLEAR(lrDocDim);
+      lrDocDim.VALIDATE("Table ID"             , DATABASE::"Gen. Journal Line");
+      lrDocDim.VALIDATE("Journal Template Name", prLinDiario."Journal Template Name");
+      lrDocDim.VALIDATE("Journal Batch Name"   , prLinDiario."Journal Batch Name");
+      lrDocDim.VALIDATE("Journal Line No."     , prLinDiario."Line No.");
+      lrDocDim.VALIDATE("Dimension Code"       , pwCodigoDimension);
+      lrDocDim.VALIDATE("Dimension Value Code" , pwValorDimension);
+
+      // Comprobar que no exista ya un registro de dimension asociado a la linea de diario
+
+      lrDocDim2 := lrDocDim;
+      IF lrDocDim.FIND THEN BEGIN
+        IF lrDocDim2."Dimension Value Code" <> lrDocDim."Dimension Value Code" THEN
+          lrDocDim.MODIFY(TRUE)
+      END
+      ELSE
+        lrDocDim.INSERT(TRUE);
+    END;
+
+    PROCEDURE AgrupaLineas@1103350004(prCab@1103350002 : Record 38);
+    VAR
+      lrLin@1103350000 : Record 39;
+      lrLin2@1103350001 : Record 39;
+      lrLin3@1103350004 : Record 39;
+      lwOk@1103350003 : Boolean;
+    BEGIN
+      // AgrupaLineas
+      //
+      // JPT 20/12/04 Agrupa las lineas de factura x Tipo Servicio, TTOO, y GARAJE
+      // De momento no se utliza
+
+      CLEAR(lrLin);
+      lrLin.SETRANGE("Document Type" , prCab."Document Type");
+      lrLin.SETRANGE("Document No."  , prCab."No.");
+      IF lrLin.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          lrLin2.COPY(lrLin);
+          IF lrLin2.FIND THEN BEGIN
+            REPEAT
+              lwOk := lrLin."Line No." <> lrLin2."Line No.";
+              lwOk := lwOk AND (lrLin."Shortcut Dimension 2 Code" = lrLin2."Shortcut Dimension 2 Code" ); // TTOO
+              lwOk := lwOk AND (lrLin."Shortcut Dimension 1 Code" = lrLin2."Shortcut Dimension 1 Code" ); // Garaje
+              lwOk := lwOk AND (GetDimValLin(lrLin,rPar."Dimensi¢n Tipo Servicio") = GetDimValLin(lrLin2,rPar."Dimensi¢n Tipo Servicio")
+      );
+              IF lwOk THEN BEGIN
+                lrLin."Unit Cost"             := lrLin."Unit Cost" + lrLin2."Unit Cost";
+                lrLin."Outstanding Amount"    := lrLin."Outstanding Amount" + lrLin2."Outstanding Amount";
+                lrLin."Line Amount"           := lrLin."Line Amount" + lrLin2."Line Amount";
+                lrLin.MODIFY;
+                // Se borra la linea
+                lrLin3 := lrLin2;
+                lrLin3.DELETE(TRUE);
+              END;
+            UNTIL lrLin2.NEXT=0;
+          END;
+        UNTIL lrLin.NEXT=0;
+        // Al final valida los resultados.
+        lrLin.VALIDATE("Unit Cost");
+        lrLin.VALIDATE("Outstanding Amount");
+        lrLin.VALIDATE("Line Amount");
+        lrLin.Amount:= lrLin."Line Amount"; // este campo no es necesario, lo igualo para no confundir
+        lrLin.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetDimValLin@1103350016(VAR prLin@1103350002 : Record 39;pwDimension@1103350000 : Code[20]) : Code[20];
+    VAR
+      lrDocDim@1103350001 : Record 357;
+    BEGIN
+      // GetDimValLin
+      // Devuelve el valor de una determinada dimensi¢n de la linea
+
+      CLEAR(lrDocDim);
+      IF lrDocDim.GET(DATABASE::"Purchase Line",prLin."Document Type",prLin."Document No.",prLin."Line No.",pwDimension) THEN
+        EXIT(lrDocDim."Dimension Value Code");
+    END;
+
+    PROCEDURE FiltraCostes@1103350006(VAR prPC@1103350000 : Record 7035393) : Boolean;
+    VAR
+      lfConCost@1103350001 : Form 7010370;
+      lrCond@1103350002 : Record 7010420;
+      lwNumClave@1103350003 : Integer;
+      lwClv@1103350004 : ARRAY [15] OF Boolean;
+      lwContFilt@1103350005 : Text[250];
+      lwCont@1103350006 : Integer;
+      lwNCmps@1103350007 : Integer;
+      lwrTabla@1103350008 : RecordRef;
+    BEGIN
+      // FiltraCostes
+      // Propone un filtrado inicial de la Tabla Coste-ingreso antes de ense¤ar la ventana
+
+      CLEAR(lfConCost);
+      CLEAR(lrCond);
+
+      lfConCost.LOOKUPMODE:= TRUE;
+      IF lfConCost.RUNMODAL <> ACTION::OK THEN
+        EXIT(FALSE);
+
+      lfConCost.GETRECORD(lrCond);
+      CLEAR(prPC);
+
+      // Filtros
+      IF lrCond.Cliente <> '' THEN
+        prPC.SETRANGE(Cliente, lrCond.Cliente);
+
+      IF lrCond.Touroperador <> '' THEN
+        prPC.SETRANGE(Touroperador , lrCond.Touroperador);
+
+      IF lrCond."Tipos servicio" <> '' THEN
+        prPC.SETFILTER("Tipo servicio" ,lrCond."Tipos servicio");
+
+      IF lrCond."Codigos Servicio" <> '' THEN
+        prPC.SETFILTER("Codigo servicio", lrCond."Codigos Servicio");
+
+      IF lrCond."Tipos Vehiculo" <> '' THEN
+        prPC.SETFILTER("Tipo Vehiculo", lrCond."Tipos Vehiculo");
+
+      IF  lrCond."N§ Parte" <> '' THEN
+        prPC.SETRANGE("N§ Parte" , lrCond."N§ Parte");
+
+      IF lrCond.Proveedor  <> '' THEN
+        prPC.SETRANGE(Proveedor , lrCond.Proveedor);
+
+      IF (lrCond."Fecha desde" <> 0D) OR (lrCond."Fecha hasta" <> 0D) THEN
+        prPC.SETFILTER(Fecha, '%1..%2' ,lrCond."Fecha desde" ,lrCond."Fecha hasta" );
+
+      IF (lrCond."Rango Desde" <> 0) OR  (lrCond."Rango Hasta" <> 0) THEN
+        prPC.SETFILTER("Pax Transportados", '%1..%2' ,lrCond."Rango Desde", lrCond."Rango Hasta");
+
+      // Establecemos la clave idonea
+      DeterminaClaveParte(prPC);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE DeterminaClaveParte@1100253000(VAR prPC@1103350001 : Record 7035393);
+    VAR
+      lwrTabla@1103350000 : RecordRef;
+      lwNumClave@1103350002 : Integer;
+      lwcampo@1103355000 : FieldRef;
+      lwTextView@1103355001 : Text[1024];
+    BEGIN
+      // DeterminaClaveParte
+
+      lwrTabla.GETTABLE(prPC);
+      lwNumClave := cFunBas.DeterminaClave(lwrTabla);
+      lwTextView := lwrTabla.GETVIEW;
+      //lwrTabla.SETTABLE(prPC); // JPT 28/12/04 Esto, no se porque, no traspasa la clave
+      prPC.SETVIEW(lwTextView);
+    END;
+
+    PROCEDURE ValidarGasoil@1103355001(VAR prTempMC@1103355000 : TEMPORARY Record 7010397) : Boolean;
+    VAR
+      lwImpt@1103355010 : Decimal;
+      lrMovCost@1103355009 : Record 7010397;
+      lrTar@1103355008 : Record 7035383;
+      lrCab@1103355007 : Record 38;
+      lrCI@1103355006 : Record 7010414;
+      lrTempGarj@1103355005 : TEMPORARY Record 7010349;
+      lrVeh@1103355004 : Record 7010346;
+      lfFicFra@1103355003 : Form 7035255;
+      lwNoContrRecibo@1103355002 : Code[30];
+      ltab_to@1103355001 : ARRAY [50] OF Code[10];
+    BEGIN
+      // ValidarGasoil
+      // AJF 17/09/08 - Mantengo esta funcionalidad para que no de problemas de compilacion
+
+      rPar.FINDFIRST;
+
+      prTempMC.RESET;
+      CLEAR(lwImpt);
+      IF prTempMC.FINDSET THEN BEGIN
+        REPEAT
+          lwImpt += prTempMC.Importe;
+        UNTIL prTempMC.NEXT=0;
+      END
+      ELSE
+        ERROR(err5);
+
+      // Se piden los datos
+
+      // AJF 07/01/09
+      // Evito borrar el registro, ya que ahora tiene datos permanentes.
+      IF rCond.GET(USERID) THEN
+        rCond.LimpiaRegistro
+      ELSE BEGIN
+        rCond.INIT;
+        rCond.Usuario := USERID;
+        rCond.INSERT;
+      END;
+
+      rCond.Proveedor     := prTempMC.Proveedor;
+      rCond.Operacion     := rCond.Operacion::Gasoil;
+      rCond."C¢d. Divisa" := prTempMC.Divisa;
+      rCond.MODIFY;
+
+      COMMIT;
+      rCond.FILTERGROUP(2);
+      rCond.SETRECFILTER;
+      rCond.FILTERGROUP(0);
+      CLEAR(lfFicFra);
+      lfFicFra.SETTABLEVIEW(rCond);
+      IF lfFicFra.RUNMODAL <> ACTION::OK THEN
+        EXIT;
+      lfFicFra.GETRECORD(rCond);
+
+      IF rCond.Importe <> lwImpt THEN
+        ERROR(err6, rCond.Importe, lwImpt);
+
+      IF rCond."Fecha Factura" =0D THEN
+        ERROR(Text00003);
+
+      IF rCond.Proveedor <> prTempMC.Proveedor THEN
+        ERROR(Text00004, rCond.Proveedor, prTempMC.Proveedor);
+
+      IF rCond."N§ Factura" ='' THEN
+        ERROR(Text00007);
+
+      // Comprobamos que la factura del proveedor no se haya validado
+      CLEAR(lrMovCost);
+      lrMovCost.SETCURRENTKEY(Concepto,Fecha,Proveedor);
+      lrMovCost.SETRANGE(Concepto , lrMovCost.Concepto::Gasoil);
+      lrMovCost.SETRANGE(Proveedor, rCond.Proveedor);
+      lrMovCost.SETRANGE("Num Factura Proveedor", rCond."N§ Factura");
+      IF lrMovCost.FINDFIRST THEN
+        ERROR(Text00008, rCond."N§ Factura", rCond.Proveedor);
+
+      IF NOT CONFIRM (Text00005, FALSE, rCond."N§ Factura", rCond.Proveedor, rCond.Importe) THEN
+        EXIT;
+
+      IF rCond.Importe <> 0 THEN BEGIN // Si se va a realizar factura
+        // Busca la tarifa de la ultima linea
+        cGestDia.BuscaTarifaGasoil(prTempMC.Fecha, rCond.Proveedor, lrTar, TRUE);
+        lrTar.TESTFIELD("Grupo registro IVA prod.");
+        rCond."C¢d. Divisa" := lrTar.Divisa;
+        CLEAR(lrCI);
+        lrCI.Proveedor := rCond.Proveedor;
+        // Utilizamos una funci¢n que ya se encuentra en validaci¢n servicios
+        comprobar_cuentas2(lrCI,ltab_to);
+        rIVA.GET(rProv."VAT Bus. Posting Group", lrTar."Grupo registro IVA prod.");
+
+        // Creamos un temporal de Importes x Garaje
+        CLEAR(lrTempGarj);
+        lrTempGarj.DELETEALL;
+        IF prTempMC.FINDSET THEN BEGIN
+          REPEAT
+            IF NOT lrVeh.GET(prTempMC.Matricula) THEN
+              CLEAR(lrVeh);
+            IF NOT lrTempGarj.GET(lrVeh.Garaje) THEN BEGIN
+              lrTempGarj."Parte accidente" := lrVeh.Garaje;
+              lrTempGarj.Garaje            := lrVeh.Garaje;
+              lrTempGarj.INSERT;
+            END;
+            lrTempGarj."Importe Factura" += prTempMC.Importe;
+            lrTempGarj.MODIFY;
+          UNTIL prTempMC.NEXT=0;
+        END;
+        CrearFacturaGasoil(rCond, lrCab, lwNoContrRecibo, lrTempGarj);
+      END;
+
+      // Se graban los datos en las lineas de coste
+      IF prTempMC.FINDSET THEN BEGIN
+        REPEAT
+          lrMovCost := prTempMC;
+          lrMovCost.VALIDATE("Num Factura Proveedor", rCond."N§ Factura");
+          lrMovCost.VALIDATE("Tipo Documento"       , lrCab."Document Type");
+          lrMovCost.VALIDATE("No Documento"         , lrCab."No.");
+          lrMovCost.MODIFY(TRUE);
+        UNTIL prTempMC.NEXT=0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CrearFacturaGasoil@1103355006(prCond@1103355003 : Record 7010420;VAR prCab@1103355002 : Record 38;pwContrarecibo@1103355001 : Code[20];VAR prTempGarj@1103355000 : TEMPORARY Record 7010349);
+    VAR
+      lrCab@1103355004 : Record 38;
+    BEGIN
+      // CrearFacturaGasoil
+      // AJF 17/09/08 - Mantengo la funcionalidad para que no de problemas de compilaci¢n/ejecuci¢n
+
+      CLEAR(prCab);
+      prCab.VALIDATE("Document Type"  , prCab."Document Type"::Invoice);
+      prCab.VALIDATE("No. Series"     , rConf."Posted Invoice Nos.");
+      prCab.INSERT(TRUE);
+
+      prCab.VALIDATE("Posting No. Series"   , rConf."Posted Invoice Nos.");
+      prCab.VALIDATE("Buy-from Vendor No."  , rProv."No.");
+      IF (rProv."Pay-to Vendor No."<>'') AND (rProv."No."<>'') THEN
+        prCab.VALIDATE("Pay-to Vendor No."    , rProv."Pay-to Vendor No.");
+      prCab.VALIDATE("Posting Date"         , TODAY);
+      prCab.VALIDATE("Posting Description"  , Text00009);
+      prCab.VALIDATE("Document Date"        , prCond."Fecha Factura");
+      prCab.VALIDATE("Vendor Invoice No."   , prCond."N§ Factura");
+      prCab.VALIDATE("Payment Terms Code"   , rProv."Payment Terms Code");
+      prCab.VALIDATE("Payment Method Code"  , rProv."Payment Method Code");
+      prCab.VALIDATE("Shortcut Dimension 1 Code", prCond.Garaje);
+      prCab.VALIDATE("Currency Code"        , prCond."C¢d. Divisa");
+      prCab.VALIDATE("Prices Including VAT" , TRUE);
+
+      // JPT 26/07/04 TER Se Genera el No de Contra recibo a proveedores
+      prCab.VALIDATE("Your Reference", pwContrarecibo);
+      prCab.MODIFY;
+      rPar.TESTFIELD("Cta. Costes Gasoil");
+
+      // Hacemos una linea por cada garaje
+      IF prTempGarj.FINDSET THEN BEGIN
+        REPEAT
+          CrearLineaGasoil(prCab, 10000, rPar."Cta. Costes Gasoil", prTempGarj.Garaje, prTempGarj."Importe Factura");
+        UNTIL prTempGarj.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE CrearLineaGasoil@1103355004(prCab@1103355004 : Record 38;pwLinea@1103355003 : Integer;pwCuenta@1103355002 : Code[20];pwGaraje@1103355001 : Code[10];pwImporte@1103355000 : Decimal);
+    VAR
+      rLin@1103355006 : Record 39;
+      w_importeSin@1103355005 : Decimal;
+    BEGIN
+      // CrearLineaGasoil
+      // AJF 17/09/08 - Mantengo la funcionalidad para que no de problemas de compilaci¢n/ejecuci¢n
+      rLin.RESET; rLin.INIT;
+      rLin.VALIDATE("Document Type"             , prCab."Document Type");
+      rLin.VALIDATE("Document No."              , prCab."No.");
+      rLin.VALIDATE("Line No."                  , pwLinea);
+      rLin.VALIDATE("Buy-from Vendor No."       , rConC.Proveedor);
+      rLin.INSERT(TRUE);
+
+      rLin.VALIDATE(Type                        , rLin.Type::"G/L Account");
+      rLin.VALIDATE("No."                       , pwCuenta);
+      rLin.VALIDATE("Shortcut Dimension 1 Code" , pwGaraje);
+      rLin.VALIDATE(Quantity                    , 1);
+      rLin.VALIDATE("Gen. Bus. Posting Group"   , rProv."Gen. Bus. Posting Group");
+      rLin.VALIDATE("VAT Bus. Posting Group"    , rIVA."VAT Bus. Posting Group");
+      rLin.VALIDATE("VAT Prod. Posting Group"   , rIVA."VAT Prod. Posting Group");
+
+      rLin.VALIDATE("Direct Unit Cost", pwImporte);
+      rLin.Description := STRSUBSTNO(Text00010, pwGaraje);
+      rLin.MODIFY;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 11102013 Modifico la funcion linea_prevision para que el parametro de nombre cliente/proveedor sea Text(50)
+
+      $002 AJS 10022015 Modifico la funcion linea_prevision para cubrir los casos en que el tipo de servicio no se quiere como una
+                        dimension contable (ibizatours)
+    }
+    END.
+  }
+}

@@ -1,0 +1,291 @@
+OBJECT Report 3010574 Copy G/L Budget to CA
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=CACEM6.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Copy G/L Budget to CA;
+               ESP=Copiar ppto. contable en ppto. costes];
+    ProcessingOnly=Yes;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table96;
+        DataItemTableView=SORTING(Budget Name,G/L Account No.,Date);
+        OnPreDataItem=BEGIN
+                        IF NOT CONFIRM(Text000,TRUE,GETFILTER("Budget Name"),TargetCostBudEntry."Budget Name") THEN
+                          ERROR(Text001);
+
+                        LOCKTABLE;
+
+                        IF CostBudEntry.FIND('+') THEN
+                          NextEntryNo := CostBudEntry."Line No.";
+                        NextEntryNo := NextEntryNo + 1;
+
+                        CostBudName.SETRANGE(Name,TargetCostBudEntry."Budget Name");
+                        IF NOT CostBudName.FIND('-') THEN BEGIN
+                          CostBudName.Name := TargetCostBudEntry."Budget Name";
+                          CostBudName.INSERT;
+                        END;
+
+                        d.OPEN(Text002 +
+                          Text003 +
+                          Text004);
+
+                        d.UPDATE(1,COUNT);
+
+                        FirstCostBudgetEntryNo := NextEntryNo;
+                        "G/L Budget Entry".FIND('-');
+                        FirstGlBudgetEntryNo := "G/L Budget Entry"."Entry No.";
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           CostBudEntry.INIT;
+                           CostBudEntry."Line No." := NextEntryNo;
+
+                           IF TargetCostBudEntry."Budget Name" <> '' THEN
+                             CostBudEntry."Budget Name" := TargetCostBudEntry."Budget Name"
+                           ELSE
+                             CostBudEntry."Budget Name" := "G/L Budget Entry"."Budget Name";
+
+                           IF DateFormulaChange <> '' THEN
+                             CostBudEntry.Date := CALCDATE(DateFormulaChange,Date)
+                           ELSE
+                             CostBudEntry.Date := "G/L Budget Entry".Date;
+
+                           IF TargetCostBudEntry."Cost Type No." <> '' THEN
+                             CostBudEntry."Cost Type No." := TargetCostBudEntry."Cost Type No."
+                           ELSE BEGIN
+                             // G/L account does not exist or no cost type defined
+                             IF NOT GlAccount.GET("G/L Budget Entry"."G/L Account No.") OR (GlAccount."Cost Type No." = '') THEN BEGIN
+                               NoSkipped := NoSkipped + 1;
+                               CurrReport.SKIP;
+                             END ELSE
+                               CostBudEntry."Cost Type No." := GlAccount."Cost Type No.";
+                           END;
+
+                           // CC and CO from requestform or original CC or CO. Not both
+                           IF TargetCostBudEntry."Cost Center Code" <> '' THEN
+                             CostBudEntry."Cost Center Code" := TargetCostBudEntry."Cost Center Code"
+                           ELSE
+                             CostBudEntry."Cost Center Code" := "G/L Budget Entry"."Global Dimension 1 Code";
+
+                           IF TargetCostBudEntry."Cost Object Code" <> '' THEN
+                             CostBudEntry."Cost Object Code" := TargetCostBudEntry."Cost Object Code"
+                           ELSE
+                             CostBudEntry."Cost Object Code" := "G/L Budget Entry"."Global Dimension 2 Code";
+
+                           // Delete CO if CC is filled in
+                           IF CostBudEntry."Cost Center Code" <> '' THEN
+                             CostBudEntry."Cost Object Code" := '';
+
+                           // Without CC and CO: Do not transfer
+                           IF (CostBudEntry."Cost Center Code" = '') AND (CostBudEntry."Cost Object Code" = '') THEN
+                             CurrReport.SKIP;
+
+                           CostBudEntry.Amount := "G/L Budget Entry".Amount;
+                           CostBudEntry.Text := "G/L Budget Entry".Description;
+
+                           // For register Entry
+                           IF "G/L Budget Entry".Amount > 0 THEN
+                             TotalDebit := TotalDebit + "G/L Budget Entry".Amount
+                           ELSE
+                             TotalCredit := TotalCredit - "G/L Budget Entry".Amount;
+
+                           CostBudEntry.INSERT;
+                           NextEntryNo := NextEntryNo + 1;
+
+                           NoInserted := NoInserted + 1;
+                           IF (NoInserted MOD 100) = 0 THEN
+                             d.UPDATE(2,NoInserted);
+                         END;
+
+        OnPostDataItem=BEGIN
+                         LastGlBudgetEntryNo := "G/L Budget Entry"."Entry No.";
+                         d.CLOSE;
+
+                         IF NOT CONFIRM(
+                              Text005 +
+                              Text006 +
+                              Text007,
+                              TRUE,NoInserted,TargetCostBudEntry."Budget Name",NoSkipped)
+                         THEN
+                           ERROR(Text001);
+
+                         LastCostBudgetEntryNo := NextEntryNo - 1;
+
+                         CostBudgetRegister.LOCKTABLE;
+                         IF CostBudgetRegister.FIND('+') THEN
+                           LastRegisterNo := CostBudgetRegister."No.";
+
+                         CostBudgetRegister.INIT;
+                         CostBudgetRegister."No." := LastRegisterNo + 1;
+                         CostBudgetRegister."Journal Batch Name" := '';
+                         CostBudgetRegister.Source := CostBudgetRegister.Source::"Transfer from G/L Budget";
+                         CostBudgetRegister."From Budget Entry No." := FirstGlBudgetEntryNo;
+                         CostBudgetRegister."To Budget Entry No." := LastGlBudgetEntryNo;
+                         CostBudgetRegister."From Cost Budget Entry No." := FirstCostBudgetEntryNo;
+                         CostBudgetRegister."To Cost Budget Entry No." := LastCostBudgetEntryNo;
+                         CostBudgetRegister."No. of Entries" := NoInserted;
+                         CostBudgetRegister."Debit Amount" := TotalCredit;
+                         CostBudgetRegister."Credit Amount" := TotalDebit;
+                         CostBudgetRegister."User ID" := USERID;
+                         CostBudgetRegister."Processed Date" := TODAY;
+                         CostBudgetRegister.INSERT;
+                       END;
+
+        ReqFilterFields=Budget Name,G/L Account No.,Global Dimension 1 Code,Global Dimension 2 Code,Date;
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=6160;
+      Height=3080;
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;440  ;2750 ;440  ;ParentControl=21;
+                                                   InFrame=Yes;
+                                                   Lookup=Yes;
+                                                   CaptionML=[ENU=Budget Name;
+                                                              ESP=Nombre ppto.];
+                                                   SourceExpr=TargetCostBudEntry."Budget Name";
+                                                   TableRelation="Cost Budget Name" }
+      { 31  ;Label        ;220  ;440  ;3080 ;440  ;ParentControl=1 }
+      { 5   ;TextBox      ;3410 ;2090 ;2750 ;440  ;ParentControl=21;
+                                                   InFrame=Yes;
+                                                   Lookup=Yes;
+                                                   CaptionML=[ENU=Cost Object Code;
+                                                              ESP=C¢d. objeto coste];
+                                                   SourceExpr=TargetCostBudEntry."Cost Object Code";
+                                                   TableRelation="Cost Object" }
+      { 25  ;Label        ;220  ;2090 ;3080 ;440  ;ParentControl=5 }
+      { 4   ;TextBox      ;3410 ;1540 ;2750 ;440  ;ParentControl=21;
+                                                   InFrame=Yes;
+                                                   Lookup=Yes;
+                                                   CaptionML=[ENU=Cost Center Code;
+                                                              ESP=C¢d. centro coste];
+                                                   SourceExpr=TargetCostBudEntry."Cost Center Code";
+                                                   TableRelation="Cost Center" }
+      { 24  ;Label        ;220  ;1540 ;3080 ;440  ;ParentControl=4 }
+      { 22  ;Label        ;220  ;990  ;3080 ;440  ;ParentControl=2 }
+      { 2   ;TextBox      ;3410 ;990  ;2750 ;440  ;ParentControl=21;
+                                                   InFrame=Yes;
+                                                   Lookup=Yes;
+                                                   CaptionML=[ENU=Cost Type No.;
+                                                              ESP=N§ tipo coste];
+                                                   SourceExpr=TargetCostBudEntry."Cost Type No.";
+                                                   TableRelation="Cost Type" }
+      { 6   ;TextBox      ;3410 ;2640 ;2750 ;440  ;CaptionML=[ENU=Date Change Formula;
+                                                              ESP=F¢rmula de cambio fecha];
+                                                   DateFormula=Yes;
+                                                   SourceExpr=DateFormulaChange }
+      { 26  ;Label        ;0    ;2640 ;3300 ;440  ;ParentControl=6 }
+      { 21  ;Frame        ;0    ;0    ;6160 ;2530 ;CaptionML=[ENU=Copy to...;
+                                                              ESP=Copiar a...] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 21  ;2   ;Group     ;
+                  CaptionML=[ENU=Copy to...;
+                             ESP=Copiar a...] }
+
+      { 1   ;3   ;Field     ;
+                  Lookup=Yes;
+                  CaptionML=[ENU=Budget Name;
+                             ESP=Nombre ppto.];
+                  SourceExpr=TargetCostBudEntry."Budget Name";
+                  TableRelation="Cost Budget Name" }
+
+      { 2   ;3   ;Field     ;
+                  Lookup=Yes;
+                  CaptionML=[ENU=Cost Type No.;
+                             ESP=N§ tipo coste];
+                  SourceExpr=TargetCostBudEntry."Cost Type No.";
+                  TableRelation="Cost Type" }
+
+      { 4   ;3   ;Field     ;
+                  Lookup=Yes;
+                  CaptionML=[ENU=Cost Center Code;
+                             ESP=C¢d. centro coste];
+                  SourceExpr=TargetCostBudEntry."Cost Center Code";
+                  TableRelation="Cost Center" }
+
+      { 5   ;3   ;Field     ;
+                  Lookup=Yes;
+                  CaptionML=[ENU=Cost Object Code;
+                             ESP=C¢d. objeto coste];
+                  SourceExpr=TargetCostBudEntry."Cost Object Code";
+                  TableRelation="Cost Object" }
+
+      { 6   ;2   ;Field     ;
+                  CaptionML=[ENU=Date Change Formula;
+                             ESP=F¢rmula de cambio fecha];
+                  DateFormula=Yes;
+                  SourceExpr=DateFormulaChange }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1150010 : TextConst 'ENU=Do you want to copy the G/L budget "%1" to cost budget "%2"?;ESP=¨Desea copiar el ppto. contable "%1" en el ppto. costes "%2"?';
+      Text001@1150011 : TextConst 'ENU=Job cancelled.;ESP=Tarea cancelada.';
+      Text002@1150012 : TextConst 'ENU=Copying budget entries\;ESP=Copiando movs. ppto.\';
+      Text003@1150013 : TextConst 'ENU=No of entries #1#####\;ESP=N§ movs.      #1#####\';
+      Text004@1150014 : TextConst 'ENU=Copied        #2#####;ESP=Copiados      #2#####';
+      Text005@1150015 : TextConst 'ENU=%1 entries generated in budget %2.\\;ESP=%1 movimientos generados en el presupuesto %2.\\';
+      Text006@1150016 : TextConst 'ENU=%3 entries skipped. No corresponding G/L account defined.\\;ESP=%3 movimientos omitidos. No se defini¢ una cuenta correspondiente.\\';
+      Text007@1150017 : TextConst 'ENU=Write definitely?;ESP=¨Escribir definitivamente?';
+      TargetCostBudEntry@1150000 : Record 3010571;
+      CostBudEntry@1150001 : Record 3010571;
+      CostBudName@1150002 : Record 95;
+      GlAccount@1150006 : Record 15;
+      CostBudgetRegister@1150020 : Record 3010573;
+      d@1150009 : Dialog;
+      DateFormulaChange@1150003 : Code[10];
+      NextEntryNo@1150005 : Integer;
+      NoInserted@1150007 : Integer;
+      NoSkipped@1150008 : Integer;
+      FirstGlBudgetEntryNo@1150050 : Integer;
+      LastGlBudgetEntryNo@1150051 : Integer;
+      FirstCostBudgetEntryNo@1150052 : Integer;
+      LastCostBudgetEntryNo@1150053 : Integer;
+      TotalDebit@1150055 : Decimal;
+      TotalCredit@1150056 : Decimal;
+      LastRegisterNo@1150057 : Integer;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

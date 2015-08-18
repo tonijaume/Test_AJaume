@@ -1,0 +1,180 @@
+OBJECT Codeunit 99000793 Calculate Low-Level Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=27;
+    Permissions=TableData 27=rm,
+                TableData 99000765=r;
+    OnRun=VAR
+            ProdBOM@1000 : Record 99000771;
+            Item2@1001 : Record 27;
+          BEGIN
+            Item2.COPY(Rec);
+            Item := Item2; // to store the last item- used in RecalcLowerLevels
+            Item2."Low-Level Code" := CalcLevels(1,Item2."No.",0,0);
+            IF ProdBOM.GET(Item."Production BOM No.") THEN
+              SetRecursiveLevelsOnBOM(ProdBOM,Item2."Low-Level Code" + 1,FALSE);
+            Item2.MODIFY;
+            Rec.COPY(Item2);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Max. Levels in BOM Structure on %1 is too high. Current Item No. %2. End BOM Header No. %3. Level %4.;ESP=Niveles max. en estructura L.M. en %1 es muy grande. Producto No %2. Fin cab LM No %3. Nivel %4.';
+      Item@1001 : Record 27;
+      ActualProdBOM@1002 : Record 99000771;
+
+    PROCEDURE CalcLevels@4(Type@1000 : ' ,Item,Production BOM';BomHeaderNo@1001 : Code[20];Level@1002 : Integer;LevelDepth@1003 : Integer) : Integer;
+    VAR
+      Item2@1004 : Record 27;
+      ProdBOMHeader@1005 : Record 99000771;
+      ProdBomComponent@1006 : Record 99000772;
+      ActLevel@1007 : Integer;
+      TotalLevels@1008 : Integer;
+    BEGIN
+      IF LevelDepth > 50 THEN
+        ERROR(
+          Text000,
+          50,Item."No.",BomHeaderNo,Level);
+
+      TotalLevels := Level;
+
+      IF Type = Type::"Production BOM" THEN BEGIN
+        Item2.SETCURRENTKEY("Production BOM No.");
+        Item2.SETRANGE("Production BOM No.",BomHeaderNo);
+
+        IF Item2.FINDSET THEN
+          REPEAT
+            Item2."Low-Level Code" :=
+              CalcLevels(Type::Item,Item2."No.",Level + 1,LevelDepth + 1) - Level;
+
+            ActLevel := Item2."Low-Level Code" + Level;
+
+            IF ActLevel > TotalLevels THEN
+              TotalLevels := ActLevel;
+          UNTIL Item2.NEXT = 0;
+
+      END;
+
+      ProdBomComponent.SETCURRENTKEY(Type,"No.");
+
+      ProdBomComponent.SETRANGE(Type,Type);
+      ProdBomComponent.SETRANGE("No.",BomHeaderNo);
+      IF NOT ProdBomComponent.FINDSET THEN
+        EXIT(TotalLevels);
+
+      REPEAT
+        IF ProdBOMHeader.GET(ProdBomComponent."Production BOM No.") THEN BEGIN
+          IF ProdBOMHeader."No." = ActualProdBOM."No." THEN
+            ERROR(
+              Text000,
+              50,Item."No.",BomHeaderNo,Level);
+
+          IF ProdBOMHeader.Status = ProdBOMHeader.Status::Certified THEN BEGIN
+            ProdBOMHeader."Low-Level Code" :=
+              CalcLevels(Type::"Production BOM",ProdBomComponent."Production BOM No.",Level,LevelDepth + 1) - Level;
+
+            ActLevel := ProdBOMHeader."Low-Level Code" + Level;
+            IF ActLevel > TotalLevels THEN
+              TotalLevels := ActLevel;
+          END;
+        END;
+      UNTIL ProdBomComponent.NEXT = 0;
+
+      EXIT(TotalLevels);
+    END;
+
+    PROCEDURE RecalcLowerLevels@3(ProdBOMNo@1000 : Code[20];LowLevelCode@1001 : Integer;IgnoreMissingItemsOrBOMs@1002 : Boolean);
+    VAR
+      CompItem@1003 : Record 27;
+      CompBOM@1004 : Record 99000771;
+      ProdBOMLine@1005 : Record 99000772;
+      EntityPresent@1006 : Boolean;
+    BEGIN
+      IF LowLevelCode > 50 THEN
+        ERROR(
+          Text000,
+          50,Item."No.",ProdBOMNo,LowLevelCode);
+
+      ProdBOMLine.SETRANGE("Production BOM No.",ProdBOMNo);
+      ProdBOMLine.SETFILTER("No.",'<>%1','');
+
+      IF ProdBOMLine.FINDSET THEN
+        REPEAT
+          CASE ProdBOMLine.Type OF
+            ProdBOMLine.Type::Item:
+              BEGIN
+                EntityPresent := CompItem.GET(ProdBOMLine."No.");
+                IF EntityPresent OR (NOT IgnoreMissingItemsOrBOMs) THEN
+                  SetRecursiveLevelsOnItem(CompItem,LowLevelCode,IgnoreMissingItemsOrBOMs);
+              END;
+            ProdBOMLine.Type::"Production BOM":
+              BEGIN
+                EntityPresent := CompBOM.GET(ProdBOMLine."No.");
+                IF EntityPresent OR (NOT IgnoreMissingItemsOrBOMs) THEN
+                  SetRecursiveLevelsOnBOM(CompBOM,LowLevelCode,IgnoreMissingItemsOrBOMs);
+              END
+          END;
+        UNTIL ProdBOMLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SetRecursiveLevelsOnItem@2(VAR CompItem@1000 : Record 27;LowLevelCode@1001 : Integer;IgnoreMissingItemsOrBOMs@1002 : Boolean);
+    VAR
+      CompBOM@1005 : Record 99000771;
+      xLowLevelCode@1003 : Integer;
+      EntityPresent@1004 : Boolean;
+    BEGIN
+      Item := CompItem; // to store the last item- used in RecalcLowerLevels
+      xLowLevelCode := CompItem."Low-Level Code";
+      CompItem."Low-Level Code" := GetMax(Item."Low-Level Code",LowLevelCode);
+      IF xLowLevelCode <> CompItem."Low-Level Code" THEN BEGIN
+        IF CompItem."Production BOM No." <> '' THEN BEGIN
+          // calc low level code for BOM set in the item
+          EntityPresent := CompBOM.GET(CompItem."Production BOM No.");
+          IF EntityPresent OR (NOT IgnoreMissingItemsOrBOMs) THEN
+            SetRecursiveLevelsOnBOM(CompBOM,CompItem."Low-Level Code" + 1,IgnoreMissingItemsOrBOMs);
+        END;
+        CompItem.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetRecursiveLevelsOnBOM@1(VAR CompBOM@1000 : Record 99000771;LowLevelCode@1001 : Integer;IgnoreMissingItemsOrBOMs@1002 : Boolean);
+    VAR
+      xLowLevelCode@1003 : Integer;
+    BEGIN
+      xLowLevelCode := CompBOM."Low-Level Code";
+      IF CompBOM.Status = CompBOM.Status::Certified THEN BEGIN
+        // set low level on this BOM
+        CompBOM."Low-Level Code" := GetMax(CompBOM."Low-Level Code",LowLevelCode);
+        IF xLowLevelCode <> CompBOM."Low-Level Code" THEN BEGIN
+          RecalcLowerLevels(CompBOM."No.",LowLevelCode,IgnoreMissingItemsOrBOMs);
+          CompBOM.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetMax@8(Level1@1000 : Integer;Level2@1001 : Integer) Result : Integer;
+    BEGIN
+      IF Level1 > Level2 THEN
+        Result := Level1
+      ELSE
+        Result := Level2;
+    END;
+
+    PROCEDURE SetActualProdBOM@5(ActualProdBOM2@1000 : Record 99000771);
+    BEGIN
+      ActualProdBOM := ActualProdBOM2;
+    END;
+
+    BEGIN
+    END.
+  }
+}

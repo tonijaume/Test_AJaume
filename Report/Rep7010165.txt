@@ -1,0 +1,643 @@
+OBJECT Report 7010165 Registered Tickets
+{
+  OBJECT-PROPERTIES
+  {
+    Date=31/07/14;
+    Time=15:57:49;
+    Modified=Yes;
+    Version List=AIC2009,CNT;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Registered Tickets;
+               ESP=Tickets registrados];
+    OnInitReport=BEGIN
+                   wFechaAct := CURRENTDATETIME;
+                   rInfEmp.FINDFIRST;
+                   rInfEmp.CALCFIELDS(Picture);
+                 END;
+
+    OnPreReport=BEGIN
+                  IF (diReserva.GETFILTER("Fecha Excursion")='') AND (diReserva.GETFILTER("Fecha Venta")='') THEN
+                    ERROR(Text001);
+                END;
+
+    Orientation=Landscape;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7010162;
+        DataItemTableView=SORTING(Delegacion,N§ Reserva);
+        DataItemVarName=diReserva;
+        OnPreDataItem=BEGIN
+                        IF (diReserva.GETFILTER("Fecha Excursion") <> '') THEN
+                          SETCURRENTKEY("Fecha Excursion", "N§ Servicio", "Orden zona", "Orden hotel", "Hotel Cliente")
+                        ELSE
+                          SETCURRENTKEY("Guia Venta", "Fecha Venta", Confirmada);
+
+                        SETFILTER("N§ Ticket", '<>%1', '');
+
+                        IF wGeneraExcel THEN
+                        BEGIN
+                          wLinea := 0;
+
+                          rExcel.RESET;
+                          rExcel.DELETEALL;
+
+                          wLinea += 1;
+                          _InsertaExcel(3 , Text002     , TRUE , 3, 'F' + STRSUBSTNO('%1', wLinea), 0);
+                          _InsertaExcel(7 , NomUsuario  , FALSE, 3, 'J' + STRSUBSTNO('%1', wLinea), 0);
+                          _InsertaExcel(14, rInfEmp.Name, FALSE, 4, 'K' + STRSUBSTNO('%1', wLinea), 0);
+
+                          wLinea += 1;
+                          _InsertaExcel(3, GETFILTER("Fecha Excursion"), FALSE, 3, 'F' + STRSUBSTNO('%1', wLinea), 0);
+                          _InsertaExcel(7, FORMAT(CURRENTDATETIME)     , FALSE, 3, 'J' + STRSUBSTNO('%1', wLinea), 0);
+
+                          wLinea += 1;
+                          _InsertaExcel(3, GETFILTER("Fecha Venta"), FALSE, 3, 'F' + STRSUBSTNO('%1', wLinea), 0);
+                        END;
+
+                        CurrReport.CREATETOTALS(wDif, wDto, wImpCobro, Adultos, Ni¤os, "Adultos Reembolsados", "Ni¤os Reembolsados"); //+$004
+                      END;
+
+        OnAfterGetRecord=VAR
+                           lrCobro@1100217000 : Record 7010240;
+                           lrDetEco@1100217003 : Record 7010245;
+                           lrIVAVta@1100217004 : Record 325;
+                           lrSupl@1100217005 : Record 7010165;
+                           lrRep@1100217001 : Record 7010241;
+                           lwIng@1100217002 : Decimal;
+                         BEGIN
+                           IF NOT lrRep.GET("Guia Venta") THEN
+                             CurrReport.SKIP;
+
+                           //+$007 <
+                           IF NOT ControlSuplemento(diReserva) THEN
+                             CurrReport.SKIP;
+                           //+$007 <
+
+                           IF NOT lrDetEco.GET(Delegacion, "N§ Reserva") THEN
+                             CLEAR(lrDetEco);
+
+                           //-$009 <
+                           //+$005 <
+                           //. Mas adelante utilizo el campo signo para multiplicarlo por todos los importes
+                           //IF Reembolsada THEN
+                           //  wSigno := 0
+                           //ELSE
+                           //  wSigno := 1;
+                           //+$005 >
+                           //-$009 >
+
+
+                           CLEAR(wImpCobro);
+
+                           //+$003 <
+                           IF lrRep."Trabaja a credito" THEN
+                             wImpCobro := lrDetEco."Ingreso reserva" - diReserva."Importe Reembolsado" // $009
+                           ELSE
+                           BEGIN
+                             CLEAR(lrCobro);
+
+                             lrCobro.SETRANGE(Delegacion   , Delegacion);
+                             lrCobro.SETRANGE("Num Reserva", "N§ Reserva");
+                             IF lrCobro.FINDSET THEN BEGIN
+                               REPEAT     // $001
+                                 wImpCobro += lrCobro.CambioDivisa(lrCobro."Cod. Divisa", Divisa, lrCobro."Importe Recibido");
+                               UNTIL lrCobro.NEXT = 0;
+                               wImpCobro := wImpCobro - diReserva."Importe Reembolsado";  //$009
+                             END;
+                           END;
+                           //+$003 >
+
+                           // Si buscamos la informaci¢n sin iva
+                           IF wModoIVA =  wModoIVA::"No Incluido" THEN BEGIN
+                             IF BuscaIVA(diReserva, lrIVAVta) THEN
+                               wImpCobro := ROUND((wImpCobro / ((lrIVAVta."VAT+EC %" / 100) + 1)))
+                             ELSE
+                               CLEAR(wImpCobro);
+                           END;
+
+                           // Buscamos el ingreso
+                           CLEAR(lwIng);
+                           CASE wModoIVA OF
+                             wModoIVA::Incluido      : lwIng  := lrDetEco."Ingreso reserva" - diReserva."Importe Reembolsado";  //$009
+                             wModoIVA::"No Incluido" : lwIng  := lrDetEco."Ingreso reserva neto" - diReserva."Importe Reembolsado Neto"; //$009
+                           END;
+
+                           IF wImpCobro <> 0 THEN
+                             wDif := wImpCobro - lwIng;
+
+                           // Buscamos los suplementos negativos
+                           CLEAR(wDto);
+                           CLEAR(lrSupl);
+                           lrSupl.SETRANGE (Delegacion  , Delegacion);
+                           lrSupl.SETRANGE ("N§ Reserva", "N§ Reserva");
+                           lrSupl.SETRANGE (Aplicacion  , TRUE);
+                           lrSupl.SETFILTER(Importe     , '<%1',0);
+                           IF lrSupl.FINDSET THEN BEGIN
+                             REPEAT
+                               CASE wModoIVA OF
+                                 wModoIVA::Incluido      : wDto  += lrSupl.Importe;
+                                 wModoIVA::"No Incluido" : wDto  += lrSupl."Importe neto";
+                               END;
+                             UNTIL lrSupl.NEXT = 0;
+                             wDto := wSigno * wDto;
+                           END;
+
+                           CLEAR(wEstado);
+                           CASE TRUE OF
+                             Anulada     : wEstado:= 'N' ;
+                             Reembolsada : wEstado:= 'R';
+                             ELSE wEstado         := 'A';
+                           END;
+
+                           IF wGeneraExcel THEN
+                           BEGIN
+                             IF wLinea = 3 THEN
+                             BEGIN
+                               wLinea += 2;
+                               _InsertaExcel(1 , Text004, TRUE, 2, '', 2);
+                               _InsertaExcel(2 , Text005, TRUE, 2, '', 2);
+                               _InsertaExcel(3 , Text006, TRUE, 2, '', 2);
+                               _InsertaExcel(4 , Text007, TRUE, 2, '', 2);
+                               _InsertaExcel(5 , Text008, TRUE, 2, '', 2);
+                               _InsertaExcel(6 , Text009, TRUE, 2, '', 2);
+                               _InsertaExcel(7 , Text010, TRUE, 2, '', 2);
+                               _InsertaExcel(8 , Text011, TRUE, 3, '', 2);
+                               _InsertaExcel(9 , Text012, TRUE, 3, '', 2);
+                               _InsertaExcel(10, Text013, TRUE, 2, '', 2);
+                               _InsertaExcel(11, Text014, TRUE, 2, '', 2);
+                               _InsertaExcel(12, Text015, TRUE, 4, '', 2);
+                               _InsertaExcel(13, Text016, TRUE, 4, '', 2);
+                               _InsertaExcel(14, Text017, TRUE, 4, '', 2);
+                             END;
+
+                             wLinea += 1;
+                             _InsertaExcel(1 , "N§ Ticket"                , FALSE, 2, '', 0);
+                             _InsertaExcel(2 , "Nombre Cliente"           , FALSE, 2, '', 0);
+                             _InsertaExcel(3 , NomExcursion(Producto)     , FALSE, 2, '', 0);
+                             _InsertaExcel(4 , FORMAT("Fecha Venta")      , FALSE, 2, '', 0);
+                             _InsertaExcel(5 , FORMAT("Fecha Excursion")  , FALSE, 2, '', 0);
+                             _InsertaExcel(6 , FORMAT("N§ liquidacion GV"), FALSE, 2, '', 0);
+                             _InsertaExcel(7 , TourOperador               , FALSE, 2, '', 0);
+                             _InsertaExcel(8 , FORMAT(Adultos - diReserva."Adultos Reembolsados")            , FALSE, 3, '', 0); //$009
+                             _InsertaExcel(9 , FORMAT(Ni¤os - diReserva."Ni¤os Reembolsados")              , FALSE, 3, '', 0); //$009
+                             _InsertaExcel(10, wEstado                    , FALSE, 2, '', 0);
+                             _InsertaExcel(11, NomRep("Guia Venta")       , FALSE, 2, '', 0);
+                             _InsertaExcel(12, FORMAT(wDto)               , FALSE, 4, '', 0);
+                             _InsertaExcel(13, FORMAT(wDif)               , FALSE, 4, '', 0);
+                             _InsertaExcel(14, FORMAT(wImpCobro)          , FALSE, 4, '', 0);
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF wGeneraExcel THEN
+                         BEGIN
+                           rExcel.CreateBook;
+                           rExcel.CreateSheet(Text003, Text002, rInfEmp.Name, USERID, TRUE, TRUE, '');
+                           rExcel.GiveUserControl();
+                         END;
+                       END;
+
+        ReqFilterFields=Fecha Excursion,Fecha Venta,Hotel Cliente,TourOperador,Guia Venta;
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=23400;
+            SectionHeight=2115;
+          }
+          CONTROLS
+          {
+            { 1100217024;Label  ;6750 ;0    ;6450 ;423  ;HorzAlign=Center;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Registered Tickets;
+                                                                    ESP=Cupones Registrados] }
+            { 1100217025;TextBox;6750 ;423  ;6450 ;423  ;HorzAlign=Center;
+                                                         SourceExpr=GETFILTER("Fecha Excursion") }
+            { 1100217021;TextBox;13500;0    ;3300 ;423  ;HorzAlign=Center;
+                                                         SourceExpr=NomUsuario }
+            { 1100217022;TextBox;13500;423  ;3300 ;423  ;HorzAlign=Center;
+                                                         SourceExpr=wFechaAct }
+            { 1100217023;PictureBox;0 ;0    ;6150 ;2115 ;SourceExpr=rInfEmp.Picture }
+            { 1100217018;TextBox;6750 ;846  ;6450 ;423  ;HorzAlign=Center;
+                                                         SourceExpr=GETFILTER("Fecha Venta") }
+            { 1100217026;TextBox;17850;0    ;5550 ;423  ;HorzAlign=Right;
+                                                         SourceExpr=rInfEmp.Name }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Header;
+            PrintOnEveryPage=Yes;
+            SectionWidth=23400;
+            SectionHeight=1269;
+          }
+          CONTROLS
+          {
+            { 1100217003;Label  ;0    ;0    ;1500 ;846  ;ParentControl=1100217002;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217009;Label  ;13200;0    ;1050 ;846  ;ParentControl=1100217008;
+                                                         HorzAlign=Center;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217011;Label  ;14400;0    ;1050 ;846  ;ParentControl=1100217010;
+                                                         HorzAlign=Center;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217015;Label  ;1650 ;0    ;3000 ;846  ;ParentControl=1100217014;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217017;Label  ;11550;0    ;1500 ;846  ;ParentControl=1100217016;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217027;Shape  ;0    ;846  ;23400;423  ;ShapeStyle=HorzLine }
+            { 1100217001;Label  ;7800 ;0    ;1200 ;846  ;ParentControl=1100217000;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217005;Label  ;9150 ;0    ;1200 ;846  ;ParentControl=1100217004;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217007;Label  ;10500;0    ;900  ;846  ;ParentControl=1100217006;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217013;Label  ;4800 ;0    ;2850 ;846  ;ParentControl=1100217012;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217030;Label  ;20250;0    ;1500 ;846  ;ParentControl=1100217029;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217032;Label  ;21900;0    ;1500 ;846  ;ParentControl=1100217031;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217033;Label  ;15600;0    ;750  ;846  ;ParentControl=1100217028;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217037;Label  ;18600;0    ;1500 ;846  ;ParentControl=1100217036;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+            { 1100217020;Label  ;16500;0    ;1950 ;846  ;ParentControl=1100217019;
+                                                         HorzAlign=Left;
+                                                         VertAlign=Bottom;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=23400;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1100217002;TextBox;0    ;0    ;1500 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Ticket;
+                                                                    ESP=Cupon];
+                                                         SourceExpr="N§ Ticket" }
+            { 1100217008;TextBox;13200;0    ;1050 ;423  ;HorzAlign=Center;
+                                                         CaptionML=[ENU=Adults;
+                                                                    ESP=Adultos];
+                                                         SourceExpr=Adultos - "Adultos Reembolsados" }
+            { 1100217010;TextBox;14400;0    ;1050 ;423  ;HorzAlign=Center;
+                                                         CaptionML=[ENU=Childs;
+                                                                    ESP=Ni¤os];
+                                                         SourceExpr=Ni¤os - "Ni¤os Reembolsados" }
+            { 1100217014;TextBox;1650 ;0    ;3000 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Pax Name;
+                                                                    ESP=Nombre Pax];
+                                                         SourceExpr="Nombre Cliente" }
+            { 1100217016;TextBox;11550;0    ;1500 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Agency;
+                                                                    ESP=Agencia];
+                                                         SourceExpr=TourOperador }
+            { 1100217000;TextBox;7800 ;0    ;1200 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Sale Date;
+                                                                    ESP=Fecha Venta];
+                                                         SourceExpr="Fecha Venta" }
+            { 1100217004;TextBox;9150 ;0    ;1200 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Service Date;
+                                                                    ESP=Fecha Excursion];
+                                                         SourceExpr="Fecha Excursion" }
+            { 1100217006;TextBox;10500;0    ;900  ;423  ;CaptionML=[ENU=Liquid.;
+                                                                    ESP=Liquid.];
+                                                         SourceExpr="N§ liquidacion GV" }
+            { 1100217012;TextBox;4800 ;0    ;2850 ;423  ;CaptionML=[ENU=Service;
+                                                                    ESP=Servicio];
+                                                         SourceExpr=NomExcursion(Producto) }
+            { 1100217029;TextBox;20250;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=[ENU=Charge +;
+                                                                    ESP=Cobro +];
+                                                         SourceExpr=wDif }
+            { 1100217031;TextBox;21900;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=TOTAL;
+                                                         SourceExpr=wImpCobro }
+            { 1100217028;TextBox;15600;0    ;750  ;423  ;HorzAlign=Left;
+                                                         CaptionML=ESP=Edo.;
+                                                         SourceExpr=wEstado }
+            { 1100217036;TextBox;18600;0    ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=[ENU=Discount;
+                                                                    ESP=Descto];
+                                                         SourceExpr=wDto }
+            { 1100217019;TextBox;16500;0    ;1950 ;423  ;HorzAlign=Left;
+                                                         CaptionML=[ENU=Rep. Name;
+                                                                    ESP=Nombre Rep];
+                                                         SourceExpr=NomRep("Guia Venta") }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=23400;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1100217034;Shape  ;18600;0    ;4800 ;423  ;ShapeStyle=HorzLine }
+            { 1100217035;TextBox;18600;423  ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=[ENU=Discount;
+                                                                    ESP=Descto];
+                                                         SourceExpr=wDto }
+            { 1100217038;TextBox;20250;423  ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=[ENU=Charge +;
+                                                                    ESP=Cobro +];
+                                                         SourceExpr=wDif }
+            { 1100217039;TextBox;21900;423  ;1500 ;423  ;HorzAlign=Right;
+                                                         CaptionML=ESP=TOTAL;
+                                                         SourceExpr=wImpCobro }
+            { 1100217040;TextBox;13200;423  ;1050 ;423  ;HorzAlign=Center;
+                                                         CaptionML=[ENU=Adults;
+                                                                    ESP=Adultos];
+                                                         SourceExpr=Adultos - "Adultos Reembolsados" }
+            { 1100217041;TextBox;14400;423  ;1050 ;423  ;HorzAlign=Center;
+                                                         CaptionML=[ENU=Childs;
+                                                                    ESP=Ni¤os];
+                                                         SourceExpr=Ni¤os - "Ni¤os Reembolsados" }
+            { 1100217042;Shape  ;13200;0    ;2250 ;423  ;ShapeStyle=HorzLine }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8470;
+      Height=2970;
+      CaptionML=[ENU=Registered Tickets;
+                 ESP=Tickets registrados];
+    }
+    CONTROLS
+    {
+      { 1100217000;TextBox;3630 ;220  ;2530 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=VAT;
+                                                              ESP=IVA];
+                                                   SourceExpr=wModoIVA }
+      { 1100217001;Label  ;220  ;220  ;3300 ;440  ;ParentControl=1100217000 }
+      { 1100217002;CheckBox;3630;770  ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Create Excel;
+                                                              ESP=Generar Excel];
+                                                   SourceExpr=wGeneraExcel }
+      { 1100217003;Label  ;220  ;770  ;3300 ;440  ;ParentControl=1100217002 }
+      { 1100217004;TextBox;3630 ;1320 ;2640 ;440  ;CaptionML=ESP=Suplemento de control;
+                                                   SourceExpr=wSuplementoControl;
+                                                   TableRelation="Suplemento Excursiones" }
+      { 1100217005;Label  ;220  ;1320 ;3300 ;440  ;ParentControl=1100217004 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      wFechaAct@1100217001 : DateTime;
+      rInfEmp@1100217002 : Record 79;
+      Text001@1100217003 : TextConst 'ENU=Must set a range date;ESP=Debe de definir una rango de fechas';
+      rCamb@1100217006 : Record 330;
+      rTarifa@1100217009 : Record 7010147;
+      rExcel@1100217013 : Record 7009785;
+      cNom@1100217004 : Codeunit 7009702;
+      wModoIVA@1100217007 : 'Incluido,No Incluido';
+      wDif@1100217008 : Decimal;
+      wDto@1100217011 : Decimal;
+      wImpCobro@1100217005 : Decimal;
+      wEstado@1100217010 : Text[1];
+      wGeneraExcel@1100217012 : Boolean;
+      wLinea@1100217014 : Integer;
+      Text002@1100217015 : TextConst 'ENU=Registered tickets;ESP=Cupones registrados';
+      Text003@1100217016 : TextConst 'ENU=Tickets;ESP=Tickets';
+      Text004@1100217017 : TextConst 'ENU=Ticket;ESP=Cupon';
+      Text005@1100217018 : TextConst 'ENU=Pax Name;ESP=Nombre Pax';
+      Text006@1100217019 : TextConst 'ENU=Service;ESP=Servicio';
+      Text007@1100217020 : TextConst 'ENU=Sale date;ESP=Fecha venta';
+      Text008@1100217021 : TextConst 'ENU=Excursion date;ESP=Fecha excursion';
+      Text009@1100217022 : TextConst 'ENU=Liquid.;ESP=Liquid.';
+      Text010@1100217023 : TextConst 'ENU=Agency;ESP=Agencia';
+      Text011@1100217024 : TextConst 'ENU=Adults;ESP=Adultos';
+      Text012@1100217025 : TextConst 'ENU=Childs;ESP=Ni¤os';
+      Text013@1100217026 : TextConst 'ENU=Sta.;ESP=Edo.';
+      Text014@1100217027 : TextConst 'ENU=Representant name;ESP=Nombre representante';
+      Text015@1100217028 : TextConst 'ENU=Discount;ESP=Descto';
+      Text016@1100217029 : TextConst 'ENU=Payment+;ESP=Cobro+';
+      Text017@1100217030 : TextConst 'ENU=TOTAL;ESP=TOTAL';
+      wSigno@1100217000 : Decimal;
+      wSuplementoControl@1100217031 : Code[10];
+
+    PROCEDURE NomUsuario@1100217001() : Text[250];
+    VAR
+      lrUser@1100217000 : Record 2000000002;
+      lwNom@1100217001 : Text[250];
+    BEGIN
+      // NomUsuario
+
+      CLEAR(lwNom);
+      CLEAR(lrUser);
+      IF lrUser.GET(USERID) THEN
+        lwNom := lrUser.Name;
+      IF lwNom='' THEN
+        lwNom := USERID;
+      EXIT(lwNom);
+    END;
+
+    PROCEDURE NomExcursion@1100217002(pwExc@1100217000 : Code[20]) : Text[50];
+    VAR
+      lrProd@1100217001 : Record 7009710;
+      lwText@1100217002 : Text[50];
+    BEGIN
+      // NomExcursion
+
+      CLEAR(lwText);
+      IF lrProd.GET(pwExc) THEN
+        lwText := lrProd.Descripcion;
+
+      IF lwText = '' THEN
+        lwText := pwExc;
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE NomProv@1100217009(prServ@1100217001 : Record 7010163) : Text[50];
+    VAR
+      lrPrest@1100217000 : Record 7010170;
+      lrCon@1100217004 : Record 7010142;
+      lrPro@1100217003 : Record 23;
+      lwText@1100217002 : Text[50];
+    BEGIN
+      // NomProv
+
+      CLEAR(lwText);
+      CLEAR(lrPrest);
+      lrPrest.SETRANGE(Delegacion    , prServ.Delegacion);
+      lrPrest.SETRANGE("N§ Servicio" , prServ."N§ Servicio");
+      lrPrest.SETRANGE("Tipo Contrato", lrPrest."Tipo Contrato"::Excursion);
+      IF lrPrest.FINDFIRST THEN BEGIN
+        CLEAR(lrCon);
+        CLEAR(lrPro);
+        IF lrCon.GET(lrPrest.Delegacion, lrPrest."N§ Contrato", lrPrest."Tipo Contrato") THEN BEGIN
+          IF lrPro.GET(lrCon.Proveedor) THEN
+            lwText := lrPro.Name;
+          IF lwText = '' THEN
+            lwText := lrCon.Proveedor;
+        END;
+      END;
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE NomRep@1100217054(pwCod@1100217002 : Code[20]) : Text[50];
+    VAR
+      lrRep@1100217000 : Record 7010241;
+      lwText@1100217001 : Text[50];
+    BEGIN
+      // NomRep
+
+      CLEAR(lrRep);
+      IF lrRep.GET(pwCod) THEN
+        lwText := lrRep.Nombre;
+
+      IF lwText ='' THEN
+        lwText := pwCod;
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE BuscaIVA@1100217006(prResExc@1100217008 : Record 7010162;VAR prIVAVnt@1100217000 : Record 325) : Boolean;
+    VAR
+      lrCust@1100217003 : Record 18;
+      lrRep@1100217001 : Record 7010241;
+      lwOk@1100217002 : Boolean;
+    BEGIN
+      // BuscaIVA
+
+      CLEAR(rTarifa);
+      lwOk := prResExc.busca_tarifa(rTarifa);
+      IF lwOk THEN BEGIN
+        rTarifa.TESTFIELD("Gr. Registro IVA Producto");
+
+        lrRep.GET(prResExc."Guia Venta");
+        lwOk:= lrCust.GET(lrRep."Cliente Facturacion");
+        IF lwOk THEN
+          lwOk := prIVAVnt.GET(lrCust."VAT Bus. Posting Group", rTarifa."Gr. Registro IVA Producto");
+      END;
+
+      EXIT(lwOk);
+    END;
+
+    LOCAL PROCEDURE _InsertaExcel@1100217000(pwColumna@1100217000 : Integer;pwTexto@1100217001 : Text[250];pwBold@1100217002 : Boolean;pwAlineaHor@1100217003 : Integer;pwFusionar@1100217004 : Text[30];pwBordeInferior@1100217005 : Integer);
+    BEGIN
+      // _InsertaExcel
+
+      rExcel.INIT;
+      rExcel.VALIDATE("Row No."                    , wLinea);
+      rExcel.VALIDATE("Column No."                 , pwColumna);
+      rExcel.VALIDATE("Cell Value as Text"         , pwTexto);
+      rExcel.VALIDATE(Bold                         , pwBold);
+      rExcel.VALIDATE("Texto Alineacion Horizontal", pwAlineaHor); // 2 - Izq, 3 - Cen, 4 - Der
+      rExcel.VALIDATE("Fusionar hasta celda"       , pwFusionar);
+      rExcel.VALIDATE("Tama¤o Fuente"              , 9);
+      rExcel.VALIDATE("Borde Abaj"                 , pwBordeInferior);
+      rExcel.INSERT;
+    END;
+
+    PROCEDURE ControlSuplemento@1100217003(prRsv@1100217000 : Record 7010162) : Boolean;
+    VAR
+      lrSuplRsv@1100217001 : Record 7010165;
+    BEGIN
+      // ControlSuplemento
+
+      IF wSuplementoControl = '' THEN
+        EXIT(TRUE);
+
+      lrSuplRsv.RESET;
+      lrSuplRsv.SETRANGE(Delegacion         , prRsv.Delegacion);
+      lrSuplRsv.SETRANGE("N§ Reserva"       , prRsv."N§ Reserva");
+      lrSuplRsv.SETRANGE("Codigo Suplemento", wSuplementoControl);
+      EXIT(NOT lrSuplRsv.ISEMPTY);
+    END;
+
+    BEGIN
+    {
+      $001 JPT 06/09/12 CNT 12002 Permitir mas de un cobro por reserva de excursi¢n
+
+      $002 AJS 22102012 Nueva opcion para generar el informe directamente en EXCEL
+
+      $003 AJS 06112012 Incluir la gestion de los representantes que trabajan a credito
+
+      $004 AJS 20012013 Incluimos totales por Adultos y Ni¤os
+
+      $005 AJS 21022013 Los reembolsos deben descontar de este informe
+
+      $006 AJS 28022013 Los reembolsos deben tener un efecto neutro y los anulados deben salir
+
+      $007 AJS 28042013 Nueva opcion para mostrar solo las reservas que tienen un suplemento
+
+      $008 AJS 06022014 Corregir error de tama¤o en el nombre de la compa¤ia
+
+      $009 ARM 29072014 Reembolsos CNT-OC-14047
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

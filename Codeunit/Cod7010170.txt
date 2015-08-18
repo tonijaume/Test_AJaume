@@ -1,0 +1,1057 @@
+OBJECT Codeunit 7010170 Coste excursion x reserva
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/01/15;
+    Time=10:06:38;
+    Modified=Yes;
+    Version List=AIC2009,CNT-OC-14047;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rPar@1100217011 : Record 7009700;
+      rContrato@1100217000 : Record 7010142;
+      Text0001@1100217001 : TextConst 'ENU=There is no contrat number %1 for the service date.;ESP=No existe contrato %1 para la fecha de servicio.';
+      Text0002@1100217002 : TextConst 'ENU=The zone %1 doesn''t exist in the contract %2.;ESP=La zona fisica %1 no existe en el contrato %2.';
+      Text0003@1100217003 : TextConst 'ENU=It doesn''t exist price per person for the zone %1 excursion %2 in day %3 for %4 persons in the contract %5.;ESP=No existe precio por persona para zona %1 excursion %2 el dia %3 para %4 personas en el contrato %5.';
+      Text0004@1100217004 : TextConst 'ENU=It doesn''t exist ADULTS price for the zone %1 excursion %2 in day %3 for %4 persons in the contract %5.;ESP=No existe precio ADULTOS para zona %1 excursion %2 el dia %3 para %4 personas en el contrato %5.';
+      Text0005@1100217005 : TextConst 'ENU=It doesn''t exist CHILDS price for the zone %1 excursion %2 in day %3 for %4 persons in the contract %5.;ESP=No existe precio NI¥OS para zona %1 excursion %2 el dia %3 para %4 personas en el contrato %5.';
+      rSer@1100217006 : Record 7010163;
+      rParPer@1100217007 : Record 7009701;
+      Text0006@1100217008 : TextConst 'ENU=It doesn''t exist price per person for the excursion %1 in day %2 for %3 persons in the contract %4.;ESP=No existe precio por persona para excursion %1 el dia %2 para %3 personas en el contrato %4.';
+      Text0007@1100217009 : TextConst 'ENU=It doesn''t exist price per person for the duration %1 excursion %2 in day %3 for %4 persons in the contract %5.;ESP=No existe precio por persona para duracion %1 excursion %2 el dia %3 para %4 personas en el contrato %5.';
+      Text0008@1100217010 : TextConst 'ENU=You must fill the Vehicle type field.;ESP=Debe rellenar el campo Tipo vehiculo.';
+      rExchange@1100217012 : Record 330;
+
+    PROCEDURE CosteReservas@1100217000(prSer@1100217000 : Record 7010163;pwReserva@1000000000 : Integer);
+    VAR
+      lrRsv@1100217001 : Record 7010162;
+    BEGIN
+      //. Copio el parametro en una variable global para no andar pasandola como parametro en todas
+      //. las funciones, en principio no tengo que modificar el servicio para nada
+      rSer.COPY(prSer);
+
+      rParPer.FINDFIRST;
+
+      //. Bucle de las reservas asociadas al servicio
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("N§ Servicio");
+      lrRsv.SETRANGE("N§ Servicio", prSer."N§ Servicio");
+      //+$012 <
+      IF pwReserva <> 0 THEN
+        lrRsv.SETRANGE("N§ Reserva", pwReserva);
+      //+$012 <
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        REPEAT
+          //+$012 <
+          IF pwReserva <> 0 THEN
+            BorrarCoste(lrRsv);
+          //+$012 <
+          IF (lrRsv.Adultos + lrRsv.Ni¤os - lrRsv."Compra - Invitados Adultos" - lrRsv."Compra - Invitados ni¤os" -
+              lrRsv."Personas Reembolsadas") <> 0 THEN
+            _CosteReserva(lrRsv);
+        UNTIL lrRsv.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CosteReserva@1100217001(prRsv@1100217000 : Record 7010162);
+    VAR
+      lrPres@1100217001 : Record 7010170;
+    BEGIN
+      //. Recorremos y calculamos las prestaciones del servicio
+
+      rSer.CALCFIELDS("Num personas servicio", "N§ Adultos", "N§ Ni¤os"); //+$002
+
+      lrPres.RESET;
+      lrPres.SETRANGE(Delegacion   , prRsv.Delegacion);
+      lrPres.SETRANGE("N§ Servicio", prRsv."N§ Servicio");
+      lrPres.SETRANGE(Aplicacion   , TRUE);
+      IF lrPres.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Buscamos si el contrato especificado en la prestacion sigue correcto y vigente
+          IF _BuscaContrato(lrPres) THEN
+          BEGIN
+            CASE lrPres."Tipo Contrato" OF
+              lrPres."Tipo Contrato"::Transportista: _TR_Calculo(lrPres, prRsv);
+              lrPres."Tipo Contrato"::Excursion: _EX_Calculo(lrPres, prRsv);
+              lrPres."Tipo Contrato"::"Guia Oficial": _GO_Calculo(lrPres, prRsv);
+            END;
+          END;
+
+          //+$002 <
+          lrPres."N§ Personas" := rSer."Num personas servicio";
+          lrPres.Adultos       := rSer."N§ Adultos";
+          lrPres.Ni¤os         := rSer."N§ Ni¤os";
+          lrPres.Proveedor     := rContrato.Proveedor;
+          lrPres.MODIFY;
+          //+$002 >
+        UNTIL lrPres.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _BuscaContrato@1100217002(prPres@1100217001 : Record 7010170) : Boolean;
+    BEGIN
+      rContrato.RESET;
+      rContrato.SETRANGE (Delegacion             , prPres.Delegacion);
+      rContrato.SETRANGE ("N§ Contrato compra"   , prPres."N§ Contrato");
+      rContrato.SETRANGE ("Tipo Contrato"        , prPres."Tipo Contrato");
+      rContrato.SETFILTER("Fecha inicio contrato", '<=%1', rSer.Fecha);
+      rContrato.SETFILTER("Fecha final contrato" , '>=%1', rSer.Fecha);
+      rContrato.SETRANGE (Confirmado             , TRUE);
+      IF NOT rContrato.FINDFIRST THEN
+      BEGIN
+        CLEAR(rContrato);
+        InsertaError(rSer."N§ Servicio", STRSUBSTNO(Text0001, prPres."N§ Contrato"))
+      END
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _TR_Calculo@1100217003(prPres@1100217005 : Record 7010170;prRsv@1100217000 : Record 7010162);
+    VAR
+      lrPreAD@1100217006 : Record 7010150;
+      lrPreNI@1100217007 : Record 7010150;
+      lwZonaCompra@1100217001 : Code[10];
+      lwRangoBuscaPrecio@1100217004 : Decimal;
+      lwAdultosRsv@1100217002 : Integer;
+      lwNi¤osRsv@1100217003 : Integer;
+      lwLinea@1100217008 : Integer;
+    BEGIN
+      //. Buscamos la zona de compra que le corresponde
+      // $005 Descontamos los reembolsados
+
+      lwZonaCompra := _TR_ZonaCompra(prRsv."Zona Hotel");
+      IF lwZonaCompra = '' THEN
+        EXIT;
+
+      //. El tipo de vehiculo debe estar rellenado
+      //-$008IF rSer."Tipo Vehiculo" = '' THEN
+      //-$008  InsertaError(rSer."N§ Servicio",
+      //-$008               Text0008);
+
+      //. En funcion del contrato los ni¤os no cuentan como una unidad a la hora de buscar el precio
+      IF rContrato."old_Modo contar ni¤os" = rContrato."old_Modo contar ni¤os"::Medio THEN
+        lwRangoBuscaPrecio := (prRsv.Adultos - prRsv."Adultos Reembolsados") +
+                               ROUND((prRsv.Ni¤os - prRsv."Ni¤os Reembolsados") / 2, 1)
+      ELSE
+        lwRangoBuscaPrecio := prRsv.Adultos + prRsv.Ni¤os - prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados";
+
+      //. Cuando apliquemos el precio vamos a descontar los invitados
+      // $005 Descontamos los reembolsados
+      lwAdultosRsv := prRsv.Adultos - prRsv."Compra - Invitados Adultos" - prRsv."Adultos Reembolsados";
+      lwNi¤osRsv   := prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os" - prRsv."Ni¤os Reembolsados";
+
+      //. Buscamos el precio por pax
+      IF _TR_BuscaPrecioBase(lwZonaCompra, lwRangoBuscaPrecio, lrPreAD, lrPreNI, lwAdultosRsv, lwNi¤osRsv) THEN
+      BEGIN
+        //. Crear una linea de margen o coste segun el tipo de calculo
+        //. Habr  una sola linea por reserva y prestacion, el detalle lo almaceno en otra tabla auxiliar
+        CASE rSer."Tipo Calculo" OF
+          rSer."Tipo Calculo"::Margenes:
+            lwLinea := _CrearMargen('EXAC', prRsv.TourOperador, lwZonaCompra,
+                                    prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                    lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os -
+                                    prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados");
+          ELSE
+            lwLinea := _CrearCoste('EXAC', prRsv.TourOperador, lwZonaCompra, prPres."Orden Prestacion",
+                                   prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                   lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os -
+                                   prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados",
+                                   prRsv."Booking Touroperador");
+        END;
+
+        //. Linea de detalle para los adultos
+        IF lwAdultosRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Adulto", lwAdultosRsv, lrPreAD.Precio);
+        //. Linea de detalle para los ni¤os
+        IF lwNi¤osRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Ni¤o", lwNi¤osRsv, lrPreNI.Precio);
+      END
+      ELSE
+        EXIT;
+
+      //. Buscaremos si la reserva tiene suplementos de compra asociados con este contrato
+      _CalcularSuplementos(prRsv, lwLinea);
+
+      //. Acumularemos todos los importes de los detalles sobre la linea de margen o coste segun el calculo
+
+      _AcumularDetalles(lwLinea);
+    END;
+
+    LOCAL PROCEDURE _TR_ZonaCompra@1100217008(pwZona@1100217000 : Code[10]) : Code[10];
+    VAR
+      lrZona@1100217001 : Record 7010149;
+    BEGIN
+      lrZona.RESET;
+      lrZona.SETRANGE("Codigo Contrato", rContrato."N§ Contrato compra");
+      lrZona.SETRANGE("Tipo Contrato"  , lrZona."Tipo Contrato"::Compra);
+      lrZona.SETRANGE("Zona Fisica"    , pwZona);
+      IF NOT lrZona.FINDFIRST THEN
+        InsertaError(rSer."N§ Servicio", STRSUBSTNO(Text0002, pwZona, rContrato."N§ Contrato compra"))
+      ELSE
+        EXIT(lrZona.Zona);
+    END;
+
+    LOCAL PROCEDURE _TR_BuscaPrecioBase@1100217007(pwZona@1100217000 : Code[10];pwRangoPlazas@1100217001 : Decimal;VAR prPreAD@1100217002 : Record 7010150;VAR prPreNI@1100217003 : Record 7010150;pwAdultosRsv@1100217005 : Integer;pwNi¤osRsv@1100217006 : Integer) : Boolean;
+    VAR
+      lrPre@1100217004 : Record 7010150;
+    BEGIN
+      lrPre.RESET;
+      lrPre.SETRANGE (Delegacion       , rContrato.Delegacion);
+      lrPre.SETRANGE ("N§ Contrato"    , rContrato."N§ Contrato compra");
+      lrPre.SETRANGE ("Tipo precio"    , lrPre."Tipo precio"::"Precio zona");
+      lrPre.SETRANGE ("Tipo aplicacion", lrPre."Tipo aplicacion"::Pax);
+      lrPre.SETRANGE (Producto         , rSer.Excursion);
+      lrPre.SETFILTER("Fecha desde"    , '<=%1', rSer.Fecha);
+      lrPre.SETFILTER("Fecha hasta"    , '>=%1', rSer.Fecha);
+      lrPre.SETRANGE (Zona             , pwZona);
+      lrPre.SETFILTER("Rango desde"    , '<=%1', pwRangoPlazas);
+      lrPre.SETFILTER("Rango hasta"    , '>=%1', pwRangoPlazas);
+      lrPre.SETRANGE ("Tipo vehiculo"  , rSer."Tipo Vehiculo");
+      lrPre.SETRANGE (Activo           , TRUE);
+      IF NOT lrPre.FINDFIRST THEN
+      BEGIN
+        lrPre.SETRANGE("Tipo vehiculo", '');
+        IF NOT lrPre.FINDFIRST THEN
+        BEGIN
+          InsertaError(rSer."N§ Servicio",
+                       STRSUBSTNO(Text0003, pwZona, rSer.Excursion, rSer.Fecha, pwRangoPlazas, rContrato."N§ Contrato compra")
+                      );
+          EXIT(FALSE);
+        END;
+      END;
+
+      //. Buscamos el precio para los adultos
+      IF pwAdultosRsv <> 0 THEN
+      BEGIN
+        prPreAD.RESET;
+        prPreAD.SETRANGE(Delegacion         , lrPre.Delegacion);
+        prPreAD.SETRANGE("N§ Contrato"      , lrPre."N§ Contrato");
+        prPreAD.SETRANGE("Tipo precio"      , lrPre."Tipo precio");
+        prPreAD.SETRANGE("Orden dependiente", lrPre."Orden precio");
+        prPreAD.SETRANGE("Codigo suplemento"    , rParPer."Codigo Adulto");
+        IF NOT prPreAD.FINDFIRST THEN
+        BEGIN
+          InsertaError(rSer."N§ Servicio",
+                       STRSUBSTNO(Text0004, pwZona, rSer.Excursion, rSer.Fecha, pwRangoPlazas, rContrato."N§ Contrato compra")
+                      );
+          EXIT(FALSE);
+        END;
+      END;
+
+      //. Buscamos el precio para los adultos
+      IF pwNi¤osRsv <> 0 THEN
+      BEGIN
+        prPreNI.RESET;
+        prPreNI.SETRANGE(Delegacion         , lrPre.Delegacion);
+        prPreNI.SETRANGE("N§ Contrato"      , lrPre."N§ Contrato");
+        prPreNI.SETRANGE("Tipo precio"      , lrPre."Tipo precio");
+        prPreNI.SETRANGE("Orden dependiente", lrPre."Orden precio");
+        prPreNI.SETRANGE("Codigo suplemento"    , rParPer."Codigo Ni¤o");
+        IF NOT prPreNI.FINDFIRST THEN
+        BEGIN
+          InsertaError(rSer."N§ Servicio",
+                       STRSUBSTNO(Text0005, pwZona, rSer.Excursion, rSer.Fecha, pwRangoPlazas, rContrato."N§ Contrato compra")
+                      );
+          EXIT(FALSE);
+        END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _EX_Calculo@1100217004(prPres@1100217005 : Record 7010170;prRsv@1100217000 : Record 7010162);
+    VAR
+      lrPre@1100217003 : Record 7010151;
+      lwAdultosRsv@1100217001 : Integer;
+      lwNi¤osRsv@1100217002 : Integer;
+      lwLinea@1100217004 : Integer;
+    BEGIN
+      //. Cuando apliquemos el precio vamos a descontar los invitados
+      // $005 Descontamos los reembolsados
+
+      lwAdultosRsv := prRsv.Adultos - prRsv."Compra - Invitados Adultos" - prRsv."Adultos Reembolsados";
+      lwNi¤osRsv   := prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os" - prRsv."Ni¤os Reembolsados";
+
+      IF _EX_BuscaPrecioBase(prRsv.Adultos + prRsv.Ni¤os - prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados",
+                             prRsv."Zona Hotel", lrPre) THEN
+      BEGIN
+        //. Crear una linea de margen o coste segun el tipo de calculo
+        //. Habr  una sola linea por reserva y prestacion, el detalle lo almaceno en otra tabla auxiliar
+        CASE rSer."Tipo Calculo" OF
+          rSer."Tipo Calculo"::Margenes:
+            lwLinea := _CrearMargen('EXCC', prRsv.TourOperador, prRsv."Zona Hotel",
+                                    prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                    lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os -
+                                    prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados");
+          ELSE
+            lwLinea := _CrearCoste('EXCC', prRsv.TourOperador, prRsv."Zona Hotel", prPres."Orden Prestacion",
+                                   prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                   lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os -
+                                   prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados",
+                                   prRsv."Booking Touroperador");
+        END;
+
+        //. Linea de detalle para los adultos
+        IF lwAdultosRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Adulto", lwAdultosRsv, lrPre."Precio Adulto");
+        //. Linea de detalle para los ni¤os
+        IF lwNi¤osRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Ni¤o", lwNi¤osRsv, lrPre."Precio Ni¤o");
+      END
+      ELSE
+        EXIT;
+
+      //. Calculamos los suplementos de compra
+      _CalcularSuplementos(prRsv, lwLinea);
+
+      //. Comprobamos si hay que aplicar una oferta sobre la reserva
+      _EX_CalcularOferta(prRsv, prRsv.Adultos + prRsv.Ni¤os - prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados", lwLinea);
+
+      //. Acumularemos todos los importes de los detalles sobre la linea de margen o coste segun el calculo
+      _AcumularDetalles(lwLinea);
+    END;
+
+    LOCAL PROCEDURE _EX_BuscaPrecioBase@1100217009(pwRangoPlazas@1100217001 : Decimal;pwZona@1100217002 : Code[10];VAR prPre@1100217003 : Record 7010151) : Boolean;
+    BEGIN
+      prPre.RESET;
+      prPre.SETRANGE (Delegacion       , rContrato.Delegacion);
+      prPre.SETRANGE ("N§ Contrato"    , rContrato."N§ Contrato compra");
+      prPre.SETRANGE ("Tipo precio"    , prPre."Tipo precio"::"Precio Excursion");
+      prPre.SETRANGE ("Tipo aplicacion", prPre."Tipo aplicacion"::Pax);
+      prPre.SETFILTER("Fecha desde"    , '<=%1', rSer.Fecha);
+      prPre.SETFILTER("Fecha hasta"    , '>=%1', rSer.Fecha);
+      prPre.SETFILTER("Rango desde"    , '<=%1', pwRangoPlazas);
+      prPre.SETFILTER("Rango hasta"    , '>=%1', pwRangoPlazas);
+      prPre.SETRANGE ("Zona Hotel"     , pwZona);
+      prPre.SETRANGE (Activo           , TRUE);
+      IF NOT prPre.FINDFIRST THEN
+      BEGIN
+        prPre.SETRANGE("Zona Hotel", '');
+        IF NOT prPre.FINDFIRST THEN
+        BEGIN
+          InsertaError(rSer."N§ Servicio",
+                       STRSUBSTNO(Text0006, rSer.Excursion, rSer.Fecha, pwRangoPlazas, rContrato."N§ Contrato compra")
+                      );
+          EXIT(FALSE);
+        END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _EX_CalcularOferta@1100217019(prRsv@1100217000 : Record 7010162;pwRangoPlazas@1100217003 : Integer;pwLinea@1100217001 : Integer);
+    VAR
+      lrPre@1100217002 : Record 7010151;
+      lwAdultosRsv@1100217004 : Integer;
+      lwNi¤osRsv@1100217005 : Integer;
+      lwVuelta@1000000000 : Integer;
+      lwAplicado@1000000001 : Boolean;
+    BEGIN
+
+      // $007 Primero calculamos promociones y luego ofertas
+      lwAplicado := FALSE;
+      FOR lwVuelta := 1 TO 2 DO BEGIN
+        lrPre.RESET;
+        lrPre.SETRANGE (Delegacion       , rContrato.Delegacion);
+        lrPre.SETRANGE ("N§ Contrato"    , rContrato."N§ Contrato compra");
+        IF lwVuelta = 1 THEN BEGIN   // $007
+          lrPre.SETRANGE ("Tipo precio"    , lrPre."Tipo precio"::Promocion);
+          lrPre.SETFILTER(lrPre."Fecha venta desde", '<=%1',prRsv."Fecha Venta");
+          lrPre.SETFILTER(lrPre."Fecha venta hasta", '>=%1',prRsv."Fecha Venta");
+        END
+        ELSE BEGIN
+          lrPre.SETRANGE ("Tipo precio"    , lrPre."Tipo precio"::Oferta);
+        END;
+        lrPre.SETRANGE ("Tipo aplicacion", lrPre."Tipo aplicacion"::Pax);
+        lrPre.SETFILTER("Fecha desde"    , '<=%1', rSer.Fecha);
+        lrPre.SETFILTER("Fecha hasta"    , '>=%1', rSer.Fecha);
+        lrPre.SETFILTER("Rango desde"    , '<=%1', pwRangoPlazas);
+        lrPre.SETFILTER("Rango hasta"    , '>=%1', pwRangoPlazas);
+        lrPre.SETRANGE (Activo           , TRUE);
+        IF (lrPre.FINDFIRST) AND (NOT lwAplicado) THEN  // $007 Solo se debe aplicar una oferta
+        BEGIN
+          // +$006 Si la oferta es solo online‡se comprueba que la reserva sea online
+          IF (lrPre."Aplica sobre online") AND (NOT prRsv."Reserva online") THEN
+            EXIT;
+
+          //. Si la oferta no se acumula sobre el precio base lo que hacemos es introducir detalles con signo
+          //. contrario
+          IF NOT lrPre.Acumula THEN
+            _EX_CancelaAnterior(prRsv, pwLinea);
+
+          //. Creamos las lineas de detalle para la oferta
+          //. Cuando apliquemos el precio vamos a descontar los invitados
+          lwAdultosRsv := prRsv.Adultos - prRsv."Compra - Invitados Adultos" - prRsv."Adultos Reembolsados";
+          lwNi¤osRsv   := prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os" - prRsv."Ni¤os Reembolsados";
+
+          //. Linea de detalle para los adultos
+          IF lwAdultosRsv <> 0 THEN
+            _CrearDetalle(pwLinea, 2, rParPer."Codigo Adulto", lwAdultosRsv, lrPre."Precio Adulto");
+          //. Linea de detalle para los ni¤os
+          IF lwNi¤osRsv <> 0 THEN
+            _CrearDetalle(pwLinea, 2, rParPer."Codigo Ni¤o", lwNi¤osRsv, lrPre."Precio Ni¤o");
+
+          lwAplicado := TRUE;  // $007 Solo se debe aplicar una oferta
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _EX_CancelaAnterior@1100217014(prRsv@1100217000 : Record 7010162;pwLinea@1100217003 : Integer);
+    VAR
+      lrDet@1100217002 : Record 7010256;
+      lrDet2@1100217001 : Record 7010256;
+    BEGIN
+      lrDet.RESET;
+      lrDet.SETRANGE (Delegacion     , rSer.Delegacion);
+      lrDet.SETRANGE ("Num. Servicio", rSer."N§ Servicio");
+      lrDet.SETRANGE ("ID linea"     , pwLinea);
+      lrDet.SETFILTER(Concepto       , '<>%1', lrDet.Concepto::Cancela); //+$004
+      IF lrDet.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrDet2 := lrDet;
+          lrDet2."ID Detalle" := 0;
+          lrDet2.Concepto     := lrDet2.Concepto::Cancela;
+          lrDet2.Importe      := (-1) * lrDet.Importe;
+          lrDet2.INSERT(TRUE);
+        UNTIL lrDet.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GO_Calculo@1100217005(prPres@1100217001 : Record 7010170;prRsv@1100217000 : Record 7010162);
+    VAR
+      lwAdultosRsv@1100217002 : Integer;
+      lwNi¤osRsv@1100217004 : Integer;
+      lwLinea@1100217005 : Integer;
+      lrPre@1100217003 : Record 7010154;
+    BEGIN
+      //. Cuando apliquemos el precio vamos a descontar los invitados
+      lwAdultosRsv := prRsv.Adultos - prRsv."Compra - Invitados Adultos" -prRsv."Adultos Reembolsados";
+      lwNi¤osRsv   := prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os" - prRsv."Ni¤os Reembolsados";
+
+      IF _GO_BuscaPrecioBase(prRsv.Adultos + prRsv.Ni¤os - prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados", lrPre) THEN
+      BEGIN
+        //. Crear una linea de margen o coste segun el tipo de calculo
+        //. Habr  una sola linea por reserva y prestacion, el detalle lo almaceno en otra tabla auxiliar
+        CASE rSer."Tipo Calculo" OF
+          rSer."Tipo Calculo"::Margenes:
+            lwLinea := _CrearMargen('EXGO', prRsv.TourOperador, prRsv."Zona Hotel",
+                                    prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                    lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os -
+                                    prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados");
+          ELSE
+            lwLinea := _CrearCoste('EXGO', prRsv.TourOperador, prRsv."Zona Hotel", prPres."Orden Prestacion",
+                                   prRsv."N§ Ticket", prRsv."Confirmacion proveedor",
+                                   lwAdultosRsv + lwNi¤osRsv, prRsv.Adultos + prRsv.Ni¤os-
+                                   prRsv."Adultos Reembolsados" - prRsv."Ni¤os Reembolsados",
+                                   prRsv."Booking Touroperador");
+        END;
+
+        //. Linea de detalle para los adultos
+        IF lwAdultosRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Adulto", lwAdultosRsv, lrPre."Precio Adulto");
+        //. Linea de detalle para los ni¤os
+        IF lwNi¤osRsv <> 0 THEN
+          _CrearDetalle(lwLinea, 0, rParPer."Codigo Ni¤o", lwNi¤osRsv, lrPre."Precio Ni¤o");
+      END
+      ELSE
+        EXIT;
+
+      //. Calculamos los suplementos de compra
+      _CalcularSuplementos(prRsv, lwLinea);
+
+      //. Acumularemos todos los importes de los detalles sobre la linea de margen o coste segun el calculo
+      _AcumularDetalles(lwLinea);
+    END;
+
+    LOCAL PROCEDURE _GO_BuscaPrecioBase@1100217011(pwRangoPlazas@1100217000 : Integer;VAR prPre@1100217001 : Record 7010154) : Boolean;
+    BEGIN
+      prPre.RESET;
+      prPre.SETRANGE (Delegacion       , rContrato.Delegacion);
+      prPre.SETRANGE ("N§ Contrato"    , rContrato."N§ Contrato compra");
+      prPre.SETRANGE ("Tipo precio"    , prPre."Tipo precio"::"Precio Base");
+      prPre.SETFILTER("Fecha desde"    , '<=%1', rSer.Fecha);
+      prPre.SETFILTER("Fecha hasta"    , '>=%1', rSer.Fecha);
+      prPre.SETRANGE ("Tipo Aplicacion", prPre."Tipo Aplicacion"::Pax);
+      prPre.SETFILTER("Rango desde"    , '<=%1', pwRangoPlazas);
+      prPre.SETFILTER("Rango hasta"    , '>=%1', pwRangoPlazas);
+      prPre.SETRANGE (Duracion         , rSer.Duracion);
+      prPre.SETRANGE (Excursion        , rSer.Excursion);
+      prPre.SETRANGE (Activo           , TRUE);
+      IF NOT prPre.FINDFIRST THEN
+      BEGIN
+        //. Probamos si hay precio por excursion sin duracion
+        prPre.SETRANGE(Duracion, prPre.Duracion::" ");
+        IF NOT prPre.FINDFIRST THEN
+        BEGIN
+          //. Probamos si hay precio por duracion sin excursion
+          prPre.SETRANGE (Duracion , rSer.Duracion);
+          prPre.SETRANGE (Excursion, '');
+          IF NOT prPre.FINDFIRST THEN
+            InsertaError(rSer."N§ Servicio",
+                         STRSUBSTNO(Text0007, rSer.Duracion, rSer.Excursion, rSer.Fecha, pwRangoPlazas, rContrato."N§ Contrato compra")
+                        );
+        END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE InsertaError@1100217006(pwServicio@1100217001 : Integer;pwTexto@1100217002 : Text[250]);
+    VAR
+      lrError@1100217000 : Record 7010175;
+    BEGIN
+      CLEAR(lrError);
+      lrError.Servicio := pwServicio;
+      lrError.Error    := pwTexto;
+      lrError.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _CrearMargen@1100217012(pwConcepto@1100217001 : Code[10];pwTouroperador@1100217002 : Code[10];pwZona@1100217003 : Code[10];pwTicket@1100217005 : Code[10];pwConfirmacion@1100217004 : Code[20];pwCantAplicada@1100217007 : Decimal;pwCantReal@1100217006 : Decimal) : Integer;
+    VAR
+      lrMargen@1100217000 : Record 7010174;
+    BEGIN
+      CLEAR(lrMargen);
+      lrMargen.Delegacion              := rSer.Delegacion;
+      lrMargen."N§ Servicio"           := rSer."N§ Servicio";
+      lrMargen.Concepto                := pwConcepto;
+      lrMargen.TourOperador            := pwTouroperador;
+      lrMargen.Zona                    := pwZona;
+      lrMargen."N§ Vehiculos"          := rSer.Buses;
+      lrMargen."Tipo Veh¡culos"        := rSer."Tipo Vehiculo";
+      lrMargen."N§ Contrato Excursion" := rContrato."N§ Contrato compra";
+      lrMargen.Excursion               := rSer.Excursion;
+      lrMargen."Cod. divisa"           := rContrato."Cod. divisa";
+      lrMargen."Num. Ticket"           := pwTicket;
+      lrMargen."Confimacion proveedor" := pwConfirmacion;
+      lrMargen."Cantidad Aplicada"     := pwCantAplicada;
+      lrMargen."Cantidad Real"         := pwCantReal;
+      lrMargen."Coste x Ticket"        := TRUE;
+      lrMargen.INSERT(TRUE);
+
+      EXIT(lrMargen."Orden Linea");
+    END;
+
+    LOCAL PROCEDURE _CrearCoste@1100217013(pwConcepto@1100217003 : Code[10];pwTouroperador@1100217002 : Code[10];pwZona@1100217001 : Code[10];pwPrestacion@1100217004 : Integer;pwTicket@1100217006 : Code[10];pwConfirmacion@1100217007 : Code[20];pwCantAplicada@1100217005 : Decimal;pwCantReal@1100217008 : Decimal;pwBonoTouroperador@1000000000 : Code[20]) : Integer;
+    VAR
+      lrCoste@1100217000 : Record 7010166;
+    BEGIN
+      CLEAR(lrCoste);
+      lrCoste.Delegacion               := rSer.Delegacion;
+      lrCoste."N§ Servicio"            := rSer."N§ Servicio";
+      lrCoste.Concepto                 := pwConcepto;
+      lrCoste.TourOperador             := pwTouroperador;
+      lrCoste.Fecha                    := rSer.Fecha;
+      lrCoste.Zona                     := pwZona;
+      lrCoste."N§ Vehiculos"           := rSer.Buses;
+      lrCoste."Tipo Vehiculo"          := rSer."Tipo Vehiculo";
+      lrCoste."N§ Contrato Excursion"  := rContrato."N§ Contrato compra";
+      lrCoste.Excursion                := rSer.Excursion;
+      lrCoste."Cod. divisa"            := rContrato."Cod. divisa";
+      lrCoste.Oficina                  := rSer.Oficina;
+      lrCoste.Proveedor                := rContrato.Proveedor;
+      lrCoste.Prestacion               := pwPrestacion;
+      lrCoste."Num. Ticket"            := pwTicket;
+      lrCoste."Confirmacion proveedor" := pwConfirmacion;
+      lrCoste."Cantidad Aplicada"      := pwCantAplicada;
+      lrCoste."Cantidad Real"          := pwCantReal;
+      lrCoste."Coste x Ticket"         := TRUE;
+      lrCoste."Fecha cambio divisa"    := _UltimaFechaCambio(lrCoste."Cod. divisa");
+      lrCoste."Tipo cambio FPR"        := _GetTipoCambio(lrCoste."Cod. divisa", lrCoste."Fecha cambio divisa");
+      lrCoste."Booking Touroperador"   := pwBonoTouroperador;
+
+      rSer.CALCFIELDS("Num personas servicio");
+      lrCoste."Personas servicio" := rSer."Num personas servicio";
+
+      lrCoste.INSERT(TRUE);
+
+      EXIT(lrCoste."Orden Linea");
+    END;
+
+    LOCAL PROCEDURE _CrearDetalle@1100217022(pwNumLinea@1100217001 : Integer;pwConcepto@1100217002 : Integer;pwSubconcepto@1100217003 : Code[10];pwCantidad@1100217004 : Decimal;pwPrecio@1100217005 : Decimal) : Integer;
+    VAR
+      lrDet@1100217000 : Record 7010256;
+    BEGIN
+      CLEAR(lrDet);
+      lrDet.Delegacion      := rSer.Delegacion;
+      lrDet."Num. Servicio" := rSer."N§ Servicio";
+      lrDet."ID linea"      := pwNumLinea;
+      lrDet.Concepto        := pwConcepto;
+      lrDet.Subconcepto     := pwSubconcepto;
+      lrDet.Cantidad        := pwCantidad;
+      lrDet.Precio          := pwPrecio;
+      lrDet."Cod. Divisa"   := rContrato."Cod. divisa";
+      lrDet.Importe         := pwCantidad * pwPrecio;
+      lrDet.INSERT(TRUE);
+
+      EXIT(lrDet."ID Detalle");
+    END;
+
+    LOCAL PROCEDURE _CalcularSuplementos@1100217016(prRsv@1100217001 : Record 7010162;pwLinea@1100217002 : Integer);
+    VAR
+      lrSupl@1100217000 : Record 7010180;
+    BEGIN
+      //. Recorremos los suplementos de la reserva, para el contrato que estamos calculando
+      lrSupl.RESET;
+      lrSupl.SETRANGE(Delegacion     , prRsv.Delegacion);
+      lrSupl.SETRANGE("Num. Reserva" , prRsv."N§ Reserva");
+      lrSupl.SETRANGE("Tipo contrato", rContrato."Tipo Contrato");
+      lrSupl.SETRANGE("Num. Contrato", rContrato."N§ Contrato compra");
+      IF lrSupl.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Si se ha creado una linea de suplemento sin gente no se calcula
+          //+$009
+          IF (lrSupl.Adultos <> 0) OR (lrSupl.Ni¤os <> 0) THEN
+          BEGIN
+            //. 1 - Indica a la funcion que tiene que mostrar errores por falta de configuracion
+            //. Le pasamos el numero de servicio para que los errores se inserten en la tabla
+            lrSupl.CalculoSuplemento(1, rSer."N§ Servicio");
+
+            lrSupl."ID Linea calculo" := pwLinea;
+
+            IF lrSupl.Adultos <> 0 THEN
+              lrSupl."ID Detalle adulto" := _CrearDetalle(pwLinea, 1, lrSupl."Codigo suplemento",
+                                                          lrSupl.Adultos, lrSupl."Precio adulto");
+            IF lrSupl.Ni¤os <> 0 THEN
+              lrSupl."ID Detalle ni¤o" := _CrearDetalle(pwLinea, 1, lrSupl."Codigo suplemento",
+                                                        lrSupl.Ni¤os, lrSupl."Precio ni¤o");
+            lrSupl.MODIFY;
+          END
+          ELSE
+          BEGIN
+            lrSupl."Precio adulto"     := 0;
+            lrSupl."Precio ni¤o"       := 0;
+            lrSupl."Importe Base"      := 0;
+            lrSupl."Importe IVA"       := 0;
+            lrSupl."Importe Total"     := 0;
+            lrSupl."ID Linea calculo"  := 0;
+            lrSupl."ID Detalle adulto" := 0;
+            lrSupl."ID Detalle ni¤o"   := 0;
+            lrSupl.MODIFY;
+          END;
+        UNTIL lrSupl.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _AcumularDetalles@1100217010(pwNumLinea@1100217000 : Integer);
+    VAR
+      lrCoste@1100217003 : Record 7010166;
+      lrMargen@1100217002 : Record 7010174;
+      lrDet@1100217001 : Record 7010256;
+    BEGIN
+      lrDet.RESET;
+      lrDet.SETRANGE(Delegacion     , rSer.Delegacion);
+      lrDet.SETRANGE("Num. Servicio", rSer."N§ Servicio");
+      lrDet.SETRANGE("ID linea"     , pwNumLinea);
+      IF lrDet.FINDSET THEN
+        lrDet.CALCSUMS(Importe);
+
+      CASE rSer."Tipo Calculo" OF
+        rSer."Tipo Calculo"::Margenes:
+        BEGIN
+          lrMargen.GET(rSer.Delegacion, rSer."N§ Servicio", pwNumLinea);
+          lrMargen.VALIDATE(Importe, (-1) * lrDet.Importe);
+          lrMargen.MODIFY;
+        END;
+        ELSE
+        BEGIN
+          lrCoste.GET(rSer.Delegacion, rSer."N§ Servicio", pwNumLinea);
+          lrCoste.VALIDATE(Importe, (-1) * lrDet.Importe);
+          lrCoste.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _UltimaFechaCambio@1100253006(pwDivisa@1100253002 : Code[10]) rvFechaCamb : Date;
+    VAR
+      lrCurrExch@1100253000 : Record 330;
+    BEGIN
+      // _UltimaFechaCambio
+      //+004
+      IF pwDivisa = '' THEN
+        EXIT;
+
+      lrCurrExch.RESET;
+      lrCurrExch.SETRANGE ("Currency Code", pwDivisa);
+      lrCurrExch.SETFILTER("Starting Date", '<=%1', rSer.Fecha);
+      lrCurrExch.FINDLAST;
+
+      EXIT(lrCurrExch."Starting Date");
+      //-004
+    END;
+
+    LOCAL PROCEDURE _GetTipoCambio@1100217015(pwDivisa@1100217001 : Code[10];pwFecha@1100217002 : Date) : Decimal;
+    VAR
+      lrCurrExch@1100217000 : Record 330;
+      lrGLSetup@1100217003 : Record 98;
+    BEGIN
+      // _GetTipoCambio
+
+      //. Creada dia 13.05.2013
+      //. Retornar el tipo de cambio que se va a utilizar para convertir a DL
+
+      lrGLSetup.FINDFIRST;
+      IF (pwDivisa = lrGLSetup."LCY Code") OR (pwDivisa = '') THEN
+        EXIT(0);
+
+      lrCurrExch.SETRANGE ("Currency Code", pwDivisa);
+      lrCurrExch.SETFILTER("Starting Date", '<=%1', pwFecha);
+      lrCurrExch.FINDLAST;
+
+      EXIT(lrCurrExch."Relational Exch. Rate Amount");
+    END;
+
+    PROCEDURE CostePrevistoReserva@1100217017(prRsv@1100217000 : Record 7010162) : Decimal;
+    VAR
+      lrExc@1100217001 : Record 7009710;
+      lrPrestCont@1100217003 : Record 7010141;
+      lwCoste@1100217002 : Decimal;
+    BEGIN
+      // CostePrevistoReserva
+
+      //. Buscaremos las prestaciones de la excursion y calcularemos el coste base de la excursion
+      //. La reserva tendr  que tener unos datos minimos rellenados
+
+      IF (prRsv.Producto = '') OR
+         (prRsv."Fecha Excursion" = 0D) OR
+         (prRsv."Hotel Cliente" = '') OR
+         (prRsv.Adultos + prRsv.Ni¤os = 0) THEN
+        EXIT;
+
+      IF NOT lrExc.GET(prRsv.Producto) THEN
+        EXIT(0);
+
+      //. Segun el estado de la reserva ya no volveremos a calcular el coste previsto
+
+      IF (prRsv.Confirmada) OR
+         (prRsv.Anulada) OR
+         (prRsv.Facturada) OR
+         (prRsv."N§ liquidacion GV" <> 0) THEN
+        EXIT;
+
+      IF NOT lrExc."Coste x ticket" THEN
+      BEGIN
+        lwCoste := 0;
+        lwCoste := ROUND(prRsv."Ingreso reserva neto" * lrExc."Margen bruto" / 100);
+        lwCoste := prRsv."Ingreso reserva neto" - lwCoste;
+        EXIT(lwCoste);
+      END;
+
+      rPar.FINDFIRST;
+
+      lwCoste := 0;
+
+      lrPrestCont.RESET;
+      lrPrestCont.SETRANGE("Codigo Producto", prRsv.Producto);
+      IF lrPrestCont.FINDSET THEN
+      BEGIN
+        REPEAT
+          lwCoste += _PrevisionPrestacion(lrPrestCont, prRsv);
+        UNTIL lrPrestCont.NEXT = 0;
+      END;
+
+      EXIT(lwCoste);
+    END;
+
+    LOCAL PROCEDURE _PrevisionPrestacion@1100217024(prPrestCont@1100217000 : Record 7010141;prRsv@1100217005 : Record 7010162) : Decimal;
+    VAR
+      lrCont@1100217002 : Record 7010142;
+      lrPrecioGO@1100217004 : Record 7010154;
+    BEGIN
+      // _PrevisionPrestacion
+
+      lrCont.RESET;
+      lrCont.SETRANGE("N§ Contrato compra", prPrestCont.Contrato);
+      lrCont.SETRANGE("Tipo Contrato"     , prPrestCont."Tipo Contrato");
+      IF lrCont.FINDFIRST THEN
+      BEGIN
+        CASE lrCont."Tipo Contrato" OF
+          lrCont."Tipo Contrato"::Transportista:
+            EXIT(_PrestacionTransporte(lrCont, prRsv));
+          lrCont."Tipo Contrato"::Excursion:
+            EXIT(_PrestacionServicio(lrCont, prRsv));
+          lrCont."Tipo Contrato"::"Guia Oficial":
+            EXIT(_PrestacionGuiaOficial(lrCont, prRsv));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _PrestacionTransporte@1100217023(prContrato@1100217001 : Record 7010142;prRsv@1100217000 : Record 7010162) : Decimal;
+    VAR
+      lrParPer@1100217004 : Record 7009701;
+      lrZonasExc@1100217003 : Record 7010149;
+      lrPrecioTra@1100217002 : Record 7010150;
+      lrPrecioTra2@1100217005 : Record 7010150;
+      lrVendor@1100217008 : Record 23;
+      lwAdultos@1100217006 : Decimal;
+      lwNi¤os@1100217007 : Decimal;
+      lwIVA@1100217009 : Decimal;
+      lwImporte@1100217010 : Decimal;
+    BEGIN
+      // _PrestacionTransporte
+
+      lrParPer.FINDFIRST;
+
+      lrZonasExc.RESET;
+      lrZonasExc.SETRANGE("Tipo Contrato"  , lrZonasExc."Tipo Contrato"::Compra);
+      lrZonasExc.SETRANGE("Codigo Contrato", prContrato."N§ Contrato compra");
+      lrZonasExc.SETRANGE("Zona Fisica"    , prRsv."Zona Hotel");
+      IF NOT lrZonasExc.FINDFIRST THEN
+        EXIT(0);
+
+      lrPrecioTra.RESET;
+      lrPrecioTra.SETRANGE (Delegacion    , prContrato.Delegacion);
+      lrPrecioTra.SETRANGE ("N§ Contrato" , prContrato."N§ Contrato compra");
+      lrPrecioTra.SETRANGE ("Tipo precio" , lrPrecioTra."Tipo precio"::"Precio zona");
+      lrPrecioTra.SETRANGE (Producto      , prRsv.Producto);
+      lrPrecioTra.SETFILTER("Fecha desde" , '<=%1', prRsv."Fecha Excursion");
+      lrPrecioTra.SETFILTER("Fecha hasta" , '>=%1', prRsv."Fecha Excursion");
+      lrPrecioTra.SETFILTER("Rango desde" , '<=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPrecioTra.SETFILTER("Rango hasta" , '>=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPrecioTra.SETRANGE (Zona          , lrZonasExc.Zona);
+      lrPrecioTra.SETRANGE ("Codigo suplemento", '');
+      lrPrecioTra.SETRANGE (Activo        , TRUE);
+      IF NOT lrPrecioTra.FINDFIRST THEN
+        EXIT(0);
+
+      lrPrecioTra2.COPY(lrPrecioTra);
+      lrPrecioTra2.SETRANGE("Orden dependiente", lrPrecioTra."Orden precio");
+      lrPrecioTra2.SETRANGE("Codigo suplemento"    , lrParPer."Codigo Adulto");
+      IF NOT lrPrecioTra2.FINDFIRST THEN
+      BEGIN
+        lwAdultos := (prRsv.Adultos - prRsv."Compra - Invitados Adultos") * lrPrecioTra.Precio;
+        lwNi¤os   := (prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os") * lrPrecioTra.Precio;
+      END
+      ELSE
+      BEGIN
+        lwAdultos := (prRsv.Adultos - prRsv."Compra - Invitados Adultos") * lrPrecioTra2.Precio;
+        lrPrecioTra2.SETRANGE("Codigo suplemento", lrParPer."Codigo Ni¤o");
+        IF NOT lrPrecioTra2.FINDFIRST THEN
+          lwNi¤os := (prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os") * lrPrecioTra2.Precio
+        ELSE
+          lwNi¤os := (prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os") * lrPrecioTra.Precio;
+      END;
+
+      IF prContrato."Impuestos incluidos" THEN
+      BEGIN
+        IF NOT lrVendor.GET(prContrato.Proveedor) THEN
+          lwIVA := 1
+        ELSE
+          lwIVA := _GetIVA(lrVendor."VAT Bus. Posting Group", prContrato."Grupo registro iva prod.");
+        lwImporte := lwAdultos + lwNi¤os;
+        IF lwIVA <> 0 THEN
+          lwImporte := ROUND(lwImporte / lwIVA);
+      END
+      ELSE
+        lwImporte := lwAdultos + lwNi¤os;
+
+      //. Hago esta comparacion para evitar convertir la divisa US3 en la divisa de venta ya que ambas son dolares
+      IF COPYSTR(prContrato."Cod. divisa", 1, 2) <> COPYSTR(rPar."Divisa venta excursiones", 1, 2) THEN
+      BEGIN
+        lwImporte := rExchange.ExchangeAmtFCYToFCY(prRsv."Fecha Excursion", prContrato."Cod. divisa",
+                                                   rPar."Divisa venta excursiones", lwImporte);
+        lwImporte := ROUND(lwImporte);
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    LOCAL PROCEDURE _PrestacionServicio@1100217021(prContrato@1100217001 : Record 7010142;prRsv@1100217000 : Record 7010162) : Decimal;
+    VAR
+      lrPrecioExc@1100217002 : Record 7010151;
+      lrVendor@1100217005 : Record 23;
+      lwAdultos@1100217004 : Decimal;
+      lwNi¤os@1100217003 : Decimal;
+      lwIVA@1100217006 : Decimal;
+      lwImporte@1100217007 : Decimal;
+    BEGIN
+      // _PrestacionServicio
+
+      lrPrecioExc.RESET;
+      lrPrecioExc.SETRANGE (Delegacion    , prContrato.Delegacion);
+      lrPrecioExc.SETRANGE ("N§ Contrato" , prContrato."N§ Contrato compra");
+      lrPrecioExc.SETRANGE ("Tipo precio" , lrPrecioExc."Tipo precio"::"Precio Excursion");
+      lrPrecioExc.SETFILTER("Fecha desde" , '<=%1', prRsv."Fecha Excursion");
+      lrPrecioExc.SETFILTER("Fecha hasta" , '>=%1', prRsv."Fecha Excursion");
+      lrPrecioExc.SETFILTER("Rango desde" , '<=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPrecioExc.SETFILTER("Rango hasta" , '>=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPrecioExc.SETRANGE ("Zona Hotel"  , prRsv."Zona Hotel");
+      lrPrecioExc.SETRANGE (Activo        , TRUE);
+      IF NOT lrPrecioExc.FINDFIRST THEN
+      BEGIN
+        lrPrecioExc.SETRANGE("Zona Hotel", '');
+        IF NOT lrPrecioExc.FINDFIRST THEN
+          EXIT(0);
+      END;
+
+      lwAdultos := (prRsv.Adultos - prRsv."Compra - Invitados Adultos") * lrPrecioExc."Precio Adulto";
+      lwNi¤os   := (prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os") * lrPrecioExc."Precio Ni¤o";
+
+      IF prContrato."Impuestos incluidos" THEN
+      BEGIN
+        IF NOT lrVendor.GET(prContrato.Proveedor) THEN
+          lwIVA := 1
+        ELSE
+          lwIVA := _GetIVA(lrVendor."VAT Bus. Posting Group", prContrato."Grupo registro iva prod.");
+        lwImporte := lwAdultos + lwNi¤os;
+        IF lwIVA <> 0 THEN
+          lwImporte := ROUND(lwImporte / lwIVA);
+      END
+      ELSE
+        lwImporte := lwAdultos + lwNi¤os;
+
+      //. Hago esta comparacion para evitar convertir la divisa US3 en la divisa de venta ya que ambas con dolares
+      IF COPYSTR(prContrato."Cod. divisa", 1, 2) <> COPYSTR(rPar."Divisa venta excursiones", 1, 2) THEN
+      BEGIN
+        lwImporte := rExchange.ExchangeAmtFCYToFCY(prRsv."Fecha Excursion", prContrato."Cod. divisa",
+                                                   rPar."Divisa venta excursiones", lwImporte);
+        lwImporte := ROUND(lwImporte);
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    LOCAL PROCEDURE _PrestacionGuiaOficial@1100217027(prContrato@1100217001 : Record 7010142;prRsv@1100217000 : Record 7010162) : Decimal;
+    VAR
+      lrPre@1100217002 : Record 7010154;
+      lrVendor@1100217006 : Record 23;
+      lrExc@1100217005 : Record 7009710;
+      lwAdultos@1100217003 : Decimal;
+      lwNi¤os@1100217004 : Decimal;
+      lwIVA@1100217007 : Decimal;
+      lwImporte@1100217008 : Decimal;
+    BEGIN
+      // _PrestacionGuiaOficial
+
+      lrExc.GET(prRsv.Producto);
+
+      lrPre.RESET;
+      lrPre.SETRANGE (Delegacion       , prContrato.Delegacion);
+      lrPre.SETRANGE ("N§ Contrato"    , prContrato."N§ Contrato compra");
+      lrPre.SETRANGE ("Tipo precio"    , lrPre."Tipo precio"::"Precio Base");
+      lrPre.SETFILTER("Fecha desde"    , '<=%1', prRsv."Fecha Excursion");
+      lrPre.SETFILTER("Fecha hasta"    , '>=%1', prRsv."Fecha Excursion");
+      lrPre.SETRANGE ("Tipo Aplicacion", lrPre."Tipo Aplicacion"::Pax);
+      lrPre.SETFILTER("Rango desde" , '<=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPre.SETFILTER("Rango hasta" , '>=%1', prRsv.Adultos + prRsv.Ni¤os);
+      lrPre.SETRANGE (Duracion         , lrExc.Duracion);
+      lrPre.SETRANGE (Excursion        , prRsv.Producto);
+      lrPre.SETRANGE (Activo           , TRUE);
+      IF NOT lrPre.FINDFIRST THEN
+      BEGIN
+        //. Probamos si hay precio por excursion sin duracion
+        lrPre.SETRANGE(Duracion, lrPre.Duracion::" ");
+        IF NOT lrPre.FINDFIRST THEN
+        BEGIN
+          //. Probamos si hay precio por duracion sin excursion
+          lrPre.SETRANGE (Duracion , lrExc.Duracion);
+          lrPre.SETRANGE (Excursion, '');
+          IF NOT lrPre.FINDFIRST THEN
+            EXIT(0);
+        END;
+      END;
+
+      lwAdultos := (prRsv.Adultos - prRsv."Compra - Invitados Adultos") * lrPre."Precio Adulto";
+      lwNi¤os   := (prRsv.Ni¤os - prRsv."Compra - Invitados ni¤os") * lrPre."Precio Ni¤o";
+
+      IF prContrato."Impuestos incluidos" THEN
+      BEGIN
+        IF NOT lrVendor.GET(prContrato.Proveedor) THEN
+          lwIVA := 1
+        ELSE
+          lwIVA := _GetIVA(lrVendor."VAT Bus. Posting Group", prContrato."Grupo registro iva prod.");
+        lwImporte := lwAdultos + lwNi¤os;
+        IF lwIVA <> 0 THEN
+          lwImporte := ROUND(lwImporte / lwIVA);
+      END
+      ELSE
+        lwImporte := lwAdultos + lwNi¤os;
+
+      //. Hago esta comparacion para evitar convertir la divisa US3 en la divisa de venta ya que ambas con dolares
+      IF COPYSTR(prContrato."Cod. divisa", 1, 2) <> COPYSTR(rPar."Divisa venta excursiones", 1, 2) THEN
+      BEGIN
+        lwImporte := rExchange.ExchangeAmtFCYToFCY(prRsv."Fecha Excursion", prContrato."Cod. divisa",
+                                                   rPar."Divisa venta excursiones", lwImporte);
+        lwImporte := ROUND(lwImporte);
+      END;
+
+      EXIT(lwImporte);
+    END;
+
+    LOCAL PROCEDURE _GetIVA@1100217025(pwIVANegocio@1100217000 : Code[10];pwIVAProducto@1100217001 : Code[10]) : Decimal;
+    VAR
+      lrVATSetup@1100217002 : Record 325;
+      lwIVA@1100217003 : Decimal;
+    BEGIN
+
+      IF NOT lrVATSetup.GET(pwIVANegocio, pwIVAProducto) THEN
+        EXIT(0);
+
+      lwIVA := ROUND(1 + (lrVATSetup."VAT+EC %" / 100) );
+
+      EXIT(lwIVA);
+    END;
+
+    PROCEDURE BorrarCoste@1000000000(prReserva@1000000000 : Record 7010162);
+    VAR
+      lrCoste@1000000001 : Record 7010166;
+    BEGIN
+      // BorrarCoste
+
+      //. Esta funcion sirve para borrar los registros de coste de una reserva
+      //. o bien porque la hemos reembolsado completamente, o bien porque la recalculamos individualmente
+
+      lrCoste.RESET;
+      lrCoste.SETCURRENTKEY(Delegacion, "N§ Servicio", Prestacion, "Num. Ticket");
+      lrCoste.SETRANGE(Delegacion   , prReserva.Delegacion);
+      lrCoste.SETRANGE("N§ Servicio", prReserva."N§ Servicio");
+      lrCoste.SETRANGE("Num. Ticket", prReserva."N§ Ticket");
+      lrCoste.SETRANGE("N§ Factura" , '');
+      IF lrCoste.FINDSET(TRUE) THEN
+        lrCoste.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      $000 AJS 13062013 Nueva funcion para calcular el coste de excursiones por cada reserva
+                        Esta funcion con calcula los suplementos por servicio ni los servicios de soporte
+
+      $001 AJS 27082013 Dejamos de rellenar el campo Nombre proveedor de la tabla de Margenes Excursiones
+
+      $002 AJS 28102013 Rellenamos campos informativos en las prestaciones
+
+      $003 AJS 24032014 CNT-OC-14033, Nueva funcion CostePrevistoReserva para calcular en base a las prestaciones de la excursion
+
+      $004 AJS 05052014 Corregir error en la funcion _EX_CancelaAnterior que bloqueaba el proceso
+
+      $005 ARM 28072014 A¤adir tener en cuenta los reembolsos CNT-OC-14047
+
+      $006 ARM 29082014 CNT-CAR-14073 Ofertas solo online
+
+      $007 ARM 16092014 CNT-OC-14069 Nueva gestion de promociones
+
+      $008 AJS 24092014 El campo Tipo vehiculo no es obligatorio
+
+      $009 AJS 04102014 Los suplementos que no tengan gente no se calculan
+
+      $010 ARM 24112014 CNT-OC-14055 Separar invitados de venta y de compra
+
+      $011 AJS 29012015 Nueva funcion BorrarCoste para llamar desde los reembolsos totales o cuando se recalcule el coste
+                        de una sola reserva
+
+      $012 AJS 29012015 Nuevo parametro de la funcion CosteReservas para poder lanzar el recalculo de una sola reserva
+    }
+    END.
+  }
+}

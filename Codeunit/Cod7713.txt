@@ -1,0 +1,217 @@
+OBJECT Codeunit 7713 Miniform Phys.-Inventory
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/09/04;
+    Time=12:00:00;
+    Version List=NAVW14.00;
+  }
+  PROPERTIES
+  {
+    TableNo=7700;
+    OnRun=VAR
+            MiniformMgmt@1000 : Codeunit 7702;
+          BEGIN
+            MiniformMgmt.Initialize(MiniformHeader,Rec,DOMxmlin,ReturnedNode,RootNode,XMLDOMMgmt,ADCSCommunication,LoginID,CurrentCode,
+            StackCode,LocationFilter);
+
+            IF Code <> CurrentCode THEN
+              PrepareData
+            ELSE
+              ProcessInput;
+
+            CLEAR(DOMxmlin);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1006 : TextConst 'ENU=Function not Found;ESP=Funci¢n no encontrada';
+      MiniformHeader@1015 : Record 7700;
+      WhseJournalLine@1009 : Record 7311;
+      DOMxmlin@1011 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      ReturnedNode@1012 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      RootNode@1010 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLDOMMgmt@1007 : Codeunit 99008516;
+      ADCSCommunication@1003 : Codeunit 7701;
+      ADCSNasStartup@1024 : Codeunit 7700;
+      LoginID@1004 : Text[250];
+      Remark@1002 : Text[250];
+      LocationFilter@1000 : Text[250];
+      Text004@1021 : TextConst 'ENU=Invalid %1.;ESP=%1 no valido.';
+      Text006@1001 : TextConst 'ENU=No input Node found;ESP=No se ha encontrado el Nodo de entrada';
+      Text007@1014 : TextConst 'ENU=Record not found;ESP=No se ha encontrado ning£n registro';
+      Text008@1013 : TextConst 'ENU=End of Document;ESP=Fin del documento';
+      CurrentCode@1008 : Text[250];
+      StackCode@1016 : Text[250];
+      ActiveInputField@1026 : Integer;
+      Text012@1027 : TextConst 'ENU=No Lines available;ESP=No hay l¡neas disponibles';
+      RecRef@1005 : RecordRef;
+
+    LOCAL PROCEDURE ProcessInput@10();
+    VAR
+      TableNo@1008 : Integer;
+      RecordId@1004 : RecordID;
+      FldNo@1000 : Integer;
+      FuncGroup@1001 : Record 7702;
+      TextValue@1007 : Text[250];
+    BEGIN
+      IF XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode) THEN
+        TextValue := ReturnedNode.text
+      ELSE
+        ERROR(Text006);
+
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));    // Key1 = TableNo
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));   // Key2 = RecordID
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(WhseJournalLine);
+        WhseJournalLine.SETRANGE("Journal Template Name",WhseJournalLine."Journal Template Name");
+        WhseJournalLine.SETRANGE("Journal Batch Name",WhseJournalLine."Journal Batch Name");
+        WhseJournalLine.SETRANGE("Location Code",WhseJournalLine."Location Code");
+        RecRef.GETTABLE(WhseJournalLine);
+        ADCSCommunication.SetRecRef(RecRef);
+      END ELSE BEGIN
+        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        EXIT;
+      END;
+
+      FuncGroup.KeyDef := ADCSCommunication.GetFunctionKey(MiniformHeader.Code,TextValue);
+      ActiveInputField := 1;
+
+      CASE FuncGroup.KeyDef OF
+        FuncGroup.KeyDef::Esc :
+          ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+
+        FuncGroup.KeyDef::First :
+          ADCSCommunication.FindRecRef(RecRef,0,MiniformHeader."No. of Records in List");
+
+        FuncGroup.KeyDef::LnDn :
+          IF NOT ADCSCommunication.FindRecRef(RecRef,1,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+
+        FuncGroup.KeyDef::LnUp :
+          ADCSCommunication.FindRecRef(RecRef,2,MiniformHeader."No. of Records in List");
+
+        FuncGroup.KeyDef::Last :
+          ADCSCommunication.FindRecRef(RecRef,3,MiniformHeader."No. of Records in List");
+
+        FuncGroup.KeyDef::PgDn :
+          IF NOT ADCSCommunication.FindRecRef(RecRef,4,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+
+        FuncGroup.KeyDef::PgUp :
+          ADCSCommunication.FindRecRef(RecRef,5,MiniformHeader."No. of Records in List");
+
+        FuncGroup.KeyDef::Input : BEGIN
+          EVALUATE(FldNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'FieldID'));
+
+          CASE FldNo OF
+            WhseJournalLine.FIELDNO("Bin Code"): CheckBinNo(UPPERCASE(TextValue));
+            WhseJournalLine.FIELDNO("Item No."): CheckItemNo(UPPERCASE(TextValue));
+            ELSE BEGIN
+              ADCSCommunication.FieldSetvalue(RecRef,FldNo,TextValue);
+              RecRef.SETTABLE(WhseJournalLine);
+            END;
+          END;
+
+          WhseJournalLine.MODIFY;
+          RecRef.GETTABLE(WhseJournalLine);
+          ADCSCommunication.SetRecRef(RecRef);
+          ActiveInputField := ADCSCommunication.GetActiveInputNo(CurrentCode,FldNo);
+          IF Remark = '' THEN
+            IF ADCSCommunication.LastEntryField(CurrentCode,FldNo) THEN BEGIN
+              RecRef.GETTABLE(WhseJournalLine);
+              IF NOT ADCSCommunication.FindRecRef(RecRef,1,ActiveInputField) THEN BEGIN
+                Remark := Text008;
+              END ELSE
+                ActiveInputField := 1;
+            END ELSE
+              ActiveInputField += 1;
+        END;
+      ELSE
+        ERROR(Text000);
+      END;
+
+      IF NOT (FuncGroup.KeyDef IN [FuncGroup.KeyDef::Esc,FuncGroup.KeyDef::Register]) THEN
+        SendForm(ActiveInputField);
+    END;
+
+    LOCAL PROCEDURE CheckBinNo@4(InputValue@1002 : Text[250]);
+    BEGIN
+      IF InputValue = WhseJournalLine."Bin Code" THEN
+        EXIT;
+
+      Remark := STRSUBSTNO(Text004,WhseJournalLine.FIELDCAPTION("Bin Code"));
+    END;
+
+    LOCAL PROCEDURE CheckItemNo@2(InputValue@1005 : Text[250]);
+    VAR
+      ItemIdent@1000 : Record 7704;
+    BEGIN
+      IF InputValue = WhseJournalLine."Item No." THEN
+        EXIT;
+
+      IF NOT ItemIdent.GET(InputValue) THEN
+        Remark := STRSUBSTNO(Text004,ItemIdent.FIELDCAPTION(Code));
+
+      IF ItemIdent."Item No." <> WhseJournalLine."Item No." THEN
+        Remark := STRSUBSTNO(Text004,ItemIdent.FIELDCAPTION(Code));
+
+      IF ((ItemIdent."Variant Code" <> '') AND (ItemIdent."Variant Code" <> WhseJournalLine."Variant Code")) THEN
+        Remark := STRSUBSTNO(Text004,ItemIdent.FIELDCAPTION(Code));
+
+      IF ((ItemIdent."Unit of Measure Code" <> '') AND (ItemIdent."Unit of Measure Code" <> WhseJournalLine."Unit of Measure Code"))
+      THEN
+        Remark := STRSUBSTNO(Text004,ItemIdent.FIELDCAPTION(Code));
+    END;
+
+    LOCAL PROCEDURE PrepareData@1();
+    VAR
+      TableNo@1004 : Integer;
+      RecordId@1003 : RecordID;
+      WhseJournalBatch@1000 : Record 7310;
+    BEGIN
+      XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode);
+
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(WhseJournalBatch);
+        WhseJournalLine.SETRANGE("Journal Template Name",WhseJournalBatch."Journal Template Name");
+        WhseJournalLine.SETRANGE("Journal Batch Name",WhseJournalBatch.Name);
+        WhseJournalLine.SETRANGE("Location Code",WhseJournalBatch."Location Code");
+        IF NOT WhseJournalLine.FIND('-') THEN BEGIN
+          ADCSNasStartup.SendError(Text012);
+          EXIT;
+        END;
+        RecRef.GETTABLE(WhseJournalLine);
+        ADCSCommunication.SetRecRef(RecRef);
+        ActiveInputField := 1;
+        SendForm(ActiveInputField);
+      END ELSE
+        ERROR(Text007);
+    END;
+
+    LOCAL PROCEDURE SendForm@3(InputField@1000 : Integer);
+    BEGIN
+      // Prepare Miniform
+      ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,InputField,Remark,LoginID);
+      ADCSCommunication.GetReturnXML(DOMxmlin);
+      ADCSNasStartup.SendXMLReply(DOMxmlin);
+    END;
+
+    EVENT DOMxmlin@1011::ondataavailable@198();
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1011::onreadystatechange@-609();
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}

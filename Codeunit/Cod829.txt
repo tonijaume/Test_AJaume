@@ -1,0 +1,192 @@
+OBJECT Codeunit 829 DO Payment Trans. Log Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/10;
+    Time=12:00:00;
+    Version List=NAVW16.00.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PaymentMgt@1000 : Codeunit 825;
+      Text065@1001 : TextConst 'ENU=Credit card %1 has already been performed for this %2, but posting failed. You must complete posting of %2 %3.;ESP=La tarjeta de cr‚dito %1 ya se us¢ para %2, pero se produjo un error de registro. Complete el registro de %2 %3.';
+      Text066@1003 : TextConst 'ENU=The operation cannot be performed because %1 %2 has already been authorized on %3, and authorization is not expired.;ESP=No se puede completar la operaci¢n porque %1 %2 ya se autoriz¢ el %3 y la autorizaci¢n no expir¢.';
+      Text069@1002 : TextConst 'ENU=%1 %2 has already been authorized on %3, and authorization is not expired. You must void the previous authorization before you can delete this %1.;ESP=%1 %2 ya se autoriz¢ el %3 y la autorizaci¢n no expir¢. Para poder eliminar %1, debe anular la autorizaci¢n anterior.';
+      Text001@1004 : TextConst 'ENU="""Error Code = %1; Message = %2""";ESP="""C¢digo de error = %1; Mensaje = %2"""';
+      Text002@1005 : TextConst 'ENU=Payment transaction has been performed successfully.;ESP=La transacci¢n de pagos se complet¢ correctamente.';
+      Text003@1006 : TextConst 'ENU=Payment transaction has not been performed.;ESP=La transacci¢n de pagos no se complet¢.';
+      Text004@1007 : TextConst 'ENU=Payment transaction has been initialized but not completed;ESP=La transacci¢n de pagos se inici¢ pero no se complet¢';
+      Text005@1008 : TextConst 'ENU=A capture of %1 %2 has already been performed for Document No. %3 on %4.;ESP=Ya se gener¢ una captura de %1 %2 para el n.§ de documento %3 el %4.';
+
+    PROCEDURE ValidateCanDeleteDocument@1(PaymentMethodCode@1010 : Code[10];DocumentType@1011 : Integer;DocumentTypeName@1012 : Text[30];DocumentNo@1013 : Code[20]);
+    VAR
+      TransactionLogEntry@1100 : Record 829;
+    BEGIN
+      IF PaymentMgt.IsValidPaymentMethod(PaymentMethodCode) THEN BEGIN
+        IF FindPostingNotFinishedEntry(DocumentType,DocumentNo,TransactionLogEntry) THEN
+          ERROR(Text065,TransactionLogEntry."Transaction Type",DocumentTypeName,DocumentNo);
+
+        IF FindValidAuthorizationEntry(DocumentType,DocumentNo,TransactionLogEntry) THEN
+          ERROR(Text069,DocumentTypeName,DocumentNo,TransactionLogEntry."Transaction Date-Time");
+      END;
+    END;
+
+    PROCEDURE ValidateHasNoValidTransactions@2(DocumentType@1000 : Integer;DocumentTypeName@1001 : Text[30];DocumentNo@1002 : Code[20]);
+    VAR
+      TransactionLogEntry@1003 : Record 829;
+    BEGIN
+      IF FindPostingNotFinishedEntry(DocumentType,DocumentNo,TransactionLogEntry) THEN
+        ERROR(Text065,TransactionLogEntry."Transaction Type",DocumentTypeName,DocumentNo);
+
+      IF FindValidAuthorizationEntry(DocumentType,DocumentNo,TransactionLogEntry) THEN
+        ERROR(Text066,DocumentTypeName,DocumentNo,TransactionLogEntry."Transaction Date-Time");
+    END;
+
+    PROCEDURE UpdateExpirationInAuthEntries@3(DocumentType@1000 : Integer;DocumentNo@1001 : Code[20]);
+    VAR
+      TransactionLogEntry@1002 : Record 829;
+      PaymentConfig@1003 : Record 826;
+    BEGIN
+      IF PaymentConfig.GET THEN
+        IF PaymentConfig."Days Before Authoriz. Expiry" <> 0 THEN
+          WITH TransactionLogEntry DO BEGIN
+            SETCURRENTKEY("Document Type","Document No.","Transaction Type","Transaction Result","Transaction Status");
+            SETRANGE("Document Type",DocumentType);
+            SETRANGE("Document No.",DocumentNo);
+            SETRANGE("Transaction Type","Transaction Type"::Authorization);
+            SETRANGE("Transaction Result","Transaction Result"::Success);
+            SETRANGE("Transaction Status","Transaction Status"::" ");
+            IF FINDSET THEN
+              REPEAT
+                IF DT2DATE(CURRENTDATETIME) - DT2DATE("Transaction Date-Time") > PaymentConfig."Days Before Authoriz. Expiry" THEN BEGIN
+                  "Transaction Status" := "Transaction Status"::Expired;
+                  MODIFY;
+                END;
+              UNTIL NEXT = 0;
+          END;
+    END;
+
+    PROCEDURE FindValidAuthorizationEntry@4(DocumentType@1000 : Integer;DocumentNo@1001 : Code[20];VAR TransactionLogEntry@1002 : Record 829) : Boolean;
+    BEGIN
+      UpdateExpirationInAuthEntries(DocumentType,DocumentNo);
+      WITH TransactionLogEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type","Document No.","Transaction Type","Transaction Result","Transaction Status");
+        SETRANGE("Document Type",DocumentType);
+        SETRANGE("Document No.",DocumentNo);
+        SETRANGE("Transaction Type","Transaction Type"::Authorization);
+        SETRANGE("Transaction Result","Transaction Result"::Success);
+        SETRANGE("Transaction Status","Transaction Status"::" ");
+        EXIT(FINDFIRST);
+      END;
+    END;
+
+    PROCEDURE FindPostingNotFinishedEntry@5(DocumentType@1000 : Integer;DocumentNo@1001 : Code[20];VAR TransactionLogEntry@1002 : Record 829) : Boolean;
+    BEGIN
+      WITH TransactionLogEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type","Document No.","Transaction Type","Transaction Result","Transaction Status");
+        SETRANGE("Document Type",DocumentType);
+        SETRANGE("Document No.",DocumentNo);
+        SETFILTER("Transaction Type",'%1|%2',"Transaction Type"::Void,"Transaction Type"::Refund);
+        SETRANGE("Transaction Result","Transaction Result"::Success);
+        SETRANGE("Transaction Status","Transaction Status"::"Posting Not Finished");
+        EXIT(FINDFIRST);
+      END;
+    END;
+
+    PROCEDURE FindCapturedButNotFinishedEntr@10(CustomerNo@1000 : Code[20];DocumentNo@1001 : Code[20];PaidAmount@1002 : Decimal;CurrencyCode@1003 : Code[10];CreditCardNo@1004 : Code[20];VAR DOPaymentTransLogEntry@1005 : Record 829) : Boolean;
+    VAR
+      DOPaymentMgt@1006 : Codeunit 825;
+    BEGIN
+      WITH DOPaymentTransLogEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document No.","Customer No.","Transaction Status");
+        SETRANGE("Document No.",DocumentNo);
+        SETRANGE("Customer No.",CustomerNo);
+        SETRANGE("Transaction Status","Transaction Status"::"Posting Not Finished");
+        SETRANGE("Credit Card No.",CreditCardNo);
+        CurrencyCode := DOPaymentMgt.FindCurrencyCode(CurrencyCode);
+        SETRANGE("Currency Code",CurrencyCode);
+        SETRANGE("Transaction Type","Transaction Type"::Capture);
+        SETRANGE("Transaction Result","Transaction Result"::Success);
+
+        IF NOT FINDFIRST THEN
+          EXIT(FALSE);
+
+        IF Amount <> PaidAmount THEN
+          ERROR(Text005,Amount,CurrencyCode,DocumentNo,FORMAT(DT2DATE("Transaction Date-Time"),0,4));
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE CompleteTransLogEntry@6(VAR TransactionLogEntry@1000 : Record 829;TransactionResult@1001 : Automation "{DAB99883-91F5-4CEA-B6A1-58EFE34D77A0} 1.0:{616391CD-EE5C-4AF9-AD7F-4DE272210B77}:Unknown Automation Server.Unknown Class");
+    BEGIN
+      IF NOT TransactionResult.IsSuccess THEN BEGIN
+        TransactionLogEntry."Transaction Result" := TransactionLogEntry."Transaction Result"::Failed;
+        TransactionLogEntry."Transaction Description" := COPYSTR(STRSUBSTNO(Text001,TransactionResult.LastErrorCode,TransactionResult.
+              LastErrorMessage),1,MAXSTRLEN(TransactionLogEntry."Transaction Description"));
+        IF TransactionLogEntry."Transaction Description" = '' THEN
+          TransactionLogEntry."Transaction Description" := Text003;
+      END ELSE BEGIN
+        TransactionLogEntry."Transaction Result" := TransactionLogEntry."Transaction Result"::Success;
+        TransactionLogEntry."Transaction Description" := COPYSTR(TransactionResult.Description,1,MAXSTRLEN(TransactionLogEntry.
+              "Transaction Description"));
+        IF TransactionLogEntry."Transaction Description" = '' THEN
+          TransactionLogEntry."Transaction Description" := Text002;
+        TransactionLogEntry.Amount := ROUND(TransactionResult.Amount,0.01,'=');
+        TransactionLogEntry."Transaction GUID" := TransactionResult.transactionId;
+        TransactionLogEntry."Transaction ID" := TransactionResult.TransactionIdentifier;
+        TransactionLogEntry."Currency Code" := TransactionResult.CurrencyCode;
+      END;
+      TransactionLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+      TransactionLogEntry."User ID" := USERID;
+      TransactionLogEntry.MODIFY;
+    END;
+
+    PROCEDURE CompleTransLogEntryWithError@7(VAR TransactionLogEntry@1000 : Record 829;ErrorMessage@1001 : Text[250]);
+    BEGIN
+      TransactionLogEntry."Transaction Result" := TransactionLogEntry."Transaction Result"::Failed;
+      TransactionLogEntry."Transaction Description" := ErrorMessage;
+      IF TransactionLogEntry."Transaction Description" = '' THEN
+        TransactionLogEntry."Transaction Description" := Text003;
+      TransactionLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+      TransactionLogEntry."User ID" := USERID;
+      TransactionLogEntry.MODIFY;
+    END;
+
+    PROCEDURE InitializeTransactionLogEntry@8(VAR TransactionLogEntry@1000 : Record 829;CreditCardNo@1001 : Code[20];SourceType@1002 : ' ,Order,Invoice';SourceNo@1003 : Code[20];CustomerNo@1004 : Code[20];TransactionType@1005 : 'Authorization,Capture,Void,Refund';VAR ParentTransactionLogEntry@1006 : Record 829) : Integer;
+    VAR
+      NewTransactionLogEntry@1010 : Record 829;
+    BEGIN
+      NewTransactionLogEntry.INIT;
+      NewTransactionLogEntry."Document Type" := SourceType;
+      NewTransactionLogEntry."Document No." := SourceNo;
+      NewTransactionLogEntry."Customer No." := CustomerNo;
+      NewTransactionLogEntry."Credit Card No." := CreditCardNo;
+      NewTransactionLogEntry."Transaction Type" := TransactionType;
+      NewTransactionLogEntry."Transaction Result" := NewTransactionLogEntry."Transaction Result"::Failed;
+      NewTransactionLogEntry."Transaction Description" := Text004;
+      NewTransactionLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+      NewTransactionLogEntry."User ID" := USERID;
+      NewTransactionLogEntry."Reference GUID" := CREATEGUID;
+      IF NOT ParentTransactionLogEntry.ISEMPTY THEN
+        NewTransactionLogEntry."Parent Entry No." := ParentTransactionLogEntry."Entry No.";
+      NewTransactionLogEntry.INSERT;
+
+      TransactionLogEntry := NewTransactionLogEntry;
+      EXIT(NewTransactionLogEntry."Entry No.");
+    END;
+
+    BEGIN
+    END.
+  }
+}

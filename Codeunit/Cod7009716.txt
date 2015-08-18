@@ -1,0 +1,388 @@
+OBJECT Codeunit 7009716 Calculo ingreso hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/06/14;
+    Time=11:37:42;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355034 : TextConst 'ENU=Calculating incomes of booking #1######## Touroperator #2########;ESP=Calculando ingresos de la reserva #1######## Touroperador #2########';
+      Text001@1103355035 : TextConst 'ENU=Touroperator %1 does not exist;ESP=No existe el Touroperador %1.';
+      Text002@1103355036 : TextConst 'ENU=Contract %1 is not confirmed;ESP=El contrato %1 no esta confirmado.';
+      Text003@1103355037 : TextConst 'ENU=There is no contract for TO %3;ESP=No existe contrato para el TO %3';
+      Text004@1103355038 : TextConst 'ENU=hotel %1 day %2;ESP=hotel %1 el dia %2.';
+      Text005@1103355039 : TextConst 'ENU=REGIMENV;ESP=REGIMENV';
+      Text006@1103355040 : TextConst 'ENU=There is no price for board %1 day %2 in contract %3;ESP=No hay precio para el regimen %1 el dia %2 en contrato %3.';
+      Text007@1103355041 : TextConst 'ENU=HABITACIOV;ESP=HABITACIOV';
+      Text008@1103355042 : TextConst 'ENU=There is no price for the room %1 day %2 in contract %3;ESP=No hay precio para la habitacion %1 el dia %2 en contrato %3.';
+      cCalRes@1103355000 : Codeunit 7009707;
+      cSupRes@1103355001 : Codeunit 7009709;
+      cExtRes@1103355002 : Codeunit 7009710;
+      cOfeRes@1103355004 : Codeunit 7009712;
+      cManRes@1103355007 : Codeunit 7009715;
+      rCab@1103355008 : Record 7009735;
+      rLin@1103355009 : Record 7009736;
+      rPerCal@1103355010 : Record 7009740;
+      rRsvDia@1103355011 : Record 7009756;
+      rErr@1103355012 : Record 7009737;
+      rConV@1103355013 : Record 7009727;
+      rPreV@1103355015 : Record 7009732;
+      rRsv@1103355016 : Record 7009743;
+      w_hotel_factura@1103355017 : Code[20];
+      w_contratos_diferentes@1103355018 : Integer;
+      w_contratos@1103355019 : ARRAY [5] OF Code[10];
+      w_dia@1103355020 : Date;
+      w_fin_estancia@1103355021 : Date;
+      w_indice@1103355022 : Integer;
+      w_encontrado@1103355023 : Boolean;
+      w_existe_contrato@1103355024 : Boolean;
+      w_existe_precio@1103355025 : Boolean;
+      w_precio_regimen@1103355026 : Decimal;
+      w_precio_habitacion@1103355027 : Decimal;
+      w_garantia@1103355028 : Boolean;
+      w_hp@1103355029 : Boolean;
+      w_texto_error@1103355030 : Text[80];
+      w_cantidad@1103355031 : Integer;
+      w_habitacion_reserva@1103355032 : Code[10];
+      ventana@1103355033 : Dialog;
+
+    PROCEDURE calculo_ingresos@1(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_ingresos
+
+      ventana.OPEN(Text000);
+      ventana.UPDATE(1, reserva.Bono);
+      ventana.UPDATE(2, reserva."TourOperador Venta");
+
+      // Buscar los contratos para cada dia
+      busca_contratos(reserva);
+
+      // Iniciamos el calculo de ingresos de la reserva
+      IF (w_existe_contrato) AND
+         ((reserva."Tipo Precio Manual Venta" = 0) OR (reserva."Tipo Precio Manual Venta" = 3)) THEN
+      BEGIN
+        calculo_regimen(reserva);
+        calculo_habitacion(reserva);
+
+        cSupRes.suplementos_ingreso_hotel(reserva);
+
+        cExtRes.calculo_extras_fijos_ingreso(reserva);
+        cExtRes.calculo_extras_variables_ing(reserva);
+        cExtRes.calculo_extras_libres_ingreso(reserva);
+
+        cOfeRes.calculo_ofertas_precio_ingreso(reserva, TRUE); //excluyente= Si
+        //-$006cAxBRes.calculo_ofertas_AxB_ingreso(reserva, TRUE);
+        //-$006cOfeRes.calculo_ofertas_precio_ingreso(reserva, TRUE);  //excluyente= Si
+
+        cOfeRes.calculo_ofertas_precio_ingreso(reserva, FALSE); //excluyente= Si
+        //-$006cAxBRes.calculo_ofertas_AxB_ingreso(reserva, FALSE);
+        //-$006cOfeRes.calculo_ofertas_precio_ingreso(reserva, FALSE);  //excluyente= No
+      END;
+
+      IF (reserva."Tipo Precio Manual Venta" <> 0) AND (reserva."Tipo Precio Manual Venta" <> 3) THEN
+        cManRes.calculo_precio_manual_ing(reserva);
+
+      ventana.CLOSE;
+    END;
+
+    PROCEDURE busca_contratos@8(VAR reserva@1103355000 : Record 7009743);
+    VAR
+      rRsv@1103355001 : Record 7009743;
+      rRsv2@1103355002 : Record 7009743;
+      rTO@1103355003 : Record 7009717;
+      w_to@1103355004 : Code[10];
+    BEGIN
+      // busca_contratos
+
+      w_contratos_diferentes := 0;
+      w_hotel_factura := reserva."Hotel Factura";
+      w_existe_contrato := TRUE;
+
+      IF NOT rTO.GET(reserva."TourOperador Venta") THEN
+        ERROR(Text001, reserva."TourOperador Venta");
+
+      //-$001IF rTO."Grupo Touroperador" = '' THEN
+      //-$001  w_to := reserva."TourOperador Venta"
+      //-$001ELSE
+      //-$001  w_to := rTO."Grupo Touroperador";
+
+      w_to := reserva."TourOperador Venta";
+
+      // Buscamos los contratos de venta
+
+      rConV.RESET;
+      rConV.SETCURRENTKEY(Hotel,
+                          TourOperador,
+                          "Fecha inicio contrato");
+      rConV.SETRANGE(Hotel       , reserva."Hotel venta");
+      rConV.SETRANGE(TourOperador, w_to);
+      FOR w_dia := reserva."Fecha entrada" TO reserva."Fin estancia" - 1 DO BEGIN
+        rConV.SETFILTER("Fecha inicio contrato", '<=%1', w_dia);
+        rConV.SETFILTER("Fecha final contrato" , '>=%1', w_dia);
+        IF rConV.FIND('-') THEN BEGIN
+          IF NOT rConV.Confirmado THEN BEGIN
+            w_existe_contrato := FALSE;
+            w_texto_error := STRSUBSTNO(Text002, rConV."N§ Contrato venta");
+            cCalRes.inserta_error(w_texto_error);
+          END
+          ELSE BEGIN
+            contratos_diferentes;
+            rRsvDia.RESET;
+            rRsvDia.SETRANGE(Delegacion  , reserva.Delegacion);
+            rRsvDia.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+            rRsvDia.SETRANGE(Dia         , w_dia);
+            IF rRsvDia.FIND('-') THEN BEGIN
+              rRsvDia."Contrato venta" := rConV."N§ Contrato venta";
+              rRsvDia.MODIFY;
+            END;
+            rRsvDia.RESET;
+          END;
+        END
+        ELSE BEGIN
+          w_existe_contrato := TRUE;
+          w_texto_error := STRSUBSTNO(Text003 +
+                                      Text004, reserva."Hotel venta", w_dia, reserva."TourOperador Venta");
+          cCalRes.inserta_error(w_texto_error);
+        END;
+      END;
+    END;
+
+    PROCEDURE contratos_diferentes@3();
+    BEGIN
+      // contratos_diferentes
+
+      w_indice := 1;
+      w_encontrado := FALSE;
+      WHILE (w_indice < 5) AND (NOT w_encontrado) DO BEGIN
+        IF w_contratos[w_indice] = rConV."N§ Contrato venta" THEN BEGIN
+          w_encontrado := TRUE;
+        END
+        ELSE BEGIN
+          IF w_contratos[w_indice] = '' THEN BEGIN
+            w_contratos[w_indice] := rConV."N§ Contrato venta";
+            w_encontrado := TRUE;
+          END
+          ELSE
+            w_indice := w_indice + 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE calculo_regimen@10(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_regimen
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          IF (rRsv."Fecha entrada" <> 0D) AND (w_hotel_factura <> '') THEN BEGIN
+            IF rRsv.Responsable THEN
+              w_habitacion_reserva := rRsv.Habitacion;
+            FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+              rLin.INIT;
+              rRsvDia.RESET;
+              rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+              rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+              rRsvDia.SETRANGE(Dia         , w_dia);
+              IF NOT rRsvDia.FIND('-') THEN BEGIN
+                rRsvDia.SETRANGE(Dia);
+                rRsvDia.FIND('-');
+              END;
+
+              buscar_precios_regimen(rRsv, rRsvDia);
+              IF (rPreV."Tipo Precio" = rPreV."Tipo Precio"::Pax) OR
+                 ((rPreV."Tipo Precio" = rPreV."Tipo Precio"::"0") AND (rRsv.Responsable)) THEN BEGIN
+                cCalRes.inserta_linea_calculo(
+                  rLin, USERID(), Text005, rRsvDia."Contrato venta", w_precio_regimen, rRsv."N§ Reserva", w_dia,
+                  rRsv.Regimen, 1, w_precio_regimen, w_garantia, w_hp);
+                cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono,
+                  reserva."N§ Responsable", reserva."Hotel reservado", 2, reserva."Hotel Factura",
+                  reserva.Delegacion, FALSE);
+              END;
+            END;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+      rRsv.RESET;
+    END;
+
+    PROCEDURE buscar_precios_regimen@4(reserva@1103355000 : Record 7009743;reserva_dia@1103355001 : Record 7009756);
+    BEGIN
+      // buscar_precios_regimen
+
+      w_precio_regimen := 0;
+      w_garantia := FALSE;
+      w_hp := FALSE;
+      w_existe_precio := FALSE;
+
+      rPreV.RESET;
+      rPreV.SETRANGE (Delegacion       , reserva.Delegacion);
+      rPreV.SETRANGE ("N§ Contrato"    , reserva_dia."Contrato venta");
+      rPreV.SETRANGE ("Codigo Precio"  , rPreV."Codigo Precio"::Regimen);
+      rPreV.SETRANGE (Codigo           , reserva.Regimen);
+      rPreV.SETFILTER("Fecha desde"    , '<=%1', w_dia);
+      rPreV.SETFILTER("Fecha hasta"    , '>=%1', w_dia);
+      rPreV.SETRANGE ("Tipo Habitacion", w_habitacion_reserva);
+      rPreV.SETRANGE (Activo           , TRUE);
+      IF rPreV.FIND('-') THEN BEGIN
+        w_existe_precio := TRUE;
+        w_precio_regimen := rPreV.Importe;
+        w_garantia := rPreV.Garantizable;
+        w_hp := rPreV."Importe HP";
+      END;
+      IF NOT w_existe_precio THEN BEGIN
+        rPreV.RESET;
+        rPreV.SETRANGE (Delegacion       , reserva.Delegacion);
+        rPreV.SETRANGE ("N§ Contrato"    , reserva_dia."Contrato venta");
+        rPreV.SETRANGE ("Codigo Precio"  , rPreV."Codigo Precio"::Regimen);
+        rPreV.SETRANGE (Codigo           , reserva.Regimen);
+        rPreV.SETFILTER("Fecha desde"    , '<=%1', w_dia);
+        rPreV.SETFILTER("Fecha hasta"    , '>=%1', w_dia);
+
+        // AJS 19.10.2009
+
+        rPreV.SETRANGE("Tipo Habitacion", '');
+
+        rPreV.SETRANGE (Activo           , TRUE);
+        IF rPreV.FIND('-') THEN BEGIN
+          w_existe_precio := TRUE;
+          w_precio_regimen := rPreV.Importe;
+          w_garantia := rPreV.Garantizable;
+          w_hp := rPreV."Importe HP";
+        END;
+      END;
+      rPreV.RESET;
+      IF NOT w_existe_precio THEN BEGIN
+        w_texto_error := STRSUBSTNO(Text006,
+                                    reserva.Regimen, w_dia, reserva_dia."Contrato venta");
+        cCalRes.inserta_error(w_texto_error);
+      END;
+    END;
+
+    PROCEDURE calculo_habitacion@5(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_habitacion
+
+      rRsv.RESET;
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          IF (rRsv."Fecha entrada" <> 0D) AND (w_hotel_factura <> '') THEN BEGIN
+            FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+              rLin.INIT;
+              rRsvDia.RESET;
+              rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+              rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+              rRsvDia.SETRANGE(Dia         , w_dia);
+              IF NOT rRsvDia.FIND('-') THEN BEGIN
+                rRsvDia.SETRANGE(Dia);
+                rRsvDia.FIND('-');
+              END;
+
+              buscar_precios_habitacion(reserva, rRsvDia);
+              IF (rRsv.Responsable) THEN BEGIN
+                IF rPreV."Tipo Precio" = rPreV."Tipo Precio"::Pax THEN
+                  w_cantidad := 1
+                ELSE
+                  w_cantidad := rRsv."N§ Habitaciones";
+                cCalRes.inserta_linea_calculo(
+                  rLin, USERID(), Text007, rRsvDia."Contrato venta", (w_precio_habitacion * w_cantidad),
+                  rRsv."N§ Reserva", w_dia, reserva.Habitacion, w_cantidad, w_precio_habitacion ,
+                  w_garantia, w_hp);
+                cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono, reserva."N§ Responsable",
+                  reserva."Hotel reservado", 2, reserva."Hotel Factura", reserva.Delegacion, FALSE);
+              END;
+              IF (rPreV."Tipo Precio" = rPreV."Tipo Precio"::Pax) AND (NOT rRsv.Responsable) THEN BEGIN
+                cCalRes.inserta_linea_calculo(
+                  rLin, USERID(), Text007, rRsvDia."Contrato venta", w_precio_habitacion,
+                  rRsv."N§ Reserva", w_dia, reserva.Habitacion, 1, w_precio_habitacion,
+                  w_garantia, w_hp);
+                cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, rRsv.Bono, reserva."N§ Responsable",
+                  reserva."Hotel reservado", 2, reserva."Hotel Factura", reserva.Delegacion,  FALSE);
+              END;
+            END;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+      rRsv.RESET;
+    END;
+
+    PROCEDURE buscar_precios_habitacion@6(reserva@1103355000 : Record 7009743;reserva_dia@1103355001 : Record 7009756);
+    BEGIN
+      // buscar_precios_habitacion
+
+      w_precio_habitacion := 0;
+      w_garantia := FALSE;
+      w_hp := FALSE;
+      w_existe_precio := FALSE;
+
+      rPreV.RESET;
+      rPreV.SETRANGE (Delegacion     , reserva.Delegacion);
+      rPreV.SETRANGE ("N§ Contrato"  , reserva_dia."Contrato venta");
+      rPreV.SETRANGE ("Codigo Precio", rPreV."Codigo Precio"::Habitacion);
+      rPreV.SETRANGE (Codigo         , reserva.Habitacion);
+      rPreV.SETFILTER("Fecha desde"  , '<=%1', w_dia);
+      rPreV.SETFILTER("Fecha hasta"  , '>=%1', w_dia);
+      rPreV.SETRANGE (Activo         , TRUE);
+      IF rPreV.FIND('-') THEN BEGIN
+        w_existe_precio := TRUE;
+        w_precio_habitacion := rPreV.Importe;
+        w_garantia := rPreV.Garantizable;
+        w_hp := rPreV."Importe HP";
+      END;
+      rPreV.RESET;
+      IF NOT w_existe_precio THEN BEGIN
+        w_texto_error := STRSUBSTNO(Text008,
+                                    reserva.Habitacion, w_dia, reserva_dia."Contrato venta");
+        cCalRes.inserta_error(w_texto_error);
+      END;
+      rPreV.RESET;
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 29/06/09
+
+        .- (09/00319) cambio c¢digos de hotel de code10 a code20.
+
+      ## AJS 19.10.2009
+
+        .- En la busqueda de precios de regimen si no encontramos precio para el tipo de habitacion en concreto
+           de la reserva hay que buscar los precios que no esten referenciados a ningun tipo de habitacion (blanco)
+
+      $001 AJS 25102011 Modifico la funcion busca_contrato para no utilizar el Grupo Touroperador
+
+      $002 JPT 23/04/12 CNT-CAR-12004 HOT-18
+
+      $003 AJS 10052012 Modifico el calculo de handling fee para basarlo en una tabla de tarifa x concepto
+                        como el repservice
+
+      $004 AJS 03042013 Hay que tener en cuenta que hay reservas que se marcan para no calcular handling fee
+
+      $005 AJS 26022014 Saco el calculo de handling fee de este rutina, la dejo en el calculo general de la reserva
+
+      $006 AJS 25062014 QNT-CAR-14001, Las ofertas Free Night se calculan como ofertas precio y no como AxB
+    }
+    END.
+  }
+}

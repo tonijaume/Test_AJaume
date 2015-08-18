@@ -1,0 +1,262 @@
+OBJECT Codeunit 7320 Whse. Undo Quantity
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=83;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WMSMgmt@1001 : Codeunit 7302;
+      Text000@1000 : TextConst 'ENU=Assertion failed, %1.;ESP=Error de aserci¢n, %1.';
+      Text001@1002 : TextConst 'ENU=There is not enough space to insert correction lines.;ESP=No hay espacio suficiente para insertar l¡ns. correcci¢n.';
+
+    PROCEDURE InsertTempWhseJnlLine@7302(ItemJnlLine@1000 : Record 83;SourceType@1001 : Integer;SourceSubType@1002 : Integer;SourceNo@1007 : Code[20];SourceLineNo@1005 : Integer;RefDoc@1006 : Integer;VAR TempWhseJnlLine@1008 : TEMPORARY Record 7311;VAR NextLineNo@1004 : Integer);
+    VAR
+      WhseEntry@1009 : Record 7312;
+      WhseMgt@1003 : Codeunit 5775;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        WhseEntry.RESET;
+        WhseEntry.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+        WhseEntry.SETRANGE("Source Type",SourceType);
+        WhseEntry.SETRANGE("Source Subtype",SourceSubType);
+        WhseEntry.SETRANGE("Source No.",SourceNo);
+        WhseEntry.SETRANGE("Source Line No.",SourceLineNo);
+        WhseEntry.SETRANGE("Reference No.","Document No.");
+        WhseEntry.SETRANGE("Item No.","Item No.");
+        IF WhseEntry.FIND('-') THEN
+          REPEAT
+            TempWhseJnlLine.INIT;
+            IF WhseEntry."Entry Type" = WhseEntry."Entry Type"::"Positive Adjmt." THEN
+              "Entry Type" := "Entry Type"::"Negative Adjmt."
+            ELSE
+              "Entry Type" := "Entry Type"::"Positive Adjmt.";
+            Quantity := ABS(WhseEntry.Quantity);
+            "Quantity (Base)" := ABS(WhseEntry."Qty. (Base)");
+            WMSMgmt.CreateWhseJnlLine(ItemJnlLine,0,TempWhseJnlLine,FALSE,FALSE);
+            TempWhseJnlLine."Source Type" := SourceType;
+            TempWhseJnlLine."Source Subtype" := SourceSubType;
+            TempWhseJnlLine."Source No." := SourceNo;
+            TempWhseJnlLine."Source Line No." := SourceLineNo;
+            WhseMgt.GetSourceDocument(
+              TempWhseJnlLine."Source Document",TempWhseJnlLine."Source Type",TempWhseJnlLine."Source Subtype");
+            TempWhseJnlLine."Reference Document" := RefDoc;
+            TempWhseJnlLine."Reference No." := "Document No.";
+            TempWhseJnlLine."Location Code" := "Location Code";
+            TempWhseJnlLine."Zone Code" := WhseEntry."Zone Code";
+            TempWhseJnlLine."Bin Code" := WhseEntry."Bin Code";
+            TempWhseJnlLine."Whse. Document Type" := WhseEntry."Whse. Document Type";
+            TempWhseJnlLine."Whse. Document No." := WhseEntry."Whse. Document No.";
+            TempWhseJnlLine."Unit of Measure Code" := WhseEntry."Unit of Measure Code";
+            TempWhseJnlLine."Line No." := NextLineNo;
+            TempWhseJnlLine."Serial No." := WhseEntry."Serial No.";
+            TempWhseJnlLine."Lot No." := WhseEntry."Lot No.";
+            IF  "Entry Type" = "Entry Type"::"Negative Adjmt." THEN BEGIN
+              TempWhseJnlLine."From Zone Code" := TempWhseJnlLine."Zone Code";
+              TempWhseJnlLine."From Bin Code" := TempWhseJnlLine."Bin Code";
+            END ELSE BEGIN
+              TempWhseJnlLine."To Zone Code" := TempWhseJnlLine."Zone Code";
+              TempWhseJnlLine."To Bin Code" := TempWhseJnlLine."Bin Code";
+            END;
+            TempWhseJnlLine.INSERT;
+            NextLineNo := TempWhseJnlLine."Line No." + 10000;
+          UNTIL WhseEntry.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE PostTempWhseJnlLine@5(VAR TempWhseJnlLine@1000 : TEMPORARY Record 7311);
+    VAR
+      WhseJnlPostLine@1001 : Codeunit 7301;
+    BEGIN
+      IF TempWhseJnlLine.FIND('-') THEN
+        REPEAT
+          WhseJnlPostLine.RUN(TempWhseJnlLine);
+        UNTIL TempWhseJnlLine.NEXT = 0;
+    END;
+
+    PROCEDURE UndoPostedWhseRcptLine@10(VAR PostedWhseRcptLine@1000 : Record 7319);
+    BEGIN
+      PostedWhseRcptLine.TESTFIELD("Source Type");
+      InsertPostedWhseRcptLine(PostedWhseRcptLine);
+      DeleteWhsePutAwayRequest(PostedWhseRcptLine);
+      DeleteWhseItemEntryRelation(PostedWhseRcptLine);
+    END;
+
+    PROCEDURE UpdateSourceDocLines@1(VAR PostedWhseRcptLine@1000 : Record 7319);
+    BEGIN
+      UpdateWhseRcptLine(PostedWhseRcptLine);
+      UpdateWhseRequest(PostedWhseRcptLine);
+    END;
+
+    PROCEDURE FindPostedWhseRcptLine@11(VAR PostedWhseRcptLine@1000 : Record 7319;UndoType@1006 : Integer;UndoID@1005 : Code[20];SourceType@1004 : Integer;SourceSubtype@1003 : Integer;SourceID@1002 : Code[20];SourceRefNo@1001 : Integer) Ok : Boolean;
+    BEGIN
+      WITH PostedWhseRcptLine DO BEGIN
+        CLEAR(PostedWhseRcptLine);
+        SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.");
+        CASE UndoType OF
+          DATABASE::"Purch. Rcpt. Line": SETRANGE("Posted Source Document","Posted Source Document"::"Posted Receipt");
+          DATABASE::"Return Receipt Line": SETRANGE("Posted Source Document","Posted Source Document"::"Posted Return Receipt");
+          ELSE
+            EXIT;
+        END;
+        SETRANGE("Source Type",SourceType);
+        SETRANGE("Source Subtype",SourceSubtype);
+        SETRANGE("Source No.",SourceID);
+        SETRANGE("Source Line No.",SourceRefNo);
+        SETRANGE("Posted Source No.",UndoID);
+        IF FINDFIRST THEN BEGIN
+          IF COUNT > 1 THEN
+            ERROR(Text000,TABLECAPTION); // Assert: only one posted line.
+          Ok := TRUE;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertPostedWhseRcptLine@14(OldPostedWhseRcptLine@1000 : Record 7319);
+    VAR
+      NewPostedWhseRcptLine@1001 : Record 7319;
+      LineSpacing@1002 : Integer;
+    BEGIN
+      WITH OldPostedWhseRcptLine DO BEGIN
+        "Qty. Put Away" := Quantity;
+        "Qty. Put Away (Base)" := "Qty. (Base)";
+        MODIFY;
+
+        NewPostedWhseRcptLine.SETRANGE("No.","No.");
+        NewPostedWhseRcptLine."No." := "No.";
+        NewPostedWhseRcptLine."Line No." := "Line No.";
+        NewPostedWhseRcptLine.FIND('=');
+
+        IF NewPostedWhseRcptLine.FIND('>') THEN BEGIN
+          LineSpacing := (NewPostedWhseRcptLine."Line No." - "Line No.") DIV 2;
+          IF LineSpacing = 0 THEN
+            ERROR(Text001);
+        END ELSE
+          LineSpacing := 10000;
+
+        NewPostedWhseRcptLine.RESET;
+        NewPostedWhseRcptLine.INIT;
+        NewPostedWhseRcptLine.COPY(OldPostedWhseRcptLine);
+        NewPostedWhseRcptLine."Line No." := "Line No." + LineSpacing;
+        NewPostedWhseRcptLine.Quantity := -Quantity;
+        NewPostedWhseRcptLine."Qty. (Base)" := -"Qty. (Base)";
+        NewPostedWhseRcptLine."Qty. Put Away" := -"Qty. Put Away";
+        NewPostedWhseRcptLine."Qty. Put Away (Base)" := -"Qty. Put Away (Base)";
+        NewPostedWhseRcptLine.Status := NewPostedWhseRcptLine.Status::"Completely Put Away";
+        NewPostedWhseRcptLine.INSERT;
+
+        Status := Status::"Completely Put Away";
+        MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteWhsePutAwayRequest@16(VAR PostedWhseRcptLine@1003 : Record 7319);
+    VAR
+      PostedWhseRcptLine2@1000 : Record 7319;
+      WhsePutAwayReq@1002 : Record 7324;
+      Sum@1001 : Decimal;
+    BEGIN
+      PostedWhseRcptLine2.SETRANGE("No.",PostedWhseRcptLine."No.");
+      IF PostedWhseRcptLine2.FIND('-') THEN BEGIN
+        REPEAT
+          Sum := Sum + PostedWhseRcptLine2."Qty. (Base)";
+        UNTIL PostedWhseRcptLine2.NEXT = 0;
+
+        IF Sum = 0 THEN BEGIN
+          WhsePutAwayReq.SETRANGE("Document Type",WhsePutAwayReq."Document Type"::Receipt);
+          WhsePutAwayReq.SETRANGE("Document No.",PostedWhseRcptLine."No.");
+          IF NOT WhsePutAwayReq.ISEMPTY THEN
+            WhsePutAwayReq.DELETEALL;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateWhseRcptLine@15(VAR PostedWhseRcptLine@1002 : Record 7319);
+    VAR
+      WhseRcptHeader@1001 : Record 7316;
+      WhseRcptLine@1000 : Record 7317;
+    BEGIN
+      WITH PostedWhseRcptLine DO BEGIN
+        WhseRcptLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.");
+        WhseRcptLine.SETRANGE("Source Type","Source Type");
+        WhseRcptLine.SETRANGE("Source Subtype","Source Subtype");
+        WhseRcptLine.SETRANGE("Source No.","Source No.");
+        WhseRcptLine.SETRANGE("Source Line No.","Source Line No.");
+        IF WhseRcptLine.FIND('-') THEN BEGIN
+          WhseRcptLine.VALIDATE("Qty. Outstanding",WhseRcptLine."Qty. Outstanding" + Quantity);
+          WhseRcptLine.VALIDATE("Qty. Received",WhseRcptLine."Qty. Received" - Quantity);
+
+          IF WhseRcptLine."Qty. Received" = 0 THEN BEGIN
+            WhseRcptLine.Status := WhseRcptLine.Status::" ";
+            WhseRcptHeader.GET(WhseRcptLine."No.");
+            WhseRcptHeader."Document Status" := WhseRcptHeader."Document Status"::" ";
+            WhseRcptHeader.MODIFY;
+          END;
+          WhseRcptLine.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteWhseItemEntryRelation@18(NewPostedWhseRcptLine@1002 : Record 7319);
+    VAR
+      WhseItemEntryRelation@1001 : Record 6509;
+    BEGIN
+      WITH NewPostedWhseRcptLine DO BEGIN
+        WhseItemEntryRelation.SETCURRENTKEY(
+          "Source ID","Source Type","Source Subtype","Source Ref. No.");
+        WhseItemEntryRelation.SETRANGE("Source Type",DATABASE::"Posted Whse. Receipt Line");
+        WhseItemEntryRelation.SETRANGE("Source Subtype",0);
+        WhseItemEntryRelation.SETRANGE("Source ID","No.");
+        WhseItemEntryRelation.SETRANGE("Source Ref. No.","Line No.");
+        IF NOT WhseItemEntryRelation.ISEMPTY THEN
+          WhseItemEntryRelation.DELETEALL;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateWhseRequest@12(VAR PostedWhseRcptLine@1002 : Record 7319);
+    VAR
+      PurchLine@1000 : Record 39;
+      SalesLine@1003 : Record 37;
+      WhseReq@1001 : Record 5765;
+    BEGIN
+      WITH PostedWhseRcptLine DO BEGIN
+        CASE "Source Type" OF
+          DATABASE::"Purchase Line":
+            BEGIN
+              PurchLine.GET("Source Subtype","Source No.","Source Line No.");
+              IF NOT (PurchLine."Quantity Received" < PurchLine.Quantity) THEN
+                EXIT;
+            END;
+          DATABASE::"Sales Line":
+            BEGIN
+              SalesLine.GET("Source Subtype","Source No.","Source Line No.");
+              IF NOT (SalesLine."Return Qty. Received" < SalesLine.Quantity) THEN
+                EXIT;
+            END;
+        END;
+
+        WhseReq.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+        WhseReq.SETRANGE("Source Type","Source Type");
+        WhseReq.SETRANGE("Source Subtype","Source Subtype");
+        WhseReq.SETRANGE("Source No.","Source No.");
+        IF WhseReq.FIND('-') AND WhseReq."Completely Handled" THEN BEGIN
+          WhseReq."Completely Handled" := FALSE;
+          WhseReq.MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

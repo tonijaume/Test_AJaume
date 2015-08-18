@@ -1,0 +1,142 @@
+OBJECT Codeunit 99008512 BizTalk Watchdog
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CheckOutbound;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      OutboundDocument@1000 : Record 99008511;
+      BizTalkSetup@1001 : Record 99008512;
+      BizTalkPartnerSetupHdr@1002 : Record 99008513;
+      SendXMLDocument@1003 : Codeunit 99008514;
+      DocumentType@1004 : 'Purchase,Sales,Product Catalog,BizTalk Request';
+
+    PROCEDURE CheckOutbound@1();
+    VAR
+      Company@1000 : Record 2000000006;
+      Mail@1001 : Codeunit 99008527;
+      Subject@1002 : Text[50];
+      BodyText@1003 : Text[250];
+      NewLine@1004 : Text[2];
+    BEGIN
+      IF BizTalkSetup.GET THEN BEGIN
+        OutboundDocument.RESET;
+        OutboundDocument.SETCURRENTKEY(Status);
+        OutboundDocument.SETRANGE(Status,OutboundDocument.Status::Unsent,OutboundDocument.Status::"Received by CGRS");
+        IF OutboundDocument.FIND('-') THEN BEGIN
+          REPEAT
+            CASE OutboundDocument."Outbound Document Type" OF
+              OutboundDocument."Outbound Document Type"::Sales:
+                SendDocument(OutboundDocument."Entry No.",DocumentType::Sales);
+              OutboundDocument."Outbound Document Type"::Purchase:
+                SendDocument(OutboundDocument."Entry No.",DocumentType::Purchase);
+              OutboundDocument."Outbound Document Type"::"Product Catalog":
+                SendDocument(OutboundDocument."Entry No.",DocumentType::"Product Catalog");
+            END;
+          UNTIL OutboundDocument.NEXT = 0;
+
+      // If number of unsent documents exceeds a given number an email has to be forwarded to the administrator
+          IF (BizTalkSetup."Maximum Unsent Documents" > 0) AND
+             (BizTalkSetup."Send System Error Description") AND
+             (BizTalkSetup."System Administrator E-Mail" <> '') AND
+             (OutboundDocument.COUNT >= BizTalkSetup."Maximum Unsent Documents") AND
+             (NOT BizTalkSetup."Notify System Error Desc. Sent")
+          THEN BEGIN
+            Subject := 'Warning: Exceeded number of unsent documents/requests';
+            BodyText := 'The number of unsent documents to the BizTalk Server has exceeded ' +
+              FORMAT(BizTalkSetup."Maximum Unsent Documents");
+            Mail.NewMessage(BizTalkSetup."System Administrator E-Mail",
+              Subject,BodyText,'');
+            BizTalkSetup."Notify System Error Desc. Sent" := TRUE;
+          END;
+        END;
+
+      // If a technical email has been sent and the number of unsent documents falls below a given number
+      // then clear the notification flag
+        IF (BizTalkSetup."Notify System Error Desc. Sent") AND
+           (OutboundDocument.COUNT < BizTalkSetup."Maximum Unsent Documents")
+        THEN
+          BizTalkSetup."Notify System Error Desc. Sent" := FALSE;
+
+      // Check if any outbound document has failed
+        IF (BizTalkSetup."Send System Error Description") AND
+           (BizTalkSetup."System Administrator E-Mail" <> '')
+        THEN BEGIN
+          OutboundDocument.SETCURRENTKEY(Status);
+          OutboundDocument.SETRANGE(Status,OutboundDocument.Status::Failed);
+          OutboundDocument.SETRANGE("Technical Notif. Sent",FALSE);
+          IF OutboundDocument.FIND('-') THEN
+            REPEAT
+              Subject := 'Warning: A document or a request has failed';
+              NewLine[1] := 13;
+              NewLine[2] := 10;
+              BodyText := 'A document or a request that was sent to the BizTalk Server has failed';
+              BodyText := BodyText + NewLine + 'Identification: ' + FORMAT(OutboundDocument."Outbound Document No.");
+              Mail.NewMessage(BizTalkSetup."System Administrator E-Mail",
+                Subject,BodyText,'');
+              OutboundDocument."Technical Notif. Sent" := TRUE;
+              OutboundDocument.MODIFY;
+            UNTIL OutboundDocument.NEXT = 0;
+            COMMIT;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FindEmailAccount@3(SourceOrganizationID@1000 : Integer;DestOrganizationID@1001 : Integer) : Text[50];
+    VAR
+      BizTalkTechnicalNot@1002 : Record 99008519;
+      Company@1003 : Record 2000000006;
+      BizTalkSetup@1004 : Record 99008512;
+      CompanyFound@1005 : Boolean;
+      EmailAccount@1006 : Text[50];
+    BEGIN
+      EmailAccount := '';
+      CompanyFound := FALSE;
+      IF (SourceOrganizationID > 0) OR
+         (DestOrganizationID > 0)
+      THEN
+        IF Company.FIND('-') THEN
+          REPEAT
+            BizTalkSetup.CHANGECOMPANY(Company.Name);
+            IF BizTalkSetup.FIND('-') THEN BEGIN
+              IF (BizTalkSetup."BizTalk Organization ID" = SourceOrganizationID) OR
+                 (BizTalkSetup."BizTalk Organization ID" = DestOrganizationID)
+              THEN BEGIN
+                CompanyFound := TRUE;
+                EmailAccount := BizTalkSetup."System Administrator E-Mail";
+              END;
+            END;
+          UNTIL (Company.NEXT = 0) OR (CompanyFound);
+
+      IF (NOT CompanyFound) AND
+         (BizTalkTechnicalNot.GET)
+      THEN
+        EmailAccount := BizTalkTechnicalNot."E-Mail";
+      EXIT(EmailAccount);
+    END;
+
+    LOCAL PROCEDURE SendDocument@4(EntryNo@1000 : Integer;DocumentType@1001 : 'Purchase,Sales,Product Catalog,BizTalk Request');
+    VAR
+      ReturnCode@1002 : Integer;
+    BEGIN
+      CLEAR(SendXMLDocument);
+      IF OutboundDocument.GET(EntryNo) THEN
+        ReturnCode := SendXMLDocument.SendXMLDocument(
+          OutboundDocument."Outbound Document No.",DocumentType,OutboundDocument."Partner No.");
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,539 @@
+OBJECT Codeunit 8000 Business Notification Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=8003;
+    Permissions=TableData 8001=rimd,
+                TableData 8002=rimd,
+                TableData 8003=rimd,
+                TableData 8004=rimd,
+                TableData 8005=rimd;
+    OnRun=VAR
+            NotificationWSLine@1000 : Record 8003;
+            Selection@1002 : Integer;
+            CountAllLines@1003 : Integer;
+            CountNewLines@1004 : Integer;
+          BEGIN
+            NotificationSetup.GET;
+            IF NOT NotificationSetup."Send Notifications" THEN
+              ERROR(Text010);
+            CheckPropertyStore();
+            LineSentCount := 0;
+            NotificationWSLine.RESET;
+            NotificationWSLine.SETRANGE("Batch Name","Batch Name");
+            NotificationWSLine.SETRANGE("Sending Type",NotificationWSLine."Sending Type"::Now);
+            GetCountsLinesToSend(NotificationWSLine,CountAllLines,CountNewLines);
+            IF CountAllLines > 0 THEN BEGIN
+              IF CountAllLines = CountNewLines THEN BEGIN
+                IF CONFIRM(Text011,TRUE,NotificationWSLine.FIELDCAPTION("Sending Type")) THEN
+                  Selection := 2;
+              END ELSE
+                Selection := STRMENU(STRSUBSTNO(Text012,CountAllLines,CountNewLines),2);
+              IF Selection = 0 THEN
+                EXIT;
+              IF NotificationWSLine.FIND('-') THEN
+                REPEAT
+                  Notification.GET(NotificationWSLine."Notification Code");
+                  IF NOT Notification.Blocked THEN BEGIN
+                    NotificationLine.RESET;
+                    NotificationLine.SETRANGE("Notification Batch Name",NotificationWSLine."Batch Name");
+                    NotificationLine.SETRANGE("Notification Code",NotificationWSLine."Notification Code");
+                    IF Selection = 2 THEN BEGIN
+                      NotificationLine.CALCFIELDS(Sent);
+                      NotificationLine.SETRANGE(Sent,FALSE);
+                    END;
+                    IF NotificationLine.FIND('-') THEN
+                      REPEAT
+                        SendToBN(NotificationLine);
+                        NotificationWSLine."Last Time Sent" := CURRENTDATETIME;
+                        NotificationWSLine.MODIFY(TRUE);
+                      UNTIL NotificationLine.NEXT = 0;
+                  END ELSE
+                    MESSAGE(Text017,NotificationWSLine."Notification Code");
+                UNTIL NotificationWSLine.NEXT = 0;
+            END;
+            IF LineSentCount = 0 THEN
+              MESSAGE(Text014)
+            ELSE
+              MESSAGE(Text013,LineSentCount);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=DELIVERY;ESP=ENTREGA';
+      Text001@1001 : TextConst 'ENU=INVENTORY;ESP=INVENTARIO';
+      Text002@1002 : TextConst 'ENU=POCONF;ESP=CONFOC';
+      Text003@1003 : TextConst 'ENU=ITEMSDELAY;ESP=RETRASOPRO';
+      Text004@1004 : TextConst 'ENU=PRORDELAY;ESP=RETRORDPRO';
+      Text005@1005 : TextConst 'ENU=Notify About Upcoming Delivery;ESP=Notificar pr¢ximas entregas';
+      Text006@1006 : TextConst 'ENU=Inventory Status;ESP=Estado del inventario';
+      Text007@1007 : TextConst 'ENU=Unconfirmed Purchase Order;ESP=Orden de compra sin confirmar';
+      Text008@1008 : TextConst 'ENU=Items Not Received;ESP=Productos no recibidos';
+      Text009@1009 : TextConst 'ENU=Production Order Delayed;ESP=Orden de producci¢n retrasada';
+      NotificationSetup@1025 : Record 8000;
+      NotificationWSBatch@1011 : Record 8002;
+      NotificationLine@1012 : Record 8004;
+      Notification@1020 : Record 8001;
+      LineSentCount@1013 : Integer;
+      Text010@1014 : TextConst 'ENU=In order to send notifications to Business Notification, you must first select the Send Notifications check box in the Notification Setup window.;ESP=Para enviar notificaciones a Business Notification, debe activar la casilla de verificaci¢n Enviar notificaciones en la ventana Configurar notificaciones.';
+      Text011@1015 : TextConst 'ENU=Do you want to send all notifications with the %1 Now to Business Notification?;ESP=¨Desea enviar ahora a Business Notification todas las notificaciones con el %1?';
+      Text012@1016 : TextConst 'ENU=Send &all %1 notification lines.,&Send only %2 &new notification lines that have not yet been sent.;ESP=Enviar &todas las l¡neas de notificaci¢n %1.,&Enviar s¢lo las l¡neas de notificaci¢n %2 &nuevas que a£n no fueron enviadas.';
+      Text013@1017 : TextConst 'ENU=%1 lines were sent.;ESP=L¡neas enviadas: %1.';
+      Text014@1010 : TextConst 'ENU=There is nothing to send.;ESP=No hay nada para enviar.';
+      Text015@1019 : TextConst 'ENU="view=SORTING(Field1)";ESP="view=SORTING(Field1)"';
+      Text016@1018 : TextConst 'ENU="position=";ESP="position="';
+      Text017@1021 : TextConst 'ENU=Notification %1 is blocked and cannot be sent.;ESP=La notificaci¢n %1 est  bloqueada, no se puede enviar.';
+      Text018@1022 : TextConst 'ENU="Field%1=0(%2)";ESP="Field%1=0(%2)"';
+      Text019@1023 : TextConst 'ENU="%1&target=Form %2&%3&%4";ESP="%1&target=Form %2&%3&%4"';
+      Text020@1024 : TextConst 'ENU=You cannot generate notification lines because the notification %1 is blocked.;ESP=La notificaci¢n %1 est  bloqueada, no es posible generar l¡neas de notificaci¢n.';
+      Text021@1026 : TextConst 'ENU=You have to install Microsoft Dynamics NAV Business Notification to be able to send notifications.;ESP=Tiene que instalar Microsoft Dynamics NAV Business Notification para poder enviar notificaciones.';
+
+    LOCAL PROCEDURE SendToBN@3(VAR NotificationLine2@1000 : Record 8004);
+    VAR
+      Notification@1005 : Record 8001;
+      PurchaseHeader@1004 : Record 38;
+      Item@1003 : Record 27;
+      ProductionOrder@1002 : Record 5405;
+      PurchaseOrderXML@1001 : XMLport 8000;
+      ItemXML@1010 : XMLport 8002;
+      ProductionOrderXML@1011 : XMLport 8001;
+      CurrRecordID@1008 : RecordID;
+      RecRef@1007 : RecordRef;
+      LineSent@1009 : Boolean;
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        Notification.GET(NotificationLine2."Notification Code");
+        Notification.TESTFIELD("Report ID");
+        CurrRecordID := NotificationLine2."Record ID";
+        RecRef := CurrRecordID.GETRECORD;
+        CASE Notification."Report ID" OF
+          REPORT::"Notify About Upcoming Delivery",
+          REPORT::"Unconfirmed Purchase Order",
+          REPORT::"Items Not Received": BEGIN
+            RecRef.SETTABLE(PurchaseHeader);
+            PurchaseHeader.SETRECFILTER;
+            PurchaseOrderXML.SETTABLEVIEW(PurchaseHeader);
+            CASE Notification."Report ID" OF
+              REPORT::"Notify About Upcoming Delivery":
+                PurchaseOrderXML."Notify About Upcoming Delivery";
+              REPORT::"Unconfirmed Purchase Order":
+                PurchaseOrderXML."Unconfirmed Purchase Order";
+              REPORT::"Items Not Received":
+                PurchaseOrderXML."Items Not Received";
+            END;
+            LineSent := TRUE;
+          END;
+          REPORT::"Inventory Status": BEGIN
+            RecRef.SETTABLE(Item);
+            Item.SETRECFILTER;
+            ItemXML.SETTABLEVIEW(Item);
+            ItemXML."Inventory Status";
+            LineSent := TRUE;
+          END;
+          REPORT::"Production Order Delayed": BEGIN
+            RecRef.SETTABLE(ProductionOrder);
+            ProductionOrder.SETRECFILTER;
+            ProductionOrderXML.SETTABLEVIEW(ProductionOrder);
+            ProductionOrderXML."Production Order Delayed";
+            LineSent := TRUE;
+          END;
+        END;
+        IF LineSent THEN BEGIN
+          LogNotificationLine(NotificationLine2);
+          LineSentCount := LineSentCount + 1;
+        END;
+        NotificationLine2.DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE GenerateDefaultNotifications@1();
+    BEGIN
+      WITH Notification DO BEGIN
+        INIT;
+        Code := Text000;
+        Description := Text005;
+        "Report ID" := 8000;
+        INSERT;
+        Code := Text001;
+        Description := Text006;
+        "Report ID" := 8001;
+        INSERT;
+        Code := Text002;
+        Description := Text007;
+        "Report ID" := 8002;
+        INSERT;
+        Code := Text003;
+        Description := Text008;
+        "Report ID" := 8003;
+        INSERT;
+        Code := Text004;
+        Description := Text009;
+        "Report ID" := 8004;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE Show@4(RecordID@1000 : RecordID);
+    VAR
+      Item@1004 : Record 27;
+      "Production Order"@1003 : Record 5405;
+      "Purchase Header"@1002 : Record 38;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      IF FORMAT(RecordID) = '' THEN
+        EXIT;
+      RecRef := RecordID.GETRECORD;
+      CASE RecordID.TABLENO OF
+        DATABASE::Item: BEGIN
+          RecRef.SETTABLE(Item);
+          FORM.RUN(FORM::"Item Card",Item);
+        END;
+        DATABASE::"Purchase Header": BEGIN
+          RecRef.SETTABLE("Purchase Header");
+          FORM.RUN(FORM::"Purchase Order","Purchase Header");
+        END;
+        DATABASE::"Production Order": BEGIN
+          RecRef.SETTABLE("Production Order");
+          CASE "Production Order".Status OF
+            "Production Order".Status::Planned:
+              FORM.RUN(FORM::"Planned Production Order","Production Order");
+            "Production Order".Status::"Firm Planned":
+              FORM.RUN(FORM::"Firm Planned Prod. Order","Production Order");
+            "Production Order".Status::Released:
+              FORM.RUN(FORM::"Released Production Order","Production Order");
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE DeleteExpiredLogEntries@5(VAR BatchName@1000 : Code[10]);
+    VAR
+      NotifWorksheetBatch@1002 : Record 8002;
+      NotificationLogEntry@1001 : Record 8005;
+      LogCalcDateFormula@1003 : DateFormula;
+    BEGIN
+      IF NotifWorksheetBatch.GET(BatchName) THEN BEGIN
+        NotificationLogEntry.RESET;
+        EVALUATE(LogCalcDateFormula,'-' + FORMAT(NotifWorksheetBatch."Logging Period"));
+        NotificationLogEntry.SETRANGE("Notification Batch Name",NotifWorksheetBatch.Name);
+        NotificationLogEntry.SETRANGE(
+          "Date and Time Sent",
+          CREATEDATETIME(0D,0T),
+          CREATEDATETIME(CALCDATE(LogCalcDateFormula,TODAY),TIME));
+        NotificationLogEntry.DELETEALL;
+      END;
+
+      NotificationSetup.GET;
+      EVALUATE(LogCalcDateFormula,'-' + FORMAT(NotificationSetup."Default Logging Period"));
+      NotificationLogEntry.RESET;
+      NotificationLogEntry.SETRANGE("Notification Batch Name",'');
+      NotificationLogEntry.SETRANGE(
+        "Date and Time Sent",
+        CREATEDATETIME(0D,0T),
+        CREATEDATETIME(CALCDATE(LogCalcDateFormula,TODAY),TIME));
+      NotificationLogEntry.DELETEALL;
+    END;
+
+    PROCEDURE LogNotificationLine@6(VAR NotificationLine2@1000 : Record 8004);
+    VAR
+      NotificationLogEntry@1001 : Record 8005;
+      LastEntryNo@1002 : Integer;
+    BEGIN
+      WITH NotificationLogEntry DO BEGIN
+        RESET;
+        LOCKTABLE;
+        IF FIND('+') THEN
+          LastEntryNo := "Entry No.";
+        INIT;
+        "Entry No." := LastEntryNo + 1;
+        "Notification Batch Name" := NotificationLine2."Notification Batch Name";
+        "Notification Code" := NotificationLine2."Notification Code";
+        "Search Record ID" := NotificationLine2."Search Record ID";
+        "Date and Time Sent" := CURRENTDATETIME;
+        "User ID" := USERID;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE LookupBatchName@2(VAR CurrentBatchName@1000 : Code[10];VAR NotificationWSLine@1001 : Record 8003) : Boolean;
+    BEGIN
+      COMMIT;
+      NotificationWSBatch.Name := NotificationWSLine.GETRANGEMAX("Batch Name");
+      IF FORM.RUNMODAL(0,NotificationWSBatch) = ACTION::LookupOK THEN BEGIN
+        IF NotificationWSBatch.Name <> '' THEN
+          CurrentBatchName := NotificationWSBatch.Name;
+      END;
+      SetBatchName(CurrentBatchName,NotificationWSLine);
+    END;
+
+    PROCEDURE CheckBatchName@8(CurrentBatchName@1000 : Code[10]);
+    BEGIN
+      NotificationWSBatch.GET(CurrentBatchName);
+    END;
+
+    PROCEDURE SetBatchName@9(CurrentBatchName@1001 : Code[10];VAR NotificationWSLine@1000 : Record 8003);
+    BEGIN
+      NotificationWSLine.FILTERGROUP := 2;
+      NotificationWSLine.SETRANGE("Batch Name",CurrentBatchName);
+      NotificationWSLine.FILTERGROUP := 0;
+      DeleteExpiredLogEntries(CurrentBatchName);
+    END;
+
+    PROCEDURE StartReport@7(VAR CurrNotificationWSLine@1000 : Record 8003);
+    VAR
+      NotificationWSLine@1002 : Record 8003;
+    BEGIN
+      Notification.GET(CurrNotificationWSLine."Notification Code");
+      IF Notification.Blocked THEN
+        ERROR(Text020,Notification.Code);
+      NotificationWSLine := CurrNotificationWSLine;
+      NotificationWSLine.SETRECFILTER;
+      NotificationWSLine.FIND('-');
+      REPORT.RUN(Notification."Report ID",TRUE,FALSE,NotificationWSLine);
+    END;
+
+    PROCEDURE DeleteNotificationLines@10(VAR CurrNotificationWSLine@1000 : Record 8003;DeleteOnlySentLines@1002 : Boolean);
+    BEGIN
+      NotificationLine.RESET;
+      NotificationLine.SETRANGE("Notification Batch Name",CurrNotificationWSLine."Batch Name");
+      NotificationLine.SETRANGE("Notification Code",CurrNotificationWSLine."Notification Code");
+      IF DeleteOnlySentLines THEN
+        NotificationLine.SETRANGE(NotificationLine.Sent,TRUE);
+      NotificationLine.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE OpenWorksheetForm@11(VAR CurrentBatchName@1000 : Code[10]);
+    BEGIN
+      IF NOT NotificationWSBatch.GET(CurrentBatchName) THEN BEGIN
+        NotificationWSBatch.RESET;
+        IF NOT NotificationWSBatch.FIND('-') THEN
+          NotificationWSBatch.AddDefaultBatchRecord;
+        CurrentBatchName := NotificationWSBatch.Name;
+      END;
+    END;
+
+    PROCEDURE DeleteSentNotificationLines@12(VAR NotificationLine2@1000 : Record 8004);
+    BEGIN
+      NotificationLine2.SETRANGE(Sent,TRUE);
+      NotificationLine2.DELETEALL;
+      NotificationLine2.SETRANGE(Sent);
+    END;
+
+    PROCEDURE SendProdBOMToBN@13(ProductBOMHeader@1000 : Record 99000771);
+    VAR
+      ProductBOMXML@1002 : XMLport 8003;
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        NotificationSetup.GET;
+        IF NOT NotificationSetup."Send Notifications" THEN
+          EXIT;
+        ProductBOMHeader.SETRECFILTER;
+        ProductBOMXML.SETTABLEVIEW(ProductBOMHeader);
+        ProductBOMXML."Production BOM Changed";
+      END;
+    END;
+
+    PROCEDURE SendProdBOMVerToBN@14(ProductBOMVersion@1000 : Record 99000779);
+    VAR
+      ProductBOMVerXML@1001 : XMLport 8004;
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        NotificationSetup.GET;
+        IF NOT NotificationSetup."Send Notifications" THEN
+          EXIT;
+        ProductBOMVersion.SETRECFILTER;
+        ProductBOMVerXML.SETTABLEVIEW(ProductBOMVersion);
+        ProductBOMVerXML."Production BOM Changed";
+      END;
+    END;
+
+    PROCEDURE StringReplace@15(VAR Source@1000 : Text[1024];Old@1001 : Text[30];New@1002 : Text[30]) : Text[1024];
+    VAR
+      Pos@1003 : Integer;
+    BEGIN
+      Pos := STRPOS(Source,Old);
+      WHILE (Pos <> 0) DO BEGIN
+        Source := DELSTR(Source,Pos,STRLEN(Old));
+        Source := INSSTR(Source,New,Pos);
+        Pos := STRPOS(Source,Old);
+      END;
+      EXIT(Source);
+    END;
+
+    PROCEDURE URLStringReplace@19(VAR StrURL@1001 : Text[1024]) : Text[1024];
+    BEGIN
+      StrURL := StringReplace(StrURL,' ','%20');
+      StrURL := StringReplace(StrURL,'\','%5C');
+      StrURL := StringReplace(StrURL,'&','%26');
+      EXIT(StrURL);
+    END;
+
+    PROCEDURE CreatePurchaseOrderURL@17(PurchaseHeaderNo@1000 : Text[30]) : Text[1024];
+    VAR
+      PurchaseHeader@1002 : Record 38;
+      StringURL@1001 : Text[1024];
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        StringURL :=
+          STRSUBSTNO(
+            Text019,
+            CONTEXTURL,
+            FORM::"Purchase Order",
+            Text015,
+            STRSUBSTNO(
+              Text016 + Text018,
+              PurchaseHeader.FIELDNO("Document Type"),
+              PurchaseHeader."Document Type"::Order) +
+                STRSUBSTNO(',' + Text018,PurchaseHeader.FIELDNO("No."),PurchaseHeaderNo));
+        EXIT(URLStringReplace(StringURL));
+      END ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CreateProductOrderURL@18(ProductOrderNo@1001 : Text[30];ProductOrderStatus@1002 : 'Simulated,Planned,Firm Planned,Released,Finished') : Text[1024];
+    VAR
+      ProductionOrder@1004 : Record 5405;
+      StringURL@1000 : Text[1024];
+      FormNo@1003 : Integer;
+    BEGIN
+      CASE ProductOrderStatus OF
+        ProductOrderStatus::Planned:
+          FormNo := FORM::"Planned Production Order";
+        ProductOrderStatus::"Firm Planned":
+          FormNo := FORM::"Firm Planned Prod. Order";
+        ProductOrderStatus::Released:
+          FormNo := FORM::"Released Production Order";
+      END;
+      IF NOT ISSERVICETIER THEN BEGIN
+        StringURL :=
+          STRSUBSTNO(
+            Text019,
+            CONTEXTURL,
+            FormNo,
+            Text015,
+            STRSUBSTNO(
+              Text016 + Text018,
+              ProductionOrder.FIELDNO(Status),
+              ProductOrderStatus) +
+                STRSUBSTNO(',' + Text018,ProductionOrder.FIELDNO("No."),ProductOrderNo));
+        EXIT(URLStringReplace(StringURL));
+      END ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CreateItemURL@20(ItemNo@1000 : Text[30]) : Text[1024];
+    VAR
+      Item@1002 : Record 27;
+      StringURL@1001 : Text[1024];
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        StringURL :=
+          STRSUBSTNO(
+            Text019,
+            CONTEXTURL,
+            FORM::"Item Card",
+            Text015,
+            STRSUBSTNO(Text016 + Text018,Item.FIELDNO("No."),ItemNo));
+        EXIT(URLStringReplace(StringURL));
+      END ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CreateProductBOMURL@21(ProductionBOMNo@1001 : Text[30]) : Text[1024];
+    VAR
+      ProBOMHead@1002 : Record 99000771;
+      StringURL@1000 : Text[1024];
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        StringURL :=
+          STRSUBSTNO(
+            Text019,
+            CONTEXTURL,
+            FORM::"Production BOM",
+            Text015,
+            STRSUBSTNO(
+              Text016 + Text018,
+              ProBOMHead.FIELDNO("No."),
+              ProductionBOMNo));
+        EXIT(URLStringReplace(StringURL));
+      END ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CreateProductBOMVerURL@25(ProductionBOMNo@1000 : Text[30];VersionCode@1001 : Text[30]) : Text[1024];
+    VAR
+      ProBOMVer@1003 : Record 99000779;
+      StringURL@1002 : Text[1024];
+    BEGIN
+      IF NOT ISSERVICETIER THEN BEGIN
+        StringURL :=
+          STRSUBSTNO(
+            Text019,
+            CONTEXTURL,
+            FORM::"Production BOM Version",
+            Text015,
+            STRSUBSTNO(
+              Text016 + Text018,
+              ProBOMVer.FIELDNO("Production BOM No."),
+              ProductionBOMNo) +
+                STRSUBSTNO(',' + Text018,ProBOMVer.FIELDNO("Version Code"),VersionCode));
+        EXIT(URLStringReplace(StringURL));
+      END ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetCountsLinesToSend@16(VAR NotificationWorksheetLine@1000 : Record 8003;VAR CountAllLines@1001 : Integer;VAR CountNewLines@1002 : Integer);
+    VAR
+      NotificationWorksheetLine2@1003 : Record 8003;
+      CountOldLines@1004 : Integer;
+    BEGIN
+      CountAllLines := 0;
+      CountNewLines := 0;
+      NotificationWorksheetLine2.COPY(NotificationWorksheetLine);
+      IF NotificationWorksheetLine2.FIND('-') THEN
+        REPEAT
+          NotificationWorksheetLine2.CALCFIELDS("No. of Lines","No. of Sent Lines");
+          CountAllLines := CountAllLines + NotificationWorksheetLine2."No. of Lines";
+          CountOldLines := CountOldLines + NotificationWorksheetLine2."No. of Sent Lines";
+        UNTIL NotificationWorksheetLine2.NEXT = 0;
+      CountNewLines := CountAllLines - CountOldLines;
+    END;
+
+    PROCEDURE CheckPropertyStore@22();
+    VAR
+      PropertyStore@1000 : Record 9801;
+    BEGIN
+
+      IF NOT PropertyKeyExists('BN_MessageBusUrl_0') THEN BEGIN
+        PropertyStore.Key := 'BN_MessageBusUrl_0';
+        PropertyStore.Value := 'http://localhost/BusinessNotificationMessageBus/MessageBusService.asmx';
+        PropertyStore.INSERT;
+      END;
+
+      IF NOT PropertyKeyExists('BN_PublishRetryTime_0') THEN BEGIN
+        PropertyStore.Key := 'BN_PublishRetryTime_0';
+        PropertyStore.Value := '10000';
+        PropertyStore.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE PropertyKeyExists@124(param@1102601000 : Text[30]) : Boolean;
+    VAR
+      PropertyStore@1234 : Record 9801;
+    BEGIN
+      PropertyStore.SETFILTER(Key, param);
+      EXIT(PropertyStore.COUNT = 1);
+    END;
+
+    BEGIN
+    END.
+  }
+}

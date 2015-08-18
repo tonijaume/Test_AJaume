@@ -1,0 +1,176 @@
+OBJECT Codeunit 8612 Template Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1001 : TextConst 'ENU=Template %1 is in this hierarchy and contains the same field.;ESP=La plantilla %1 se encuentra dentro de esta jerarqu¡a y contiene el mismo campo.';
+      Text001@1003 : TextConst 'ENU=Number Series has not been set up for table %1 %2. The instance could not be created.;ESP=Los n£meros serie no se han establecido para la tabla %1 %2. No se pudo crear la instancia.';
+      Text002@1000 : TextConst 'ENU=The instance %1 already exists in table %2 %3.;ESP=La instancia %1 ya existe en la tabla %2 %3.';
+      Text003@1004 : TextConst 'ENU=The value for key field %1 is not filled for the instance.;ESP=El valor para el campo de clave %1 no est  cumplimentado para la instancia.';
+      UpdatingRelatedTable@1002 : Boolean;
+
+    PROCEDURE UpdateFromTemplateSelection@4(VAR RecRef@1000 : RecordRef);
+    VAR
+      TemplateHeader@1001 : Record 8618;
+    BEGIN
+      TemplateHeader.SETRANGE(TableID,RecRef.NUMBER);
+      IF FORM.RUNMODAL(FORM::"Data Template List",TemplateHeader,TemplateHeader.Code) = ACTION::LookupOK THEN
+        UpdateRecord(TemplateHeader,RecRef);
+    END;
+
+    PROCEDURE UpdateRecord@1(Template@1000 : Record 8618;VAR RecRef@1001 : RecordRef);
+    BEGIN
+      IF TestKeyFields(RecRef) THEN BEGIN
+        InsertTemplate(RecRef,Template);
+      END ELSE BEGIN
+        InsertRecordWithKeyFields(RecRef,Template);
+        IF TestKeyFields(RecRef) THEN
+          InsertTemplate(RecRef,Template)
+        ELSE
+          ERROR(STRSUBSTNO(Text001,RecRef.NUMBER,RecRef.CAPTION));
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertTemplate@3(VAR RecRef@1000 : RecordRef;TemplateHeader@1001 : Record 8618);
+    VAR
+      TemplateLine@1002 : Record 8619;
+      TemplateHeader2@1004 : Record 8618;
+      FieldRef@1003 : FieldRef;
+      RecRef2@1005 : RecordRef;
+    BEGIN
+      TemplateLine.SETRANGE("Data Template Code",TemplateHeader.Code);
+      IF TemplateLine.FIND('-') THEN
+        REPEAT
+          IF TemplateLine.Type = TemplateLine.Type::Field THEN BEGIN
+            IF TemplateLine.FieldID <> 0 THEN BEGIN
+              FieldRef := RecRef.FIELD(TemplateLine.FieldID);
+              ModifyRecordWithField(RecRef,FieldRef,TemplateLine."Default Value");
+            END
+          END ELSE
+            IF TemplateLine.Template <> '' THEN
+              IF TemplateHeader2.GET(TemplateLine.Template) THEN
+                IF TemplateHeader2.TableID = TemplateHeader.TableID THEN
+                  InsertTemplate(RecRef,TemplateHeader2)
+                ELSE BEGIN
+                  UpdatingRelatedTable := TRUE;
+                  RecRef2.OPEN(TemplateHeader2.TableID);
+                  UpdateRecord(TemplateHeader2,RecRef2);
+                  UpdatingRelatedTable := FALSE;
+                END;
+        UNTIL TemplateLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ModifyRecordWithField@39(VAR RecRef@1004 : RecordRef;FieldRef@1005 : FieldRef;Value@1002 : Text[250]);
+    VAR
+      MigrationMgt@1000 : Codeunit 8611;
+    BEGIN
+      MigrationMgt.ValidateFieldValue(RecRef,FieldRef,Value);
+      RecRef.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE TestKeyFields@2(VAR RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      KeyRef@1003 : KeyRef;
+      FieldRef@1002 : FieldRef;
+      KeyFieldCount@1001 : Integer;
+    BEGIN
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR KeyFieldCount := 1 TO KeyRef.FIELDCOUNT DO BEGIN
+        FieldRef := KeyRef.FIELDINDEX(KeyFieldCount);
+        IF FORMAT(FieldRef.VALUE) = '' THEN
+          EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE TestHierarchy@6(TemplateLine@1001 : Record 8619);
+    VAR
+      TemplateLine2@1000 : Record 8619;
+    BEGIN
+      IF TemplateLine.Type = TemplateLine.Type::Field THEN
+        TestDuplicateFields(TemplateLine,TemplateLine.FieldID)
+      ELSE BEGIN
+        TemplateLine2.SETRANGE("Data Template Code",TemplateLine."Data Template Code");
+        IF TemplateLine2.FIND('-') THEN
+          REPEAT
+            TestDuplicateFields(TemplateLine,TemplateLine.FieldID);
+          UNTIL TemplateLine2.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE TestDuplicateFields@7(TemplateLine@1001 : Record 8619;TestFieldID@1002 : Integer);
+    VAR
+      TemplateLine1@1000 : Record 8619;
+      TemplateLine2@1003 : Record 8619;
+    BEGIN
+      TemplateLine1.SETRANGE("Data Template Code",TemplateLine."Data Template Code");
+      IF TemplateLine1.FIND('-') THEN
+        REPEAT
+          IF TemplateLine1.Type = TemplateLine1.Type::Field THEN BEGIN
+            IF TemplateLine1.FieldID = TestFieldID THEN
+              ERROR(STRSUBSTNO(Text000,TemplateLine1."Data Template Code"));
+          END ELSE BEGIN
+            TemplateLine2.SETRANGE("Data Template Code",TemplateLine1.Template);
+            IF TemplateLine2.FIND('-') THEN
+              TestDuplicateFields(TemplateLine2,TestFieldID);
+          END;
+        UNTIL TemplateLine1.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE InsertRecordWithKeyFields@40(VAR RecRef@1000 : RecordRef;Templateheader@1002 : Record 8618);
+    VAR
+      TemplateLine@1001 : Record 8619;
+      MigrationMgt@1007 : Codeunit 8611;
+      RecRef1@1006 : RecordRef;
+      KeyRef@1003 : KeyRef;
+      FieldRef@1004 : FieldRef;
+      KeyFieldCount@1005 : Integer;
+      MessageString@1008 : Text[250];
+    BEGIN
+      TemplateLine.SETRANGE("Data Template Code",Templateheader.Code);
+
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR KeyFieldCount := 1 TO KeyRef.FIELDCOUNT DO BEGIN
+        FieldRef := KeyRef.FIELDINDEX(KeyFieldCount);
+        TemplateLine.SETRANGE(FieldID,FieldRef.NUMBER);
+        IF TemplateLine.FIND('-') THEN BEGIN
+          MigrationMgt.ValidateFieldValue(RecRef,FieldRef,TemplateLine."Default Value");
+        END ELSE
+          IF KeyRef.FIELDCOUNT <> 1 THEN
+            ERROR(STRSUBSTNO(Text003,FieldRef.NAME));
+      END;
+
+      RecRef1 := RecRef.DUPLICATE;
+
+      IF RecRef1.FIND('=') THEN
+        IF NOT UpdatingRelatedTable THEN BEGIN
+          MessageString := MessageString + ' ' + FORMAT(FieldRef.VALUE);
+          MessageString := DELCHR(MessageString,'<');
+          ERROR(STRSUBSTNO(Text002,MessageString,RecRef.NUMBER,RecRef.CAPTION));
+        END ELSE
+          EXIT;
+
+      RecRef.INSERT(TRUE);
+    END;
+
+    PROCEDURE SetUpdatingRelatedTable@5(UpdatingRelated@1000 : Boolean);
+    BEGIN
+      UpdatingRelatedTable := UpdatingRelated;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,282 @@
+OBJECT Codeunit 7000007 Document-Misc
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVES5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 21=imd,
+                TableData 25=imd,
+                TableData 7000002=imd,
+                TableData 7000003=imd,
+                TableData 7000004=imd,
+                TableData 7000006=imd,
+                TableData 7000007=imd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text1100000@1000 : TextConst 'ENU=This document is included in a posted bill group. Its %1 cannot be modified.;ESP=El documento est  incluido en una remesa registrada. Su %1 no se puede modificar.';
+      Text1100001@1001 : TextConst 'ENU=This document is closed. Its %1 cannot be modified.;ESP=El documento est  cerrado. Su %1 no se puede modificar.';
+      Text1100002@1002 : TextConst 'ENU=This document is included in a posted payment order. Its %1 cannot be modified.;ESP=El documento est  incluido en una orden de pago registrada. Su %1 no se puede modificar.';
+      Text1100003@1003 : TextConst 'ENU=%1 cannot be used in CSB Electronics Norms Exports.;ESP=%1 no se puede utilizar en Normas exportaci¢n CSB.';
+      Text1100004@1004 : TextConst 'ENU=%1 cannot be used in CSB Electronic Norm Export No. 34./Norm Export No. 34.1;ESP=No se puede utilizar %1 en la exportaci¢n CSB norma 34./norma 34.1';
+      Text1100005@1005 : TextConst 'ENU=%1 is not correct. Do you want to have it corrected?;ESP=%1 no es correcto. ¨Quiere que sea corregido?';
+      Text1100006@1006 : TextConst 'ENU=This account has no control digit. Do you want to have it calculated?;ESP=La cuenta no tiene d¡gito de control. ¨Quiere se calcule?';
+      Text1100007@1007 : TextConst 'ENU=Partial Bill settlement %1/%2;ESP=Liq. parcial efecto %1/%2';
+      Text1100008@1008 : TextConst 'ENU=Partial Document settlement %1 Customer No. %2;ESP=Liq. parcial documento %1 Cliente No. %2';
+      Text1100009@1009 : TextConst 'ENU=Partial Document settlement %1;ESP=Liq. parcial documento %1';
+      Text1100010@1010 : TextConst 'ENU=%1 must be different from blank.;ESP=%1 debe ser diferente de blanco.';
+
+    PROCEDURE UpdateReceivableDueDate@2(VAR CustLedgEntry@1100000 : Record 21);
+    VAR
+      Doc@1100001 : Record 7000002;
+    BEGIN
+      WITH CustLedgEntry DO BEGIN
+        IF "Document Situation" = "Document Situation"::" " THEN
+          EXIT;
+        CASE "Document Situation" OF
+          "Document Situation"::"BG/PO","Document Situation"::Cartera:
+            BEGIN
+              Doc.GET(Doc.Type::Receivable,"Entry No.");
+              Doc.VALIDATE("Due Date","Due Date");
+              Doc.MODIFY;
+            END;
+          "Document Situation"::"Posted BG/PO":
+            ERROR(
+              Text1100000,
+              FIELDCAPTION("Due Date"));
+          "Document Situation"::"Closed BG/PO","Document Situation"::"Closed Documents":
+            ERROR(
+              Text1100001,
+              FIELDCAPTION("Due Date"));
+        END;
+      END;
+    END;
+
+    PROCEDURE UpdatePayableDueDate@5(VAR VendLedgEntry@1100000 : Record 25);
+    VAR
+      Doc@1100001 : Record 7000002;
+      ClosedDoc@1100002 : Record 7000004;
+    BEGIN
+      WITH VendLedgEntry DO BEGIN
+        IF "Document Situation" = "Document Situation"::" " THEN
+          EXIT;
+        CASE "Document Situation" OF
+          "Document Situation"::"BG/PO","Document Situation"::Cartera:
+            BEGIN
+              Doc.GET(Doc.Type::Payable,"Entry No.");
+              Doc."Due Date" := "Due Date";
+              Doc.MODIFY;
+            END;
+          "Document Situation"::"Posted BG/PO":
+            ERROR(
+              Text1100002,
+              FIELDCAPTION("Due Date"));
+          "Document Situation"::"Closed BG/PO","Document Situation"::"Closed Documents":
+            ERROR(
+              Text1100001,
+              FIELDCAPTION("Due Date"));
+        END;
+      END;
+    END;
+
+    PROCEDURE DocType@1(PmtMethodCode@1100000 : Code[10]) : Code[10];
+    VAR
+      PaymentMethod@1100001 : Record 289;
+    BEGIN
+      WITH PaymentMethod DO BEGIN
+        GET(PmtMethodCode);
+        CASE "Bill Type" OF
+          "Bill Type"::"Bill of Exchange":
+            EXIT('1');
+          "Bill Type"::Receipt:
+            EXIT('2');
+          "Bill Type"::IOU:
+            EXIT('3');
+          ELSE
+            ERROR(Text1100003,PmtMethodCode);
+        END;
+      END;
+    END;
+
+    PROCEDURE DocType2@6(PmtMethodCode@1100000 : Code[10]) : Code[10];
+    VAR
+      PaymentMethod@1100001 : Record 289;
+    BEGIN
+      WITH PaymentMethod DO BEGIN
+        GET(PmtMethodCode);
+        CASE "Bill Type" OF
+          "Bill Type"::Check:
+            EXIT('4');
+          "Bill Type"::Transfer:
+            EXIT('5');
+          ELSE
+            ERROR(Text1100004,PmtMethodCode);
+        END;
+      END;
+    END;
+
+    PROCEDURE CalcControlDigit@4(Branch@1100000 : Text[30];Bank@1100001 : Text[30]) : Text[2];
+    VAR
+      CarteraSetup@1100002 : Record 7000016;
+      Weight@1100003 : Text[30];
+      Digit1@1100004 : Integer;
+      Digit2@1100005 : Integer;
+      i@1100006 : Integer;
+      BranchDigit@1100007 : Integer;
+      BankDigit@1100008 : Integer;
+      WeightDigit@1100009 : Integer;
+    BEGIN
+      CarteraSetup.GET();
+      Weight := CarteraSetup."CCC Ctrl Digits Check String";
+      Digit1 := 0;
+      Digit2 := 0;
+
+      FOR i := 1 TO STRLEN(Branch) DO BEGIN
+        EVALUATE(BranchDigit,COPYSTR(Branch,(STRLEN(Branch) - i + 1),1));
+        CASE i OF
+          1..4:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i,1));
+          5:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i,2));
+          6..11:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i + 1,1));
+        END;
+        Digit1 := Digit1 + (BranchDigit * WeightDigit);
+      END;
+      Digit1 := 11 - (Digit1 MOD 11);
+
+      IF Digit1 = 10 THEN
+        Digit1 := 1;
+      IF Digit1 = 11 THEN
+        Digit1 := 0;
+
+      FOR i := 1 TO STRLEN(Bank) DO BEGIN
+        EVALUATE(BankDigit,COPYSTR(Bank,(STRLEN(Bank) - i + 1),1));
+        CASE i OF
+          1..4:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i,1));
+          5:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i,2));
+          6..11:
+            EVALUATE(WeightDigit,COPYSTR(Weight,i + 1,1));
+        END;
+        Digit2 := Digit2 + (BankDigit * WeightDigit);
+      END;
+      Digit2 := 11 - (Digit2 MOD 11);
+
+      IF Digit2 = 10 THEN
+        Digit2 := 1;
+      IF Digit2 = 11 THEN
+        Digit2 := 0;
+
+      EXIT(FORMAT(Digit1) + FORMAT(Digit2));
+    END;
+
+    PROCEDURE CheckControlDigit@3(VAR CustCCCControlDigits@1100000 : Text[2];CustCCCBankBranchNo@1100001 : Text[30];CustCCCAccNo@1100002 : Text[30];Cust2@1100003 : Text[30]);
+    VAR
+      CarteraSetup@1100004 : Record 7000016;
+      CustBankAcc@1100005 : Record 287;
+      MessageTxt@1100006 : Text[150];
+    BEGIN
+      CarteraSetup.GET();
+      IF CarteraSetup."CCC Ctrl Digits Check String" <> '' THEN
+       IF CustCCCControlDigits <> '' THEN BEGIN
+         IF CalcControlDigit(CustCCCBankBranchNo + Cust2,CustCCCAccNo) <> CustCCCControlDigits THEN BEGIN
+           MessageTxt := STRSUBSTNO(
+             Text1100005,
+             CustBankAcc.FIELDCAPTION("CCC Control Digits"));
+           IF NOT CONFIRM (MessageTxt) THEN
+             CustCCCControlDigits := '**'
+           ELSE
+             CustCCCControlDigits := CalcControlDigit(CustCCCBankBranchNo + Cust2,CustCCCAccNo);
+         END
+        END ELSE
+          IF NOT CONFIRM (Text1100006) THEN
+            CustCCCControlDigits := '**'
+          ELSE
+            CustCCCControlDigits := CalcControlDigit(CustCCCBankBranchNo + Cust2,CustCCCAccNo)
+      ELSE
+       IF CustCCCControlDigits = '' THEN
+          CustCCCControlDigits := '**';
+    END;
+
+    PROCEDURE FilterGLEntry@7(VAR GLEntry@1100000 : Record 17;AccNo@1100001 : Code[20];DocNo@1100002 : Code[20];BillNo@1100003 : Code[20];TypeDoc@1100004 : 'Bill,Invoice';CustAccNo@1100005 : Code[20]);
+    VAR
+      Description2@1100006 : Text[50];
+    BEGIN
+      WITH GLEntry DO BEGIN
+        SETCURRENTKEY("G/L Account No.",Description);
+        SETRANGE("G/L Account No.",AccNo);
+        IF TypeDoc = TypeDoc::Bill THEN
+          Description2 := COPYSTR(
+            STRSUBSTNO(Text1100007,DocNo,BillNo),
+            1,MAXSTRLEN(Description))
+        ELSE
+          IF CustAccNo <> '' THEN
+            Description2 := COPYSTR(
+              STRSUBSTNO(Text1100008,
+                DocNo,
+                CustAccNo),1,MAXSTRLEN(Description))
+          ELSE
+            Description2 := COPYSTR(
+              STRSUBSTNO(Text1100009,DocNo),
+              1,MAXSTRLEN(Description));
+        SETRANGE(Description,Description2);
+      END;
+    END;
+
+    PROCEDURE GetRegisterCode@8(CurrCode@1100000 : Code[10];VAR RegisterCode@1100001 : Integer;VAR RegisterString@1100002 : Text[2]) : Boolean;
+    VAR
+      CarteraSetup@1100003 : Record 7000016;
+    BEGIN
+      WITH CarteraSetup DO BEGIN
+        GET();
+        IF CurrCode = "Euro Currency Code" THEN BEGIN
+          RegisterCode := 50;
+          RegisterString := '65';
+          EXIT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE CheckCurrency@10(CurrCode@1100000 : Code[10];VAR LCY@1100001 : 'Euro,Other') : Boolean;
+    VAR
+      CarteraSetup@1100002 : Record 7000016;
+    BEGIN
+      CarteraSetup.GET();
+      WITH CarteraSetup DO BEGIN
+        IF ("Euro Currency Code" = '') THEN
+          ERROR(Text1100010,
+                 FIELDCAPTION("Euro Currency Code"));
+        CASE TRUE OF
+          "Euro Currency Code" = '': LCY := LCY::Euro;
+        ELSE
+            LCY := LCY::Other;
+        END;
+        IF (CurrCode = "Euro Currency Code") THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE CheckBankSuffix@9(SuffixBankAccNo@1100000 : Code[20];BillGrBankAccNo@1100001 : Code[20]) : Boolean;
+    BEGIN
+      IF SuffixBankAccNo <> BillGrBankAccNo THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}

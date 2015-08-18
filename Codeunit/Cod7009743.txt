@@ -1,0 +1,231 @@
+OBJECT Codeunit 7009743 Funciones Consulta x Bono
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1103355000 : TextConst 'ENU=Voucher does not correspond with a touroperator of the group assigned to user;ESP=El bono no se corresponde con un touroperador del grupo asignado al usuario.';
+      Text002@1103355001 : TextConst 'ENU=Final date of the period cannot be previous to the start date.;ESP=La fecha de final de periodo no puede ser anterior a la fecha de inicio.';
+      Text003@1103355002 : TextConst 'ENU=There is no information for this voucher;ESP=No existe informacion para este bono.';
+      Text004@1103355003 : TextConst 'ENU=Information of this voucher was not found in the supplier;ESP=No se ha encontrado informacion de este bono en el proveedor.';
+      Text005@1103355004 : TextConst 'ENU=Bank information of this invoice was not found;ESP=No se ha encontrado informacion bancaria de esta factura.';
+      Text006@1103355005 : TextConst 'ENU=Non-conciliated information with the bank;ESP=Informacion no conciliada con el banco.';
+      cFunVar@1103355006 : Codeunit 7009720;
+      Text007@1103355007 : TextConst 'ENU=&Selected voucher,&Filtered vouchers;ESP=Bono &seleccionado,Bonos &filtrados';
+
+    PROCEDURE ControlBonoTouroperador@1103355000(pwBono@1103355000 : Code[10]);
+    VAR
+      lrBono@1103355001 : Record 7010013;
+      lrUser@1103355002 : Record 91;
+      lrTTOO@1103355003 : Record 7009717;
+      lwOk@1103355004 : Boolean;
+    BEGIN
+      // ControlBonoTouroperador
+
+      lrUser.GET(USERID);
+
+      // AJS 17.05.2007
+      // De momento se permite entrada a usuarios sin touroperador
+
+      //lrUser.TESTFIELD(TourOperador);
+
+      lrBono.RESET;
+      lrBono.SETRANGE(Bono, pwBono);
+      IF lrBono.FINDFIRST THEN BEGIN
+        lwOk := FALSE;
+
+        lrTTOO.RESET;
+        IF lrUser.TourOperador <> '' THEN
+          lrTTOO.SETRANGE("Grupo Touroperador", lrUser.TourOperador);
+        IF lrTTOO.FINDSET THEN BEGIN
+          REPEAT
+            IF lrBono.TourOperador = lrTTOO.TourOperador THEN
+              lwOk := TRUE;
+          UNTIL (lrTTOO.NEXT = 0) OR lwOk;
+        END;
+      END
+      ELSE
+        ERROR(Text003);
+
+      IF NOT lwOk THEN
+        ERROR(Text001);
+    END;
+
+    PROCEDURE CoherenciaFechasConsulta@1103355001(pwFechaDesde@1103355000 : Date;pwFechaHasta@1103355001 : Date);
+    BEGIN
+      // CoherenciaFechasConsulta
+
+      IF pwFechaDesde <> 0D THEN
+        IF pwFechaHasta <> 0D THEN
+          IF pwFechaDesde > pwFechaHasta THEN
+            ERROR(Text002);
+    END;
+
+    PROCEDURE ConsultaMovsProveedor@1103355002(pwBono@1103355002 : Code[20];pwVisualizaPDF@1103355007 : Boolean);
+    VAR
+      lrBono@1103355000 : Record 7010013;
+      lrValBono@1103355001 : Record 7010022;
+      lrMovProv@1103355003 : Record 25;
+      lrMovProvTMP@1103355005 : TEMPORARY Record 25;
+      lrHotel@1103355004 : Record 7009724;
+      lfConsultaMovs@1103355008 : Form 7009978;
+    BEGIN
+      // ConsultaFacturaPDF
+
+      IF pwBono = '' THEN
+        EXIT;
+
+      // Buscaremos todas las facturas de compra en que se ha validado el bono y mostraremos el PDF asociado
+
+      lrBono.RESET;
+      lrBono.SETRANGE(Bono, pwBono);
+      IF lrBono.FINDSET THEN BEGIN
+        REPEAT
+
+          // Para cada bono consultaremos sus validaciones
+
+          lrValBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+          lrValBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+          lrValBono.SETRANGE(Bono          , lrBono.Bono);
+          lrValBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+          lrValBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+          IF lrValBono.FINDSET THEN BEGIN
+            REPEAT
+              // Buscar el proveedor asignado al hotel Pago de la factura
+
+              lrHotel.GET(lrValBono."Hotel Pago");
+
+              lrMovProv.SETCURRENTKEY("External Document No.",
+                                      "Document Type",
+                                      "Vendor No.");
+
+              lrMovProv.SETRANGE ("External Document No.", lrValBono."N§ Factura");
+
+              // Si quieremos ver los PDFs vamos a filtrar por Factura/Abono, en caso contrario buscaremos pagos
+
+              IF pwVisualizaPDF THEN
+                lrMovProv.SETFILTER("Document Type", '%1|%2', lrMovProv."Document Type"::Invoice,
+                                                              lrMovProv."Document Type"::"Credit Memo")
+              ELSE
+                lrMovProv.SETRANGE("Document Type", lrMovProv."Document Type"::Payment);
+
+              lrMovProv.SETRANGE ("Vendor No."           , lrHotel."Proveedor Intermediacion");
+              IF lrMovProv.FINDFIRST THEN BEGIN
+
+                // Como un numero de bono puede tener varias reservas asociadas y multiples validaciones
+                // montaremos un temporal de movimientos de proveedor para no abrir varias veces la misma
+                // factura
+
+                IF NOT lrMovProvTMP.GET(lrMovProv."Entry No.") THEN BEGIN
+                  lrMovProvTMP := lrMovProv;
+                  lrMovProvTMP.INSERT;
+                END;
+              END;
+            UNTIL lrValBono.NEXT = 0;
+          END;
+        UNTIL lrBono.NEXT = 0;
+
+        // Recorremos el temporal de movimientos de proveedor para abrir los PDFs asociados
+
+        IF lrMovProvTMP.FINDSET THEN BEGIN
+          lrMovProv.RESET;
+          REPEAT
+
+            // Ponemos una opcion para visualizar los PDFs de los movimientos encontrados o queremos mostrar una
+            // ventana con los movimientos de proveedor
+
+            IF pwVisualizaPDF THEN
+              cFunVar.VisualizaDocCompraProveedor(lrMovProvTMP)
+            ELSE BEGIN
+              CLEAR(lfConsultaMovs);
+              lfConsultaMovs.SetTempMovProveedor(lrMovProvTMP);
+              lfConsultaMovs.RUN;
+            END;
+          UNTIL lrMovProvTMP.NEXT = 0;
+        END
+        ELSE
+          ERROR(Text004);
+      END;
+    END;
+
+    PROCEDURE VisualizaExtractoBancario@1103355003(prMovProv@1103355000 : Record 25);
+    VAR
+      lrMovBanco@1103355001 : Record 271;
+      lrExtracto@1103355002 : Record 275;
+    BEGIN
+      // VisualizaExtractoBancario
+
+      lrMovBanco.RESET;
+      lrMovBanco.SETCURRENTKEY("Document No.",
+                               "Posting Date");
+      lrMovBanco.SETRANGE("Document No.", prMovProv."Document No.");
+      lrMovBanco.SETRANGE("Posting Date", prMovProv."Posting Date");
+      IF lrMovBanco.FINDFIRST THEN BEGIN
+        IF lrMovBanco."Statement No." = '' THEN
+          ERROR(Text006);
+
+        IF lrExtracto.GET(lrMovBanco."Bank Account No.", lrMovBanco."Statement No.") THEN
+          cFunVar.VisualizaExtractoBancario(lrExtracto."Codigo barras PDF", lrExtracto."Statement Date");
+      END
+      ELSE
+        ERROR(Text005);
+    END;
+
+    PROCEDURE LanzarAnalisisBonos@1103355017(pwBono@1103355002 : Code[20];pwFechaDesde@1103355001 : Date;pwFechaHasta@1103355000 : Date;pwDelegacion@1103355006 : Code[10];pwHotel@1103355007 : Code[20];pwTouroperador@1103355009 : Code[10]);
+    VAR
+      lfVoucherAnalisys@1103355003 : Report 7009909;
+      lrBono@1103355004 : Record 7010013;
+      lrPar@1103355005 : Record 7009700;
+      lwOpcion@1103355008 : Integer;
+    BEGIN
+      // LanzarAnalisisBonos
+
+      lrPar.FINDFIRST;
+
+      lwOpcion := STRMENU(Text007, 0);
+
+      lrBono.RESET;
+      lrBono.SETCURRENTKEY(Delegacion, Hotel, "Fecha llegada");
+
+      IF pwDelegacion <> '' THEN
+        lrBono.SETRANGE (Delegacion, pwDelegacion);
+
+      IF pwHotel <> '' THEN
+        lrBono.SETRANGE(Hotel, pwHotel);
+
+      IF pwTouroperador <> '' THEN
+        lrBono.SETRANGE(TourOperador, pwTouroperador);
+
+      IF lwOpcion = 1 THEN
+        lrBono.SETRANGE (Bono, pwBono);
+
+      IF pwFechaDesde <> 0D THEN
+        lrBono.SETRANGE ("Fecha llegada", pwFechaDesde, pwFechaHasta);
+
+      CLEAR(lfVoucherAnalisys);
+      lfVoucherAnalisys.SETTABLEVIEW(lrBono);
+      lfVoucherAnalisys.RUNMODAL
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 29/06/09
+
+        .- (09/00319) cambio c¢digos de hotel de code10 a code20.
+    }
+    END.
+  }
+}

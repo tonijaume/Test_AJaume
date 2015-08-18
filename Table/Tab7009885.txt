@@ -1,0 +1,1402 @@
+OBJECT Table 7009885 Conversion codigo hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Hotel conversion code;
+               ESP=Conversion codigo hotel];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Id Conversion       ;Integer       ;CaptionML=[ENU=Exchange Id;
+                                                              ESP=Id Conversion] }
+    { 2   ;   ;Codigo hotel        ;Code20        ;CaptionML=[ENU=Hotel code;
+                                                              ESP=Codigo hotel] }
+    { 3   ;   ;Codigo hotel Nuevo  ;Code20        ;OnValidate=BEGIN
+
+                                                                IF "Codigo hotel Nuevo" <> xRec."Codigo hotel Nuevo" THEN
+                                                                  ModificarHotelHP(Rec);
+                                                              END;
+
+                                                   CaptionML=[ENU=New hotel code;
+                                                              ESP=Codigo hotel Nuevo] }
+    { 4   ;   ;Nombre Hotel        ;Text30        ;CaptionML=[ENU=Hotel Name;
+                                                              ESP=Nombre Hotel];
+                                                   Editable=No }
+    { 5   ;   ;Conflicto           ;Boolean       ;CaptionML=[ENU=Conflict;
+                                                              ESP=Conflicto] }
+    { 6   ;   ;Empresa             ;Text30        ;CaptionML=[ENU=Company;
+                                                              ESP=Empresa] }
+    { 7   ;   ;Hotel Payment       ;Boolean       ;CaptionML=[ENU=Hotel Payment;
+                                                              ESP=Hotel Payment] }
+    { 8   ;   ;Convertido          ;Boolean       ;CaptionML=[ENU=Exchanged;
+                                                              ESP=Convertido] }
+    { 9   ;   ;Cancelado           ;Boolean       ;CaptionML=[ENU=Cancelled;
+                                                              ESP=Cancelado] }
+  }
+  KEYS
+  {
+    {    ;Id Conversion,Empresa,Codigo hotel      ;Clustered=Yes }
+    {    ;Codigo hotel Nuevo                      ;KeyGroups=RENUMERING }
+    {    ;Convertido,Cancelado                    ;KeyGroups=RENUMERING }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    PROCEDURE NuevaConversion1@1103355001() rvNumConv : Integer;
+    VAR
+      lrHoteles@1103355000 : Record 7009724;
+      lrConvHot@1103355001 : Record 7009885;
+      lwDialog@1103355002 : Dialog;
+      lwCont@1103355003 : Integer;
+      lwTot@1103355004 : Integer;
+      lrEmp@1103355005 : Record 2000000006;
+      lrPar@1103355006 : Record 7009700;
+      lrEmpsHP@1103355007 : TEMPORARY Record 2000000006;
+    BEGIN
+      // NuevaConversion
+      //: Copiamos todos los c¢digos de hotel a la tabla con un nuevo n§ de conversi¢n.
+
+      IF lrConvHot.FINDLAST THEN BEGIN
+        IF NOT lrConvHot.Convertido THEN
+          EXIT(lrConvHot."Id Conversion");
+        rvNumConv := lrConvHot."Id Conversion" + 1;
+      END
+      ELSE
+        rvNumConv := 1;
+
+
+
+      IF lrEmp.FINDSET THEN BEGIN
+        REPEAT
+
+          lrHoteles.RESET;
+          lrHoteles.CHANGECOMPANY(lrEmp.Name);
+
+          lrPar.RESET;
+          lrPar.CHANGECOMPANY(lrEmp.Name);
+          lrPar.FINDFIRST;
+          IF (lrPar."Empres Hotel Payment" <> lrEmp.Name) AND (lrPar."Empres Hotel Payment" <> '') THEN BEGIN
+            lrEmpsHP.RESET;
+            IF NOT lrEmpsHP.GET(lrPar."Empres Hotel Payment") THEN BEGIN
+              lrEmpsHP.Name := lrPar."Empres Hotel Payment";
+              lrEmpsHP.INSERT;
+            END;
+          END;
+
+          lwTot := lrHoteles.COUNT;
+
+          IF lrHoteles.FINDSET THEN BEGIN
+
+            lwCont := 0;
+            lwDialog.OPEN('Copiando codigos hotel(' +  lrEmp.Name + '): @1@@@@@@@@');
+
+            REPEAT
+
+              lrConvHot."Id Conversion"      := rvNumConv;
+              lrConvHot.Empresa              := lrEmp.Name;
+              lrConvHot."Codigo hotel"       := lrHoteles.Hotel;
+              lrConvHot."Codigo hotel Nuevo" := '';
+              lrConvHot."Nombre Hotel"       := lrHoteles.Nombre;
+              lrConvHot.INSERT;
+
+              lwCont += 1;
+              lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+            UNTIL lrHoteles.NEXT = 0;
+
+            lwDialog.CLOSE;
+
+          END;
+
+        UNTIL lrEmp.NEXT = 0;
+      END;
+
+      // Marco los registros de hotpayment.
+
+      lrEmpsHP.RESET;
+      IF lrEmpsHP.FINDSET THEN BEGIN
+        REPEAT
+
+          lrConvHot.RESET;
+          lrConvHot.SETRANGE("Id Conversion", rvNumConv);
+          lrConvHot.SETRANGE(Empresa        , lrEmpsHP.Name);
+
+          lrConvHot.MODIFYALL("Hotel Payment", TRUE);
+
+        UNTIL lrEmpsHP.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ComprobarConversion1@1103355000(pwIdConversion@1103355000 : Integer) rvCorrecta : Boolean;
+    VAR
+      lrConvHot@1103355001 : Record 7009885;
+      lrConvAnt@1103355002 : Record 7009885;
+      lwDialog@1103355005 : Dialog;
+      lwCont@1103355004 : Integer;
+      lwTot@1103355003 : Integer;
+      lrPar@1103355006 : Record 7009700;
+    BEGIN
+      // ComprobarConversion
+      //: Comprueba que no se hayan repetido c¢digos nuevos en una conversi¢n.
+      //: Marca los conflictivos.
+
+      rvCorrecta := TRUE;
+
+      lrConvHot.SETRANGE ("Id Conversion", pwIdConversion);
+      lrConvHot.MODIFYALL(Conflicto, FALSE);
+
+      lwTot := lrConvHot.COUNT;
+
+      lrConvHot.SETCURRENTKEY("Codigo hotel Nuevo");
+      lrConvHot.SETRANGE ("Hotel Payment", FALSE);
+      IF lrConvHot.FINDSET(TRUE) THEN BEGIN
+
+        lwCont := 0;
+        lwDialog.OPEN('Comprobando codigos hotel: @1@@@@@@@@@@@@@@@@');
+
+        REPEAT
+
+          IF (lrConvHot."Codigo hotel Nuevo" = lrConvAnt."Codigo hotel Nuevo") AND
+             (lwCont <> 0) THEN BEGIN
+
+            lrConvHot.Conflicto := TRUE;
+            lrConvHot.MODIFY;
+
+            lrConvAnt.Conflicto := TRUE;
+            lrConvAnt.MODIFY;
+
+            rvCorrecta := FALSE;
+
+          END;
+
+          lrConvAnt := lrConvHot;
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+        UNTIL lrConvHot.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+
+      lrConvHot.RESET;
+      lrConvHot.SETCURRENTKEY("Codigo hotel Nuevo");
+      IF lrConvHot.FINDSET(TRUE) THEN BEGIN
+
+        lwCont := 0;
+        lwDialog.OPEN('Comprobando codigos hotel: @1@@@@@@@@@@@@@@@@');
+
+        REPEAT
+
+          IF lrConvHot."Codigo hotel Nuevo" = '' THEN BEGIN
+
+            lrConvHot.Conflicto := TRUE;
+            lrConvHot.MODIFY;
+
+            rvCorrecta := FALSE;
+
+          END;
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+        UNTIL lrConvHot.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+    END;
+
+    PROCEDURE Convertir1@1103355002(pwIdConversion@1103355000 : Integer);
+    VAR
+      lrCampos@1103355001 : TEMPORARY Record 2000000041;
+      lrTablas@1103355002 : TEMPORARY Record 2000000026;
+      lrRecRef@1103355003 : RecordRef;
+      lrRecRefNuevo@1103355016 : RecordRef;
+      lrRecRefAnt@1103355017 : RecordRef;
+      lrFieldRef@1103355004 : FieldRef;
+      lrFieldRefNuevo@1103355018 : FieldRef;
+      lrConvs@1103355005 : TEMPORARY Record 7009885;
+      lrEmps@1103355006 : Record 2000000006;
+      lwDialog@1103355009 : Dialog;
+      lwTot@1103355007 : Integer;
+      lwCont@1103355008 : Integer;
+      lrConvHot@1103355010 : Record 7009885;
+      lrHoteles@1103355011 : Record 7009724;
+      lrHotNuevo@1103355012 : Record 7009724;
+      lrHotAnt@1103355013 : Record 7009724;
+      lwFin@1103355014 : Boolean;
+      lwCambioClave@1103355015 : Boolean;
+      lwModificado@1103355019 : Boolean;
+      lwInicioDT@1103355020 : DateTime;
+      lwDuration@1103355022 : Duration;
+    BEGIN
+      // Convertir.
+
+      lwInicioDT := CURRENTDATETIME;
+
+      IF NOT ComprobarConversion1(pwIdConversion) THEN
+        ERROR('Existen conflictos pendientes de solucionar para la conversion %1', pwIdConversion);
+
+      // ************ primero cambiamos los c¢digos en la Tabla hotel.
+
+      IF lrEmps.FINDSET THEN BEGIN
+        lwDialog.OPEN('#1############################################');
+        REPEAT
+
+          lwDialog.UPDATE(1, 'Modificando Tabla Hotel (' + lrEmps.Name + ')');
+
+          lrHoteles.CHANGECOMPANY(lrEmps.Name);
+          IF lrHoteles.FINDSET(TRUE) THEN BEGIN
+            REPEAT
+
+              lrConvs.RESET;
+              lrConvs.SETRANGE (Empresa       , lrEmps.Name);
+              lrConvs.SETRANGE ("Codigo hotel", FORMAT(lrFieldRef));
+              lwCambioClave := lrConvs.FINDFIRST;
+              IF lwCambioClave THEN BEGIN
+
+                lrHotNuevo       := lrHoteles;
+                lrHotNuevo.Hotel := lrConvs."Codigo hotel Nuevo";
+                lrHotNuevo.INSERT;
+
+                lrHotAnt := lrHoteles;
+
+              END;
+
+              lwFin := (lrHoteles.NEXT = 0);
+
+              IF lwCambioClave THEN BEGIN
+                lrHotAnt.DELETE;
+              END;
+
+            UNTIL lwFin;
+          END;
+
+        UNTIL lrEmps.NEXT = 0;
+        lwDialog.CLOSE;
+      END;
+
+      // ************ Resto de tablas.
+
+      //Cargamos la relaci¢n de tablas y campos a cambiar
+      CargarCampos    (lrTablas      , lrCampos);
+      CargarConversion(pwIdConversion, lrConvs);
+
+      lwTot := lrTablas.COUNT * lrEmps.COUNT ;
+
+      IF lrEmps.FINDSET THEN BEGIN
+
+        lwDialog.OPEN('#1############################################,\ @2@@@@@@@@@@@@@@@@@@@@@@@');
+        REPEAT
+
+          IF lrTablas.FINDSET THEN BEGIN
+            REPEAT
+
+              lrRecRef.OPEN     (lrTablas.Number, FALSE, lrEmps.Name);
+              lrRecRefNuevo.OPEN(lrTablas.Number, FALSE, lrEmps.Name);
+              lrRecRefAnt.OPEN  (lrTablas.Number, FALSE, lrEmps.Name);
+
+              lwCont += 1;
+              lwDialog.UPDATE(1, 'Modificando Tabla' + lrRecRef.NAME + '(' + lrEmps.Name + ')');
+              lwDialog.UPDATE(2, ROUND(lwCont / lwTot * 10000, 1));
+              IF lrRecRef.FINDSET(TRUE) THEN BEGIN
+                REPEAT
+
+                  lwCambioClave := FALSE;
+                  lwModificado  := FALSE;
+
+                  lrCampos.RESET;
+                  lrCampos.SETRANGE (TableNo, lrTablas.Number);
+                  IF lrCampos.FINDSET THEN BEGIN
+
+                    TransfiereCampos(lrRecRef, lrRecRefAnt);
+                    TransfiereCampos(lrRecRef, lrRecRefNuevo);
+
+                    REPEAT
+
+                      lwCambioClave := lwCambioClave OR lrCampos.Enabled;
+
+                      lrFieldRef := lrRecRefNuevo.FIELD(lrCampos."No.");
+
+                      lrConvs.RESET;
+                      lrConvs.SETRANGE (Empresa       , lrEmps.Name);
+                      lrConvs.SETRANGE ("Codigo hotel", FORMAT(lrFieldRef));
+                      IF lrConvs.FINDFIRST THEN BEGIN
+                        lwModificado := TRUE;
+                        lrFieldRef.VALUE := lrConvs."Codigo hotel Nuevo";
+                      END;
+
+                    UNTIL lrCampos.NEXT = 0;
+
+                  END;
+
+                  lwFin := (lrRecRef.NEXT = 0);
+
+                  IF NOT lwCambioClave THEN BEGIN
+                    IF lwModificado THEN
+                      lrRecRefNuevo.MODIFY;
+                  END
+                  ELSE BEGIN
+                    IF lwModificado THEN BEGIN
+                      lrRecRefAnt.DELETE;
+                      lrRecRefNuevo.INSERT;
+                    END;
+                  END;
+
+                UNTIL lwFin;
+              END;
+
+              lrRecRef.CLOSE;
+              lrRecRefAnt.CLOSE;
+              lrRecRefNuevo.CLOSE;
+
+            UNTIL lrTablas.NEXT = 0;
+
+          END;
+
+        UNTIL lrEmps.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+
+      lrConvHot.RESET;
+      lrConvHot.SETRANGE("Id Conversion", pwIdConversion);
+      lrConvHot.MODIFYALL(Convertido, TRUE);
+
+      lwDuration := CURRENTDATETIME - lwInicioDT;
+      MESSAGE('Proceso finalizado(' + FORMAT(lwDuration) + ').');
+    END;
+
+    PROCEDURE CargarCampos@1103355003(VAR prTablas@1103355001 : TEMPORARY Record 2000000026;VAR prCampos@1103355000 : TEMPORARY Record 2000000041);
+    VAR
+      lwFile@1103355002 : File;
+    BEGIN
+      // CargarCampos
+
+      prCampos.RESET;
+      prCampos.DELETEALL;
+      prTablas.RESET;
+      prTablas.DELETEALL;
+
+      prTablas.Number := 21; prTablas.INSERT;
+      prTablas.Number := 36; prTablas.INSERT;
+      prTablas.Number := 49; prTablas.INSERT;
+      prTablas.Number := 81; prTablas.INSERT;
+      prTablas.Number := 112; prTablas.INSERT;
+      prTablas.Number := 114; prTablas.INSERT;
+      prTablas.Number := 50013; prTablas.INSERT;
+      prTablas.Number := 50017; prTablas.INSERT;
+      prTablas.Number := 50023; prTablas.INSERT;
+      prTablas.Number := 50025; prTablas.INSERT;
+      prTablas.Number := 50027; prTablas.INSERT;
+      prTablas.Number := 50029; prTablas.INSERT;
+      prTablas.Number := 50032; prTablas.INSERT;
+      prTablas.Number := 50035; prTablas.INSERT;
+      prTablas.Number := 50036; prTablas.INSERT;
+      prTablas.Number := 50038; prTablas.INSERT;
+      prTablas.Number := 50040; prTablas.INSERT;
+      prTablas.Number := 50042; prTablas.INSERT;
+      prTablas.Number := 50043; prTablas.INSERT;
+      prTablas.Number := 50044; prTablas.INSERT;
+      prTablas.Number := 50045; prTablas.INSERT;
+      prTablas.Number := 50046; prTablas.INSERT;
+      prTablas.Number := 50049; prTablas.INSERT;
+      prTablas.Number := 50050; prTablas.INSERT;
+      prTablas.Number := 50055; prTablas.INSERT;
+      prTablas.Number := 50056; prTablas.INSERT;
+      prTablas.Number := 50057; prTablas.INSERT;
+      prTablas.Number := 50058; prTablas.INSERT;
+      prTablas.Number := 50061; prTablas.INSERT;
+      prTablas.Number := 50063; prTablas.INSERT;
+      prTablas.Number := 50066; prTablas.INSERT;
+      prTablas.Number := 50067; prTablas.INSERT;
+      prTablas.Number := 50070; prTablas.INSERT;
+      prTablas.Number := 50071; prTablas.INSERT;
+      prTablas.Number := 50072; prTablas.INSERT;
+      prTablas.Number := 50073; prTablas.INSERT;
+      prTablas.Number := 50074; prTablas.INSERT;
+      prTablas.Number := 50075; prTablas.INSERT;
+      prTablas.Number := 50076; prTablas.INSERT;
+      prTablas.Number := 50077; prTablas.INSERT;
+      prTablas.Number := 50079; prTablas.INSERT;
+      prTablas.Number := 50080; prTablas.INSERT;
+      prTablas.Number := 50081; prTablas.INSERT;
+      prTablas.Number := 50082; prTablas.INSERT;
+      prTablas.Number := 50083; prTablas.INSERT;
+      prTablas.Number := 50108; prTablas.INSERT;
+      prTablas.Number := 50111; prTablas.INSERT;
+      prTablas.Number := 50113; prTablas.INSERT;
+      prTablas.Number := 50124; prTablas.INSERT;
+      prTablas.Number := 50130; prTablas.INSERT;
+      prTablas.Number := 50132; prTablas.INSERT;
+      prTablas.Number := 50136; prTablas.INSERT;
+      prTablas.Number := 50138; prTablas.INSERT;
+      prTablas.Number := 50149; prTablas.INSERT;
+      prTablas.Number := 50150; prTablas.INSERT;
+      prTablas.Number := 50151; prTablas.INSERT;
+      prTablas.Number := 50422; prTablas.INSERT;
+      prTablas.Number := 50444; prTablas.INSERT;
+      prTablas.Number := 50603; prTablas.INSERT;
+      prTablas.Number := 50908; prTablas.INSERT;
+      prTablas.Number := 51000; prTablas.INSERT;
+      prTablas.Number := 51001; prTablas.INSERT;
+      prTablas.Number := 51002; prTablas.INSERT;
+      prTablas.Number := 51004; prTablas.INSERT;
+      prTablas.Number := 51005; prTablas.INSERT;
+      prTablas.Number := 51006; prTablas.INSERT;
+      prTablas.Number := 51007; prTablas.INSERT;
+      prTablas.Number := 51008; prTablas.INSERT;
+      prTablas.Number := 51009; prTablas.INSERT;
+      prTablas.Number := 51010; prTablas.INSERT;
+      prTablas.Number := 51013; prTablas.INSERT;
+      prTablas.Number := 51014; prTablas.INSERT;
+      prTablas.Number := 51015; prTablas.INSERT;
+      prTablas.Number := 51016; prTablas.INSERT;
+      prTablas.Number := 51018; prTablas.INSERT;
+      prTablas.Number := 51019; prTablas.INSERT;
+      prTablas.Number := 51021; prTablas.INSERT;
+      prTablas.Number := 51024; prTablas.INSERT;
+      prTablas.Number := 51102; prTablas.INSERT;
+      prTablas.Number := 51108; prTablas.INSERT;
+      prTablas.Number := 53000; prTablas.INSERT;
+      prTablas.Number := 53003; prTablas.INSERT;
+      prTablas.Number := 58001; prTablas.INSERT;
+      prTablas.Number := 58002; prTablas.INSERT;
+      prTablas.Number := 58003; prTablas.INSERT;
+      prTablas.Number := 58005; prTablas.INSERT;
+      prTablas.Number := 58009; prTablas.INSERT;
+      prTablas.Number := 58019; prTablas.INSERT;
+      prTablas.Number := 58020; prTablas.INSERT;
+      prTablas.Number := 58022; prTablas.INSERT;
+      prTablas.Number := 58024; prTablas.INSERT;
+      prTablas.Number := 58027; prTablas.INSERT;
+      prTablas.Number := 58028; prTablas.INSERT;
+      prTablas.Number := 58029; prTablas.INSERT;
+      prTablas.Number := 58033; prTablas.INSERT;
+      prTablas.Number := 58036; prTablas.INSERT;
+      prTablas.Number := 58038; prTablas.INSERT;
+      prTablas.Number := 58045; prTablas.INSERT;
+      prTablas.Number := 7010457; prTablas.INSERT;
+      prCampos.TableNo := 21; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 36; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 49; prCampos."No." := 50002; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 81; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 112; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 114; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50013; prCampos."No." := 27; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50017; prCampos."No." := 27; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50023; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50025; prCampos."No." := 3; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50025; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50025; prCampos."No." := 14; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50025; prCampos."No." := 30; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50027; prCampos."No." := 15; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50029; prCampos."No." := 23; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50032; prCampos."No." := 99; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50035; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50036; prCampos."No." := 25; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50036; prCampos."No." := 27; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50036; prCampos."No." := 59; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50038; prCampos."No." := 99; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50038; prCampos."No." := 120; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50040; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50040; prCampos."No." := 69; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50040; prCampos."No." := 89; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50042; prCampos."No." := 47; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50042; prCampos."No." := 49; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50042; prCampos."No." := 63; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50042; prCampos."No." := 65; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50042; prCampos."No." := 67; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50042; prCampos."No." := 71; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 55; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50043; prCampos."No." := 57; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 79; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 81; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 91; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 99; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50043; prCampos."No." := 210; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50044; prCampos."No." := 57; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50044; prCampos."No." := 59; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50045; prCampos."No." := 31; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50046; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50049; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50050; prCampos."No." := 31; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50055; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50055; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50056; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50056; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50057; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50058; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50061; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50063; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50063; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50063; prCampos."No." := 15; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50063; prCampos."No." := 49; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50066; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50067; prCampos."No." := 17; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50070; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50071; prCampos."No." := 55; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50071; prCampos."No." := 57; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50071; prCampos."No." := 79; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50071; prCampos."No." := 81; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50071; prCampos."No." := 91; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50071; prCampos."No." := 99; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50072; prCampos."No." := 17; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50072; prCampos."No." := 19; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50072; prCampos."No." := 37; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50073; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50074; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50075; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50076; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50077; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50079; prCampos."No." := 21; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50080; prCampos."No." := 1; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50081; prCampos."No." := 1; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50081; prCampos."No." := 29; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50082; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50083; prCampos."No." := 19; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50108; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50111; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50113; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50124; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50130; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50132; prCampos."No." := 2; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50132; prCampos."No." := 19; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50136; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 50138; prCampos."No." := 23; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50149; prCampos."No." := 2; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50150; prCampos."No." := 2; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50151; prCampos."No." := 2; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50422; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50444; prCampos."No." := 1; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50603; prCampos."No." := 25; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 50908; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51000; prCampos."No." := 5; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51000; prCampos."No." := 17; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51001; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51002; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51004; prCampos."No." := 1; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51005; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51006; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51007; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51008; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51009; prCampos."No." := 53; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51009; prCampos."No." := 87; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51010; prCampos."No." := 68; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51013; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51014; prCampos."No." := 19; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51014; prCampos."No." := 37; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51014; prCampos."No." := 52; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51015; prCampos."No." := 27; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51016; prCampos."No." := 17; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51016; prCampos."No." := 23; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51018; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51018; prCampos."No." := 19; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51019; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51019; prCampos."No." := 35; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51019; prCampos."No." := 37; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51019; prCampos."No." := 49; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51019; prCampos."No." := 51; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 51021; prCampos."No." := 5; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51021; prCampos."No." := 29; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51024; prCampos."No." := 1; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51102; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51102; prCampos."No." := 50; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 51108; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 53000; prCampos."No." := 5; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 53000; prCampos."No." := 111; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 53003; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58001; prCampos."No." := 47; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 58001; prCampos."No." := 49; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58001; prCampos."No." := 63; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58001; prCampos."No." := 65; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58001; prCampos."No." := 67; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58001; prCampos."No." := 71; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58002; prCampos."No." := 55; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      //prCampos.TableNo := 58002; prCampos."No." := 57; prCampos.INSERT;
+      //prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58002; prCampos."No." := 79; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58002; prCampos."No." := 81; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58002; prCampos."No." := 91; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58002; prCampos."No." := 99; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58003; prCampos."No." := 57; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58003; prCampos."No." := 59; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58005; prCampos."No." := 9; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58009; prCampos."No." := 11; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58019; prCampos."No." := 31; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58020; prCampos."No." := 10; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58022; prCampos."No." := 24; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58024; prCampos."No." := 25; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58027; prCampos."No." := 4; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58028; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58029; prCampos."No." := 2; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58033; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58036; prCampos."No." := 6; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58036; prCampos."No." := 7; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58038; prCampos."No." := 3; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 58045; prCampos."No." := 13; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      prCampos.TableNo := 7010457; prCampos."No." := 50009; prCampos.INSERT;
+      prCampos.Enabled := RevisarClavePrimaria(prCampos.TableNo, prCampos."No."); prCampos.MODIFY;
+      // ** TEST **
+      //prCampos.RESET;
+      //IF prCampos.FINDSET THEN BEGIN
+      //  lwFile.CREATE('c:\TESTCAMPOSENABLED.c');
+      //  lwFile.WRITEMODE := TRUE;
+      //  lwFile.TEXTMODE  := TRUE;
+      //  REPEAT
+      //    lwFile.WRITE(prCampos);
+      //  UNTIL prCampos.NEXT = 0;
+      //  lwFile.CLOSE;
+      //END;
+      //prCampos.RESET;
+      // ** TEST **
+    END;
+
+    PROCEDURE CargarConversion@1103355015(pwIdConversion@1103355000 : Integer;VAR prConvTMP@1103355001 : TEMPORARY Record 7009885);
+    VAR
+      lrConvHotel@1103355002 : Record 7009885;
+    BEGIN
+      // CargarConversion.
+
+      lrConvHotel.SETRANGE("Id Conversion", pwIdConversion);
+
+      prConvTMP.RESET;
+      prConvTMP.DELETEALL;
+
+      IF lrConvHotel.FINDSET THEN BEGIN
+        REPEAT
+
+          prConvTMP := lrConvHotel;
+          prConvTMP.INSERT;
+
+        UNTIL lrConvHotel.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ModificarHotelHP@1103355013(VAR prRec@1103355000 : Record 7009885);
+    VAR
+      lrPar@1103355001 : Record 7009700;
+      lrConvHot@1103355002 : Record 7009885;
+    BEGIN
+      // ModificarHotelHP.
+
+      lrPar.RESET;
+      lrPar.CHANGECOMPANY(prRec.Empresa);
+      lrPar.FINDFIRST;
+
+      IF (lrPar."Empres Hotel Payment" <> prRec.Empresa) AND
+         (lrPar."Empres Hotel Payment" <> '') THEN BEGIN
+        lrConvHot.SETRANGE ("Id Conversion", prRec."Id Conversion");
+        lrConvHot.SETRANGE (Empresa        , lrPar."Empres Hotel Payment");
+        lrConvHot.SETRANGE ("Codigo hotel" , prRec."Codigo hotel");
+
+        IF lrConvHot.FINDFIRST THEN BEGIN
+          lrConvHot."Codigo hotel Nuevo" := prRec."Codigo hotel Nuevo";
+          lrConvHot.MODIFY;
+        END;
+
+      END;
+    END;
+
+    PROCEDURE CambiarNombreTEST@1103355004(pwIdConversion@1103355000 : Integer;pwPrefijo@1103355001 : Code[10]);
+    BEGIN
+      // CambiarNombreTEST.
+
+      SETRANGE("Id Conversion", pwIdConversion);
+      //SETRANGE("Hotel Payment",FALSE);
+
+      IF FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          IF "Codigo hotel Nuevo" = '' THEN BEGIN
+            VALIDATE("Codigo hotel Nuevo", "Codigo hotel");
+            MODIFY;
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE RevisarClavePrimaria@1103355005(pwTableNo@1103355006 : Integer;pwFieldNo@1103355007 : Integer) rvEncontrado : Boolean;
+    VAR
+      lrRecRef@1103355000 : RecordRef;
+      lrKey@1103355001 : KeyRef;
+      lwKCount@1103355002 : Integer;
+      lwIndex@1103355003 : Integer;
+      lrField@1103355004 : FieldRef;
+    BEGIN
+      // revisarClavePrimaria
+
+      lrRecRef.OPEN(pwTableNo);
+      lrKey := lrRecRef.KEYINDEX(1);
+      lwKCount := lrKey.FIELDCOUNT;
+      FOR lwIndex := 1 TO lwKCount DO BEGIN
+        lrField := lrKey.FIELDINDEX(lwIndex);
+        IF lrField.NUMBER = pwFieldNo THEN
+          EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE TransfiereCampos@1103355020(VAR prRefDe@1103355000 : RecordRef;VAR prRefA@1103355001 : RecordRef);
+    VAR
+      lwFieldRefDe@1103355002 : FieldRef;
+      lwFieldRefA@1103355003 : FieldRef;
+      lwIndex@1103355004 : Integer;
+    BEGIN
+      // TransfiereCampos.
+
+      FOR lwIndex := 1 TO prRefDe.FIELDCOUNT DO BEGIN
+        lwFieldRefDe := prRefDe.FIELDINDEX(lwIndex);
+        lwFieldRefA  := prRefA.FIELDINDEX(lwIndex);
+        lwFieldRefA.VALUE := lwFieldRefDe.VALUE;
+      END;
+    END;
+
+    PROCEDURE NuevaConversionUna@1103355016() rvNumConv : Integer;
+    VAR
+      lrHoteles@1103355000 : Record 7009724;
+      lrConvHot@1103355001 : Record 7009885;
+      lwDialog@1103355002 : Dialog;
+      lwCont@1103355003 : Integer;
+      lwTot@1103355004 : Integer;
+      lrPar@1103355006 : Record 7009700;
+    BEGIN
+      // NuevaConversionUna
+      //: Copiamos todos los c¢digos de hotel a la tabla con un nuevo n§ de conversi¢n.
+
+      IF lrConvHot.FINDLAST THEN BEGIN
+        IF NOT lrConvHot.Convertido AND NOT lrConvHot.Cancelado THEN
+          IF CONFIRM('¨Desea Cancelar la conversi¢n Pendiente?') THEN
+            CancelarConversion
+          ELSE
+            EXIT(lrConvHot."Id Conversion");
+        rvNumConv := lrConvHot."Id Conversion" + 1;
+      END
+      ELSE
+        rvNumConv := 1;
+
+      lrHoteles.RESET;
+
+      lrPar.RESET;
+      lrPar.FINDFIRST;
+
+      lwTot := lrHoteles.COUNT;
+
+      IF lrHoteles.FINDSET THEN BEGIN
+
+        lwCont := 0;
+        lwDialog.OPEN('Copiando codigos hotel: @1@@@@@@@@');
+
+        REPEAT
+
+          lrConvHot.INIT;
+          lrConvHot."Id Conversion"      := rvNumConv;
+          lrConvHot.Empresa              := COMPANYNAME;
+          lrConvHot."Codigo hotel"       := lrHoteles.Hotel;
+          lrConvHot."Codigo hotel Nuevo" := '';
+          lrConvHot."Nombre Hotel"       := lrHoteles.Nombre;
+          lrConvHot.INSERT;
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+        UNTIL lrHoteles.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+    END;
+
+    PROCEDURE ComprobarConversionUna@1103355014(pwIdConversion@1103355000 : Integer) rvCorrecta : Boolean;
+    VAR
+      lrConvHot@1103355001 : Record 7009885;
+      lrConvAnt@1103355002 : Record 7009885;
+      lwDialog@1103355005 : Dialog;
+      lwCont@1103355004 : Integer;
+      lwTot@1103355003 : Integer;
+      lrPar@1103355006 : Record 7009700;
+    BEGIN
+      // ComprobarConversionUna
+      //: Comprueba que no se hayan repetido c¢digos nuevos en una conversi¢n.
+      //: Marca los conflictivos.
+
+      rvCorrecta := TRUE;
+
+      lrPar.FINDFIRST;
+
+      lrConvHot.SETRANGE ("Id Conversion", pwIdConversion);
+      lrConvHot.MODIFYALL(Conflicto, FALSE);
+
+      lwTot := lrConvHot.COUNT;
+
+      lrConvHot.SETCURRENTKEY("Codigo hotel Nuevo");
+      lrConvHot.SETRANGE ("Hotel Payment", FALSE);
+      IF lrConvHot.FINDSET(TRUE) THEN BEGIN
+
+        lwCont := 0;
+        lwDialog.OPEN('Comprobando codigos hotel: @1@@@@@@@@@@@@@@@@');
+
+        REPEAT
+
+          IF (lrConvHot."Codigo hotel Nuevo" = lrConvAnt."Codigo hotel Nuevo") AND
+             (lwCont <> 0) THEN BEGIN
+
+            lrConvHot.Conflicto := TRUE;
+            lrConvHot.MODIFY;
+
+            lrConvAnt.Conflicto := TRUE;
+            lrConvAnt.MODIFY;
+
+            rvCorrecta := FALSE;
+
+          END;
+
+          lrConvAnt := lrConvHot;
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+        UNTIL lrConvHot.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+
+      lrConvHot.RESET;
+      lrConvHot.SETCURRENTKEY("Codigo hotel Nuevo");
+      lrConvHot.SETRANGE ("Id Conversion", pwIdConversion);
+      IF lrConvHot.FINDSET(TRUE) THEN BEGIN
+
+        lwCont := 0;
+        lwDialog.OPEN('Comprobando codigos hotel: @1@@@@@@@@@@@@@@@@');
+
+        REPEAT
+
+          IF lrConvHot."Codigo hotel Nuevo" = '' THEN BEGIN
+
+            lrConvHot.Conflicto := TRUE;
+            lrConvHot.MODIFY;
+
+            rvCorrecta := FALSE;
+
+          END
+          ELSE BEGIN
+
+            IF COPYSTR(lrConvHot."Codigo hotel Nuevo", 1, 3) <> lrPar.Delegacion THEN BEGIN
+              lrConvHot.Conflicto := TRUE;
+              lrConvHot.MODIFY;
+
+              rvCorrecta := FALSE;
+            END;
+          END;
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND(lwCont/lwTot * 10000, 1));
+
+        UNTIL lrConvHot.NEXT = 0;
+
+        lwDialog.CLOSE;
+
+      END;
+    END;
+
+    PROCEDURE ConvertirUna@1103355012(pwIdConversion@1103355000 : Integer);
+    VAR
+      lrCampos@1103355001 : TEMPORARY Record 2000000041;
+      lrTablas@1103355002 : TEMPORARY Record 2000000026;
+      lrRecRef@1103355003 : RecordRef;
+      lrRecRefNuevo@1103355016 : RecordRef;
+      lrRecRefAnt@1103355017 : RecordRef;
+      lrFieldRef@1103355004 : FieldRef;
+      lrFieldRefNuevo@1103355018 : FieldRef;
+      lrConvs@1103355005 : TEMPORARY Record 7009885;
+      lwDialog@1103355009 : Dialog;
+      lwTot@1103355007 : Integer;
+      lwCont@1103355008 : Integer;
+      lrConvHot@1103355010 : Record 7009885;
+      lrHoteles@1103355011 : Record 7009724;
+      lrHotNuevo@1103355012 : Record 7009724;
+      lrHotAnt@1103355013 : Record 7009724;
+      lwFin@1103355014 : Boolean;
+      lwCambioClave@1103355015 : Boolean;
+      lwModificado@1103355019 : Boolean;
+      lwInicioDT@1103355020 : DateTime;
+      lwDuration@1103355022 : Duration;
+      lrResHot@1103355006 : Record 7009743;
+      lwIndex@1103355021 : Integer;
+    BEGIN
+      // ConvertirUna.
+
+      lwInicioDT := CURRENTDATETIME;
+
+      IF NOT ComprobarConversionUna(pwIdConversion) THEN BEGIN
+        MESSAGE('Existen conflictos pendientes de solucionar para la conversion %1', pwIdConversion);
+        EXIT;
+      END;
+
+      // ************ primero cambiamos los c¢digos en la Tabla hotel.
+
+      CargarConversion(pwIdConversion, lrConvs);
+
+      lwDialog.OPEN('#1############################################');
+
+      lwDialog.UPDATE(1, 'Modificando Tabla Hotel');
+
+      IF lrHoteles.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          lrConvs.RESET;
+          //lrConvs.SETRANGE (Empresa       , lrEmps.Name);
+          lrConvs.SETRANGE ("Codigo hotel", lrHoteles.Hotel);
+          lwCambioClave := lrConvs.FINDFIRST;
+          lwCambioClave := lwCambioClave AND (lrConvs."Codigo hotel" <> lrConvs."Codigo hotel Nuevo");
+
+          IF lwCambioClave THEN BEGIN
+
+            lrHotNuevo       := lrHoteles;
+            lrHotNuevo.Hotel := lrConvs."Codigo hotel Nuevo";
+            lrHotNuevo.INSERT;
+
+            lrHotAnt := lrHoteles;
+
+          END;
+
+          lwFin := (lrHoteles.NEXT = 0);
+
+          IF lwCambioClave THEN BEGIN
+            lrHotAnt.DELETE;
+          END;
+
+        UNTIL lwFin;
+      END;
+
+      lwDialog.CLOSE;
+
+      // ************ Resto de tablas.
+
+      //Cargamos la relaci¢n de tablas y campos a cambiar
+      CargarCampos(lrTablas, lrCampos);
+
+      lwTot := lrTablas.COUNT;
+
+      lwDialog.OPEN('#1############################################,\ @2@@@@@@@@@@@@@@@@@@@@@@@');
+
+      IF lrTablas.FINDSET THEN BEGIN
+        REPEAT
+
+          lrRecRef.OPEN     (lrTablas.Number, FALSE);
+          lrRecRefNuevo.OPEN(lrTablas.Number, FALSE);
+          lrRecRefAnt.OPEN  (lrTablas.Number, FALSE);
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, 'Modificando Tabla' + lrRecRef.NAME);
+          lwDialog.UPDATE(2, ROUND(lwCont / lwTot * 10000, 1));
+          IF lrRecRef.FINDSET(TRUE) THEN BEGIN
+            REPEAT
+
+              lwCambioClave := FALSE;
+              lwModificado  := FALSE;
+
+              lrCampos.RESET;
+              lrCampos.SETRANGE (TableNo, lrTablas.Number);
+              IF lrCampos.FINDSET THEN BEGIN
+
+                TransfiereCampos(lrRecRef, lrRecRefAnt);
+                TransfiereCampos(lrRecRef, lrRecRefNuevo);
+
+                REPEAT
+
+                  lwCambioClave := lwCambioClave OR lrCampos.Enabled;
+
+                  lrFieldRef := lrRecRefNuevo.FIELD(lrCampos."No.");
+
+                  lrConvs.RESET;
+                  lrConvs.SETRANGE ("Codigo hotel", FORMAT(lrFieldRef));
+                  IF lrConvs.FINDFIRST THEN BEGIN
+                    IF lrConvs."Codigo hotel" <> lrConvs."Codigo hotel Nuevo" THEN BEGIN
+                      lwModificado := TRUE;
+                      lrFieldRef.VALUE := lrConvs."Codigo hotel Nuevo";
+                    END;
+                  END;
+
+                UNTIL lrCampos.NEXT = 0;
+
+              END;
+
+              lwFin := (lrRecRef.NEXT = 0);
+
+              IF NOT lwCambioClave THEN BEGIN
+                IF lwModificado THEN
+                  lrRecRefNuevo.MODIFY;
+              END
+              ELSE BEGIN
+                IF lwModificado THEN BEGIN
+                  lrRecRefAnt.DELETE;
+                  lrRecRefNuevo.INSERT;
+                END;
+              END;
+
+            UNTIL lwFin;
+          END;
+
+          lrRecRef.CLOSE;
+          lrRecRefAnt.CLOSE;
+          lrRecRefNuevo.CLOSE;
+
+        UNTIL lrTablas.NEXT = 0;
+
+      END;
+
+      lwDialog.CLOSE;
+
+      lrConvHot.RESET;
+      lrConvHot.SETRANGE("Id Conversion", pwIdConversion);
+      lrConvHot.MODIFYALL(Convertido, TRUE);
+
+      lwDuration := CURRENTDATETIME - lwInicioDT;
+      MESSAGE('Proceso finalizado(' + FORMAT(lwDuration) + ').');
+    END;
+
+    PROCEDURE CancelarConversion@1103355006();
+    VAR
+      lrConvHot@1103355000 : Record 7009885;
+    BEGIN
+      // CancelarConversion.
+
+      IF lrConvHot.FINDLAST THEN BEGIN
+        IF NOT lrConvHot.Convertido AND NOT lrConvHot.Cancelado THEN BEGIN
+          lrConvHot.SETRANGE("Id Conversion", lrConvHot."Id Conversion");
+          lrConvHot.MODIFYALL(Cancelado, TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE InvertirUna@1103355008(pwIdConversion@1103355000 : Integer);
+    VAR
+      lrCampos@1103355001 : TEMPORARY Record 2000000041;
+      lrTablas@1103355002 : TEMPORARY Record 2000000026;
+      lrRecRef@1103355003 : RecordRef;
+      lrRecRefNuevo@1103355016 : RecordRef;
+      lrRecRefAnt@1103355017 : RecordRef;
+      lrFieldRef@1103355004 : FieldRef;
+      lrFieldRefNuevo@1103355018 : FieldRef;
+      lrConvs@1103355005 : TEMPORARY Record 7009885;
+      lwDialog@1103355009 : Dialog;
+      lwTot@1103355007 : Integer;
+      lwCont@1103355008 : Integer;
+      lrConvHot@1103355010 : Record 7009885;
+      lrHoteles@1103355011 : Record 7009724;
+      lrHotNuevo@1103355012 : Record 7009724;
+      lrHotAnt@1103355013 : Record 7009724;
+      lwFin@1103355014 : Boolean;
+      lwCambioClave@1103355015 : Boolean;
+      lwModificado@1103355019 : Boolean;
+      lwInicioDT@1103355020 : DateTime;
+      lwDuration@1103355022 : Duration;
+    BEGIN
+      // InvertirUna.
+
+      lwInicioDT := CURRENTDATETIME;
+
+      // ************ primero cambiamos los c¢digos en la Tabla hotel.
+
+      CargarConversion(pwIdConversion, lrConvs);
+
+      lrConvs.SETCURRENTKEY(Convertido, Cancelado);
+      lrConvs.SETRANGE (Convertido, FALSE);
+      IF NOT lrConvs.ISEMPTY THEN
+        ERROR('La conversi¢n ' + FORMAT(pwIdConversion) + ' no ha sido convertida.');
+
+      lwDialog.OPEN('#1############################################');
+
+      lwDialog.UPDATE(1, 'Modificando Tabla Hotel');
+
+      IF lrHoteles.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+
+          lrConvs.RESET;
+          lrConvs.SETCURRENTKEY("Codigo hotel Nuevo");
+          lrConvs.SETRANGE ("Codigo hotel Nuevo", lrHoteles.Hotel);
+          lwCambioClave := lrConvs.FINDFIRST;
+          lwCambioClave := lwCambioClave AND (lrConvs."Codigo hotel" <> lrConvs."Codigo hotel Nuevo");
+
+          IF lwCambioClave THEN BEGIN
+
+            lrHotNuevo       := lrHoteles;
+            lrHotNuevo.Hotel := lrConvs."Codigo hotel";
+            lrHotNuevo.INSERT;
+
+            lrHotAnt := lrHoteles;
+
+          END;
+
+          lwFin := (lrHoteles.NEXT = 0);
+
+          IF lwCambioClave THEN BEGIN
+            lrHotAnt.DELETE;
+          END;
+
+        UNTIL lwFin;
+      END;
+
+      lwDialog.CLOSE;
+
+      // ************ Resto de tablas.
+
+      //Cargamos la relaci¢n de tablas y campos a cambiar
+      CargarCampos(lrTablas, lrCampos);
+
+      lwTot := lrTablas.COUNT;
+
+      lwDialog.OPEN('#1############################################,\ @2@@@@@@@@@@@@@@@@@@@@@@@');
+
+      IF lrTablas.FINDSET THEN BEGIN
+        REPEAT
+
+          lrRecRef.OPEN     (lrTablas.Number, FALSE);
+          lrRecRefNuevo.OPEN(lrTablas.Number, FALSE);
+          lrRecRefAnt.OPEN  (lrTablas.Number, FALSE);
+
+          lwCont += 1;
+          lwDialog.UPDATE(1, 'Modificando Tabla' + lrRecRef.NAME);
+          lwDialog.UPDATE(2, ROUND(lwCont / lwTot * 10000, 1));
+          IF lrRecRef.FINDSET(TRUE) THEN BEGIN
+            REPEAT
+
+              lwCambioClave := FALSE;
+              lwModificado  := FALSE;
+
+              lrCampos.RESET;
+              lrCampos.SETRANGE (TableNo, lrTablas.Number);
+              IF lrCampos.FINDSET THEN BEGIN
+
+                TransfiereCampos(lrRecRef, lrRecRefAnt);
+                TransfiereCampos(lrRecRef, lrRecRefNuevo);
+
+                REPEAT
+
+                  lwCambioClave := lwCambioClave OR lrCampos.Enabled;
+
+                  lrFieldRef := lrRecRefNuevo.FIELD(lrCampos."No.");
+
+                  lrConvs.RESET;
+                  lrConvs.SETCURRENTKEY("Codigo hotel Nuevo");
+                  lrConvs.SETRANGE ("Codigo hotel Nuevo", FORMAT(lrFieldRef));
+                  IF lrConvs.FINDFIRST THEN BEGIN
+                    IF lrConvs."Codigo hotel" <> lrConvs."Codigo hotel Nuevo" THEN BEGIN
+                      lwModificado := TRUE;
+                      lrFieldRef.VALUE := lrConvs."Codigo hotel";
+                    END;
+                  END;
+
+                UNTIL lrCampos.NEXT = 0;
+
+              END;
+
+              lwFin := (lrRecRef.NEXT = 0);
+
+              IF NOT lwCambioClave THEN BEGIN
+                IF lwModificado THEN
+                  lrRecRefNuevo.MODIFY;
+              END
+              ELSE BEGIN
+                IF lwModificado THEN BEGIN
+                  lrRecRefAnt.DELETE;
+                  lrRecRefNuevo.INSERT;
+                END;
+              END;
+
+            UNTIL lwFin;
+          END;
+
+          lrRecRef.CLOSE;
+          lrRecRefAnt.CLOSE;
+          lrRecRefNuevo.CLOSE;
+
+        UNTIL lrTablas.NEXT = 0;
+
+      END;
+
+      lwDialog.CLOSE;
+
+      lrConvHot.RESET;
+      lrConvHot.SETRANGE("Id Conversion", pwIdConversion);
+      lrConvHot.MODIFYALL(Convertido, FALSE);
+
+      lwDuration := CURRENTDATETIME - lwInicioDT;
+      MESSAGE('Proceso finalizado(' + FORMAT(lwDuration) + ').');
+    END;
+
+    BEGIN
+    END.
+  }
+}

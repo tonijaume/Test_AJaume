@@ -1,0 +1,833 @@
+OBJECT Codeunit 7010315 C lculo Ingresos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/09;
+    Time=12:35:31;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1100244017 : TextConst 'ESP=Creando periodos';
+      vGaraje@1100244000 : Code[10];
+      vFecIni@1100244001 : Date;
+      vFecFin@1100244002 : Date;
+      vConvenio@1100244003 : Code[10];
+      vConductor@1100244004 : Code[10];
+      vIdMaleta@1100244005 : Code[10];
+      vIdHE@1100244006 : Code[10];
+      vIdViaje@1100244007 : Code[10];
+      vIdDieta@1100244008 : Code[10];
+      aFechas@1100244009 : ARRAY [10,2] OF Date;
+      aConvenios@1100244010 : ARRAY [10] OF Code[10];
+      window@1100244011 : Dialog;
+      vNomAbr@1100244012 : Code[20];
+      vTodosLosGarajes@1100244013 : Code[10];
+      vAuxFltCond@1100244014 : Code[10];
+      vAuxFltAcuerdo@1100244015 : Code[10];
+      vContaContratos@1100244016 : Integer;
+      rPar@1103350000 : Record 7010311;
+
+    PROCEDURE CalculoIngresos@1(pFecIni@1100244000 : Date;pFecFin@1100244001 : Date;pConductor@1100244002 : Code[10];pConvenio@1100244003 : Code[10];pGaraje@1100244004 : Code[10];gDiasDescuento@1100244005 : Integer);
+    VAR
+      rConductor@1100244006 : Record 7010327;
+      ERR1@1100244007 : TextConst 'ESP=Falta el usuario %1';
+      rPar@1100244008 : Record 7010311;
+      rUsu@1100244009 : Record 7010420;
+      vFecha@1100244010 : Date;
+      aFechas@1100244011 : ARRAY [10,2] OF Date;
+      aConvenio@1100244012 : ARRAY [10] OF Code[10];
+      vvConvenio@1100244013 : Code[10];
+      vAumento@1100244014 : Decimal;
+      vProgreso@1100244015 : Decimal;
+      BAD_GARAJE@1100244016 : TextConst 'ESP=Garaje incorrecto';
+      rGar@1100244017 : Record 7010310;
+      vDia@1100244018 : Date;
+      vHora@1100244019 : Time;
+    BEGIN
+      //CalculoIngresos().
+
+      rPar.FINDFIRST;
+      vGaraje    :=pGaraje;
+      vFecIni    :=pFecIni;
+      vFecFin    :=pFecFin;
+      vConductor :=pConductor;
+      vConvenio  :=pConvenio;
+
+      IF vGaraje<>'' THEN
+        IF NOT rGar.GET(vGaraje) THEN
+          ERROR(BAD_GARAJE);
+
+
+      //Validaremos de no machacar ning£n dato que pudiera haber.
+      Validaciones;
+
+      rConductor.RESET;
+      rConductor.SETCURRENTKEY(Garaje, Conductor);
+      IF vGaraje <> '' THEN
+        rConductor.SETRANGE(Garaje, vGaraje);
+
+      IF pConductor<>'' THEN
+        rConductor.SETRANGE(Conductor,pConductor);
+
+      //Seleccionamos los conductores propios.
+      rConductor.SETRANGE(Externo,FALSE);
+
+      //Iniciar variables globales del calculo.
+      Inicios(vGaraje,pFecIni,pFecFin);
+
+      vProgreso := 0;
+      IF rConductor.COUNT>0 THEN
+        vAumento:= ROUND(100/rConductor.COUNT);
+
+      IF rConductor.FINDSET THEN  BEGIN
+        window.OPEN('#2#################### @1@@@@@@@@@@@@@');
+        REPEAT
+          Progreso(rConductor,vAumento,vProgreso);
+          IniciarConductor(rConductor.Conductor,rConductor.Garaje,pFecIni,pFecFin);
+          FOR vFecha := pFecIni TO pFecFin DO BEGIN
+            vvConvenio:=ObtenerConvenio(vFecha);
+            IF (vvConvenio<>'') AND ( (pConvenio='') OR (vvConvenio=pConvenio) ) THEN BEGIN
+              GrabarRegistros(rConductor,vvConvenio,vFecha);
+            END;
+          END;
+        UNTIL rConductor.NEXT=0;
+
+        //Una vez creados los registros del d¡a crearemos los periodos.
+        window.UPDATE(2,Text000);
+        window.UPDATE(1,2*100);
+        CrearPeriodos(pFecIni,pFecFin,vDia,vHora);
+        //RRT. por incidencia IN00939.
+        //AplicarMinimos(pFecIni,pFecFin,vDia,vHora);
+        window.UPDATE(2,Text000);
+        window.UPDATE(1,60*100);
+        //Deberemos rectificar las cantidades de los viajes.
+        Progreso(rConductor,vAumento,vProgreso);
+        window.CLOSE;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE Inicios@2(pGaraje@1100244000 : Code[10];pFecIni@1100244001 : Date;pFecFin@1100244002 : Date);
+    VAR
+      rConceptos@1100244003 : Record 7010329;
+      FALTAN_VARIABLES@1100244004 : TextConst 'ESP=Falta definir alg£n concepto variable en la ficha de parametros.';
+      rCond@1100244005 : Record 7010330;
+      rPar@1100244006 : Record 7010311;
+      rIngDia@1100244007 : Record 7010336;
+    BEGIN
+      //Inicios().
+      rPar.FINDFIRST;
+      vIdMaleta:= rPar."Codigo Maletas";
+      vIdHE    := rPar."Codigo Hora Extra";
+      vIdViaje := rPar."Codigo Viajes";
+      vIdDieta := rPar."Codigo Dieta";
+
+      IF (vIdMaleta='') OR (vIdHE='') OR (vIdViaje='') OR (vIdDieta='') THEN
+        ERROR(FALTAN_VARIABLES);
+    END;
+
+    PROCEDURE IniciarConductor@5(pConductor@1100244000 : Code[10];pGaraje@1100244001 : Code[10];pFecIni@1100244002 : Date;pFecFin@1100244003 : Date);
+    VAR
+      rHist@1100244004 : Record 7010331;
+      rCond@1100244005 : Record 7010330;
+      rErr@1100244006 : Record 7010344;
+    BEGIN
+      //Iniciar Conductor.
+      //Borramos los registros de error que pudiera tener asociado.
+      rErr.RESET;
+      rErr.SETCURRENTKEY("Cod Conductor",Fecha);
+      rErr.SETRANGE("Cod Conductor",pConductor);
+      rErr.SETRANGE(Fecha,pFecIni,pFecFin);
+      rErr.DELETEALL;
+
+      //Obtenemos los convenios a los que est  vinculado.
+      CLEAR(aFechas);
+      CLEAR(aConvenios);
+
+      rHist.RESET;
+      rHist.SETCURRENTKEY(Conductor,"Fecha Alta");
+      rHist.SETRANGE(Conductor,pConductor);
+      rHist.SETRANGE(Confirmado,TRUE);
+      rHist.SETRANGE("Fecha Alta", 0D,pFecFin);
+      rHist.SETFILTER("Fecha Baja", '%1|>=%2', 0D, pFecIni);
+
+      vContaContratos:=0;
+
+      IF rHist.FINDSET THEN REPEAT
+        vContaContratos := vContaContratos + 1;
+        aFechas[vContaContratos,1]:=rHist."Fecha Alta";
+        IF rHist."Fecha Baja" <> 0D THEN
+          aFechas[vContaContratos,2]:=rHist."Fecha Baja"
+        ELSE
+          aFechas[vContaContratos,2]:=31129999D;
+        aConvenios[vContaContratos]:= rHist."Tipo Acuerdo";
+      UNTIL rHist.NEXT=0;
+    END;
+
+    PROCEDURE ObtenerConvenio@3(pFecha@1100244000 : Date) : Code[10];
+    VAR
+      i@1100244001 : Integer;
+      Result@1100244002 : Code[10];
+    BEGIN
+      //ObtenerConvenio(pFecha)
+      FOR i:=1 TO vContaContratos DO BEGIN
+        IF (pFecha>=aFechas[i,1]) AND (pFecha <= aFechas[i,2]) THEN BEGIN
+          Result := aConvenios[i];
+          EXIT(Result);
+        END;
+      END;
+      EXIT('');
+    END;
+
+    PROCEDURE GrabarRegistros@12(rConductor@1100244000 : Record 7010327;pConvenio@1100244001 : Code[10];pFecha@1100244002 : Date);
+    VAR
+      rRA@1100244003 : Record 7010332;
+      rRxC@1100244004 : Record 7035336;
+      vPrecio@1100244005 : Decimal;
+      vDivisa@1100244006 : Code[10];
+      vPrecioDL@1100244007 : Decimal;
+      vNumCond@1100244008 : Code[10];
+    BEGIN
+      // GrabarRegistros()
+      rPar.FINDFIRST;
+      IF NOT rRA.GET(pFecha,rConductor.Conductor) THEN
+        EXIT;
+
+      //1.- Buscamos las maletas.
+      rRA.CALCFIELDS(Maletas);
+      IF rRA.Maletas<>0 THEN BEGIN
+        rRxC.RESET;
+        rRxC.SETCURRENTKEY(Conductor,Fecha,"Indicador Maletas");
+        rRxC.SETRANGE(Conductor,rConductor.Conductor);
+        rRxC.SETRANGE(Fecha,pFecha);
+        rRxC.SETRANGE("Indicador Maletas",TRUE);
+        IF rRxC.FINDSET THEN REPEAT
+          TestConcepto(vIdMaleta,pFecha,rRA,rConductor,rRxC,vPrecio,vDivisa,vPrecioDL,vNumCond);
+          IF (vPrecio <> 0) AND (rRxC.Cantidad <> 0) THEN
+            GrabarRegistro(vIdMaleta,rConductor,rRA,pFecha,rRxC.Cantidad,
+                           vPrecio,vPrecioDL,vDivisa,vNumCond,rRxC);
+        UNTIL rRxC.NEXT=0;
+      END;
+
+      //2.- Buscamos los viajes.
+      rRA.CALCFIELDS("N§ Viajes");
+      IF rRA."N§ Viajes"<>0 THEN BEGIN
+        rRxC.RESET;
+        rRxC.SETCURRENTKEY(Conductor,Fecha,"Indicador Maletas");
+        rRxC.SETRANGE(Conductor,rConductor.Conductor);
+        rRxC.SETRANGE(Fecha,pFecha);
+        rRxC.SETRANGE("Indicador Viajes",TRUE);
+        IF rRxC.FINDSET THEN REPEAT
+          TestConcepto(vIdViaje,pFecha,rRA,rConductor,rRxC,vPrecio,vDivisa,vPrecioDL,vNumCond);
+          IF (vPrecio <> 0) AND (rRxC.Cantidad <> 0) THEN
+            GrabarRegistro(vIdViaje,rConductor,rRA,pFecha,rRxC.Cantidad,
+                           vPrecio,vPrecioDL,vDivisa,vNumCond,rRxC);
+        UNTIL rRxC.NEXT=0;
+      END;
+
+      //3.- Buscamos las horas extras.
+      IF rRA."Horas Extra"<>0 THEN BEGIN
+        TestConcepto(vIdHE,pFecha,rRA,rConductor,rRxC,vPrecio,vDivisa,vPrecioDL,vNumCond);
+        IF vPrecio <> 0 THEN
+          GrabarRegistro(vIdHE,rConductor,rRA,pFecha,rRA."Horas Extra",
+                         vPrecio,vPrecioDL,vDivisa,vNumCond,rRxC);
+      END;
+
+      //4.- Buscamos las dietas.
+      IF rRA.Dietas<>0 THEN BEGIN
+        TestConcepto(vIdDieta,pFecha,rRA,rConductor,rRxC,vPrecio,vDivisa,vPrecioDL,vNumCond);
+        IF vPrecio <> 0 THEN
+          GrabarRegistro(vIdDieta,rConductor,rRA,pFecha,rRA.Dietas,
+                         vPrecio,vPrecioDL,vDivisa,vNumCond,rRxC);
+      END;
+    END;
+
+    PROCEDURE TestConcepto@17(pConcepto@1100244000 : Code[10];pFecha@1100244001 : Date;rRA@1100244002 : Record 7010332;rC@1100244003 : Record 7010327;rRxC@1100244004 : Record 7035336;VAR vPrecio@1100244005 : Decimal;VAR vDivisa@1100244006 : Code[10];VAR vPrecioDL@1100244007 : Decimal;VAR vNumCond@1100244008 : Code[10]);
+    VAR
+      rCV@1100244009 : Record 7010330;
+      vGrado@1100244010 : Decimal;
+      vValorDirecto@1100244011 : Boolean;
+      vOK@1100244012 : Boolean;
+      lwRegMan@1103350000 : Boolean;
+      i@1100244013 : Integer;
+      vFltZF@1100244014 : Code[10];
+      vFltTS@1100244015 : Code[10];
+      vFltCS@1100244016 : Code[10];
+      vFltTV@1100244017 : Code[10];
+      ERROR_REGISTRO_ACTIVIDAD@1100244018 : TextConst 'ESP=Faltan datos en el registro de actividad de %1 para el d¡a %2';
+    BEGIN
+      //TestConcepto(vIdMaleta,pConvenio,pFecha,rConductor,rRxC,vPrecio,vDivisa,vPrecioDL);
+      //
+      //...............
+      // JPT 01/10/04 Consideramos ahora tambien que las condciones variables puede contemplar varias zonas
+
+      //Definimos el grado de exactitud de una condici¢n at¡pica con respecto a un registro de
+      //actividad.
+      //vGrado = 1000 ->  No hemos localizado la condici¢n at¡pica.
+      //vGrado = 0    ->  Cuadra completamente para todos los filtros. (Con dos zonas)
+      //vGrado = 3    ->  A la condici¢n le falta la zona fisica y el codigo de servicio.
+      //vGrado = 2    ->  A la condici¢n le falta el codigo de servicio.
+      //vGrado = 1    ->  A la condici¢n le falta la zona fisica.
+      //vGrado = 0,5  ->  Se ha encontrado como zona idependiente (JPT)
+      //En el nivel de obligatoriedad introducida no tiene cabida m s posibilidades.
+      //Otra observaci¢n.
+      //Si encontramos una condici¢n at¡pica para el conductor (por tanto vGrado=0,1,2,3) nos damos
+      //por satisfechos y no buscamos en las condiciones genrales.
+      //..........
+
+      //Inicializamos los parametros pasados por variable.
+      vPrecio  := 0;
+      vPrecioDL:= 0;
+      vDivisa  := '';
+      vNumCond := '';
+
+      // JPT 21/06/05 Permitimos introducir Maletas y Viajes de forma totalmente manual
+      // Eso es, sin consideraci¢n de ning£n tipo Codigo Servicio, Rango Pax, Zona Fisica, etc. Para IBZ
+      lwRegMan := rRxC."Linea Manual" AND (rPar."Empresa Real" IN [rPar."Empresa Real"::IBZ, rPar."Empresa Real"::SJO]);
+
+      //Y las variables locales.
+      vGrado   := 1000;
+      IF (pConcepto=vIdMaleta) OR (pConcepto=vIdViaje) THEN BEGIN
+        vValorDirecto:= FALSE;
+        IF rRxC."Linea Manual" THEN BEGIN
+          vFltZF := rRxC."Zona f¡sica";
+          vFltTS := rRxC."Tipo Servicio";
+          vFltCS := rRxC."C¢digo Servicio";
+          vFltTV := rRxC."Tipo Vehiculo";
+        END
+        ELSE BEGIN
+          rRxC.CALCFIELDS("Tipo Servicio CALCULO","C¢digo Servicio CALCULO");
+          vFltZF := rRxC."Zona f¡sica";
+          vFltTS := rRxC."Tipo Servicio CALCULO";
+          vFltCS := rRxC."C¢digo Servicio CALCULO";
+          //RRT. Un parte puede tener sub-partes y diferentes vehiculos
+          vFltTV := rRxC."Tipo Vehiculo";
+        END;
+        IF NOT lwRegMan THEN // JPT 21/06/05
+          IF (vFltZF='') OR (vFltTS='') OR (vFltCS='') OR (vFltTV='') OR (rRxC."Pax Transportado" = 0) THEN
+            ERROR(ERROR_REGISTRO_ACTIVIDAD,rRA."Nombre Abreviado",rRA.Fecha);
+      END
+      ELSE
+        vValorDirecto:= TRUE;
+
+      //.........
+      //.........
+      //Revisamos en primer lugar si hay una condici¢n at¡pica ligada al conductor.
+      rCV.RESET;
+      rCV.SETCURRENTKEY("Zona Independiente",Confirmado,Garaje,"Concepto variable","Asociado a",Valor,"Fecha desde",
+                        "Fecha hasta");
+      rCV.SETRANGE(Confirmado         , TRUE);
+      rCV.SETRANGE(Garaje             , rRA.Garaje);
+      rCV.SETRANGE("Concepto variable", pConcepto);
+      rCV.SETRANGE("Asociado a"       , rCV."Asociado a"::Conductor);
+      rCV.SETRANGE(Valor              , rRA.Conductor);
+      rCV.SETRANGE("Fecha desde"      , 0D, pFecha);
+      rCV.SETFILTER("Fecha hasta"     , '%1|>=%2', 0D, pFecha);
+      IF rCV.FINDSET THEN REPEAT
+        vOK:=FALSE;
+        IF vValorDirecto THEN BEGIN
+          vGrado:= 0;
+          vOK   := TRUE
+        END
+        ELSE BEGIN
+          IF ((EntreRangos(rCV."Rango M¡nimo",rRxC."Pax Transportado",rCV."Rango M ximo")) AND
+             (rCV."Tipo Servicio" = vFltTS) AND (rCV."Tipo Vehiculo" = vFltTV)) OR lwRegMan THEN
+             // JPT 05/10/04 Ahora las zonas fisicas en las condiciones variables est n por grupos
+            //IF Automata(rCV."C¢digo Servicio",rCV."Zona fisica",vFltZF,vFltCS,vGrado) THEN
+            IF Automata2(rCV,rRxC,vFltCS,vGrado) THEN
+              vOK := TRUE;
+        END;
+
+        IF vOK THEN BEGIN
+          vNumCond := rCV."N§";
+          vPrecio  := rCV.Precio;
+          vDivisa  := rCV."Cod. Divisa";
+          vPrecioDL:= rCV."Precio (DL)";
+        END;
+      UNTIL (rCV.NEXT = 0) OR (vGrado = 0);
+
+      IF vGrado< 1000 THEN EXIT;
+
+      //Como no hemos encontrado ninguna condicion atipica ligada al conductor, miramos
+      //segun el tipo de acuerdo.
+      rCV.RESET;
+      rCV.SETCURRENTKEY("Zona Independiente",Confirmado,Garaje,"Concepto variable","Asociado a",Valor,"Fecha desde",
+                        "Fecha hasta");
+      rCV.SETRANGE(Confirmado         , TRUE);
+      rCV.SETRANGE(Garaje             , rRA.Garaje);
+      rCV.SETRANGE("Concepto variable", pConcepto);
+      rCV.SETRANGE("Asociado a"       , rCV."Asociado a"::"Tipo Acuerdo");
+      rCV.SETRANGE(Valor              , rRA."Tipo Acuerdo");
+      rCV.SETRANGE("Fecha desde"      , 0D, pFecha);
+      rCV.SETFILTER("Fecha hasta"     , '%1|>=%2', 0D, pFecha);
+
+      IF rCV.FINDSET THEN REPEAT
+        vOK:=FALSE;
+        IF vValorDirecto THEN BEGIN
+          vGrado:= 0;
+          vOK   := TRUE
+        END
+        ELSE BEGIN
+          IF ((EntreRangos(rCV."Rango M¡nimo",rRxC."Pax Transportado",rCV."Rango M ximo")) AND
+             (rCV."Tipo Servicio" = vFltTS) AND (rCV."Tipo Vehiculo" = vFltTV)) OR lwRegMan THEN
+             // JPT 05/10/04 Ahora las zonas fisicas en las condiciones variables est n por grupos
+            //IF Automata(rCV."C¢digo Servicio",rCV."Zona fisica",vFltZF,vFltCS,vGrado) THEN
+            IF Automata2(rCV,rRxC,vFltCS,vGrado) THEN
+              vOK:=TRUE;
+        END;
+
+        IF vOK THEN BEGIN
+          vNumCond := rCV."N§";
+          vPrecio  := rCV.Precio;
+          vDivisa  := rCV."Cod. Divisa";
+          vPrecioDL:= rCV."Precio (DL)";
+        END;
+      UNTIL (rCV.NEXT=0) OR (vGrado=0);
+
+      TestAnomalia(vNumCond,vPrecio,rRA,pConcepto,vValorDirecto,rRxC)
+    END;
+
+    PROCEDURE Automata@14(pCS@1100244000 : Code[10];pZF@1100244001 : Code[10];pFltZF@1100244002 : Code[10];pFltCS@1100244003 : Code[10];VAR vGrado@1100244004 : Integer) : Boolean;
+    VAR
+      vResult@1100244005 : Boolean;
+      vNewGrado@1100244006 : Integer;
+    BEGIN
+      //Automata(aCondConductorD[ContaCondicion,2],aCondConductorD[ContaCondicion,4],rRxC,vGrado);
+
+      //vGrado = 0    ->  Cuadra completamente para todos los filtros.
+      //vGrado = 3    ->  A la condici¢n le falta la zona fisica y el codigo de servicio.
+      //vGrado = 2    ->  A la condici¢n le falta el codigo de servicio.
+      //vGrado = 1    ->  A la condici¢n le falta la zona fisica.
+
+      vResult   := FALSE;
+      vNewGrado := 1000;
+
+      CASE pZF OF
+        pFltZF: BEGIN
+          CASE pCS OF
+            pFltCS: vNewGrado := 0;
+            ''    : vNewGrado := 2;
+          END;
+        END;
+
+        ''                :  BEGIN
+          CASE pCS OF
+            pFltCS: vNewGrado := 1;
+            ''    : vNewGrado := 3;
+          END;
+        END;
+      END;
+
+      //Devolvemos TRUE si hemos encontrado un condici¢n m s adecuada.
+      IF vNewGrado < vGrado THEN BEGIN
+        vGrado  := vNewGrado;
+        vResult := TRUE;
+      END;
+
+      EXIT(vResult);
+    END;
+
+    PROCEDURE Automata2@1103350003(rCV@1103350000 : Record 7010330;rRxC@1103350006 : Record 7035336;pFltCS@1100244003 : Code[10];VAR vGrado@1100244004 : Decimal) : Boolean;
+    VAR
+      lrZonCond@1103350003 : Record 7010396;
+      lrZonPart@1103350004 : Record 7010366;
+      vResult@1100244005 : Boolean;
+      vNewGrado@1100244006 : Decimal;
+      pZF@1103350001 : Code[10];
+      lwOK@1103350005 : ARRAY [3] OF Boolean;
+    BEGIN
+      // Automata2
+      // pFltCS Codigo servicio del parte
+      // JPT 01/10/04 A partir de ahora consideramos que los conceptos variables pueden tener varios  grupos de zonas
+      // entonces se considerara que la condici¢n se ajusta cuando hay una zona de cada grupo en el parte
+
+
+      //vGrado = 0    ->  Cuadra completamente para todos los filtros. Con dos grupos de zonas
+      //vGrado = 3    ->  A la condici¢n le falta la zona fisica y el codigo de servicio.
+      //vGrado = 2    ->  A la condici¢n le falta el codigo de servicio.
+      //vGrado = 1    ->  A la condici¢n le falta la zona fisica.
+      //vGrado = 0,5  ->  Cuadra completamente para todos los filtros. Con un solo grupo de Zona Independiente
+      vResult   := FALSE;
+      vNewGrado := 1000;
+
+
+      IF rCV."Zona Independiente" THEN BEGIN // Tiene un solo grupo de zonas
+        IF lrZonCond.GET(rCV."N§", rRxC."Zona f¡sica") THEN BEGIN
+          CASE rCV."C¢digo Servicio" OF
+            pFltCS: vNewGrado := 0.5;
+            ''    : vNewGrado := 2;
+          END;
+        END
+        ELSE BEGIN
+          lrZonCond.RESET;
+          lrZonCond.SETRANGE(Condicion,rCV."N§"); // Puede ser que no tengan ninguna zona fisica (que sea generica)
+          IF NOT lrZonCond.FINDFIRST THEN BEGIN
+            CASE rCV."C¢digo Servicio" OF
+              pFltCS: vNewGrado := 1;
+              ''    : vNewGrado := 3;
+            END;
+          END;
+        END;
+      END
+      ELSE BEGIN // Si es una condici¢n variable con dos grupos de zonas
+        CLEAR(lrZonPart);
+        CLEAR(lrZonCond);
+        CLEAR(lwOK);
+        lrZonPart.SETRANGE("N§ Parte", rRxC."N§ Parte");
+        IF lrZonPart.FINDSET THEN BEGIN
+          REPEAT
+            IF lrZonCond.GET(rCV."N§",lrZonPart."Zona fisica") THEN BEGIN
+              IF lrZonCond.Grupo IN [1,2]  THEN
+                lwOK[lrZonCond.Grupo] := TRUE;
+            END;
+            lwOK[3]:=lwOK[1] AND lwOK[2]; // Ser  Ok solo cuando el parte contenga una zona en cada grupo
+          UNTIL (lrZonPart.NEXT=0) OR lwOK[3];
+        END;
+        IF lwOK[3] THEN BEGIN
+          CASE rCV."C¢digo Servicio" OF
+            pFltCS: vNewGrado := 0;
+            ''    : vNewGrado := 2;
+          END;
+        END
+        ELSE BEGIN
+          lrZonCond.RESET;
+          lrZonCond.SETRANGE(Condicion,rCV."N§"); // Puede ser que no tengan ninguna zona fisica (que sea generica)
+          IF NOT lrZonCond.FINDFIRST THEN BEGIN
+            CASE rCV."C¢digo Servicio" OF
+              pFltCS: vNewGrado := 1;
+              ''    : vNewGrado := 3;
+            END;
+          END;
+        END;
+      END;
+
+      //Devolvemos TRUE si hemos encontrado un condici¢n m s adecuada.
+      IF vNewGrado < vGrado THEN BEGIN
+        vGrado  := vNewGrado;
+        vResult := TRUE;
+      END;
+
+      EXIT(vResult);
+    END;
+
+    PROCEDURE TestAnomalia@10(vNumCond@1100244000 : Code[10];vPrecio@1100244001 : Decimal;rRA@1100244002 : Record 7010332;pConcepto@1100244003 : Code[10];pValorDirecto@1100244004 : Boolean;rRxP@1100244005 : Record 7035336);
+    VAR
+      SIN_CONDICION@1100244006 : TextConst 'ESP=No se ha podido asociar con una condici¢n variable';
+      SIN_PRECIO@1100244007 : TextConst 'ESP=No se ha encontrado precio para esta condici¢n';
+      rParams@1100244008 : Record 7010311;
+      rErr@1100244009 : Record 7010344;
+      vMensaje@1100244010 : Text[50];
+    BEGIN
+      //TestAnomalia(vNumCond,vPrecio,rRA,pConcepto)
+      rParams.RESET;
+      rParams.FINDFIRST;
+      IF NOT rParams."Avisar si falta ingreso" THEN
+        EXIT;
+
+      vMensaje := '';
+      IF vNumCond = '' THEN
+        vMensaje := SIN_CONDICION
+      ELSE
+        IF vPrecio = 0 THEN
+          vMensaje := SIN_PRECIO;
+
+      IF vMensaje <> '' THEN BEGIN
+        rErr.INIT;
+        rErr."Cod Conductor" := rRA.Conductor;
+        rErr.Conductor       := rRA."Nombre Abreviado";
+        rErr.Fecha           := rRA.Fecha;
+        rErr.Concepto        := pConcepto;
+        IF NOT pValorDirecto THEN
+          rErr."N§ Parte" := rRxP."N§ Parte";
+        rErr."N§ Condicion"  := vNumCond;
+        rErr.Descripci¢n     := vMensaje;
+        rErr.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE GrabarRegistro@20(pConcepto@1100244000 : Code[10];rC@1100244001 : Record 7010327;rRA@1100244002 : Record 7010332;pFecha@1100244003 : Date;pCantidad@1100244004 : Decimal;pPrecio@1100244005 : Decimal;pPrecioDL@1100244006 : Decimal;pDivisa@1100244007 : Code[10];pNumCond@1100244008 : Code[10];VAR rRxC@1100244009 : Record 7035336);
+    VAR
+      rIngConductor@1100244010 : Record 7010336;
+      FALTA_CONDICION_VARIABLE@1100244011 : TextConst 'ESP=No se ha encontrado la condici¢n variable %1';
+      rCV@1100244012 : Record 7010330;
+      vAuxCantidad@1100244013 : Decimal;
+      rPar@1100244014 : Record 7010311;
+    BEGIN
+      // GrabarRegistro(vIdMaleta,rConductor,rRA,pFecha,pCantidad,pPrecio,pPrecioDL,pDivisa,pNumCond);
+
+      rCV.RESET;
+      IF NOT rCV.GET(pNumCond) THEN
+        ERROR(FALTA_CONDICION_VARIABLE,pNumCond);
+
+      //BRM 02/06/04 Modificaci¢n precisi¢n decimales
+      rPar.FINDFIRST;
+
+      rIngConductor.RESET;
+      rIngConductor.SETRANGE(Conductor,rC.Conductor);
+      rIngConductor.SETRANGE(Fecha,pFecha);
+      rIngConductor.SETRANGE("N§ Condicion",pNumCond);
+
+      IF NOT rIngConductor.FINDFIRST THEN BEGIN
+
+        rIngConductor.INIT;
+        rIngConductor.Conductor           := rC.Conductor;
+        rIngConductor.Fecha               := pFecha;
+        rIngConductor."N§ Condicion"      := pNumCond;
+
+        //Datos redundantes.
+        rIngConductor."Nombre Abreviado"  := rC."Nombre Abreviado";
+        rIngConductor."Concepto Variable"  := pConcepto;
+        rIngConductor.Garaje              := rRA.Garaje;
+        rIngConductor.Precio              := pPrecio;
+        rIngConductor."Tipo Acuerdo"      := rRA."Tipo Acuerdo";
+        rIngConductor."C¢d. Divisa"       := pDivisa;
+        rIngConductor."Tipo Servicio"     := rCV."Tipo Servicio";
+        rIngConductor."C¢digo Servicio"   := rCV."C¢digo Servicio";
+        rIngConductor."Zona Fisica"       := rCV."Zona fisica";
+        rIngConductor."Tipo Vehiculo"     := rCV."Tipo Vehiculo";
+        rIngConductor.Periodificar        := TRUE;
+        rIngConductor.INSERT(TRUE);
+
+      END;
+
+      //Y los acumulativos.
+      //RRT por incidencia IN00939.
+      IF pCantidad >= rCV."Cantidad Minima" THEN
+        vAuxCantidad := pCantidad
+      ELSE
+        vAuxCantidad := rCV."Cantidad Minima";
+
+      rIngConductor.Cantidad            += vAuxCantidad;
+      rIngConductor.Importe             += pPrecio * vAuxCantidad;
+
+      //BRM 02/06/04 Modificacion precision decimales
+      rIngConductor.VALIDATE(Importe);
+      //rIngConductor."Importe DL"        += pPrecioDL * vAuxCantidad;
+
+      rIngConductor.MODIFY(TRUE);
+
+      //RRT.- Poner la cantidad m¡nima sobre el registro de actividad x Parte.
+      IF (rRxC.Conductor <> '') AND (rRxC.Fecha <> 0D) THEN BEGIN
+        rRxC."Cantidad (C. Ingresos)" := vAuxCantidad;
+        rRxC.MODIFY;
+      END;
+    END;
+
+    PROCEDURE Progreso@4(rConductor@1100244000 : Record 7010327;vAumento@1100244001 : Decimal;VAR vProgreso@1100244002 : Decimal);
+    BEGIN
+      //(rConductor,vAumento,vProgreso);
+      vProgreso := vProgreso + vAumento;
+      window.UPDATE(2,rConductor."Nombre Abreviado");
+      IF vProgreso > 100 THEN
+        vProgreso:=100;
+      window.UPDATE(1,ROUND(vProgreso*100,1));
+    END;
+
+    PROCEDURE CrearPeriodos@6(pFecIni@1100244000 : Date;pFecFin@1100244001 : Date;VAR vDia@1100244002 : Date;VAR vHora@1100244003 : Time);
+    VAR
+      rCV@1100244004 : Record 7010330;
+      rIngDia@1100244005 : Record 7010336;
+      rIngDia2@1100244006 : Record 7010336;
+      rIng@1100244007 : Record 7010339;
+      vConcepto@1100244008 : Code[10];
+      vconductor@1100244009 : Code[10];
+      vCondicion@1100244010 : Code[10];
+    BEGIN
+      //CrearPeriodos
+      rIngDia.RESET;
+      //rIngDia.SETCURRENTKEY(Fecha,Garaje,"Tipo Acuerdo",Conductor);
+      rIngDia.SETCURRENTKEY(Conductor,"N§ Condicion",Fecha);
+      rIngDia.SETRANGE(Fecha,pFecIni,pFecFin);
+      rIngDia.SETRANGE(Periodificar,TRUE);
+
+      //Estas variables se usan para el c lculo de minimos.
+      //Se recomienda no tocar.
+      vHora := TIME;
+      vDia  := TODAY;
+
+      IF rIngDia.FINDSET THEN BEGIN
+
+        vconductor   := '';
+        vCondicion   := '';
+        REPEAT
+
+          IF (vconductor = rIngDia.Conductor) AND (vCondicion=rIngDia."N§ Condicion") THEN BEGIN
+
+            rIng.Cantidad           +=rIngDia.Cantidad;
+            rIng."Cantidad Inicial" +=rIngDia.Cantidad;
+            rIng.Importe            +=rIngDia.Importe;
+            rIng."Importe DL"       +=rIngDia."Importe DL";
+            rIng.MODIFY;
+          END
+          ELSE BEGIN
+            rIng.INIT;
+            rIng.Garaje              := rIngDia.Garaje;
+            rIng.Conductor           := rIngDia.Conductor;
+            rIng."Nombre Abreviado"  := rIngDia."Nombre Abreviado";
+            rIng."Concepto Variable" := rIngDia."Concepto Variable";
+            rIng."Tipo Acuerdo"      := rIngDia."Tipo Acuerdo";
+            rIng.Precio              := rIngDia.Precio;
+            rIng."Precio Inicial"    := rIngDia.Precio;
+            rIng."Fecha Inicio"      := pFecIni;
+            rIng."Fecha Fin"         := pFecFin;
+            rIng.Cantidad            := rIngDia.Cantidad;
+            rIng."Cantidad Inicial"  := rIngDia.Cantidad;
+            rIng.Importe             := rIngDia.Importe;
+            rIng."C¢d. Divisa"       := rIngDia."C¢d. Divisa";
+            rIng."Importe DL"        := rIngDia."Importe DL";
+            rIng."Tipo Servicio"     := rIngDia."Tipo Servicio";
+            rIng."C¢digo Servicio"   := rIngDia."C¢digo Servicio";
+            rIng."Tipo Vehiculo"     := rIngDia."Tipo Vehiculo";
+            rIng."Zona Fisica"       := rIngDia."Zona Fisica";
+            rIng."N§ Condicion"      := rIngDia."N§ Condicion";
+
+            //RRT. 05/03/02
+            //Registramos cual es la cantidad m¡nima.
+            //rCV.RESET;
+            //IF rCV.GET(rIngDia."N§ Condicion") THEN
+            //  rIng."Cantidad m¡nima" := rCV."Cantidad Minima";
+            //END.RRT
+
+            rIng.Fecha               := vDia;
+            rIng.Hora                := vHora;
+            rIng.Usuario             := USERID;
+            rIng.INSERT(TRUE);
+          END;
+
+          vconductor  := rIngDia.Conductor;
+          vCondicion  := rIngDia."N§ Condicion";
+
+          rIngDia2 := rIngDia;
+          rIngDia2.Periodificar := FALSE;
+          rIngDia2.MODIFY;
+
+        UNTIL rIngDia.NEXT=0;
+
+      END;
+    END;
+
+    PROCEDURE AplicarMinimos@7(pFecIni@1100244000 : Date;pFecFin@1100244001 : Date;pDia@1100244002 : Date;pHora@1100244003 : Time);
+    VAR
+      rIng@1100244004 : Record 7010339;
+    BEGIN
+      //AplicarMinimos(pFecIni,pFecFin);
+      //Esta funci¢n ya no se usa.
+      rIng.RESET;
+      rIng.SETCURRENTKEY(Usuario,Fecha,Hora);
+      rIng.SETRANGE(Usuario,USERID);
+      rIng.SETRANGE(Fecha,pDia);
+      rIng.SETRANGE(Hora,pHora);
+      IF rIng.FINDSET(TRUE) THEN REPEAT
+        IF (rIng."Cantidad m¡nima" > 0) AND (rIng.Cantidad < rIng."Cantidad m¡nima")  THEN BEGIN
+          rIng.VALIDATE(Cantidad,rIng."Cantidad m¡nima");
+          rIng.MODIFY(TRUE);
+        END;
+      UNTIL rIng.NEXT=0;
+    END;
+
+    PROCEDURE Validaciones@24();
+    VAR
+      rIng@1100244000 : Record 7010339;
+      PRIMERO_BORRAR@1100244001 : TextConst 'ESP=Se ha encontrado un registro de ingresos correspondientes al Filtro para %1. Primero deben borrarse los registros';
+    BEGIN
+      //Validaciones.
+      rIng.RESET;
+      rIng.SETCURRENTKEY(Garaje,Conductor,"Tipo Acuerdo","Concepto Variable","Fecha Inicio","Fecha Fin");
+
+      IF vGaraje<>'' THEN
+        rIng.SETRANGE(Garaje,vGaraje);
+
+      IF vConductor<>'' THEN
+        rIng.SETRANGE(Conductor,vConductor);
+
+      IF vConvenio<>'' THEN
+        rIng.SETRANGE("Tipo Acuerdo",vConvenio);
+
+      rIng.SETRANGE("Fecha Inicio",0D,vFecFin);
+      rIng.SETFILTER("Fecha Fin",'>=%1',vFecIni);
+
+      IF rIng.FINDFIRST THEN
+        ERROR(PRIMERO_BORRAR,rIng."Nombre Abreviado");
+    END;
+
+    PROCEDURE EntreRangos@11(pRangoMin@1100244000 : Decimal;pValor@1100244001 : Decimal;pRangoMax@1100244002 : Decimal) : Boolean;
+    BEGIN
+      //EntreRango(pRangoMin,pValor,pRangoMax);
+      IF (pValor>=pRangoMin) AND (pValor<=pRangoMax) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE InsertaRegActParteManual@1103350000(VAR prReg@1103350000 : Record 7010332;pwValor@1103350001 : Decimal;pwTipo@1103350004 : 'Maletas,Viajes');
+    VAR
+      lwNumMal@1103350002 : Decimal;
+      lrRAP@1103350003 : Record 7035336;
+      lwConcepto@1103350005 : Code[10];
+    BEGIN
+      // InsertaRegActParteManual
+      // Esta funci¢ se cre¢ porque a IBZ le interesaba indicar Maletas y Viajes de manera independiente a los partes
+
+      rPar.FINDFIRST;
+      CASE pwTipo OF
+        pwTipo::Maletas: BEGIN
+          prReg.CALCFIELDS(Maletas);
+          lwNumMal   := pwValor - prReg.Maletas;
+          lwConcepto := rPar."Codigo Maletas";
+        END;
+        pwTipo::Viajes: BEGIN
+          prReg.CALCFIELDS("N§ Viajes");
+          lwNumMal   := pwValor - prReg."N§ Viajes";
+          lwConcepto := rPar."Codigo Viajes";
+        END;
+      END;
+
+      CLEAR(lrRAP);
+      lrRAP.SETRANGE(Conductor          , prReg.Conductor);
+      lrRAP.SETRANGE(Fecha              , prReg.Fecha);
+      lrRAP.SETRANGE("Indicador Maletas", pwTipo=pwTipo::Maletas);
+      lrRAP.SETRANGE("Indicador Viajes" , pwTipo=pwTipo::Viajes);
+      IF NOT lrRAP.FINDFIRST THEN BEGIN
+        lrRAP.Garaje                := prReg.Garaje;
+        lrRAP.VALIDATE(Conductor , prReg.Conductor);
+        lrRAP.Fecha                 := prReg.Fecha;
+        lrRAP."Indicador Maletas"   := pwTipo=pwTipo::Maletas;
+        lrRAP."Indicador Viajes"    := pwTipo=pwTipo::Viajes;
+        lrRAP.Concepto              := lwConcepto;
+        lrRAP."Linea Manual"        := TRUE;
+        lrRAP.INSERT(TRUE);
+      END;
+
+      lrRAP.VALIDATE(Cantidad, lrRAP.Cantidad + lwNumMal);
+      lrRAP.MODIFY;
+    END;
+
+    BEGIN
+    {
+      Se crear  registro de ingreso si se cumplen las siguientes 3 condiciones:
+      a) El conductor es propio (NO ES EXTERNO).
+      b) El conductor tiene asociada actividad en el periodo indicado.
+      c) El conductor tiene asociada una condici¢n variable que permita cuantificar el ingreso por
+         el concepto de la actividad.
+
+
+      //Para calcular los ingresos hay que haber dado de alta un contrato.
+
+      Revisar comentario rrt + sub-parte
+
+      <rrt.220205> Asteriscado el tratamiento de los viajes por ser motivo de error en Ibizatours.
+      Existe registro de viajes, pero como los conductores no cobran por las maletas, pues casca...
+      Corregido error si en un dia se cobran horas extras pero no maletas (por la existencia del registro de
+      "Registro de actividad x Parte".
+    }
+    END.
+  }
+}

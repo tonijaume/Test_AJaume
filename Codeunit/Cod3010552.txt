@@ -1,0 +1,388 @@
+OBJECT Codeunit 3010552 Post Cost Account Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=CACEM6.00;
+  }
+  PROPERTIES
+  {
+    TableNo=3010553;
+    Permissions=TableData 3010554=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1150029 : TextConst 'ENU=Do you want to post the journal lines?;ESP=¨Confirma que desea registrar las l¡neas del diario?';
+      Text001@1150030 : TextConst 'ENU=%1 lines have been posted.;ESP=Se han registrado %1 l¡neas.';
+      Text002@1150031 : TextConst 'ENU=No lines found in journal %1.;ESP=No se encontraron l¡neas en el diario %1.';
+      Text003@1150032 : TextConst 'ENU=Post journal lines\;ESP=Registrar l¡neas diario\';
+      Text004@1150033 : TextConst 'ENU=Lines          #1######## \;ESP=L¡neas         #1######## \';
+      Text005@1150034 : TextConst 'ENU=Lines checked  #2######## \;ESP=L¡neas compr.  #2######## \';
+      Text006@1150035 : TextConst 'ENU=Lines posted   #3########;ESP=L¡neas reg.    #3########';
+      Text007@1150036 : TextConst 'ENU=The balance of the entries on %1 is %2, but should be 0.;ESP=El saldo de los movimientos en %1 es %2, pero deber¡a ser 0.';
+      Text008@1150037 : TextConst 'ENU=There are no valid lines in journal "%1".;ESP=No hay l¡neas v lidas en el diario "%1".';
+      Text011@1150040 : TextConst 'ENU=Cost type or balance cost type must be defined.\;ESP=Debe definirse tipo coste o tipo coste saldo.\';
+      Text012@1150041 : TextConst 'ENU=Line %1, document %2, amount %3.;ESP=L¡nea %1, documento %2, importe %3.';
+      Text013@1150042 : TextConst 'ENU=Cost center or cost object must be defined.\;ESP=Debe definirse centro coste u objeto coste.\';
+      Text014@1150043 : TextConst 'ENU=You may not definie both cost center and cost object.\;ESP=No se puede definir centro coste y objeto coste.\';
+      Text015@1150044 : TextConst 'ENU=Balance cost center or balance cost object must be defined.\;ESP=Debe definirse centro coste contrap. u objeto coste contrap.\';
+      Text016@1150045 : TextConst 'ENU=You must not define both balance cost center and balance cost object.\;ESP=No se debe definir centro coste saldo y objeto coste saldo.\';
+      Text017@1150046 : TextConst 'ENU=The balance of the entries on %1 is %2, but should be 0.;ESP=El saldo de los movimientos en %1 es %2, pero deber¡a ser 0.';
+      Text018@1150047 : TextConst 'ENU=is not within the permitted range of posting dates.;ESP=no se encuentra en el rango permitido de fechas de registro.';
+      CaSetup@1150048 : Record 3010558;
+      CaEntry@1150001 : Record 3010554;
+      GlEntry@1150002 : Record 17;
+      CostType@1150004 : Record 3010551;
+      CostJourName@1150005 : Record 3010552;
+      CostRegister@1150007 : Record 3010555;
+      CostBudgetRegister@1150059 : Record 3010573;
+      AllocSource@1150008 : Record 3010556;
+      BudEntries@1150028 : Record 3010571;
+      CheckGlJourLine@1150011 : Codeunit 11;
+      d@1150012 : Dialog;
+      LinesChecked@1150013 : Integer;
+      LinesPosted@1150014 : Integer;
+      TotalLines@1150015 : Integer;
+      RegisterNo@1150016 : Integer;
+      FirstEntryNo@1150017 : Integer;
+      LastEntryNo@1150018 : Integer;
+      PreLineDate@1150025 : Date;
+      TotalBalance@1150026 : Decimal;
+      PostBud@1150027 : Boolean;
+      TotalDebit@1150055 : Decimal;
+      TotalCredit@1150056 : Decimal;
+      TotalBudgetDebit@1150057 : Decimal;
+      TotalBudgetCredit@1150058 : Decimal;
+      FirstBudgetEntryNo@1150060 : Integer;
+      LastBudgetEntryNo@1150061 : Integer;
+      BudgetRegisterNo@11500 : Integer;
+
+    PROCEDURE PostJournalYN@6(VAR CostJourLine@1150000 : Record 3010553);
+    BEGIN
+      // Call from Journal
+      IF NOT CONFIRM(Text000) THEN
+        EXIT;
+      PostJournal(CostJourLine);
+      MESSAGE(Text001,TotalLines);
+    END;
+
+    PROCEDURE PostJournal@1(VAR CostJourLine@1150000 : Record 3010553);
+    BEGIN
+      // Post cost journal. Called from PostJournalYN, GetGlEntries, Allocations
+      WITH CostJourLine DO BEGIN
+        // Filter on actual Journal
+        SETRANGE("Batch Name","Batch Name");
+
+        IF NOT FIND('-') THEN
+          ERROR(Text002,"Batch Name");
+
+        CLEARALL;
+        d.OPEN(Text003 + // Posting lines
+           Text004 +  // Lines #1
+          Text005 +  // Checked #2
+          Text006);  // Posted #3
+        TotalLines := COUNT;
+        d.UPDATE(1,TotalLines);
+
+        // *** Check Lines
+        REPEAT
+          CheckLines(CostJourLine);
+        UNTIL NEXT = 0;
+
+        // Balance of last line
+        IF TotalBalance <> 0 THEN BEGIN
+          d.CLOSE;
+          ERROR(Text007,PreLineDate,TotalBalance);
+        END;
+
+        IF LinesChecked = 0 THEN BEGIN
+          d.CLOSE;
+          ERROR(Text008,"Batch Name");
+        END;
+
+        // *** Get first entry no.
+        IF PostBud THEN BEGIN
+          IF NOT BudEntries.FIND('+') THEN
+            BudEntries.INIT;
+          LastBudgetEntryNo := BudEntries."Line No.";
+          FirstBudgetEntryNo := BudEntries."Line No." + 1;
+        END;
+
+        IF NOT CaEntry.FIND('+') THEN
+          CaEntry.INIT;
+        LastEntryNo := CaEntry."Line No.";
+        FirstEntryNo := CaEntry."Line No." + 1;
+
+        // *** Prepare next Register no.
+        CostRegister.LOCKTABLE;
+        IF CostRegister.FIND('+') THEN
+          RegisterNo := CostRegister."No.";
+        RegisterNo := RegisterNo + 1;
+
+        // *** Prepare next Budget Register no.
+        CostBudgetRegister.LOCKTABLE;
+        IF CostBudgetRegister.FIND('+') THEN
+          BudgetRegisterNo := CostBudgetRegister."No.";
+        BudgetRegisterNo := BudgetRegisterNo + 1;
+
+        // *** Post line
+        // Reset to first cost journal line
+        FIND('-');
+
+        REPEAT
+          PostLine(CostJourLine);
+        UNTIL NEXT = 0;
+        d.CLOSE;
+
+        // *** Register entry for non-budget posting
+        IF NOT PostBud THEN BEGIN
+          CostRegister.INIT;
+          CostRegister."Journal Batch Name" := "Batch Name";
+          CostRegister."No." := RegisterNo;
+
+          CaSetup.GET;
+          IF "Batch Name" = '$' + COPYSTR(CaSetup."Source Code Cost Allocation",1,8) + '$' THEN
+            CostRegister.Source := CostRegister.Source::Allocation
+          ELSE
+            CostRegister.Source := CostRegister.Source::"Cost Journal";
+
+          CostRegister."From Cost Entry No." := FirstEntryNo;
+          CostRegister."To Cost Entry No." := LastEntryNo;
+          CostRegister."No. of Entries" := LastEntryNo - FirstEntryNo + 1;
+          CostRegister."Debit Amount" := TotalCredit;
+          CostRegister."Credit Amount" := TotalDebit;
+          CostRegister."Posting Date" := "Posting Date";  // from last journal line
+          CostRegister."User ID" := USERID;
+          CostRegister."Processed Date" := TODAY;
+
+          // For allocations, from last journal line
+          IF "Allocation ID" <> '' THEN BEGIN
+            AllocSource.GET("Allocation ID");
+            CostRegister.Level := AllocSource.Level;
+          END;
+
+          CostRegister.INSERT;
+        END;
+
+        // *** Register entry for Budget posting
+        IF PostBud THEN BEGIN
+          CostBudgetRegister.INIT;
+          CostBudgetRegister."Journal Batch Name" := "Batch Name";
+          CostBudgetRegister."No." := BudgetRegisterNo;
+
+          CaSetup.GET;
+          IF "Batch Name" = '$' + COPYSTR(CaSetup."Source Code Cost Allocation",1,8) + '$' THEN
+            CostBudgetRegister.Source := CostBudgetRegister.Source::Allocation
+          ELSE
+            CostBudgetRegister.Source := CostBudgetRegister.Source::"Cost Journal";
+
+          CostBudgetRegister."From Cost Budget Entry No." := FirstBudgetEntryNo;
+          CostBudgetRegister."To Cost Budget Entry No." := LastBudgetEntryNo;
+          CostBudgetRegister."No. of Entries" := LastBudgetEntryNo - FirstBudgetEntryNo + 1;
+          CostBudgetRegister."Debit Amount" := TotalBudgetCredit;
+          CostBudgetRegister."Credit Amount" := TotalBudgetDebit;
+          CostBudgetRegister."Posting Date" := "Posting Date";  // from last journal line
+          CostBudgetRegister."User ID" := USERID;
+          CostBudgetRegister."Processed Date" := TODAY;
+
+          // For allocations, from last journal line
+          IF "Allocation ID" <> '' THEN BEGIN
+            AllocSource.GET("Allocation ID");
+            CostBudgetRegister.Level := AllocSource.Level;
+          END;
+
+          CostBudgetRegister.INSERT;
+        END;
+
+        // *** Delete Lines?
+        IF CostJourName.GET("Batch Name") AND
+           (NOT CostJourName."Delete after Posting") THEN
+          MODIFYALL("Posting Date",0D)
+        ELSE
+          DELETEALL;
+      END;
+    END;
+
+    PROCEDURE CheckLines@2(VAR CostJourLine@1150000 : Record 3010553);
+    BEGIN
+      // Check cost journal line. Call from "Post Journal"
+      WITH CostJourLine DO BEGIN
+
+        TESTFIELD("Posting Date");
+        TESTFIELD("Document No.");
+
+        CaSetup.GET;
+        IF "Batch Name" <> '$' + COPYSTR(CaSetup."Source Code G/L Entry to CA",1,8) + '$' THEN
+          TESTFIELD(Amount);
+
+        IF ("Cost Type No." = '') AND ("Bal. Cost Type No." = '') THEN BEGIN
+          d.CLOSE;
+          ERROR(Text011 + Text012,"Line No.","Document No.",Amount);
+        END;
+
+        IF "Cost Type No." <> '' THEN BEGIN
+          // Cost type found and not blocked
+          CostType.GET("Cost Type No.");
+          CostType.TESTFIELD(Blocked,FALSE);
+          CostType.TESTFIELD("Line Type",CostType."Line Type"::"Cost Type");
+
+          // CHeck debit CC/CO, only one
+          IF ("Cost Center Code" = '') AND ("Cost Object Code" = '') THEN BEGIN
+            d.CLOSE;
+            ERROR(Text013 + Text012,"Line No.","Document No.",Amount);
+          END;
+          IF ("Cost Center Code" <> '') AND ("Cost Object Code" <> '') THEN BEGIN
+            d.CLOSE;
+            ERROR(Text014 + Text012,"Line No.","Document No.",Amount);
+          END;
+        END;
+
+        IF "Bal. Cost Type No." <> '' THEN BEGIN
+          // Bal CT found and not blocked
+          CostType.GET("Bal. Cost Type No.");
+          CostType.TESTFIELD(Blocked,FALSE);
+          CostType.TESTFIELD("Line Type",CostType."Line Type"::"Cost Type");
+
+          // CHeck credit CC/CO, only one
+          IF ("Bal. Cost Center Code" = '') AND ("Bal. Cost Object Code" = '') THEN BEGIN
+            d.CLOSE;
+            ERROR(Text015 + Text012,"Line No.","Document No.",Amount);
+          END;
+          IF ("Bal. Cost Center Code" <> '') AND ("Bal. Cost Object Code" <> '') THEN BEGIN
+            d.CLOSE;
+            ERROR(Text016 + Text012,"Line No.","Document No.",Amount);
+          END;
+        END;
+
+        // CHeck balance
+        IF (PreLineDate <> "Posting Date") AND (TotalBalance <> 0) THEN BEGIN
+          d.CLOSE;
+          ERROR(Text017,PreLineDate,TotalBalance);
+        END;
+
+        TotalBalance := TotalBalance + Balance;
+        PreLineDate := "Posting Date";
+
+        IF CheckGlJourLine.DateNotAllowed("Posting Date") THEN BEGIN
+          d.CLOSE;
+          FIELDERROR("Posting Date",Text018);
+        END;
+
+        // Processing mode according to source code
+        IF "Budget Name" <> '' THEN
+          PostBud := TRUE;
+
+      END;
+
+      LinesChecked := LinesChecked + 1;
+      IF (LinesChecked < 100) OR ((LinesChecked MOD 100) = 0) THEN
+        d.UPDATE(2,LinesChecked);
+    END;
+
+    PROCEDURE PostLine@4(VAR CostJourLine@1150000 : Record 3010553);
+    BEGIN
+      // Post cost journal line. Called from "PostJournal"
+      WITH CostJourLine DO BEGIN
+
+        IF PostBud THEN BEGIN
+          // Debit entries budget
+          IF "Cost Type No." <> '' THEN
+            WriteBudEntry(CostJourLine,"Cost Type No.","Cost Center Code","Cost Object Code",Amount);
+
+          // Credit entries budget
+          IF "Bal. Cost Type No." <> '' THEN
+            WriteBudEntry(CostJourLine,"Bal. Cost Type No.","Bal. Cost Center Code","Bal. Cost Object Code",-Amount);
+        END ELSE BEGIN
+          // Debit cost entries
+          IF "Cost Type No." <> '' THEN
+            WriteCostEntries(CostJourLine,"Cost Type No.","Cost Center Code","Cost Object Code",Amount);
+
+          // Credit cost entries
+          IF "Bal. Cost Type No." <> '' THEN
+            WriteCostEntries(CostJourLine,"Bal. Cost Type No.","Bal. Cost Center Code","Bal. Cost Object Code",-Amount);
+        END;
+
+        LinesPosted := LinesPosted + 1;
+        IF (LinesPosted < 100) OR ((LinesPosted MOD 100) = 0) THEN
+          d.UPDATE(3,LinesPosted);
+      END;
+    END;
+
+    PROCEDURE WriteCostEntries@5(CostJourLine@1150000 : Record 3010553;_CT@1150001 : Code[20];_CC@1150002 : Code[20];_CO@1150003 : Code[20];_Amt@1150004 : Decimal);
+    BEGIN
+      WITH CostJourLine DO BEGIN
+        CaEntry.INIT;
+        LastEntryNo := LastEntryNo + 1;
+        CaEntry."Line No." := LastEntryNo;
+        CaEntry."Cost Type No." := _CT;
+        CaEntry."Posting Date" := "Posting Date";
+        CaEntry."Document No." := "Document No.";
+        CaEntry.Text := Text;
+        CaEntry."Cost Center Code" := _CC;
+        CaEntry."Cost Object Code" := _CO;
+
+        CaEntry.Amount := _Amt;
+        IF _Amt > 0 THEN
+          CaEntry."Debit Amount" := _Amt
+        ELSE
+          CaEntry."Credit Amount" := - _Amt;
+
+        CaEntry."Reason Code" := "Reason Code";
+        IF GlEntry.GET("GL Entry No.") THEN
+          CaEntry."GL Account" := GlEntry."G/L Account No.";
+        CaEntry."GL Entry No." := "GL Entry No.";
+        CaEntry."Source Code" := "Source Code";
+        CaEntry."System-Created Entry" := "System-Created Entry";
+        CaEntry.Allocated := Allocated;
+        CaEntry."User ID" := USERID;
+        CaEntry."Batch Name" := "Batch Name";
+        CaEntry."Register No." := RegisterNo;
+        CaEntry."Allocation Ratio" := "Allocation Ratio";
+        CaEntry."Allocation ID" := "Allocation ID";
+        CaEntry.INSERT;
+      END;
+
+      // Register entry
+      TotalCredit := TotalCredit + CaEntry."Credit Amount";
+      TotalDebit := TotalDebit + CaEntry."Debit Amount";
+    END;
+
+    PROCEDURE WriteBudEntry@7(CostJourLine@1150000 : Record 3010553;_CT@1150001 : Code[20];_CC@1150002 : Code[20];_CO@1150003 : Code[20];_Amt@1150004 : Decimal);
+    BEGIN
+      WITH CostJourLine DO BEGIN
+        BudEntries.INIT;
+        LastBudgetEntryNo := LastBudgetEntryNo + 1;
+        BudEntries."Line No." := LastBudgetEntryNo;
+        BudEntries."Budget Name" := "Budget Name";
+        BudEntries."Cost Type No." := _CT;
+        BudEntries.Date := "Posting Date";
+        BudEntries."Document No." := "Document No.";
+        BudEntries.Text := Text;
+        BudEntries."Cost Center Code" := _CC;
+        BudEntries."Cost Object Code" := _CO;
+        BudEntries.Amount := _Amt;
+        BudEntries."Source Code" := "Source Code";
+        BudEntries."System-Created Entry" := "System-Created Entry";
+        BudEntries.Allocated := Allocated;
+        BudEntries."Last Modified By User" := USERID;
+        BudEntries."Allocation Ratio" := "Allocation Ratio";
+        BudEntries."Allocation ID" := "Allocation ID";
+        BudEntries.INSERT;
+      END;
+
+      // Register entry
+      IF _Amt > 0 THEN
+        TotalBudgetDebit := TotalBudgetDebit + _Amt
+      ELSE
+        TotalBudgetCredit := TotalBudgetCredit - _Amt;
+    END;
+
+    BEGIN
+    END.
+  }
+}

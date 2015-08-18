@@ -1,0 +1,151 @@
+OBJECT Codeunit 99008528 BizTalk Appln. Srv. Startup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+            BizTalkManagement.GET;
+
+            IF BizTalkManagement."Outbnd. Doc. Monitor Interval" > 0 THEN BEGIN
+              CREATE(OutboundDocTimer,TRUE,FALSE);
+              OutboundDocTimer.Interval := BizTalkManagement."Outbnd. Doc. Monitor Interval" * 60000;
+              OutboundDocTimer.Enable;
+            END;
+
+            CREATE(TcpCom,TRUE,FALSE);
+
+            MESSAGE(Text001 + COMPANYNAME);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1006 : TextConst 'ENU="Application Server has been started for Commerce Gateway. Company is ";ESP="Application Server para Commerce Gateway. La empresa es "';
+      Text002@1007 : TextConst 'ENU=An error has occurred when importing a document to the program.;ESP=Se ha producido un error al importar un documento en el programa.';
+      Text003@1008 : TextConst 'ENU=An error has occurred when importing a %1 document with number %2.;ESP=Ha ocurrido un error al importar un documento %1 con n£mero %2.';
+      BizTalkManagement@1000 : Record 99008512;
+      OutboundDocTimer@1003 : Automation "{3B478FE2-881D-48C8-B9B5-588235ECE609} 3.0:{8A1C648F-F288-4958-A998-521A9058E5BA}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      Text004@1002 : TextConst 'ENU=Sales,Purchase,Product Catalog;ESP=Ventas,Compra,Cat logo de productos';
+      TcpCom@1001 : Automation "{9AFE38D2-3053-4247-A0DA-FC1D80FDFC5F} 6.0:{A0EB2CE3-26F8-4597-A65A-FBB6A7717D2C}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+
+    LOCAL PROCEDURE SubstString@1(StringToSearch@1000 : Text[250];SearchString@1001 : Text[250];StringToSub@1002 : Text[250]) : Text[250];
+    VAR
+      EOS@1003 : Boolean;
+      inx@1004 : Integer;
+      res@1005 : Text[250];
+      TestChar@1006 : Text[250];
+    BEGIN
+      res := StringToSearch;
+
+      IF (STRLEN(StringToSearch) > 0) AND (STRLEN(SearchString) > 0) THEN BEGIN
+        EOS := FALSE;
+        inx := 0;
+        REPEAT
+          inx := inx + 1;
+          IF inx <= STRLEN(res) THEN BEGIN
+            TestChar := COPYSTR(res,inx,STRLEN(SearchString));
+            IF TestChar = SearchString THEN
+              res := COPYSTR(res,1,inx-1) + StringToSub + COPYSTR(res,inx + STRLEN(SearchString),250);
+          END
+          ELSE
+            EOS := TRUE;
+        UNTIL EOS;
+      END;
+
+      EXIT(res);
+    END;
+
+    PROCEDURE StartTcpListen@2(PortNumber@1000 : Integer) ReturnBool : Boolean;
+    BEGIN
+      TcpCom.Cryptography := BizTalkManagement."Use Encryption";
+      IF (BizTalkManagement."Appln. Srv./Broker Config Path" <> '') THEN
+        TcpCom.ConfigFilePath := BizTalkManagement."Appln. Srv./Broker Config Path";
+      IF PortNumber = 0 THEN
+          ReturnBool := TcpCom.TcpListen(BizTalkManagement."Appln. Srv./Broker Port No.")
+      ELSE
+          ReturnBool := TcpCom.TcpListen(PortNumber);
+      EXIT(ReturnBool);
+    END;
+
+    PROCEDURE StopTcpListen@3();
+    BEGIN
+      IF NOT ISCLEAR(TcpCom) THEN
+        TcpCom.StopTcpListen;
+    END;
+
+    EVENT OutboundDocTimer@1003::TimerEvent@1();
+    VAR
+      WatchDog@1000 : Codeunit 99008512;
+    BEGIN
+      OutboundDocTimer.Disable;
+      WatchDog.CheckOutbound;
+      OutboundDocTimer.Enable;
+    END;
+
+    EVENT TcpCom@1001::DataReady@1(VAR XmlData@1102601001 : Text[1024];VAR XmlResponse@1102601000 : Text[1024]);
+    BEGIN
+    END;
+
+    EVENT TcpCom@1001::DataAvailable@2(VAR XmlData@1001 : Automation ":{00020400-0000-0000-C000-000000000046}:''.IDISPATCH";VAR XmlResponse@1102601000 : Text[1024]);
+    VAR
+      xmlin@1000 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      xmlout@1002 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{F6D90F11-9C73-11D3-B32E-00C04F990BB4}:'Microsoft XML, v3.0'.DOMDocument";
+      XMLNode@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 3.0:{2933BF80-7B36-11D2-B20E-00C04F983E60}:'Microsoft XML, v3.0'.IXMLDOMNode";
+      XMLDOMMgmt@1004 : Codeunit 99008516;
+      Mail@1005 : Codeunit 99008527;
+      XMLDocReceive@1006 : Codeunit 99008515;
+      XMLDocAccept@1007 : Codeunit 99008529;
+      DocumentNo@1008 : Integer;
+      DocumentType@1009 : 'Sales,Purchase,Product Catalog';
+      InStrm@1010 : InStream;
+      OutStrm@1011 : OutStream;
+      RequestType@1012 : Text[1024];
+    BEGIN
+      xmlin := XmlData;
+      IF XMLDOMMgmt.FindNode(xmlin,'CGBrokerRequest/Command',XMLNode) THEN
+        RequestType := XMLNode.text;
+      IF RequestType = 'ResolveIdentity' THEN BEGIN
+        CREATE(xmlout,TRUE,FALSE);
+        xmlout.loadXML('<RESPONSE>PROCESSING</RESPONSE>');
+        XmlResponse := xmlout.xml;
+        CLEAR(xmlout);
+        EXIT;
+      END;
+      XmlResponse := '';
+
+      XMLDocReceive.PutXMLIn(xmlin);
+      IF XMLDocReceive.RUN THEN BEGIN
+        COMMIT;
+        CREATE(xmlout,TRUE,FALSE);
+        xmlout.loadXML('<RESPONSE>PROCESSING</RESPONSE>');
+        XmlResponse := xmlout.xml;
+      END ELSE
+        EXIT;
+
+      XMLDocReceive.GetInboundDocumentType(DocumentType);
+      XMLDocReceive.GetInboundDocumentNo(DocumentNo);
+      XMLDocAccept.Init(DocumentType,DocumentNo);
+      IF NOT XMLDocAccept.RUN THEN BEGIN
+        IF (BizTalkManagement."Send System Error Description") AND
+          (BizTalkManagement."System Administrator E-Mail" <> '')
+        THEN
+          Mail.NewMessage(BizTalkManagement."System Administrator E-Mail",
+            Text002,
+            STRSUBSTNO(Text003,SELECTSTR(DocumentType+1,Text004),DocumentNo),'');
+      END;
+
+      CLEAR(xmlin);
+      CLEAR(xmlout);
+    END;
+
+    BEGIN
+    END.
+  }
+}

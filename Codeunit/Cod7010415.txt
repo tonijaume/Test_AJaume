@@ -1,0 +1,136 @@
+OBJECT Codeunit 7010415 Revisar servicios habituales
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/05/15;
+    Time=13:41:54;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            RellenaServiciosHabituales(rSerHab, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000001 : TextConst 'ESP=Vamos a revisar los servicios habituales de todos los registros de Cliente/Touroperador en base a su ultimo contrato';
+      Text002@1000000002 : TextConst 'ESP=Vamos a rellenar la tabla de servicios habituales a partir del ultimo contrato del Cliente %1-Touroperador %2, se vaciar  la tabla antes de empezar. Desea continuar ?';
+      Text003@1000000005 : TextConst 'ESP=No existe ningun contrato confirmado para el cliente %1 - Touroperador %2.';
+      Text004@1000000004 : TextConst 'ESP=El contrato %1 no tiene precios asignados.';
+      Text019@1000000000 : TextConst 'ESP=Revisando servicios habituales de #1##################-#2######## en base al contrato #3########';
+      rSerHab@1000000007 : Record 7035386;
+      wVentana@1000000003 : Dialog;
+
+    PROCEDURE RellenaServiciosHabituales@1100253001(prSerHab@1100253000 : Record 7035386;pwRevisionGlobal@1103355000 : Boolean);
+    VAR
+      lrSerHab@1100253003 : Record 7035386;
+      lrCont@1100253001 : Record 7010403;
+      lrPreVta@1100253002 : Record 7010405;
+      lrCliTTOO@1103355001 : Record 7010313;
+    BEGIN
+      // RellenaServiciosHabituales
+
+      // Buscamos el ultimo contrato del cliente touroperador y damos de alta un registro por cada codigo servicio que
+      // tenga precio.
+
+      // 0. Solicitamos confirmacion del usuario, avisamos de que vamos a borrar los registros actuales
+      //    Si se trata de una revision global vamos a revisar todos los cliente/Touroperador
+
+      IF pwRevisionGlobal THEN BEGIN
+        IF NOT CONFIRM(Text001) THEN
+          EXIT;
+      END
+      ELSE BEGIN
+        IF NOT CONFIRM(Text002, FALSE, prSerHab.Cliente, prSerHab.Touroperador) THEN
+          EXIT;
+      END;
+
+      IF NOT pwRevisionGlobal THEN BEGIN
+        lrCliTTOO.SETRANGE(Cliente, prSerHab.Cliente);
+        lrCliTTOO.SETRANGE(TTOO   , prSerHab.Touroperador);
+      END
+      ELSE
+        lrCliTTOO.SETRANGE("Operativa Deshabilitada", FALSE);
+
+      IF lrCliTTOO.FINDSET THEN BEGIN
+        wVentana.OPEN(Text019);
+        REPEAT
+          wVentana.UPDATE(1, lrCliTTOO.Cliente);
+          wVentana.UPDATE(2, lrCliTTOO.TTOO);
+
+          // 1. Limpiamos la tabla de servicios habituales
+
+          lrSerHab.RESET;
+          lrSerHab.SETRANGE(Cliente     , lrCliTTOO.Cliente);
+          lrSerHab.SETRANGE(Touroperador, lrCliTTOO.TTOO);
+          IF lrSerHab.FINDSET(TRUE) THEN
+            lrSerHab.DELETEALL;
+
+          // 2. Buscamos el ultimo contrato del cliente/touroperador
+
+          lrCont.RESET;
+          lrCont.SETCURRENTKEY(Cliente,
+                               Touroperador,
+                               "Fecha inicio contrato",
+                               "Fecha final contrato");
+          lrCont.SETRANGE(Cliente     , lrCliTTOO.Cliente);
+          lrCont.SETRANGE(Touroperador, lrCliTTOO.TTOO);
+          lrCont.SETRANGE(Confirmado  , TRUE);
+          IF lrCont.FINDLAST THEN
+          BEGIN
+            //+$001 <
+            IF lrCont."Basado en contrato n§" <> '' THEN
+              IF NOT lrCont.GET(lrCont.Garaje, lrCont."Basado en contrato n§") THEN
+                CLEAR(lrCont);
+            //+$001 >
+
+            wVentana.UPDATE(3, lrCont."N§ Contrato");
+
+            // 3. Filtramos en los precios para ir rellenado la tabla de servicios habituales
+
+            lrPreVta.RESET;
+            lrPreVta.SETRANGE(Garaje       , lrCont.Garaje);
+            lrPreVta.SETRANGE("N§ Contrato", lrCont."N§ Contrato");
+            lrPreVta.SETRANGE("Tipo precio", lrPreVta."Tipo precio"::"Precio Base");
+            IF lrPreVta.FINDSET THEN
+            BEGIN
+              REPEAT
+
+                // 4. Insertamos un registro por cada codigo de servicio que tenga precio
+
+                IF NOT lrSerHab.GET(lrCliTTOO.Cliente, lrCliTTOO.TTOO, lrPreVta."Codigo servicio") THEN
+                BEGIN
+                  lrSerHab.Cliente           := lrCliTTOO.Cliente;
+                  lrSerHab.Touroperador      := lrCliTTOO.TTOO;
+                  lrSerHab."Codigo servicio" := lrPreVta."Codigo servicio";
+                  lrSerHab.INSERT(TRUE);
+                END;
+              UNTIL lrPreVta.NEXT = 0;
+            END
+            ELSE
+            BEGIN
+              IF NOT pwRevisionGlobal THEN
+                ERROR(Text004, lrCont."N§ Contrato");
+            END;
+          END
+          ELSE
+          BEGIN
+            IF NOT pwRevisionGlobal THEN
+              ERROR(Text003, prSerHab.Cliente, prSerHab.Touroperador);
+          END;
+        UNTIL lrCliTTOO.NEXT = 0;
+        wVentana.CLOSE;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 19052015 Contemplar el caso de los clientes que tiene un contrato basado en otro contrato
+    }
+    END.
+  }
+}

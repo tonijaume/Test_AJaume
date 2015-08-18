@@ -1,0 +1,1020 @@
+OBJECT Codeunit 7322 Create Inventory Pick
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01,NAVES4.00.02;
+  }
+  PROPERTIES
+  {
+    TableNo=5766;
+    OnRun=BEGIN
+            WhseActivHeader := Rec;
+            Code;
+            Rec := WhseActivHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WhseRequest@1009 : Record 5765;
+      WhseActivHeader@1000 : Record 5766;
+      Text000@1001 : TextConst 'ENU=There is nothing to handle.;ESP=No hay nada que manipular.';
+      TempHandlingSpecification@1006 : TEMPORARY Record 336;
+      Location@1019 : Record 14;
+      Item@1018 : Record 27;
+      ReservationEntry@1003 : Record 337;
+      PurchHeader@1013 : Record 38;
+      SalesHeader@1012 : Record 36;
+      TransferHeader@1011 : Record 5740;
+      ProdHeader@1010 : Record 5405;
+      WMSMgt@1021 : Codeunit 7302;
+      PostingDate@1016 : Date;
+      VendorDocNo@1017 : Code[20];
+      NextLineNo@1002 : Integer;
+      LastTempHandlingSpecNo@1024 : Integer;
+      HideDialog@1008 : Boolean;
+      SNRequired@1005 : Boolean;
+      LNRequired@1004 : Boolean;
+      Text001@1007 : TextConst 'ENU="Quantity available to pick is not sufficient to fulfill %1 %2 for %3 %4=''%5'',%6=''%7'',%8=''%9''.";ESP="Cdad. disponible para pick. no es suficiente para completar %1 %2 para %3 %4=''%5'',%6=''%7'',%8=''%9''."';
+      CheckLineExist@1014 : Boolean;
+      AutoCreation@1015 : Boolean;
+      LineCreated@1020 : Boolean;
+      CompleteShipment@1022 : Boolean;
+      ShowError@1023 : Boolean;
+      Text002@1025 : TextConst 'ENU="Quantity available to pick is not sufficient to fulfill %1 %2 for %3 %4=''%5'',%6=''%7''.";ESP="La cantidad disponible para picking no es suficiente para cubrir %1 %2 para %3 %4=''%5'',%6=''%7''."';
+
+    LOCAL PROCEDURE Code@11();
+    BEGIN
+      WhseActivHeader.TESTFIELD("No.");
+      WhseActivHeader.TESTFIELD("Location Code");
+
+      IF NOT HideDialog THEN
+        IF NOT GetWhseRequest(WhseRequest) THEN
+          EXIT;
+
+      GetSourceDocHeader;
+      UpdateWhseActivHeader(WhseRequest);
+
+      CASE WhseRequest."Source Document" OF
+        WhseRequest."Source Document"::"Purchase Order":
+          CreatePickFromPurchase(PurchHeader);
+        WhseRequest."Source Document"::"Purchase Return Order":
+          CreatePickFromPurchase(PurchHeader);
+        WhseRequest."Source Document"::"Sales Order":
+          CreatePickFromSales(SalesHeader);
+        WhseRequest."Source Document"::"Sales Return Order":
+          CreatePickFromSales(SalesHeader);
+        WhseRequest."Source Document"::"Outbound Transfer":
+          CreatePickFromTransfer(TransferHeader);
+        WhseRequest."Source Document"::"Prod. Consumption":
+          CreatePickFromProduction(ProdHeader);
+      END;
+
+      IF LineCreated THEN
+        WhseActivHeader.MODIFY
+      ELSE
+        IF NOT AutoCreation THEN
+          MESSAGE(Text000);
+    END;
+
+    LOCAL PROCEDURE GetWhseRequest@1(VAR WhseRequest@1000 : Record 5765) : Boolean;
+    BEGIN
+      WITH WhseRequest DO BEGIN
+        FILTERGROUP := 2;
+        SETRANGE(Type,Type::Outbound);
+        SETRANGE("Location Code",WhseActivHeader."Location Code");
+        SETRANGE("Document Status","Document Status"::Released);
+        IF WhseActivHeader."Source Document" <> 0 THEN
+          SETRANGE("Source Document",WhseActivHeader."Source Document");
+        IF WhseActivHeader."Source No." <> '' THEN
+          SETRANGE("Source No.",WhseActivHeader."Source No.");
+        WhseRequest.SETRANGE("Completely Handled",FALSE);
+        FILTERGROUP := 0;
+        IF FORM.RUNMODAL(
+          FORM::"Source Documents",WhseRequest,"Source No.") = ACTION::LookupOK
+        THEN
+          EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSourceDocHeader@13();
+    BEGIN
+      CASE WhseRequest."Source Document" OF
+        WhseRequest."Source Document"::"Purchase Order":
+          BEGIN
+            PurchHeader.GET(PurchHeader."Document Type"::Order,WhseRequest."Source No.");
+            PostingDate := PurchHeader."Posting Date";
+            VendorDocNo := PurchHeader."Vendor Invoice No.";
+          END;
+        WhseRequest."Source Document"::"Purchase Return Order":
+          BEGIN
+            PurchHeader.GET(PurchHeader."Document Type"::"Return Order",WhseRequest."Source No.");
+            PostingDate := PurchHeader."Posting Date";
+            VendorDocNo := PurchHeader."Vendor Cr. Memo No.";
+          END;
+        WhseRequest."Source Document"::"Sales Order":
+          BEGIN
+            SalesHeader.GET(SalesHeader."Document Type"::Order,WhseRequest."Source No.");
+            PostingDate := SalesHeader."Posting Date";
+          END;
+        WhseRequest."Source Document"::"Sales Return Order":
+          BEGIN
+            SalesHeader.GET(SalesHeader."Document Type"::"Return Order",WhseRequest."Source No.");
+            PostingDate := SalesHeader."Posting Date";
+          END;
+        WhseRequest."Source Document"::"Outbound Transfer":
+          BEGIN
+            TransferHeader.GET(WhseRequest."Source No.");
+            PostingDate := TransferHeader."Posting Date";
+          END;
+        WhseRequest."Source Document"::"Prod. Consumption":
+          BEGIN
+            ProdHeader.GET(WhseRequest."Source Subtype",WhseRequest."Source No.");
+            PostingDate := WORKDATE;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateWhseActivHeader@2(WhseRequest@1001 : Record 5765);
+    BEGIN
+      WITH WhseRequest DO BEGIN
+        IF WhseActivHeader."Source Document" = 0 THEN BEGIN
+          WhseActivHeader."Source Document" := "Source Document";
+          WhseActivHeader."Source Type" := "Source Type";
+          WhseActivHeader."Source Subtype" := "Source Subtype";
+        END ELSE
+          WhseActivHeader.TESTFIELD("Source Document","Source Document");
+        IF WhseActivHeader."Source No." = '' THEN
+          WhseActivHeader."Source No." := "Source No."
+        ELSE
+          WhseActivHeader.TESTFIELD("Source No.","Source No.");
+
+        WhseActivHeader."Destination Type" := "Destination Type";
+        WhseActivHeader."Destination No." := "Destination No.";
+        WhseActivHeader."External Document No." := "External Document No.";
+        WhseActivHeader."Shipment Date" := "Shipment Date";
+        WhseActivHeader."Posting Date" := PostingDate;
+        WhseActivHeader."External Document No.2" := VendorDocNo;
+        GetLocation("Location Code");
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePickFromPurchase@7(PurchHeader@1000 : Record 38);
+    VAR
+      PurchLine@1001 : Record 39;
+      NewWhseActivLine@1005 : Record 5767;
+      RemQtyToPickBase@1007 : Decimal;
+    BEGIN
+      WITH PurchLine DO BEGIN
+        IF NOT SetFilterPurchLine(PurchLine,PurchHeader) THEN BEGIN
+          IF NOT HideDialog THEN
+            MESSAGE(Text000);
+          EXIT;
+        END;
+
+        FindNextLineNo;
+
+        REPEAT
+          IF NOT FindPickLine(DATABASE::"Purchase Line","Document Type","Document No.","Line No.",0) THEN BEGIN
+            NewWhseActivLine.INIT;
+            NewWhseActivLine."Activity Type" := WhseActivHeader.Type;
+            NewWhseActivLine."No." := WhseActivHeader."No.";
+            IF Location."Bin Mandatory" THEN
+              NewWhseActivLine."Action Type" := NewWhseActivLine."Action Type"::Take;
+            NewWhseActivLine."Source Type" := DATABASE::"Purchase Line";
+            NewWhseActivLine."Source Subtype" := "Document Type";
+            NewWhseActivLine."Source No." := "Document No.";
+            NewWhseActivLine."Source Line No." := "Line No.";
+            NewWhseActivLine."Location Code" := "Location Code";
+            NewWhseActivLine."Bin Code" := "Bin Code";
+            NewWhseActivLine."Item No." := "No.";
+            NewWhseActivLine."Variant Code" := "Variant Code";
+            NewWhseActivLine."Unit of Measure Code" := "Unit of Measure Code";
+            NewWhseActivLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+            NewWhseActivLine.Description := Description;
+            NewWhseActivLine."Description 2" := "Description 2";
+            NewWhseActivLine."Due Date" := "Expected Receipt Date";
+            IF "Document Type" = "Document Type"::Order THEN BEGIN
+              NewWhseActivLine."Source Document" := NewWhseActivLine."Source Document"::"Purchase Order";
+              RemQtyToPickBase := -"Qty. to Receive (Base)";
+            END ELSE BEGIN
+              NewWhseActivLine."Source Document" :=
+                NewWhseActivLine."Source Document"::"Purchase Return Order";
+              RemQtyToPickBase := "Return Qty. to Ship (Base)";
+            END;
+
+            CALCFIELDS("Reserved Quantity");
+            CreatePickLine(
+              NewWhseActivLine,RemQtyToPickBase,"Outstanding Qty. (Base)","Reserved Quantity" <> 0);
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilterPurchLine@14(VAR PurchLine@1000 : Record 39;PurchHeader@1001 : Record 38) : Boolean;
+    BEGIN
+      WITH PurchLine DO BEGIN
+        SETCURRENTKEY("Document Type","Document No.","Location Code");
+        SETRANGE("Document Type",PurchHeader."Document Type");
+        SETRANGE("Document No.",PurchHeader."No.");
+        SETRANGE("Drop Shipment",FALSE);
+        IF NOT CheckLineExist THEN
+          SETRANGE("Location Code",WhseActivHeader."Location Code");
+        SETRANGE(Type,Type::Item);
+        IF PurchHeader."Document Type" = PurchHeader."Document Type"::Order THEN
+          SETFILTER("Qty. to Receive",'<%1',0)
+        ELSE
+          SETFILTER("Return Qty. to Ship",'>%1',0);
+        EXIT(FIND('-'));
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePickFromSales@8(SalesHeader@1000 : Record 36);
+    VAR
+      SalesLine@1006 : Record 37;
+      NewWhseActivLine@1003 : Record 5767;
+      RemQtyToPickBase@1001 : Decimal;
+    BEGIN
+      WITH SalesLine DO BEGIN
+        IF NOT SetFilterSalesLine(SalesLine,SalesHeader) THEN BEGIN
+          IF NOT HideDialog THEN
+            MESSAGE(Text000);
+          EXIT;
+        END;
+        CompleteShipment := TRUE;
+
+        FindNextLineNo;
+
+        REPEAT
+          IF NOT FindPickLine(DATABASE::"Sales Line","Document Type","Document No.","Line No.",0) THEN BEGIN
+            NewWhseActivLine.INIT;
+            NewWhseActivLine."Activity Type" := WhseActivHeader.Type;
+            NewWhseActivLine."No." := WhseActivHeader."No.";
+            IF Location."Bin Mandatory" THEN
+              NewWhseActivLine."Action Type" := NewWhseActivLine."Action Type"::Take;
+            NewWhseActivLine."Source Type" := DATABASE::"Sales Line";
+            NewWhseActivLine."Source Subtype" := "Document Type";
+            NewWhseActivLine."Source No." := "Document No.";
+            NewWhseActivLine."Source Line No." := "Line No.";
+            NewWhseActivLine."Location Code" := "Location Code";
+            NewWhseActivLine."Bin Code" := "Bin Code";
+            NewWhseActivLine."Item No." := "No.";
+            NewWhseActivLine."Variant Code" := "Variant Code";
+            NewWhseActivLine."Unit of Measure Code" := "Unit of Measure Code";
+            NewWhseActivLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+            NewWhseActivLine.Description := Description;
+            NewWhseActivLine."Description 2" := "Description 2";
+            NewWhseActivLine."Due Date" := "Planned Shipment Date";
+            NewWhseActivLine."Shipping Advice" := SalesHeader."Shipping Advice";
+            NewWhseActivLine."Shipping Agent Code" := "Shipping Agent Code";
+            NewWhseActivLine."Shipping Agent Service Code" := "Shipping Agent Service Code";
+            NewWhseActivLine."Shipment Method Code" := SalesHeader."Shipment Method Code";
+
+            IF "Document Type" = "Document Type"::Order THEN BEGIN
+              NewWhseActivLine."Source Document" := NewWhseActivLine."Source Document"::"Sales Order";
+              RemQtyToPickBase := "Qty. to Ship (Base)";
+            END ELSE BEGIN
+              NewWhseActivLine."Source Document" := NewWhseActivLine."Source Document"::"Sales Return Order";
+              RemQtyToPickBase := -"Return Qty. to Receive (Base)";
+            END;
+
+            CALCFIELDS("Reserved Quantity");
+            CreatePickLine(
+              NewWhseActivLine,RemQtyToPickBase,"Outstanding Qty. (Base)","Reserved Quantity" <> 0);
+
+            IF SalesHeader."Shipping Advice" = SalesHeader."Shipping Advice"::Complete THEN BEGIN
+              IF RemQtyToPickBase < 0 THEN BEGIN
+                IF AutoCreation THEN BEGIN
+                  IF WhseActivHeader.DELETE(TRUE) THEN
+                    LineCreated := FALSE;
+                  FIND('+');
+                END ELSE
+                  ERROR(
+                    Text001,
+                    SalesHeader.FIELDCAPTION("Shipping Advice"),SalesHeader."Shipping Advice",
+                    TABLECAPTION,FIELDCAPTION("Document Type"),"Document Type",
+                    FIELDCAPTION("Document No."),"Document No.",FIELDCAPTION("Line No."),"Line No.");
+              END ELSE IF (RemQtyToPickBase = 0) AND NOT CompleteShipment THEN
+                IF ShowError THEN
+                  ERROR(
+                    Text001,
+                    SalesHeader.FIELDCAPTION("Shipping Advice"),SalesHeader."Shipping Advice",
+                    TABLECAPTION,FIELDCAPTION("Document Type"),"Document Type",
+                    FIELDCAPTION("Document No."),"Document No.",FIELDCAPTION("Line No."),"Line No.")
+                ELSE BEGIN
+                  IF WhseActivHeader.DELETE(TRUE) THEN ;
+                  LineCreated := FALSE;
+                  FIND('+');
+                END;
+            END;
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilterSalesLine@15(VAR SalesLine@1000 : Record 37;SalesHeader@1001 : Record 36) : Boolean;
+    BEGIN
+      WITH SalesLine DO BEGIN
+        SETCURRENTKEY("Document Type","Document No.","Location Code");
+        SETRANGE("Document Type",SalesHeader."Document Type");
+        SETRANGE("Document No.",SalesHeader."No.");
+        SETRANGE("Drop Shipment",FALSE);
+        IF NOT CheckLineExist THEN
+          SETRANGE("Location Code",WhseActivHeader."Location Code");
+        SETRANGE(Type,Type::Item);
+        IF SalesHeader."Document Type" = SalesHeader."Document Type"::Order THEN
+          SETFILTER("Qty. to Ship",'>%1',0)
+        ELSE
+          SETFILTER("Return Qty. to Receive",'<%1',0);
+        EXIT(FIND('-'));
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePickFromTransfer@9(TransferHeader@1000 : Record 5740);
+    VAR
+      TransferLine@1006 : Record 5741;
+      NewWhseActivLine@1003 : Record 5767;
+      RemQtyToPickBase@1001 : Decimal;
+    BEGIN
+      WITH TransferLine DO BEGIN
+        IF NOT SetFilterTransferLine(TransferLine,TransferHeader) THEN BEGIN
+          IF NOT HideDialog THEN
+            MESSAGE(Text000);
+          EXIT;
+        END;
+        CompleteShipment := TRUE;
+
+        FindNextLineNo;
+
+        REPEAT
+          IF NOT FindPickLine(DATABASE::"Transfer Line",0,"Document No.","Line No.",0) THEN BEGIN
+            NewWhseActivLine.INIT;
+            NewWhseActivLine."Activity Type" := WhseActivHeader.Type;
+            NewWhseActivLine."No." := WhseActivHeader."No.";
+            IF Location."Bin Mandatory" THEN
+              NewWhseActivLine."Action Type" := NewWhseActivLine."Action Type"::Take;
+            NewWhseActivLine."Source Type" := DATABASE::"Transfer Line";
+            NewWhseActivLine."Source Subtype" := 0;
+            NewWhseActivLine."Source No." := "Document No.";
+            NewWhseActivLine."Source Line No." := "Line No.";
+            NewWhseActivLine."Source Document" := NewWhseActivLine."Source Document"::"Outbound Transfer";
+            NewWhseActivLine."Location Code" := "Transfer-from Code";
+            NewWhseActivLine."Bin Code" := "Transfer-from Bin Code";
+            NewWhseActivLine."Item No." := "Item No.";
+            NewWhseActivLine."Variant Code" := "Variant Code";
+            NewWhseActivLine."Unit of Measure Code" := "Unit of Measure Code";
+            NewWhseActivLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+            NewWhseActivLine.Description := Description;
+            NewWhseActivLine."Description 2" := "Description 2";
+            NewWhseActivLine."Due Date" := "Shipment Date";
+            NewWhseActivLine."Shipping Advice" := TransferHeader."Shipping Advice";
+            RemQtyToPickBase := "Qty. to Ship (Base)";
+
+            CALCFIELDS("Reserved Quantity Outbnd.");
+            CreatePickLine(
+              NewWhseActivLine,RemQtyToPickBase,
+              "Outstanding Qty. (Base)","Reserved Quantity Outbnd." <> 0);
+
+            IF TransferHeader."Shipping Advice" = TransferHeader."Shipping Advice"::Complete THEN BEGIN
+              IF RemQtyToPickBase > 0 THEN BEGIN
+                IF AutoCreation THEN BEGIN
+                  WhseActivHeader.DELETE(TRUE);
+                  LineCreated := FALSE;
+                  FIND('+');
+                END ELSE
+                  ERROR(
+                    Text002,
+                    TransferHeader.FIELDCAPTION("Shipping Advice"),TransferHeader."Shipping Advice",
+                    TABLECAPTION,
+                    FIELDCAPTION("Document No."),"Document No.",FIELDCAPTION("Line No."),"Line No.");
+              END ELSE IF (RemQtyToPickBase = 0) AND NOT CompleteShipment THEN
+                IF ShowError THEN
+                  ERROR(
+                    Text002,
+                    TransferHeader.FIELDCAPTION("Shipping Advice"),TransferHeader."Shipping Advice",
+                    TABLECAPTION,
+                    FIELDCAPTION("Document No."),"Document No.",FIELDCAPTION("Line No."),"Line No.")
+                ELSE BEGIN
+                  IF WhseActivHeader.DELETE(TRUE) THEN ;
+                  LineCreated := FALSE;
+                  FIND('+');
+                END;
+            END;
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilterTransferLine@16(VAR TransferLine@1000 : Record 5741;TransferHeader@1001 : Record 5740) : Boolean;
+    BEGIN
+      WITH TransferLine DO BEGIN
+        SETRANGE("Document No.",TransferHeader."No.");
+        SETRANGE("Derived From Line No.",0);
+        IF NOT CheckLineExist THEN
+          SETRANGE("Transfer-from Code",WhseActivHeader."Location Code");
+        SETFILTER("Qty. to Ship",'>%1',0);
+        EXIT(FIND('-'));
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePickFromProduction@6(ProdOrder@1000 : Record 5405);
+    VAR
+      ProdOrderComp@1001 : Record 5407;
+      NewWhseActivLine@1003 : Record 5767;
+      RemQtyToPickBase@1005 : Decimal;
+    BEGIN
+      WITH ProdOrderComp DO BEGIN
+        IF NOT SetFilterProductionLine(ProdOrderComp,ProdOrder) THEN BEGIN
+          IF NOT HideDialog THEN
+            MESSAGE(Text000);
+          EXIT;
+        END;
+
+        FindNextLineNo;
+
+        REPEAT
+          IF NOT FindPickLine(DATABASE::"Prod. Order Component",Status,"Prod. Order No.","Prod. Order Line No.","Line No.") THEN BEGIN
+            NewWhseActivLine.INIT;
+            NewWhseActivLine."Activity Type" := WhseActivHeader.Type;
+            NewWhseActivLine."No." := WhseActivHeader."No.";
+            IF Location."Bin Mandatory" THEN
+              NewWhseActivLine."Action Type" := NewWhseActivLine."Action Type"::Take;
+            NewWhseActivLine."Source Type" := DATABASE::"Prod. Order Component";
+            NewWhseActivLine."Source Subtype" := Status;
+            NewWhseActivLine."Source No." := "Prod. Order No.";
+            NewWhseActivLine."Source Line No." := "Prod. Order Line No.";
+            NewWhseActivLine."Source Subline No." := "Line No.";
+            NewWhseActivLine."Location Code" := "Location Code";
+            NewWhseActivLine."Bin Code" := "Bin Code";
+            NewWhseActivLine."Item No." := "Item No.";
+            NewWhseActivLine."Variant Code" := "Variant Code";
+            NewWhseActivLine."Unit of Measure Code" := "Unit of Measure Code";
+            NewWhseActivLine."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+            NewWhseActivLine.Description := Description;
+            NewWhseActivLine."Source Document" := NewWhseActivLine."Source Document"::"Prod. Consumption";
+            NewWhseActivLine."Due Date" := "Due Date";
+            RemQtyToPickBase := "Remaining Qty. (Base)";
+
+            CALCFIELDS("Reserved Quantity");
+            CreatePickLine(
+              NewWhseActivLine,RemQtyToPickBase,"Remaining Qty. (Base)","Reserved Quantity" <> 0);
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilterProductionLine@18(VAR ProdOrderComp@1000 : Record 5407;ProdOrder@1001 : Record 5405) : Boolean;
+    BEGIN
+      WITH ProdOrderComp DO BEGIN
+        SETRANGE(Status,ProdOrder.Status);
+        SETRANGE("Prod. Order No.",ProdOrder."No.");
+        IF NOT CheckLineExist THEN
+          SETRANGE("Location Code",WhseActivHeader."Location Code");
+        SETFILTER("Flushing Method",'%1|%2|%3',
+          "Flushing Method"::Manual,
+          "Flushing Method"::"Pick + Forward",
+          "Flushing Method"::"Pick + Backward");
+        SETRANGE("Planning Level Code",0);
+        SETFILTER("Remaining Quantity",'>0');
+        EXIT(FIND('-'));
+      END;
+    END;
+
+    LOCAL PROCEDURE FindPickLine@20(SourceType@1000 : Option;SourceSubType@1001 : Option;SourceNo@1002 : Code[20];SourceLineNo@1003 : Integer;SourceSubLineNo@1005 : Integer) : Boolean;
+    VAR
+      WhseActivLine@1004 : Record 5767;
+    BEGIN
+      WITH WhseActivLine DO BEGIN
+        SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.");
+        SETRANGE("Source Type",SourceType);
+        SETRANGE("Source Subtype",SourceSubType);
+        SETRANGE("Source No.",SourceNo);
+        SETRANGE("Source Line No.",SourceLineNo);
+        SETRANGE("Source Subline No.",SourceSubLineNo);
+        IF FIND('-') THEN
+          EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindNextLineNo@24();
+    VAR
+      WhseActivLine@1000 : Record 5767;
+    BEGIN
+      WITH WhseActivHeader DO BEGIN
+        WhseActivLine.SETRANGE("Activity Type",WhseActivLine."Activity Type"::"Invt. Put-away");
+        WhseActivLine.SETRANGE("No.","No.");
+        IF WhseActivLine.FIND('+') THEN
+          NextLineNo := WhseActivLine."Line No." + 10000
+        ELSE
+          NextLineNo := 10000;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePickLine@5(NewWhseActivLine@1003 : Record 5767;VAR RemQtyToPickBase@1004 : Decimal;OutstandingQtyBase@1006 : Decimal;ReservationExists@1007 : Boolean);
+    VAR
+      ItemTrackingMgt@1002 : Codeunit 6500;
+      QtyAvailToPickBase@1005 : Decimal;
+      ITQtyToPickBase@1001 : Decimal;
+      QtyToTrackBase@1000 : Decimal;
+      EntriesExist@1106000000 : Boolean;
+    BEGIN
+      IF ReservationExists THEN
+        CalcRemQtyToPickBase(NewWhseActivLine,OutstandingQtyBase,RemQtyToPickBase);
+      IF RemQtyToPickBase <= 0 THEN
+        EXIT;
+
+      QtyAvailToPickBase := CalcInvtAvailability(NewWhseActivLine);
+
+      IF RemQtyToPickBase > QtyAvailToPickBase THEN BEGIN
+        RemQtyToPickBase := QtyAvailToPickBase;
+        CompleteShipment := FALSE;
+      END;
+
+      IF RemQtyToPickBase > 0 THEN BEGIN
+        ItemTrackingMgt.CheckWhseItemTrkgSetup(NewWhseActivLine."Item No.",SNRequired,LNRequired,FALSE);
+        IF SNRequired OR LNRequired THEN BEGIN
+          SetFilterReservEntry(NewWhseActivLine);
+          ItemTrackingMgt.SumUpItemTracking(ReservationEntry,TempHandlingSpecification,TRUE,TRUE);
+
+          IF PickAccordingToFEFO(NewWhseActivLine."Location Code",NewWhseActivLine."Item No.") THEN BEGIN
+            QtyToTrackBase := RemQtyToPickBase;
+            IF UndefinedItemTrkg(QtyToTrackBase) THEN
+              CreateTempHandlingSpec(
+                NewWhseActivLine."Item No.",
+                NewWhseActivLine."Variant Code",
+                QtyToTrackBase);
+          END;
+
+          TempHandlingSpecification.RESET;
+          IF TempHandlingSpecification.FIND('-') THEN
+            REPEAT
+              ITQtyToPickBase := ABS(TempHandlingSpecification."Qty. to Handle (Base)");
+              IF ITQtyToPickBase > 0 THEN BEGIN
+                NewWhseActivLine."Serial No." := TempHandlingSpecification."Serial No.";
+                NewWhseActivLine."Lot No." := TempHandlingSpecification."Lot No.";
+                IF (NewWhseActivLine."Lot No." <> '') OR (NewWhseActivLine."Serial No." <> '') THEN
+                  NewWhseActivLine."Expiration Date" := ItemTrackingMgt.ExistingExpirationDate(NewWhseActivLine."Item No.",
+                    NewWhseActivLine."Variant Code",NewWhseActivLine."Lot No.",NewWhseActivLine."Serial No.",
+                    FALSE,EntriesExist);
+
+                IF Location."Bin Mandatory" THEN BEGIN
+                  // find pick qty. for bin code of source line
+                  IF NewWhseActivLine."Bin Code" <> '' THEN
+                    InsertPickBinWhseActivLine(
+                      NewWhseActivLine,NewWhseActivLine."Bin Code",FALSE,ITQtyToPickBase);
+
+                  // find pick qty. for default bin
+                  IF ITQtyToPickBase > 0 THEN
+                    InsertPickBinWhseActivLine(NewWhseActivLine,'',TRUE,ITQtyToPickBase);
+
+                  // find pick qty. for other bins
+                  IF ITQtyToPickBase > 0 THEN
+                    InsertPickBinWhseActivLine(NewWhseActivLine,'',FALSE,ITQtyToPickBase);
+                END ELSE
+                  IF ITQtyToPickBase > 0 THEN
+                    InsertShelfWhseActivLine(NewWhseActivLine,ITQtyToPickBase);
+
+                RemQtyToPickBase :=
+                  RemQtyToPickBase + ITQtyToPickBase +
+                  TempHandlingSpecification."Qty. to Handle (Base)";
+              END;
+              NewWhseActivLine."Serial No." := '';
+              NewWhseActivLine."Lot No." := '';
+            UNTIL (TempHandlingSpecification.NEXT = 0) OR (RemQtyToPickBase = 0);
+        END;
+
+        IF Location."Bin Mandatory" THEN BEGIN
+          // find pick qty. for bin code of source line
+          IF (RemQtyToPickBase > 0) AND (NewWhseActivLine."Bin Code" <> '') THEN
+            InsertPickBinWhseActivLine(
+              NewWhseActivLine,NewWhseActivLine."Bin Code",FALSE,RemQtyToPickBase);
+
+          // find pick qty. for default bin
+          IF RemQtyToPickBase > 0 THEN
+            InsertPickBinWhseActivLine(NewWhseActivLine,'',TRUE,RemQtyToPickBase);
+
+          // find pick qty. for other bins
+          IF RemQtyToPickBase > 0 THEN
+            InsertPickBinWhseActivLine(NewWhseActivLine,'',FALSE,RemQtyToPickBase);
+        END ELSE
+          IF RemQtyToPickBase > 0 THEN
+            InsertShelfWhseActivLine(NewWhseActivLine,RemQtyToPickBase);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcRemQtyToPickBase@26(NewWhseActivLine@1001 : Record 5767;OutstandingQtyBase@1002 : Decimal;VAR RemQtyToPickBase@1000 : Decimal);
+    VAR
+      MaxQtyToPickBase@1003 : Decimal;
+    BEGIN
+      WITH NewWhseActivLine DO BEGIN
+        MaxQtyToPickBase :=
+          OutstandingQtyBase -
+          WMSMgt.CalcLineReservedQtyNotonInvt(
+            "Source Type","Source Subtype","Source No.",
+            "Source Line No.","Source Subline No.",
+            ("Shipping Advice" = "Shipping Advice"::Complete));
+
+        IF RemQtyToPickBase > MaxQtyToPickBase THEN
+          RemQtyToPickBase := MaxQtyToPickBase;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertPickBinWhseActivLine@4(NewWhseActivLine@1004 : Record 5767;BinCode@1000 : Code[20];DefaultBin@1005 : Boolean;VAR RemQtyToPickBase@1003 : Decimal);
+    VAR
+      FromBinContent@1002 : Record 7302;
+      CreatePick@1007 : Codeunit 7312;
+      QtyToPickBase@1001 : Decimal;
+      QtyAvailToPickBase@1006 : Decimal;
+    BEGIN
+      WITH FromBinContent DO BEGIN
+        SETCURRENTKEY(Default,"Location Code","Item No.","Variant Code","Bin Code");
+        SETRANGE(Default,DefaultBin);
+        SETRANGE("Location Code",NewWhseActivLine."Location Code");
+        SETRANGE("Item No.",NewWhseActivLine."Item No.");
+        SETRANGE("Variant Code",NewWhseActivLine."Variant Code");
+        IF BinCode <> '' THEN
+          SETRANGE("Bin Code",BinCode);
+        IF NewWhseActivLine."Serial No." <> '' THEN
+          SETRANGE("Serial No. Filter",NewWhseActivLine."Serial No.");
+        IF NewWhseActivLine."Lot No." <> '' THEN
+          SETRANGE("Lot No. Filter",NewWhseActivLine."Lot No.");
+        IF FIND('-') THEN
+          REPEAT
+            QtyAvailToPickBase := CalcQtyAvailToPick(0);
+            IF RemQtyToPickBase < QtyAvailToPickBase THEN
+              QtyAvailToPickBase := RemQtyToPickBase;
+            IF QtyAvailToPickBase > 0 THEN BEGIN
+              IF SNRequired THEN BEGIN
+                QtyAvailToPickBase := ROUND(QtyAvailToPickBase,1,'<');
+                QtyToPickBase := 1;
+              END ELSE
+                QtyToPickBase := QtyAvailToPickBase;
+
+              IF AutoCreation AND NOT LineCreated THEN BEGIN
+                WhseActivHeader."No." := '';
+                WhseActivHeader.INSERT(TRUE);
+                UpdateWhseActivHeader(WhseRequest);
+                NextLineNo := 10000;
+                COMMIT;
+              END;
+
+              REPEAT
+                NewWhseActivLine."No." := WhseActivHeader."No.";
+                NewWhseActivLine."Line No." := NextLineNo;
+                NewWhseActivLine."Bin Code" := "Bin Code";
+                NewWhseActivLine.Quantity := NewWhseActivLine.CalcQty(QtyToPickBase);
+                NewWhseActivLine."Qty. (Base)" := QtyToPickBase;
+                NewWhseActivLine."Qty. Outstanding" := NewWhseActivLine.Quantity;
+                NewWhseActivLine."Qty. Outstanding (Base)" := NewWhseActivLine."Qty. (Base)";
+                NewWhseActivLine."Qty. to Handle" := 0;
+                NewWhseActivLine."Qty. to Handle (Base)" := 0;
+                NewWhseActivLine.INSERT;
+
+                CreatePick.AdjustReservation(
+                  NewWhseActivLine."Qty. Outstanding (Base)",NewWhseActivLine."Source Type",
+                  NewWhseActivLine."Source Subtype",NewWhseActivLine."Source No.",
+                  NewWhseActivLine."Source Line No.",NewWhseActivLine."Source Subline No.",0);
+
+                LineCreated := TRUE;
+                NextLineNo := NextLineNo + 10000;
+                RemQtyToPickBase := RemQtyToPickBase - QtyToPickBase;
+                QtyAvailToPickBase := QtyAvailToPickBase - QtyToPickBase;
+              UNTIL QtyAvailToPickBase = 0;
+            END;
+          UNTIL (NEXT = 0) OR (RemQtyToPickBase = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertShelfWhseActivLine@25(NewWhseActivLine@1001 : Record 5767;VAR RemQtyToPickBase@1000 : Decimal);
+    VAR
+      CreatePick@1003 : Codeunit 7312;
+      QtyToPickBase@1002 : Decimal;
+    BEGIN
+      IF SNRequired THEN BEGIN
+        RemQtyToPickBase := ROUND(RemQtyToPickBase,1,'<');
+        QtyToPickBase := 1;
+      END ELSE
+        QtyToPickBase := RemQtyToPickBase;
+
+      IF AutoCreation AND NOT LineCreated THEN BEGIN
+        WhseActivHeader."No." := '';
+        WhseActivHeader.INSERT(TRUE);
+        UpdateWhseActivHeader(WhseRequest);
+        NextLineNo := 10000;
+      END;
+
+      REPEAT
+        NewWhseActivLine."No." := WhseActivHeader."No.";
+        NewWhseActivLine."Line No." := NextLineNo;
+        NewWhseActivLine."Shelf No." := GetShelfNo(NewWhseActivLine."Item No.");
+        NewWhseActivLine.Quantity := NewWhseActivLine.CalcQty(QtyToPickBase);
+        NewWhseActivLine."Qty. (Base)" := QtyToPickBase;
+        NewWhseActivLine."Qty. Outstanding" := NewWhseActivLine.Quantity;
+        NewWhseActivLine."Qty. Outstanding (Base)" := NewWhseActivLine."Qty. (Base)";
+        NewWhseActivLine."Qty. to Handle" := 0;
+        NewWhseActivLine."Qty. to Handle" := 0;
+        NewWhseActivLine.INSERT;
+
+        CreatePick.AdjustReservation(
+          NewWhseActivLine."Qty. Outstanding (Base)",NewWhseActivLine."Source Type",
+          NewWhseActivLine."Source Subtype",NewWhseActivLine."Source No.",
+          NewWhseActivLine."Source Line No.",NewWhseActivLine."Source Subline No.",0);
+
+        LineCreated := TRUE;
+        NextLineNo := NextLineNo + 10000;
+        RemQtyToPickBase := RemQtyToPickBase - QtyToPickBase;
+      UNTIL RemQtyToPickBase = 0;
+    END;
+
+    LOCAL PROCEDURE CalcInvtAvailability@28(WhseActivLine@1000 : Record 5767) : Decimal;
+    VAR
+      Item2@1002 : Record 27;
+      QtyAssgndtoPick@1003 : Decimal;
+      LineReservedQty@1001 : Decimal;
+      QtyReservedOnPickShip@1005 : Decimal;
+    BEGIN
+      WITH WhseActivLine DO BEGIN
+        GetItem("Item No.");
+        Item2 := Item;
+        Item2.SETRANGE("Location Filter","Location Code");
+        Item2.SETRANGE("Variant Filter","Variant Code");
+        Item2.CALCFIELDS(Inventory,"Reserved Qty. on Inventory");
+        QtyAssgndtoPick := WMSMgt.CalcQtyAssgndtoPick(Location,"Item No.","Variant Code",'','');
+        LineReservedQty :=
+          WMSMgt.CalcLineReservedQtyonInvt(
+            "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.",'','');
+        QtyReservedOnPickShip :=
+          CalcReservQtyOnPicksShips("Location Code","Item No.","Variant Code");
+
+      END;
+      EXIT(
+        Item2.Inventory - ABS(Item2."Reserved Qty. on Inventory") - QtyAssgndtoPick
+        + LineReservedQty + QtyReservedOnPickShip);
+    END;
+
+    PROCEDURE CalcReservQtyOnPicksShips@53(LocationCode@1001 : Code[10];ItemNo@1002 : Code[20];VariantCode@1003 : Code[10]) ReservedForThisLine : Decimal;
+    VAR
+      ReservEntry@1000 : Record 337;
+    BEGIN
+      ReservEntry.SETCURRENTKEY(
+       "Item No.","Variant Code","Location Code","Reservation Status");
+      ReservEntry.SETRANGE("Item No.",ItemNo);
+      ReservEntry.SETRANGE("Variant Code",VariantCode);
+      ReservEntry.SETRANGE("Location Code",LocationCode);
+      ReservEntry.SETRANGE("Reservation Status",ReservEntry."Reservation Status"::Reservation);
+      ReservEntry.SETRANGE(Positive,TRUE);
+      ReservEntry.CALCSUMS("Reserved Pick & Ship Qty.");
+      EXIT(ReservEntry."Reserved Pick & Ship Qty.");
+    END;
+
+    LOCAL PROCEDURE GetLocation@22(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode <> Location.Code THEN BEGIN
+        IF LocationCode = '' THEN
+          Location.GetLocationSetup('',Location)
+        ELSE
+          Location.GET(LocationCode);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetShelfNo@21(ItemNo@1000 : Code[20]) : Code[20];
+    BEGIN
+      GetItem(ItemNo);
+      EXIT(Item."Shelf/Bin No.");
+    END;
+
+    LOCAL PROCEDURE GetItem@19(ItemNo@1000 : Code[20]);
+    BEGIN
+      IF ItemNo <> Item."No." THEN
+        Item.GET(ItemNo);
+    END;
+
+    PROCEDURE SetWhseRequest@10(NewWhseRequest@1000 : Record 5765;SetHideDialog@1001 : Boolean);
+    BEGIN
+      WhseRequest := NewWhseRequest;
+      HideDialog := SetHideDialog;
+      LineCreated := FALSE;
+    END;
+
+    PROCEDURE CheckSourceDoc@12(NewWhseRequest@1000 : Record 5765) : Boolean;
+    VAR
+      PurchLine@1001 : Record 39;
+      SalesLine@1002 : Record 37;
+      TransferLine@1003 : Record 5741;
+      ProdOrderComp@1004 : Record 5407;
+    BEGIN
+      WhseRequest := NewWhseRequest;
+      IF Location.RequireShipment(WhseRequest."Location Code") THEN
+        EXIT(FALSE);
+
+      GetSourceDocHeader;
+      CheckLineExist := TRUE;
+      CASE WhseRequest."Source Document" OF
+        WhseRequest."Source Document"::"Purchase Order":
+          EXIT(SetFilterPurchLine(PurchLine,PurchHeader));
+        WhseRequest."Source Document"::"Purchase Return Order":
+          EXIT(SetFilterPurchLine(PurchLine,PurchHeader));
+        WhseRequest."Source Document"::"Sales Order":
+          EXIT(SetFilterSalesLine(SalesLine,SalesHeader));
+        WhseRequest."Source Document"::"Sales Return Order":
+          EXIT(SetFilterSalesLine(SalesLine,SalesHeader));
+        WhseRequest."Source Document"::"Outbound Transfer":
+          EXIT(SetFilterTransferLine(TransferLine,TransferHeader));
+        WhseRequest."Source Document"::"Prod. Consumption":
+          EXIT(SetFilterProductionLine(ProdOrderComp,ProdHeader));
+      END;
+    END;
+
+    PROCEDURE AutoCreatePick@17(VAR WhseActivHeaderNew@1000 : Record 5766);
+    BEGIN
+      WhseActivHeader := WhseActivHeaderNew;
+      CheckLineExist := FALSE;
+      AutoCreation := TRUE;
+      GetLocation(WhseRequest."Location Code");
+
+      CASE WhseRequest."Source Document" OF
+        WhseRequest."Source Document"::"Purchase Order":
+          CreatePickFromPurchase(PurchHeader);
+        WhseRequest."Source Document"::"Purchase Return Order":
+          CreatePickFromPurchase(PurchHeader);
+        WhseRequest."Source Document"::"Sales Order":
+          CreatePickFromSales(SalesHeader);
+        WhseRequest."Source Document"::"Sales Return Order":
+          CreatePickFromSales(SalesHeader);
+        WhseRequest."Source Document"::"Outbound Transfer":
+          CreatePickFromTransfer(TransferHeader);
+        WhseRequest."Source Document"::"Prod. Consumption":
+          CreatePickFromProduction(ProdHeader);
+      END;
+
+      IF LineCreated THEN BEGIN
+        WhseActivHeader.MODIFY;
+        WhseActivHeaderNew := WhseActivHeader;
+      END;
+    END;
+
+    PROCEDURE SetShowError@23(ShowError2@1000 : Boolean);
+    BEGIN
+      ShowError := ShowError2;
+    END;
+
+    LOCAL PROCEDURE SetFilterReservEntry@31(WhseActivLine@1000 : Record 5767);
+    BEGIN
+      WITH ReservationEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name","Source Prod. Order Line");
+        SETRANGE("Source ID",WhseActivLine."Source No.");
+        IF WhseActivLine."Source Type" = DATABASE::"Prod. Order Component" THEN
+          SETRANGE("Source Ref. No.",WhseActivLine."Source Subline No.")
+        ELSE
+          SETRANGE("Source Ref. No.",WhseActivLine."Source Line No.");
+        SETRANGE("Source Type",WhseActivLine."Source Type");
+        SETRANGE("Source Subtype",WhseActivLine."Source Subtype");
+        IF WhseActivLine."Source Type" = DATABASE::"Prod. Order Component" THEN
+          SETRANGE("Source Prod. Order Line",WhseActivLine."Source Line No.");
+        SETRANGE(Positive,FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE PickAccordingToFEFO@50(LocationCode@1000 : Code[10];ItemNo@1001 : Code[20]) : Boolean;
+    BEGIN
+      GetLocation(LocationCode);
+
+      EXIT(Location."Pick According to FEFO" AND (SNRequired OR LNRequired));
+    END;
+
+    PROCEDURE UndefinedItemTrkg@58(VAR QtyToTrackBase@1000 : Decimal) : Boolean;
+    BEGIN
+      QtyToTrackBase := QtyToTrackBase - ItemTrackedQuantity('','');
+
+      EXIT(QtyToTrackBase > 0);
+    END;
+
+    LOCAL PROCEDURE ItemTrackedQuantity@63(LotNo@1003 : Code[20];SerialNo@1002 : Code[20]) : Integer;
+    VAR
+      WhseItemTrkgLine@1000 : Record 6550;
+    BEGIN
+      WITH TempHandlingSpecification DO BEGIN
+        RESET;
+        IF (LotNo = '') AND (SerialNo = '') THEN
+          IF ISEMPTY THEN
+            EXIT(0);
+
+        IF SerialNo <> '' THEN BEGIN
+          SETCURRENTKEY("Lot No.","Serial No.");
+          SETRANGE("Serial No.",SerialNo);
+          IF ISEMPTY THEN
+            EXIT(0);
+
+          EXIT(1);
+        END;
+
+        IF LotNo <> '' THEN BEGIN
+          SETCURRENTKEY("Lot No.","Serial No.");
+          SETRANGE("Lot No.",LotNo);
+          IF ISEMPTY THEN
+            EXIT(0);
+        END;
+
+        SETCURRENTKEY(
+          "Source ID","Source Type","Source Subtype","Source Batch Name",
+          "Source Prod. Order Line","Source Ref. No.");
+        IF LotNo <> '' THEN
+          SETRANGE("Lot No.",LotNo);
+        CALCSUMS("Qty. to Handle (Base)");
+        EXIT("Qty. to Handle (Base)");
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateTempHandlingSpec@51(ItemNo@1005 : Code[20];VariantCode@1010 : Code[10];TotalQtytoPickBase@1002 : Decimal);
+    VAR
+      EntrySummary@1007 : Record 338;
+      FromBinContent@1003 : Record 7302;
+      ItemTrackingDataCollection@1001 : Codeunit 6501;
+      TotalAvailQtyToPickBase@1006 : Decimal;
+      RemQtyToPickBase@1009 : Decimal;
+      QtyToPickBase@1008 : Decimal;
+      QtyTracked@1000 : Decimal;
+    BEGIN
+      FromBinContent.RESET;
+      FromBinContent.SETRANGE("Location Code",Location.Code);
+      FromBinContent.SETRANGE("Item No.",ItemNo);
+      FromBinContent.SETRANGE("Variant Code",VariantCode);
+      IF FromBinContent.ISEMPTY THEN
+        EXIT;
+
+      ItemTrackingDataCollection.CreateEntrySummaryFEFO(Location,ItemNo,VariantCode,TRUE);
+
+      IF ItemTrackingDataCollection.FindFirstEntrySummaryFEFO(EntrySummary) THEN BEGIN
+        InitTempHandlingSpec;
+        RemQtyToPickBase := TotalQtytoPickBase;
+
+        REPEAT
+          IF EntrySummary."Expiration Date" <> 0D THEN BEGIN
+            QtyTracked := ItemTrackedQuantity(EntrySummary."Lot No.",EntrySummary."Serial No.");
+
+            IF NOT ((EntrySummary."Serial No." <> '') AND (QtyTracked > 0)) THEN BEGIN
+              TotalAvailQtyToPickBase := 0;
+              FromBinContent.SETRANGE("Serial No. Filter",EntrySummary."Serial No.");
+              FromBinContent.SETRANGE("Lot No. Filter",EntrySummary."Lot No.");
+              IF FromBinContent.FINDSET THEN
+                REPEAT
+                  TotalAvailQtyToPickBase += FromBinContent.CalcQtyAvailToPick(0);
+                UNTIL (FromBinContent.NEXT = 0) OR (TotalAvailQtyToPickBase >= RemQtyToPickBase);
+
+              TotalAvailQtyToPickBase := TotalAvailQtyToPickBase - QtyTracked;
+              QtyToPickBase := 0;
+
+              IF TotalAvailQtyToPickBase > 0 THEN
+                IF TotalAvailQtyToPickBase >= RemQtyToPickBase THEN BEGIN
+                  QtyToPickBase := RemQtyToPickBase;
+                  RemQtyToPickBase := 0
+                END ELSE BEGIN
+                  QtyToPickBase := TotalAvailQtyToPickBase;
+                  RemQtyToPickBase := RemQtyToPickBase - QtyToPickBase;
+                END;
+
+              IF QtyToPickBase > 0 THEN
+                InsertTempHandlingSpec(
+                  Location.Code,ItemNo,VariantCode,EntrySummary,QtyToPickBase);
+            END;
+          END;
+        UNTIL NOT ItemTrackingDataCollection.FindNextEntrySummaryFEFO(EntrySummary) OR (RemQtyToPickBase = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitTempHandlingSpec@29();
+    BEGIN
+      WITH TempHandlingSpecification DO BEGIN
+        RESET;
+        IF FINDLAST THEN
+          LastTempHandlingSpecNo := "Entry No."
+        ELSE
+          LastTempHandlingSpecNo := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertTempHandlingSpec@59(LocationCode@1003 : Code[10];ItemNo@1002 : Code[20];VariantCode@1000 : Code[10];EntrySummary@1004 : Record 338;QuantityBase@1001 : Decimal);
+    BEGIN
+      WITH TempHandlingSpecification DO BEGIN
+        INIT;
+        "Entry No." := LastTempHandlingSpecNo + 1;
+        "Location Code" := LocationCode;
+        "Item No." := ItemNo;
+        "Variant Code" := VariantCode;
+        "Lot No." := EntrySummary."Lot No.";
+        "Serial No." := EntrySummary."Serial No.";
+        "Expiration Date" := EntrySummary."Expiration Date";
+        VALIDATE("Quantity (Base)",-QuantityBase);
+        INSERT;
+        LastTempHandlingSpecNo := "Entry No.";
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

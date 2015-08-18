@@ -1,0 +1,171 @@
+OBJECT Codeunit 8726 Mobile Sales Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/02/08;
+    Time=12:00:00;
+    Version List=NAVW15.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MobSalesSetup@1000 : Record 8725;
+
+    PROCEDURE CustOnDelete@18(VAR Cust@1000 : Record 18);
+    VAR
+      MobCustPrice@1001 : Record 8726;
+    BEGIN
+      MobCustPrice.SETCURRENTKEY("Customer No.");
+      MobCustPrice.SETRANGE("Customer No.",Cust."No.");
+      IF NOT MobCustPrice.ISEMPTY THEN
+        MobCustPrice.DELETEALL;
+    END;
+
+    PROCEDURE ItemOnDelete@11(VAR Item@1000 : Record 27);
+    VAR
+      MobCustPrice@1001 : Record 8726;
+    BEGIN
+      MobCustPrice.SETCURRENTKEY("Item No.");
+      MobCustPrice.SETRANGE("Item No.",Item."No.");
+      IF NOT MobCustPrice.ISEMPTY THEN
+        MobCustPrice.DELETEALL;
+    END;
+
+    PROCEDURE TodoOnInsert@13(VAR Todo@1001 : Record 5080);
+    VAR
+      MobileSalesActivity@1000 : Record 8727;
+      CustNo@1002 : Code[20];
+      ContNo@1003 : Code[20];
+    BEGIN
+      MobSalesSetup.GET;
+      IF NOT MobSalesSetup."Auto. Activity Update" THEN
+        EXIT;
+
+      IF NOT IsMobileSalesActivity(Todo,CustNo,ContNo) THEN
+        EXIT;
+
+      TodoInitActivity(Todo,MobileSalesActivity,CustNo,ContNo);
+      MobileSalesActivity.INSERT;
+    END;
+
+    PROCEDURE TodoOnModify@12(VAR Todo@1001 : Record 5080);
+    BEGIN
+      MobSalesSetup.GET;
+      IF NOT MobSalesSetup."Auto. Activity Update" THEN
+        EXIT;
+
+      TodoOnUpdate(Todo);
+    END;
+
+    PROCEDURE TodoOnDelete@10(VAR Todo@1001 : Record 5080);
+    VAR
+      MobileSalesActivity@1000 : Record 8727;
+      CustNo@1002 : Code[20];
+      ContNo@1003 : Code[20];
+    BEGIN
+      MobSalesSetup.GET;
+      IF NOT MobSalesSetup."Auto. Activity Update" THEN
+        EXIT;
+
+      IF NOT IsMobileSalesActivity(Todo,CustNo,ContNo) THEN
+        EXIT;
+
+      IF MobileSalesActivity.GET(Todo."No.") THEN
+        MobileSalesActivity.DELETE;
+    END;
+
+    PROCEDURE TodoOnUpdate@20(VAR Todo@1001 : Record 5080);
+    VAR
+      MobileSalesActivity@1002 : Record 8727;
+      CustNo@1003 : Code[20];
+      ContNo@1004 : Code[20];
+    BEGIN
+      IF NOT IsMobileSalesActivity(Todo,CustNo,ContNo) THEN BEGIN
+        IF MobileSalesActivity.GET(Todo."No.") THEN
+          MobileSalesActivity.DELETE;
+        EXIT;
+      END;
+
+      TodoInitActivity(Todo,MobileSalesActivity,CustNo,ContNo);
+      IF NOT MobileSalesActivity.MODIFY THEN
+        MobileSalesActivity.INSERT;
+    END;
+
+    LOCAL PROCEDURE IsMobileSalesActivity@15(VAR Todo@1000 : Record 5080;VAR FoundCustNo@1003 : Code[20];VAR FoundCustContNo@1005 : Code[20]) : Boolean;
+    VAR
+      MobileSalesActivity@1001 : Record 8727;
+      AttendeeTodo@1002 : Record 5080;
+      ContBusRelation@1006 : Record 5054;
+      LastContCompanyNo@1004 : Code[20];
+    BEGIN
+      WITH Todo DO BEGIN
+        IF ("System To-do Type" <> "System To-do Type"::Organizer) OR
+           (Type <> Type::Meeting) OR
+           ("Team Code" <> '') OR
+           "All Day Event"
+        THEN
+          EXIT(FALSE);
+
+        IF Canceled THEN BEGIN
+          IF MobileSalesActivity.GET("No.") THEN
+            MobileSalesActivity.DELETE;
+          EXIT(FALSE);
+        END;
+
+        // If exactly one customer is part of the the To-do
+        AttendeeTodo.RESET;
+        AttendeeTodo.SETCURRENTKEY("Organizer To-do No.","System To-do Type");
+        AttendeeTodo.SETRANGE("Organizer To-do No.","No.");
+        AttendeeTodo.SETRANGE("System To-do Type","System To-do Type"::"Contact Attendee");
+        IF AttendeeTodo.FINDSET THEN
+          REPEAT
+            IF AttendeeTodo."Contact Company No." <> '' THEN BEGIN
+              IF NOT (AttendeeTodo."Contact Company No." IN [LastContCompanyNo,FoundCustContNo]) THEN BEGIN
+                ContBusRelation.RESET;
+                ContBusRelation.SETCURRENTKEY("Link to Table","Contact No.");
+                ContBusRelation.SETRANGE("Link to Table",ContBusRelation."Link to Table"::Customer);
+                ContBusRelation.SETRANGE("Contact No.",AttendeeTodo."Contact Company No.");
+                IF ContBusRelation.FINDFIRST THEN
+                  IF FoundCustNo = '' THEN BEGIN
+                    FoundCustNo := ContBusRelation."No.";
+                    FoundCustContNo := ContBusRelation."Contact No.";
+                  END ELSE
+                    EXIT(FALSE);
+              END;
+              LastContCompanyNo := AttendeeTodo."Contact No.";
+            END;
+          UNTIL AttendeeTodo.NEXT = 0;
+      END;
+
+      EXIT(FoundCustNo <> '');
+    END;
+
+    LOCAL PROCEDURE TodoInitActivity@19(VAR Todo@1000 : Record 5080;VAR MobileSalesActivity@1001 : Record 8727;CustNo@1002 : Code[20];ContNo@1003 : Code[20]);
+    BEGIN
+      WITH MobileSalesActivity DO BEGIN
+        INIT;
+        "To-do No." := Todo."No.";
+        Description := Todo.Description;
+        "Customer No." := CustNo;
+        "Contact No." := ContNo;
+        Date := Todo.Date;
+        "Start Time" := Todo."Start Time";
+        "End Time" := DT2TIME(CREATEDATETIME(Todo.Date,Todo."Start Time") + Todo.Duration);
+        Completed := Todo.Status = Todo.Status::Completed;
+        "Date Closed" := Todo."Date Closed";
+        "Last Date Modified" := Todo."Last Date Modified";
+        "Last Time Modified" := Todo."Last Time Modified";
+        "Salesperson Code" := Todo."Salesperson Code";
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

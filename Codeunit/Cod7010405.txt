@@ -1,0 +1,211 @@
+OBJECT Codeunit 7010405 Importacion Automatica Serv.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/15;
+    Time=13:19:26;
+    Modified=Yes;
+    Version List=TRANSFER,TER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            InciaImp;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355000 : TextConst 'ESP=XML';
+      rPar@1103350001 : Record 7010311;
+      rParTRN@1103350002 : Record 7010433;
+      rArchs@1103350003 : Record 2000000022;
+      cFunImp@1103350004 : Codeunit 7010402;
+      cFunBas@1103350005 : Codeunit 7010310;
+      wOcupado@1103350000 : Boolean;
+      Text001@1103350006 : TextConst 'ESP=%1 Detectados errores en la importacion %2 %3';
+      Text002@1103350007 : TextConst 'ESP="Fecha= %1, Ususario= %2  %3"';
+      Text003@1103350008 : TextConst 'ESP="Archivo= %1 %2"';
+      Text004@1103350009 : TextConst 'ESP=%1 La inportaci¢n %2 lleva m s de 2 horas parada %3';
+      Text005@1103350010 : TextConst 'ESP="Fecha Ahora= %1, Ususario Ahora= %2  %3"';
+      Text006@1103350011 : TextConst 'ESP=Importacion Automatica.';
+
+    PROCEDURE InciaImp@1103350001();
+    VAR
+      lrImp@1103350000 : Record 7010377;
+      lrErr@1103350002 : Record 7035334;
+      lwOK@1103350001 : Boolean;
+      lwTieneErrores@1103350003 : Boolean;
+      lwFechaH@1103350004 : DateTime;
+      lwHora@1103350005 : Integer;
+    BEGIN
+      // InciaImp
+
+      IF NOT rPar.FINDFIRST THEN
+        EXIT;
+      IF NOT rParTRN.FINDFIRST THEN
+        EXIT;
+
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TER]) THEN
+        EXIT;
+
+      IF NOT rParTRN."Importacion Automatica" THEN
+        EXIT;
+
+      rParTRN.TESTFIELD("Directorio Archivos");
+      rParTRN.TESTFIELD("Directorio Archivos Importados");
+
+      IF rParTRN."Directorio Archivos"[STRLEN(rParTRN."Directorio Archivos")]  <> '\' THEN BEGIN
+        rParTRN."Directorio Archivos":= rParTRN."Directorio Archivos" + '\';
+        rParTRN.MODIFY;
+      END;
+
+      CLEAR(rArchs);
+      rArchs.SETRANGE("Is a file", TRUE);
+      rArchs.SETRANGE(Path       , rParTRN."Directorio Archivos");
+      IF rArchs.FINDSET THEN BEGIN
+        lwOK := FALSE;
+        REPEAT
+          IF BuscaExtension(rArchs.Name)=Text50000 THEN BEGIN
+          // Busca si ya est  siendo utilizado
+            CLEAR(lrImp);
+            lrImp.SETCURRENTKEY(Archivo,"Fecha Arch","Hora Arch",Terminado);
+            lrImp.SETRANGE(Archivo     , rArchs.Name);
+            lrImp.SETRANGE("Fecha Arch", rArchs.Date);
+            lrImp.SETRANGE("Hora Arch" , rArchs.Time);
+            lrImp.SETRANGE(Terminado   , FALSE);
+            lwOK := NOT lrImp.FINDFIRST;
+            IF lwOK THEN BEGIN
+              lrImp.LOCKTABLE;
+              lrImp.INIT;
+              lrImp.Archivo      := rArchs.Name;
+              lrImp."Fecha Arch" := rArchs.Date;
+              lrImp."Hora Arch"  := rArchs.Time;
+              lrImp.INSERT(TRUE);
+
+              lrImp."No Importacion" := cFunImp.ImportaArchivoXML1(rParTRN."Directorio Archivos" + rArchs.Name);
+              lrImp.Terminado        := TRUE;
+              lrImp.MODIFY;
+              COMMIT;
+
+              lwTieneErrores := FALSE;
+              // Se comprueba la importacion
+              IF lrImp."No Importacion" <> 0 THEN BEGIN
+                cFunImp.BuscaErrores(lrImp."No Importacion");
+                CLEAR(lrErr);
+                lrErr.SETRANGE("No Importacion", lrImp."No Importacion");
+                lwTieneErrores := lrErr.FINDFIRST;
+                IF lwTieneErrores THEN BEGIN
+                  EnviaAviso(lrImp,0);
+                  COMMIT;
+                END;
+                // Traspasa lo que est‚ bien
+                cFunImp.Traspasa(lrImp."No Importacion",0,FALSE,TRUE);
+                IF NOT lwTieneErrores THEN // Borramos el registro que ya no hace falta
+                  lrImp.DELETE(TRUE);
+              END;
+
+            END
+            ELSE BEGIN
+              // Si ese archivo ya esta pillado comprobamos las fechas
+              // Si lleva as¡ mas de 2 horas enviamos un mensaje de aviso
+              IF NOT lrImp."Aviso Mail" THEN BEGIN
+                lwHora:= 3600000; // Esto es una hora en milisegundos;
+                lwFechaH:= CURRENTDATETIME - (lwHora * 2);
+                IF lrImp.Fecha < lwFechaH THEN
+                  EnviaAviso(lrImp,1);
+              END;
+            END;
+          END;
+        UNTIL (rArchs.NEXT=0) OR lwOK
+      END;
+    END;
+
+    PROCEDURE NombreARch@1103350000(pwArch@1103350000 : Text[1024]) : Text[1024];
+    VAR
+      lwXPos@1103350002 : Integer;
+    BEGIN
+      // NombreArch
+      // Devuelve el nombre del archivo sin el Path.
+
+      REPEAT
+        lwXPos := STRPOS(pwArch,'\');
+        IF lwXPos <> 0 THEN
+          pwArch := COPYSTR(pwArch,1,lwXPos);
+      UNTIL lwXPos=0;
+
+      EXIT(pwArch);
+    END;
+
+    PROCEDURE BuscaExtension@1103350004(lwNomArch@1103350000 : Text[30]) : Code[3];
+    VAR
+      lwPos@1103350001 : Integer;
+    BEGIN
+      // BuscaExtension
+      // Devuelve la extensi¢n del nombre del archivo
+
+      lwPos := STRPOS(lwNomArch,'.');
+      IF lwPos <> 0 THEN
+        EXIT(COPYSTR(lwNomArch,lwPos+1,3));
+    END;
+
+    PROCEDURE EnviaAviso@1103350002(VAR prImp@1103350000 : Record 7010377;pwTipo@1103350005 : 'ErrorImp,Retraso');
+    VAR
+      lwOK@1103350001 : Boolean;
+      lwAsunto@1103350002 : Text[250];
+      lwArchivos@1103350003 : ARRAY [5] OF Text[250];
+      lwCuerpo@1103350004 : ARRAY [5] OF Text[250];
+      lwSL@1103350006 : Char;
+    BEGIN
+      // EnviaAviso
+      // Envia un correo avisando que se han generado errores
+
+      lwOK := TRUE;
+      //-$001lwOK := lwOK AND (rParTRN."Host SMTP" <> '');
+      lwOK := lwOK AND (rParTRN."Direcion Control Importaciones" <> '');
+
+      CLEAR(lwCuerpo);
+      CLEAR(lwAsunto);
+      lwSL := 10; // Salto de Linea
+      CASE pwTipo OF
+        pwTipo::ErrorImp : BEGIN
+          lwAsunto := STRSUBSTNO(Text001, Text006 ,prImp."No Importacion",'');
+
+          lwCuerpo[1]:= STRSUBSTNO(Text001, Text006 ,prImp."No Importacion", lwSL);
+          lwCuerpo[2]:= STRSUBSTNO(Text002, prImp.Fecha, prImp.Usuario, lwSL);
+          lwCuerpo[3]:= STRSUBSTNO(Text003, prImp.Archivo,'');
+        END;
+        pwTipo::Retraso : BEGIN
+          lwAsunto := STRSUBSTNO(Text004, Text006 ,prImp."No Importacion",'');
+
+          lwCuerpo[1]:= STRSUBSTNO(Text004, Text006 ,prImp."No Importacion",lwSL);;
+          lwCuerpo[2]:= STRSUBSTNO(Text002, prImp.Fecha, prImp.Usuario,lwSL);
+          lwCuerpo[3]:= STRSUBSTNO(Text003, prImp.Archivo,lwSL);
+          lwCuerpo[4]:= STRSUBSTNO(Text002, CURRENTDATETIME, USERID,'');
+        END;
+      END;
+
+      IF lwOK THEN BEGIN
+        prImp."Aviso Mail" := prImp."Aviso Mail" OR
+                              cFunBas.EnviaDocumentoEmail(rParTRN."Host SMTP",
+                                     rParTRN."Direcion Control Importaciones",
+                                     rParTRN."Direcion Control Importaciones",
+                                                                     lwAsunto,
+                                                                   lwArchivos,
+                                                                     lwCuerpo,
+                                                                       FALSE);
+        prImp.MODIFY;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 12022015 Enviaremos el mail de aviso cuando la cuenta este configurada
+
+      $002 AJS 13022015 Pongo un control en la funcion InciaImp para que no de error cuando falta registro
+                        en la tabla de Parametros auxiliares
+    }
+    END.
+  }
+}

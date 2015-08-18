@@ -1,0 +1,1049 @@
+OBJECT Codeunit 7010410 Funciones Partes Adicionales
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/06/15;
+    Time=12:02:32;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+
+            TraspasoPartesOtraEmpresa;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355013 : TextConst 'ESP=SmtpMailX Element';
+      Text50001@1103355014 : TextConst 'ESP=.com';
+      Text50002@1103355015 : TextConst 'ESP=<body>';
+      Text50003@1103355016 : TextConst 'ESP="<font face=""Verdana"" size=""2"">"';
+      Text50004@1103355017 : TextConst 'ESP=<br>';
+      Text50005@1103355018 : TextConst 'ESP=</font>';
+      Text50006@1103355019 : TextConst 'ESP=</body>';
+      Text50007@1103355020 : TextConst 'ESP=Time';
+      Text50008@1103355021 : TextConst 'ESP=<Hours24,>:<Minutes,2>';
+      rPar@1100253000 : Record 7010311;
+      Text001@1100253001 : TextConst 'ESP=No se ha encontrado Garaje Predeterminado en la Zona F¡sica %1';
+      cFunBas@1103355002 : Codeunit 7010310;
+      Text005@1100253006 : TextConst 'ESP=Borrado parte numero %1';
+      Text006@1100253007 : TextConst 'ESP=Datos del parte';
+      Text007@1100253008 : TextConst 'ESP=Dia %1';
+      Text008@1100253009 : TextConst 'ESP=Cliente %1 - Touroperador principal %2';
+      Text009@1100253010 : TextConst 'ESP=Codigo Servicio %1';
+      Text010@1100253011 : TextConst 'ESP=Referencia %1';
+      Text011@1100253012 : TextConst 'ESP=Traspasar los partes que se facturan en otras empresas.';
+      Text012@1100253013 : TextConst 'ESP=Proceso de traspaso terminado. Iniciado %1 Finalizado %2';
+      Text013@1100253014 : TextConst 'ESP=Indique hasta que dia desea traspasar #1#########';
+      wVentana@1100253015 : Dialog;
+      Text014@1100253016 : TextConst 'ESP=Traspasando';
+      Text015@1100253017 : TextConst 'ESP=Plazas';
+      rUser@1103355000 : Record 7010420;
+      Text016@1103355001 : TextConst 'ESP=Actual,Filtrados';
+      Text017@1103355003 : TextConst 'ESP=No se encuentra el archivo %1';
+      Text020@1103355006 : TextConst 'ESP=\a la empresa %1';
+      Text021@1103355007 : TextConst 'ESP=\a todas las empresas';
+      Text022@1103355008 : TextConst 'ESP=No se ha encontrado ning£n TTOO a traspasar';
+      Text023@1103355009 : TextConst 'ESP=Ya existe el parte %1';
+      Text024@1103355010 : TextConst 'ESP=¨Desea realmente recupera el parte No %1?';
+      Text025@1103355011 : TextConst 'ESP=Realizado Backup Parte';
+      Text026@1103355012 : TextConst 'ESP=Recuperado Parte de Backup';
+      cMail@1000000000 : Codeunit 397;
+
+    PROCEDURE GarajeAutomatico@1100253000(VAR prParte@1100253000 : Record 7010360) : Boolean;
+    VAR
+      lrGaraje@1100253001 : Record 7010310;
+      lrExc@1100253004 : Record 7035346;
+      lrCodSer@1100253008 : Record 7010320;
+      lwEsVehPeq@1100253002 : Boolean;
+      lwPax@1100253003 : Decimal;
+      lwCodGaraje@1100253005 : Code[10];
+      lrZon@1100253006 : Record 7010314;
+      lwOK@1103355000 : Boolean;
+    BEGIN
+      // GarajeAutomatico
+      // Funci¢n que automatiza la asignaci¢n de Garaje
+
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TRN, rPar."Empresa Real"::CNT]) THEN // En principio solo para TransUnion
+        EXIT;
+
+      // JPT 20/06/06 Ahora la automatizaci¢n de garaje se parametriza por usuario
+      CLEAR(rUser);
+      lwOK := rUser.GET(USERID);
+      lwOK := lwOK AND rUser."Garaje Automatico";
+      IF NOT lwOK THEN
+        EXIT;
+
+      // Solo lo aplicamos a los usuario que tengan configurado el Garaja de Trabajo "Todos". JPT 21/02/06. Toni Carvajal
+      IF (rUser."Garaje de trabajo" <>'') AND (rUser."Garaje de trabajo" <> rPar."Todos los garajes") THEN
+        EXIT;
+
+      CLEAR(lrGaraje);
+      CLEAR(lwCodGaraje);
+
+      // Si el Garaje que posee est  marcado como NO automatizable No lo cambiamos
+      IF lrGaraje.GET(prParte.Garaje) THEN BEGIN
+        IF lrGaraje."Garaje No automatizable" THEN
+          EXIT;
+      END;
+
+      // Codigo de Servicio tiene un campo "Plazas Garaje Peque¤o" que determina si se tiene que cojer el garaje peque¤o
+      CLEAR(lrCodSer);
+      IF NOT lrCodSer.GET(prParte."Codigo Servicio") THEN
+        CLEAR(lrCodSer);
+
+      // Primero miramos Si es de vehiculos peque¤os (Solo puede haber uno de este tipo)
+      CLEAR(lwEsVehPeq);
+      CLEAR(lrGaraje);
+      prParte.CALCFIELDS("Adultos transportados","Ni¤os transportados");
+      lwPax := prParte."Adultos transportados" + prParte."Ni¤os transportados";
+      lrGaraje.SETFILTER("Garaje para servicios peque¤os",'<>%1',0);
+      lwEsVehPeq := lrGaraje.FINDFIRST;
+      lwEsVehPeq := lwEsVehPeq AND lrGaraje.Abierto;
+      lwEsVehPeq := lwEsVehPeq AND
+                    ((lwPax <= lrGaraje."Garaje para servicios peque¤os") OR (lwPax <= lrCodSer."Plazas Garaje Peque¤o"));
+      IF lwEsVehPeq THEN BEGIN
+        // Comprobamos que el parte no est‚ en ning£na excepci¢n
+        CLEAR(lrExc);
+        lrExc.SETCURRENTKEY(Cliente,Touroperador,"Codigo Servicio");
+        lrExc.SETRANGE(Cliente           , prParte.Cliente);
+        lrExc.SETRANGE(Touroperador      , prParte."Touroperador principal");
+        lrExc.SETRANGE("Codigo Servicio" , prParte."Codigo Servicio");
+        lwEsVehPeq := NOT lrExc.FINDFIRST;
+      END;
+
+      IF lwEsVehPeq THEN
+        lwCodGaraje := lrGaraje.Garaje
+      ELSE BEGIN // Si no lo ha encontrado por vehiculos pequelos lo buscamos por zona
+        CLEAR(lrZon);
+        IF lrZon.GET(prParte."Zona parte") THEN
+          lwCodGaraje := lrZon."Garaje Predeterminado";
+        IF lwCodGaraje = '' THEN
+          ERROR(Text001, lrZon.Codigo);
+      END;
+
+      IF lwCodGaraje <> '' THEN BEGIN
+        prParte.VALIDATE(Garaje, lwCodGaraje);
+        // JPT 17/08/06 El modify tiene que estar externo a la funci¢n
+      END;
+
+      EXIT(lwCodGaraje <> '');
+    END;
+
+    PROCEDURE AvisoBorradoParte@1100253002(prParte@1100253001 : Record 7010360);
+    VAR
+      lrParAux@1100253002 : Record 7010433;
+      lrGar@1100253000 : Record 7010310;
+      lwRemitente@1100253003 : Text[30];
+    BEGIN
+      // AvisoBorradoParte
+
+      // 1. Buscamos los parametros y el garaje del parte
+
+      rPar.FINDFIRST;
+
+      lrParAux.RESET;
+      lrParAux.FINDFIRST;
+      lrParAux.TESTFIELD("Host SMTP");
+
+      lrGar.RESET;
+      lrGar.GET(prParte.Garaje);
+      lrGar.TESTFIELD("Correo electronico");
+
+      // 2. Llamamos a la rutina que genera un nuevo correo electronico
+
+      lwRemitente := USERID + '@' + lrGar.Garaje + FORMAT(rPar."Empresa Real") + Text50001;
+      NuevoCorreoElectronico(lwRemitente, lrGar."Correo electronico", STRSUBSTNO(Text005, prParte."N§ Parte"),
+                             lrParAux."Host SMTP");
+
+      // 3. Vamos agregando lineas de texto, para incluir mas informacion del parte de trabajo borrado
+
+      NuevaLineaCorreoElectronico(Text006, FALSE);
+      NuevaLineaCorreoElectronico(' ', FALSE);
+      NuevaLineaCorreoElectronico(STRSUBSTNO(Text007, prParte.Fecha), TRUE);
+      NuevaLineaCorreoElectronico(STRSUBSTNO(Text008, prParte.Cliente, prParte."Touroperador principal"), TRUE);
+      NuevaLineaCorreoElectronico(STRSUBSTNO(Text009, prParte."Codigo Servicio"), TRUE);
+      NuevaLineaCorreoElectronico(STRSUBSTNO(Text010, prParte.Referencia), TRUE);
+
+      // 4. Enviamos el correo
+
+      EnviarCorreoElectronico;
+    END;
+
+    PROCEDURE NuevoCorreoElectronico@1100253003(pwRemitente@1100253001 : Text[80];pwDestinatario@1100253002 : Text[80];pwAsunto@1100253003 : Text[250];pwHost@1100253004 : Text[80]);
+    BEGIN
+      //. NuevoCorreoElectronico
+
+      CLEAR(cMail);
+      cMail.NewMessage(pwDestinatario, '', pwAsunto, Text50002 + Text50003, '', FALSE);
+    END;
+
+    PROCEDURE NuevaLineaCorreoElectronico@1100253004(pwTexto@1100253000 : Text[250];pwTabulacion@1100253001 : Boolean);
+    BEGIN
+      //. NuevaLineaCorreoElectronico
+
+      IF pwTabulacion THEN
+        cMail.AddBodyline('    ' + pwTexto)
+      ELSE
+        cMail.AddBodyline(pwTexto);
+      cMail.AddBodyline := Text50004;
+    END;
+
+    PROCEDURE EnviarCorreoElectronico@1100253006();
+    BEGIN
+      //. EnviarCorreoElectronico
+
+      cMail.AddBodyline(Text50005);
+      cMail.AddBodyline(Text50006);
+
+      IF NOT cMail.Send THEN
+        ERROR(cMail.GetErrorDesc);
+    END;
+
+    PROCEDURE TraspasoPartesOtraEmpresa@1100253005();
+    VAR
+      rCliTTOO@1100253028 : Record 7010313;
+      rSer@1100253027 : Record 7010358;
+      rSer2@1100253026 : Record 7010358;
+      rSer3@1100253025 : Record 7010358;
+      rTempSer@1100253033 : TEMPORARY Record 7010358;
+      rParte@1100253024 : Record 7010360;
+      rParte2@1100253023 : Record 7010360;
+      rParte3@1100253022 : Record 7010360;
+      rSerPar@1100253021 : Record 7010359;
+      rSerPar2@1100253020 : Record 7010359;
+      rSerPar3@1100253019 : Record 7010359;
+      rTTOOParte@1100253018 : Record 7010365;
+      rTTOOParte2@1100253017 : Record 7010365;
+      rTTOOParte3@1100253016 : Record 7010365;
+      rHist@1100253015 : Record 7010361;
+      rHist2@1100253014 : Record 7010361;
+      rHist3@1100253013 : Record 7010361;
+      rExtParte@1100253012 : Record 7010362;
+      rExtParte2@1100253011 : Record 7010362;
+      rExtParte3@1100253010 : Record 7010362;
+      rAnotParte@1100253009 : Record 7010435;
+      rAnotParte2@1100253008 : Record 7010435;
+      rAnotParte3@1100253007 : Record 7010435;
+      rElemPunto@1100253006 : Record 7010363;
+      rElemPunto2@1100253005 : Record 7010363;
+      rElemPunto3@1100253004 : Record 7010363;
+      rVehDestino@1103355000 : Record 7010346;
+      lrVeh@1103355005 : Record 7010346;
+      lrCompInfo@1103355002 : Record 79;
+      lfPeticion@1103355001 : Form 7035365;
+      wHoraInicio@1100253001 : Time;
+      wHoraFinal@1100253000 : Time;
+      wVentana@1100253002 : Dialog;
+      wFechaLimite@1100253003 : Date;
+      wActual@1100253029 : Integer;
+      wTotal@1100253030 : Integer;
+      lwInsert@1100253031 : Boolean;
+      lwBorra@1100253032 : Boolean;
+      lwTotal@1100253034 : ARRAY [2] OF Integer;
+      lwCont@1100253035 : ARRAY [2] OF Integer;
+      lwEmpresa@1103355003 : Text[30];
+      lwText@1103355004 : Text[250];
+    BEGIN
+      // TraspasoPartesOtraEmpresa
+      //
+
+      // Se hace una petici¢n a que empresa se desea traspasar
+      IF lfPeticion.RUNMODAL <> ACTION::LookupOK THEN
+        EXIT;
+
+      lwEmpresa := lfPeticion.GetEmpresa;
+      lwText := Text011;
+      IF lwEmpresa ='' THEN
+        lwText += Text021
+      ELSE
+        lwText += STRSUBSTNO(Text020, lwEmpresa);
+
+      IF NOT CONFIRM(lwText) THEN
+        EXIT;
+
+      wVentana.OPEN(Text013);
+      wVentana.INPUT(1, wFechaLimite);
+      wVentana.CLOSE;
+
+      rCliTTOO.RESET;
+      IF lwEmpresa = '' THEN // Se traspasarn a todas las empresas
+        rCliTTOO.SETFILTER("Facturar a traves de empresa", '<>%1', '')
+      ELSE
+        rCliTTOO.SETRANGE("Facturar a traves de empresa", lwEmpresa);
+
+      wHoraInicio := TIME;
+      IF rCliTTOO.FINDSET THEN BEGIN
+        CLEAR(lwTotal);
+        CLEAR(lwCont);
+        lwTotal[1] := rCliTTOO.COUNT;
+        wVentana.OPEN(Text014 + '\#1##############\@2@@@@@@@@@@@@@@\@3@@@@@@@@@@@@@@');
+        REPEAT
+          wVentana.UPDATE(1,STRSUBSTNO('%1-%2',rCliTTOO.Cliente,rCliTTOO.TTOO));
+
+          // AJS 27.03.2006
+          // Para cada cliente vaciamos el temporal de servicios
+
+          rTempSer.DELETEALL;
+
+          rParte.RESET;
+          rParte.SETCURRENTKEY(Confirmado, Fecha, Gestor);
+          rParte.SETRANGE(Confirmado, FALSE);
+          rParte.SETRANGE (Cliente  , rCliTTOO.Cliente);
+          rParte.SETFILTER(Fecha    , '<=%1', wFechaLimite);
+
+          // AJS 09.05.2006
+          // Filtramos por el numero de exportacion porque hay servicios de estos clientes que no se borran
+
+          rParte.SETRANGE("Num Exportacion Prov", 0);
+
+          IF rParte.FINDSET THEN BEGIN
+            lwTotal[2] := rParte.COUNT;
+            lwCont[2]  := 0;
+            REPEAT
+              // Pasamos las recogidas de los servicios
+
+              lwInsert := FALSE; // Si tiene que insertar el Parte en Empresa Facturacion
+              lwBorra  := TRUE;  // Si tiene que Borrar el Parte de la Empresa Actual
+
+              // AJS 09.05.2006
+              // Buscar la ficha de vehiculo en la empresa a facturar para obtener el proveedor
+
+              rVehDestino.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+              rVehDestino.GET(rParte.Vehiculo);
+              lrVeh.GET(rParte.Vehiculo); // Vehiculo en la propia empresa
+
+              lwBorra  := lwBorra AND (rParte.Proveedor <> '') AND (rVehDestino."Vehiculo propio");
+              // JPT 08/11/07 Si es vehiculo en origen es propio No debe de borrarse
+              lwBorra  := lwBorra AND (NOT lrVeh."Vehiculo propio");
+
+              CLEAR(rSerPar);
+              rSerPar.SETCURRENTKEY("N§ Parte", "N§ Linea");
+              rSerPar.SETRANGE("N§ Parte", rParte."N§ Parte");
+              IF rSerPar.FINDSET THEN BEGIN
+                REPEAT
+
+                  // Solo se Borran los partes que han sido afectados en todas sus lineas
+
+                  IF rSerPar.Touroperador = rCliTTOO.TTOO THEN BEGIN
+                    lwInsert := TRUE;
+
+                    rSerPar2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                    rSerPar2 := rSerPar;
+                    rSerPar2.INSERT;
+
+                    // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                    // destino
+
+                    IF lwBorra THEN BEGIN
+                      rSerPar3 := rSerPar;
+                      rSerPar3.DELETE;
+                    END;
+
+                    // Pasamos los suplementos de las lineas de recogida
+
+                    rElemPunto.SETRANGE("N§ Servicio", rSerPar."N§ Servicio");
+                    rElemPunto.SETRANGE("N§ Linea"   , rSerPar."N§ Linea");
+                    IF rElemPunto.FINDSET THEN BEGIN
+                      REPEAT
+                        rElemPunto2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                        rElemPunto2 := rElemPunto;
+                        rElemPunto2.INSERT;
+
+                        // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                        // destino
+
+                        IF lwBorra THEN BEGIN
+                          rElemPunto3 := rElemPunto;
+                          rElemPunto3.DELETE;
+                        END;
+                      UNTIL rElemPunto.NEXT = 0;
+                    END;
+
+                    // Historico de lineas
+
+                    rHist.RESET;
+                    rHist.SETRANGE("Tipo Fichero", rHist."Tipo Fichero"::Linea);
+                    rHist.SETRANGE ("N§"         , rSerPar."N§ Servicio");
+                    rHist.SETRANGE("N§ Linea"    , rSerPar."N§ Linea");
+                    IF rHist.FINDSET THEN BEGIN
+                      REPEAT
+                        rHist2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                        rHist2 := rHist;
+                        rHist2.INSERT;
+
+                        // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                        // destino
+
+                        IF lwBorra THEN BEGIN
+                          rHist3 := rHist;
+                          rHist3.DELETE;
+                        END;
+                      UNTIL rHist.NEXT = 0;
+                    END;
+
+                    // Guardamos el servicio en el temporal
+
+                    rTempSer."N§ Servicio" := rSerPar."N§ Servicio";
+                    IF NOT rTempSer.FIND THEN
+                      rTempSer.INSERT;
+                  END
+                  ELSE
+                    lwBorra := FALSE;
+                UNTIL rSerPar.NEXT = 0;
+              END;
+
+              // Pasamos los touroperadores por parte
+
+              rTTOOParte.SETRANGE("N§ Parte", rParte."N§ Parte");
+              rTTOOParte.SETRANGE(Touroperador, rCliTTOO.TTOO);
+              IF rTTOOParte.FINDSET(TRUE) THEN BEGIN
+                REPEAT
+                  rTTOOParte2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                  rTTOOParte2 := rTTOOParte;
+                  rTTOOParte2.INSERT;
+
+                  // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                  // destino
+
+                  IF lwBorra THEN BEGIN
+                    rTTOOParte3 := rTTOOParte;
+                    rTTOOParte3.DELETE;
+                  END;
+                UNTIL rTTOOParte.NEXT = 0;
+              END;
+
+              // Pasamos los extras por parte
+
+              rExtParte.SETRANGE("N§ Parte"   , rParte."N§ Parte");
+              rExtParte.SETRANGE(Touroperador, rCliTTOO.TTOO);
+              IF rExtParte.FINDSET(TRUE) THEN BEGIN
+                REPEAT
+                  rExtParte2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                  rExtParte2 := rExtParte;
+                  rExtParte2.INSERT;
+
+                  // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                  // destino
+
+                  IF lwBorra THEN BEGIN
+                    rExtParte3 := rExtParte;
+                    rExtParte3.DELETE;
+                  END;
+                UNTIL rExtParte.NEXT = 0;
+              END;
+
+              // Pasamos las anotaciones por parte
+
+              rAnotParte.SETRANGE("N§ Parte", rParte."N§ Parte");
+              IF rAnotParte.FINDSET(TRUE) THEN BEGIN
+                REPEAT
+                  IF lwInsert THEN BEGIN
+                    rAnotParte2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                    rAnotParte2 := rAnotParte;
+                    rAnotParte2.INSERT;
+                  END;
+
+                  // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                  // destino
+
+                  IF lwBorra THEN BEGIN
+                    rAnotParte3 := rAnotParte;
+                    rAnotParte3.DELETE;
+                  END;
+                UNTIL rAnotParte.NEXT = 0;
+              END;
+
+              // Pasamos las lineas de historico de Parte
+
+              rHist.RESET;
+              rHist.SETRANGE("Tipo Fichero" , rHist."Tipo Fichero"::Parte);
+              rHist.SETRANGE ("N§"          , rParte."N§ Parte");
+              IF rHist.FINDSET(TRUE) THEN BEGIN
+                REPEAT
+                  IF lwInsert THEN BEGIN
+                    rHist2 := rHist;
+                    rHist2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                    rHist2.INSERT;
+                  END;
+
+                  // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                  // destino
+
+                  IF lwBorra THEN BEGIN
+                    rHist3 := rHist;
+                    rHist3.DELETE;
+                  END;
+                UNTIL rHist.NEXT = 0;
+              END;
+
+              // Pasamos los partes de trabajo
+
+              IF lwInsert THEN BEGIN
+                rParte2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                rParte2 := rParte;
+
+                // rParte2.Proveedor := '';
+
+                rParte2.Proveedor := rVehDestino."Empresa propietaria";
+
+      // JPT 31/07/04 Si el parte se ha originado desde servicio regular o grupo no tiene sentido que se traspase esta informaci
+                rParte2."No Servicio Regular" :=0;
+                rParte2."Cod Grupo"           :='';
+
+
+                // AJS 09.05.2006
+                // En los partes que no tengan proveedor (vehiculo de Empresa origen) o que sean de un proveedor distinto
+                // a la empresa destino hay que convertirlos al cliente de la empresa destino, para saber si es un proveedor
+                // distinto comprobamos que el vehiculo en la empresa destino no tiene la marca de Vehiculo propio
+
+                IF (rParte.Proveedor = '') OR (NOT rVehDestino."Vehiculo propio") THEN BEGIN
+                  lrCompInfo.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                  lrCompInfo.FINDFIRST;
+                  rParte3 := rParte;
+                  rParte3.Cliente                := lrCompInfo."Cliente Exportacion";
+
+                  // AJS 09.05.2006
+                  // Modificamos el numero de exportacion porque hay servicios de estos clientes que no se borran y no queremos que
+                  // vuelvan a entrar en el proceso de traspaso
+
+                  rParte3."Num Exportacion Prov" := 99999999;
+                  rParte3.MODIFY;
+                END;
+
+                // AJS 24.01.2007
+                // Vaciar el campo de servicio regular para poder hacer facturacion manual en la empresa destino
+
+                rParte2."No Servicio Regular" := 0;
+
+                rParte2.INSERT;
+              END;
+
+              IF lwBorra THEN BEGIN
+
+                // AJS 09.05.2006
+                // Los partes que no tengan proveedor (vehiculo de Empresa origen) y sean de la empresa destino
+                // no hay que borrarlos, para saber si son de la empresa destino comprobamos que el vehiculo
+                // en la empresa destino tiene la marca de Vehiculo propio
+
+
+                rParte3 := rParte;
+                rParte3.DELETE;
+
+              END;
+
+              lwCont[2] += 1;
+              wVentana.UPDATE(3, ROUND(lwTotal[2] / lwCont[2] * 10000, 1));
+
+            UNTIL rParte.NEXT = 0;
+
+          CLEAR(rSer);
+          rTempSer.RESET;
+          IF rTempSer.FINDSET THEN BEGIN
+            REPEAT
+              rSer := rTempSer;
+              IF rSer.FIND THEN BEGIN
+                // Si a£n le quedan lineas no lo borramos
+
+                CLEAR(rSerPar);
+                rSerPar.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+                lwBorra := NOT rSerPar.FINDFIRST;
+
+                // Pasamos las lineas de historico
+
+                rHist.RESET;
+                rHist.SETFILTER("Tipo Fichero", '%1', rHist."Tipo Fichero"::Servicio);
+                rHist.SETRANGE ("N§"          , rSer."N§ Servicio");
+                IF rHist.FINDSET(TRUE) THEN BEGIN
+                  REPEAT
+                    rHist2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                    rHist2 := rHist;
+                    rHist2.INSERT;
+
+                    // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                    // destino
+
+                    IF lwBorra THEN BEGIN
+                      rHist3 := rHist;
+                      rHist3.DELETE;
+                    END;
+                  UNTIL rHist.NEXT = 0;
+                END;
+
+                // Pasamos los servicios
+
+                rSer2.CHANGECOMPANY(rCliTTOO."Facturar a traves de empresa");
+                rSer2 := rSer;
+                rSer2.INSERT;
+
+                // Solo se borra si el parte tiene proveedor y el vehiculo es "Vehiculo propio" en la empresa
+                // destino
+
+                IF lwBorra THEN BEGIN
+                  rSer3 := rSer;
+                  rSer3.DELETE;
+                END;
+
+              END;
+            UNTIL rTempSer.NEXT = 0;
+          END;
+
+          END;
+          lwCont[1] += 1;
+          wVentana.UPDATE(2, ROUND(lwTotal[1] / lwCont[1] * 10000, 1));
+        UNTIL rCliTTOO.NEXT = 0;
+        wVentana.CLOSE;
+      END
+      ELSE BEGIN
+        MESSAGE(Text022);
+        EXIT;
+      END;
+
+
+      wHoraFinal := TIME;
+
+      MESSAGE(Text012, wHoraInicio, wHoraFinal);
+    END;
+
+    PROCEDURE MantenCambiosImpresion@1100253007(VAR prParte@1100253009 : Record 7010360);
+    VAR
+      lrXParte@1100253000 : Record 7010360;
+      lrCambs@1100253008 : Record 7035390;
+      lwNoCamps@1100253001 : ARRAY [20] OF Integer;
+      lwRParte@1100253002 : RecordRef;
+      lwRXrecParte@1100253003 : RecordRef;
+      lwNo@1100253004 : Integer;
+      lwNoCamp@1100253010 : Integer;
+      lwField@1100253005 : FieldRef;
+      lwXrecField@1100253006 : FieldRef;
+      lwOk@1100253007 : Boolean;
+      lwCampo@1100253011 : Text[30];
+      lwCampoAnt@1100253012 : Text[30];
+    BEGIN
+      // MantenCambiosImpresion
+      // JPT 11/04/06 Mantenemos la tabla de impresi¢n de parte
+
+      rPar.FINDFIRST;
+      IF NOT (rPar."Empresa Real" IN [rPar."Empresa Real"::TRN, rPar."Empresa Real"::CNT]) THEN
+        EXIT;
+
+      lrXParte := prParte;
+      IF NOT lrXParte.FIND THEN
+        CLEAR(lrXParte);
+
+      IF lrXParte."Copias Impresas" = 0 THEN
+        EXIT;
+
+      // Si es una modificacion cambiamos el numero de versi¢n si dicha modificaci¢n afecta a alguno de los siguientes campos
+
+      lwRParte.GETTABLE(prParte);
+      lwRXrecParte.GETTABLE(lrXParte);
+      lwOk := TRUE;
+      //FOR lwNo:=1 TO lwRParte.FIELDCOUNT DO BEGIN
+      FOR lwNo:=1 TO 2 DO BEGIN
+        // En principio solo miramos los campos Garaje, Hora Inicio y Paxes
+        CASE lwNo OF
+          1 : lwNoCamp := 3; // Garaje
+          2 : lwNoCamp := 27; // Hora Inicio
+        END;
+
+        lwField     := lwRParte.FIELD(lwNoCamp);
+        lwXrecField := lwRXrecParte.FIELD(lwNoCamp);
+
+        //lwField     := lwRParte.FIELDINDEX(lwNo);
+        //lwXrecField := lwRXrecParte.FIELDINDEX(lwNo);
+        lwOk := lwField.VALUE = lwXrecField.VALUE;
+        IF NOT lwOk THEN BEGIN
+          CASE FORMAT(lwField.TYPE) OF
+            Text50007:BEGIN
+                     lwCampo    := FORMAT(lwField.VALUE , 0,Text50008);
+                     lwCampoAnt := FORMAT(lwXrecField.VALUE, 0,Text50008);
+                   END;
+            ELSE BEGIN
+                   lwCampo    := FORMAT(lwField.VALUE);
+                   lwCampoAnt := FORMAT(lwXrecField.VALUE);
+                 END;
+          END;
+
+          lrCambs.InsertaLinea(prParte."N§ Parte", lwField.CAPTION, lwCampoAnt, lwCampo);
+        END;
+      END;
+
+      // Comparamos los paxes por separado ya que es la suma de dos campos
+      lwOk := (prParte."Adultos trans. soporte" + prParte."Ni¤os trans. soporte") =
+                           (lrXParte."Adultos trans. soporte" + lrXParte."Ni¤os trans. soporte");
+
+      IF NOT lwOk THEN
+        lrCambs.InsertaLinea(prParte."N§ Parte", Text015, FORMAT(lrXParte."Adultos trans. soporte" + lrXParte."Ni¤os trans. soporte"),
+                         FORMAT(prParte."Adultos trans. soporte" + prParte."Ni¤os trans. soporte"));
+    END;
+
+    PROCEDURE ImprimirPDFsParte@1103355000(VAR prParte@1103355001 : Record 7010360);
+    VAR
+      lwOpc@1103355000 : Integer;
+      lrParte@1103355002 : Record 7010360;
+      lwNomArch@1103355003 : Text[1024];
+    BEGIN
+      // ImprimirPDFsParte
+
+      lwOpc:= STRMENU(Text016);
+
+      lrParte.COPY(prParte);
+
+      CASE lwOpc OF
+        0: EXIT;
+        1: lrParte.SETRECFILTER;
+      END;
+
+      IF lrParte.FINDSET THEN BEGIN
+        REPEAT
+          lwNomArch := lrParte.ArchivoPDF;
+          IF EXISTS(lwNomArch) THEN
+            cFunBas.ImprimeDocumento(lwNomArch)
+          ELSE
+            MESSAGE(Text017, lwNomArch);
+        UNTIL lrParte.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE RellenaPresentacion@1100253008(VAR prParte@1100253000 : Record 7010360) : Boolean;
+    VAR
+      lrSerPar@1100253001 : Record 7010359;
+      lwOk@1100253002 : Boolean;
+    BEGIN
+      // RellenaPresentacion
+      // Rellena el campo Presentacion en Partes
+      // OJO: No se hace un Modify por lo que debe de hacerse de forma externa
+      // JPT 28/07/10
+
+      rPar.FIND('-');
+
+      // Si no esta rellenada la presentaci¢n lo busca en las lineas
+      IF prParte.Presentacion ='' THEN BEGIN
+        CLEAR(lrSerPar);
+        CASE rPar."Empresa Real" OF
+          rPar."Empresa Real"::TRN: lrSerPar.SETCURRENTKEY("N§ Parte","N§ Linea");
+          ELSE lrSerPar.SETCURRENTKEY("N§ Parte","Hora recogida",Letra)
+        END;
+        lrSerPar.SETRANGE("N§ Parte", prParte."N§ Parte");
+        rPar.TESTFIELD(rPar."Codigo Entradas");
+        lrSerPar.ASCENDING(rPar."Codigo Entradas" <> prParte."Codigo Servicio");
+        lwOk := lrSerPar.FIND('-');
+        IF lwOk THEN
+          prParte.VALIDATE(Presentacion, COPYSTR(lrSerPar.nom_punto, 1, MAXSTRLEN(prParte.Presentacion)));
+      END;
+
+      EXIT(lwOk);
+    END;
+
+    PROCEDURE MakePKParte@1103355001(prParte@1103355000 : Record 7010360);
+    VAR
+      lrBKParte@1103355001 : Record 7035401;
+      lrBKTTOOP@1103355002 : Record 7035402;
+      lrBKSerPar@1103355004 : Record 7035403;
+      lrBKVuel@1103355007 : Record 7035404;
+      lrBKSubt@1103355008 : Record 7035405;
+      lrBKSupP@1103355011 : Record 7035406;
+      lrBKExtra@1103355012 : Record 7035407;
+      lrBKVuelLin@1103355015 : Record 7035408;
+      lrBKAnt@1103355017 : Record 7035409;
+      lrTTOOP@1103355003 : Record 7010365;
+      lrSerPar@1103355005 : Record 7010359;
+      lrVuel@1103355006 : Record 7035335;
+      lrSubt@1103355009 : Record 7035399;
+      lrSupP@1103355010 : Record 7010363;
+      lrExtra@1103355013 : Record 7010362;
+      lrVuelLin@1103355014 : Record 7035397;
+      lrAnt@1103355016 : Record 7010435;
+      lrHist@1103355018 : Record 7010361;
+    BEGIN
+      // MakePKParte
+      // Hace una copia de seguridad del parte pasado como parametro
+      // Notese que esta funci¢n No elimina el original, salvo los
+      // registros de Servicios-Partes y tablas relacionadas ya que las funciones
+      // normales de borrado de partes no limpian estas tablas, simplemente las desmarcan
+
+      // Si ya existia la copia de seguridad del parte la eliminamos.
+      CLEAR(lrBKParte);
+      lrBKParte.TRANSFERFIELDS(prParte);
+      IF lrBKParte.FIND THEN
+        lrBKParte.DELETE(TRUE);
+
+      // Touroperador x Parte
+      CLEAR(lrTTOOP);
+      lrTTOOP.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrTTOOP.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrBKTTOOP);
+          lrBKTTOOP.TRANSFERFIELDS(lrTTOOP);
+          lrBKTTOOP.INSERT;
+        UNTIL lrTTOOP.NEXT=0;
+      END;
+
+      // Servicios - Partes
+      CLEAR(lrSerPar);
+      lrSerPar.SETCURRENTKEY("N§ Parte");
+      lrSerPar.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrSerPar.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrBKSerPar);
+          lrBKSerPar.TRANSFERFIELDS(lrSerPar);
+          IF NOT lrBKSerPar.FIND THEN
+            lrBKSerPar.INSERT;
+        UNTIL lrSerPar.NEXT=0;
+        //-$001lrSerPar.DELETEALL;
+      END;
+
+      // Vuelo x Parte
+      CLEAR(lrVuel);
+      lrVuel.SETRANGE("N§Parte", prParte."N§ Parte");
+      IF lrVuel.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrBKVuel);
+          lrBKVuel.TRANSFERFIELDS(lrVuel);
+          lrBKVuel.INSERT;
+        UNTIL lrVuel.NEXT=0;
+      END;
+
+      // Subtrayectos x Parte
+      CLEAR(lrSubt);
+      lrSubt.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrSubt.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrBKSubt);
+          lrBKSubt.TRANSFERFIELDS(lrSubt);
+          lrBKSubt.INSERT;
+        UNTIL lrSubt.NEXT=0;
+      END;
+
+      // Suplementos x Punto
+      CLEAR(lrSupP);
+      lrSupP.SETCURRENTKEY("N§ Parte","N§ Linea");
+      lrSupP.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrSupP.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrBKSupP);
+          lrBKSupP.TRANSFERFIELDS(lrSupP);
+          lrBKSupP.INSERT;
+        UNTIL lrSupP.NEXT=0;
+        //-$001lrSupP.DELETEALL;
+      END;
+
+      // Extras x Parte
+      CLEAR(lrExtra);
+      lrExtra.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrExtra.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrBKExtra);
+          lrBKExtra.TRANSFERFIELDS(lrExtra);
+          lrBKExtra.INSERT;
+        UNTIL lrExtra.NEXT=0;
+      END;
+
+      // Vuelos x Linea
+      CLEAR(lrVuelLin);
+      lrVuelLin.SETCURRENTKEY(Parte, Vuelo);
+      lrVuelLin.SETRANGE(Parte, prParte."N§ Parte");
+      IF lrVuelLin.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrBKVuelLin);
+          lrBKVuelLin.TRANSFERFIELDS(lrVuelLin);
+          lrBKVuelLin.INSERT;
+        UNTIL lrBKVuelLin.NEXT=0;
+        lrVuelLin.DELETEALL;
+      END;
+
+      // Anotaciones x Parte
+      CLEAR(lrAnt);
+      lrAnt.SETRANGE("N§ Parte", prParte."N§ Parte");
+      IF lrAnt.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrBKAnt);
+          lrBKAnt.TRANSFERFIELDS(lrAnt);
+          lrBKAnt.INSERT;
+        UNTIL lrAnt.NEXT=0;
+      END;
+
+      // Parte
+      CLEAR(lrBKParte);
+      lrBKParte.TRANSFERFIELDS(prParte);
+      lrBKParte."Fecha Anulacion"   := CURRENTDATETIME;
+      lrBKParte."Usuario Anulacion" := USERID;
+      lrBKParte.INSERT;
+
+      // Insertamos en el historico
+      lrHist.inserta_registro2(lrHist."Tipo Fichero"::Parte, prParte."N§ Parte", 0,
+                               Text025, '','', prParte."N§ Parte");
+    END;
+
+    PROCEDURE RecuperaParteAnulado@1103355002(VAR prBKParte@1103355016 : Record 7035401;pwAvisa@1103355018 : Boolean);
+    VAR
+      lrBKTTOOP@1103355015 : Record 7035402;
+      lrBKSerPar@1103355014 : Record 7035403;
+      lrBKVuel@1103355013 : Record 7035404;
+      lrBKSubt@1103355012 : Record 7035405;
+      lrBKSupP@1103355011 : Record 7035406;
+      lrBKExtra@1103355010 : Record 7035407;
+      lrBKVuelLin@1103355009 : Record 7035408;
+      lrBKAnt@1103355008 : Record 7035409;
+      lrTTOOP@1103355007 : Record 7010365;
+      lrParte@1103355017 : Record 7010360;
+      lrSerPar@1103355006 : Record 7010359;
+      lrVuel@1103355005 : Record 7035335;
+      lrSubt@1103355004 : Record 7035399;
+      lrSupP@1103355003 : Record 7010363;
+      lrExtra@1103355002 : Record 7010362;
+      lrVuelLin@1103355001 : Record 7035397;
+      lrAnt@1103355000 : Record 7010435;
+      lrHist@1103355019 : Record 7010361;
+    BEGIN
+      // RecuperaParteAnulado
+      // Funcion inversa a la anterior
+
+      IF prBKParte."N§ Parte"='' THEN
+        EXIT;
+
+      IF pwAvisa THEN BEGIN
+        IF NOT CONFIRM(Text024, FALSE, prBKParte."N§ Parte") THEN
+          EXIT;
+      END;
+
+      // Comprobamos que no exista ya el parte en cuesti¢n
+      CLEAR(lrParte);
+      lrParte.TRANSFERFIELDS(prBKParte);
+      IF lrParte.FIND THEN
+        ERROR(Text023, lrParte.GETPOSITION);
+
+      // Touroperador x Parte
+      CLEAR(lrBKTTOOP);
+      lrBKTTOOP.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKTTOOP.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrTTOOP);
+          lrTTOOP.TRANSFERFIELDS(lrBKTTOOP);
+          lrTTOOP.INSERT;
+        UNTIL lrBKTTOOP.NEXT=0;
+      END;
+
+      // Servicios - Partes
+      CLEAR(lrBKSerPar);
+      lrBKSerPar.SETCURRENTKEY("N§ Parte");
+      lrBKSerPar.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKSerPar.FINDSET THEN BEGIN
+        REPEAT
+          // +$002 <
+          lrSerPar.RESET;
+          lrSerPar.SETRANGE(lrSerPar."N§ Servicio", lrBKSerPar."N§ Servicio");
+          lrSerPar.SETRANGE(lrSerPar."N§ Linea", lrBKSerPar."N§ Linea");
+          IF lrSerPar.FINDFIRST THEN BEGIN
+            lrSerPar."N§ Parte" := lrBKSerPar."N§ Parte";
+            lrSerPar.MODIFY;
+          END ELSE BEGIN
+          // +$002 >
+            CLEAR(lrSerPar);
+            lrSerPar.TRANSFERFIELDS(lrBKSerPar);
+            lrSerPar.INSERT;
+          END;
+        UNTIL lrBKSerPar.NEXT=0;
+      END;
+
+      // Vuelo x Parte
+      CLEAR(lrBKVuel);
+      lrBKVuel.SETRANGE("N§Parte", prBKParte."N§ Parte");
+      IF lrBKVuel.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrVuel);
+          lrVuel.TRANSFERFIELDS(lrBKVuel);
+          lrVuel.INSERT;
+        UNTIL lrBKVuel.NEXT=0;
+      END;
+
+      // Subtrayectos x Parte
+      CLEAR(lrBKSubt);
+      lrBKSubt.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKSubt.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrSubt);
+          lrSubt.TRANSFERFIELDS(lrBKSubt);
+          lrSubt.INSERT;
+        UNTIL lrBKSubt.NEXT=0;
+      END;
+
+      // Suplementos x Punto
+      CLEAR(lrBKSupP);
+      lrBKSupP.SETCURRENTKEY("N§ Parte");
+      lrBKSupP.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKSupP.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrSupP);
+          lrSupP.TRANSFERFIELDS(lrBKSupP);
+          lrSupP.INSERT;
+        UNTIL lrBKSupP.NEXT=0;
+      END;
+
+      // Extras x Parte
+      CLEAR(lrBKExtra);
+      lrBKExtra.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKExtra.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrExtra);
+          lrExtra.TRANSFERFIELDS(lrBKExtra);
+          lrExtra.INSERT;
+        UNTIL lrBKExtra.NEXT=0;
+      END;
+
+      // Vuelos x Linea
+      CLEAR(lrBKVuelLin);
+      lrBKVuelLin.SETCURRENTKEY(Parte);
+      lrBKVuelLin.SETRANGE(Parte, prBKParte."N§ Parte");
+      IF lrBKVuelLin.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrVuelLin);
+          lrVuelLin.TRANSFERFIELDS(lrBKVuelLin);
+          lrVuelLin.INSERT;
+        UNTIL lrBKVuelLin.NEXT=0;
+      END;
+
+      // Anotaciones x Parte
+      CLEAR(lrBKAnt);
+      lrBKAnt.SETRANGE("N§ Parte", prBKParte."N§ Parte");
+      IF lrBKAnt.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrAnt);
+          lrAnt.TRANSFERFIELDS(lrBKAnt);
+          lrAnt.INSERT;
+        UNTIL lrBKAnt.NEXT=0;
+      END;
+
+      // Parte
+      CLEAR(lrParte);
+      lrParte.TRANSFERFIELDS(prBKParte);
+      lrParte.INSERT;
+
+      // Borramos la copia de seguridad y todas sus tablas
+      prBKParte.DELETE(TRUE);
+
+      // Insertamos en el historico
+      lrHist.inserta_registro2(lrHist."Tipo Fichero"::Parte, lrParte."N§ Parte", 0,
+                               Text026, '','', lrParte."N§ Parte");
+    END;
+
+    BEGIN
+    {
+      $001 AJS 18052015 Dejamos de borrar las lineas de servicios - partes en la funcion MakePKParte
+
+      $002 ARM 11062015 Al recuperar si ya existe el servicio parte solo hay que actualizar el n§ parte
+    }
+    END.
+  }
+}

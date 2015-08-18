@@ -1,0 +1,163 @@
+OBJECT Codeunit 10700 Due Date-Adjust
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/11/11;
+    Time=12:00:00;
+    Version List=NAVES4.00,RegF269949;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE SalesAdjustDueDate@2(VAR DueDate@1100000 : Date;MinDate@1100005 : Date;MaxDate@1100002 : Date;CustomerNo@1100001 : Code[20]);
+    VAR
+      PaymentDay@1100004 : Record 10701;
+      NonPaymentPeriod@1100003 : Record 10702;
+      Customer@1100009 : Record 18;
+    BEGIN
+      IF CustomerNo = '' THEN
+        EXIT;
+      Customer.GET(CustomerNo);
+
+      SetNonPaymentPeriodFilterAndFi(NonPaymentPeriod,NonPaymentPeriod."Table Name"::Customer,Customer."Non-Paymt. Periods Code");
+      SetPaymentDayFilterAndFields(PaymentDay,PaymentDay."Table Name"::Customer,Customer."Payment Days Code");
+      AdjustDate(NonPaymentPeriod,PaymentDay,DueDate,MinDate,MaxDate);
+    END;
+
+    PROCEDURE PurchAdjustDueDate@6(VAR DueDate@1100000 : Date;MinDate@1100005 : Date;MaxDate@1100002 : Date;VendorNo@1100001 : Code[20]);
+    VAR
+      PaymentDay@1100004 : Record 10701;
+      NonPaymentPeriod@1100003 : Record 10702;
+      Vendor@1100007 : Record 23;
+      CompanyInfo@1100006 : Record 79;
+    BEGIN
+      IF VendorNo = '' THEN
+        EXIT;
+      Vendor.GET(VendorNo);
+
+      IF Vendor."Non-Paymt. Periods Code" <> '' THEN
+        SetNonPaymentPeriodFilterAndFi(NonPaymentPeriod,NonPaymentPeriod."Table Name"::Vendor,Vendor."Non-Paymt. Periods Code")
+      ELSE BEGIN
+        CompanyInfo.GET;
+        SetNonPaymentPeriodFilterAndFi(NonPaymentPeriod,NonPaymentPeriod."Table Name"::"Company Information",CompanyInfo.
+      "Non-Paymt. Periods Code")
+      END;
+      IF Vendor."Payment Days Code" <> '' THEN
+        SetPaymentDayFilterAndFields(PaymentDay,PaymentDay."Table Name"::Vendor,Vendor."Payment Days Code")
+      ELSE BEGIN
+        CompanyInfo.GET;
+        SetPaymentDayFilterAndFields(PaymentDay,PaymentDay."Table Name"::"Company Information",CompanyInfo."Payment Days Code")
+      END;
+      AdjustDate(NonPaymentPeriod,PaymentDay,DueDate,MinDate,MaxDate);
+    END;
+
+    LOCAL PROCEDURE AdjustDate@1100056(VAR NonPaymentPeriod@1100006 : Record 10702;VAR PaymentDay@1100005 : Record 10701;VAR DueDate@1100001 : Date;MinDate@1100000 : Date;MaxDate@1100002 : Date);
+    VAR
+      InitialDate@1100003 : Date;
+      ForwardCalculation@1100004 : Boolean;
+    BEGIN
+      IF (DueDate > MaxDate) AND (MinDate <> MaxDate) THEN
+        DueDate := MaxDate;
+      ForwardCalculation := TRUE;
+
+      REPEAT
+        InitialDate := DueDate;
+        IF NOT NonPaymentPeriod.ISEMPTY THEN BEGIN
+          IF ForwardCalculation THEN BEGIN
+            DueDate := AdjustToNonPaymentPeriod(NonPaymentPeriod,DueDate,ForwardCalculation);
+            IF DueDate > MaxDate THEN
+              ForwardCalculation := FALSE
+          END;
+          IF NOT ForwardCalculation THEN
+            DueDate := AdjustToNonPaymentPeriod(NonPaymentPeriod,InitialDate,ForwardCalculation);
+        END;
+        IF NOT PaymentDay.ISEMPTY THEN BEGIN
+          IF ForwardCalculation THEN BEGIN
+            DueDate := AdjustToPaymentDay(PaymentDay,DueDate,'>','-','+');
+            IF DueDate > MaxDate THEN
+              ForwardCalculation := FALSE
+          END;
+          IF NOT ForwardCalculation THEN
+            DueDate := AdjustToPaymentDay(PaymentDay,InitialDate,'<','+','-');
+        END;
+        IF (DueDate < MinDate) OR PaymentDayInNonPaymentPeriod(NonPaymentPeriod,PaymentDay,DueDate) THEN BEGIN
+          DueDate := 0D;
+          EXIT
+        END
+      UNTIL (DueDate = InitialDate)
+    END;
+
+    LOCAL PROCEDURE AdjustToNonPaymentPeriod@1100002(VAR NonPaymentPeriod@1100001 : Record 10702;DueDate@1100000 : Date;ForwardCalculation@1100002 : Boolean) : Date;
+    VAR
+      PreviousFromDate@1100003 : Date;
+    BEGIN
+      IF NonPaymentPeriod."From Date" <> 0D THEN
+        PreviousFromDate := NonPaymentPeriod."From Date";
+      NonPaymentPeriod."From Date" := DueDate;
+      IF NonPaymentPeriod.FIND('=<') AND (DueDate <= NonPaymentPeriod."To Date") THEN
+        IF ForwardCalculation THEN
+          DueDate := NonPaymentPeriod."To Date" + 1
+        ELSE
+          DueDate := NonPaymentPeriod."From Date" - 1
+      ELSE
+        IF PreviousFromDate <> 0D THEN
+          NonPaymentPeriod."From Date" := PreviousFromDate;
+      EXIT(DueDate)
+    END;
+
+    LOCAL PROCEDURE AdjustToPaymentDay@1100040(VAR PaymentDay@1100000 : Record 10701;DueDate@1100001 : Date;DirectionText@1100002 : Text[1];FindText@1100004 : Text[1];Sign@1100003 : Text[1]) : Date;
+    BEGIN
+      IF (CALCDATE('<CM>',DueDate) = DueDate) AND PaymentDay.GET(PaymentDay."Table Name",PaymentDay.Code,31) THEN
+        EXIT(DueDate);
+      PaymentDay."Payment Day" := DATE2DMY(DueDate,1);
+      IF PaymentDay.FIND('=') THEN
+        EXIT(DueDate);
+      IF PaymentDay.FIND(DirectionText) THEN
+        EXIT(CALCDATE(STRSUBSTNO('<%1D%2>',Sign,PaymentDay."Payment Day"),DueDate));
+      IF PaymentDay.FIND(FindText) THEN
+        EXIT(CALCDATE(STRSUBSTNO('<%1D%2>',Sign,PaymentDay."Payment Day"),DueDate));
+      EXIT(DueDate)
+    END;
+
+    LOCAL PROCEDURE SetPaymentDayFilterAndFields@1100010(VAR PaymentDay@1100000 : Record 10701;TableNameOption@1100001 : Option;PaymentDayCode@1100002 : Code[20]);
+    BEGIN
+      WITH PaymentDay DO BEGIN
+        RESET;
+        SETRANGE("Table Name",TableNameOption);
+        SETRANGE(Code,PaymentDayCode);
+        "Table Name" := TableNameOption;
+        Code := PaymentDayCode
+      END
+    END;
+
+    LOCAL PROCEDURE SetNonPaymentPeriodFilterAndFi@1100009(VAR NonPaymentPeriod@1100002 : Record 10702;TableNameOption@1100001 : Option;NonPaymentPeriodCode@1100000 : Code[20]);
+    BEGIN
+      WITH NonPaymentPeriod DO BEGIN
+        RESET;
+        SETRANGE("Table Name",TableNameOption);
+        SETRANGE(Code,NonPaymentPeriodCode);
+        "Table Name" := TableNameOption;
+        Code := NonPaymentPeriodCode
+      END
+    END;
+
+    PROCEDURE PaymentDayInNonPaymentPeriod@1100000(VAR NonPaymentPeriod@1100000 : Record 10702;PaymentDay@1100002 : Record 10701;PaymentDate@1100001 : Date) : Boolean;
+    BEGIN
+      IF NOT NonPaymentPeriod.ISEMPTY AND NOT PaymentDay.ISEMPTY  THEN BEGIN
+        IF (PaymentDate >= NonPaymentPeriod."From Date") AND (PaymentDate <= NonPaymentPeriod."To Date") THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,903 @@
+OBJECT Codeunit 7009766 Facturacion hotel x concepto
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/03/15;
+    Time=12:57:31;
+    Modified=Yes;
+    Version List=AIC2009,CNT;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            LlamarFacturacion;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100253000 : TextConst 'ENU=Must Fill %1;ESP=Debe de rellenar %1';
+      rPar@1100253001 : Record 7009700;
+      Text002@1100253002 : TextConst 'ESP=¨Desea realmente facturar la prefactura %1?';
+      Text003@1100253003 : TextConst 'ENU=Not found accounting configuration for %1 %2;ESP=No se ha encontrado configuraci¢n contable para %1 %2';
+      Text004@1100253004 : TextConst 'ESP=HANDFEEVEN';
+      Text005@1100253005 : TextConst 'ESP=REPSERVICE';
+      Text006@1100253006 : TextConst 'ENU="Total= 0.\Do you want to mark the lines as billed?";ESP="Total=0.\¨Desea marcar las lineas como facturadas?"';
+      Text007@1100253007 : TextConst 'ESP=FACTURACERO';
+      rSerie@1100253008 : Record 7009921;
+      Text009@1100253010 : TextConst 'ENU=Rep.Service %1 from %2 to %3;ESP=" %1 - %2 desde %3 hasta %4"';
+      rDat@1100217001 : Record 7009768;
+      cFunNom@1100253011 : Codeunit 7009702;
+      Text010@1100253012 : TextConst 'ESP=Rep. Service';
+      Text011@1100253013 : TextConst 'ESP=Rep.Serv';
+      cFunSeg@1100217000 : Codeunit 7009751;
+      wGRegIVAP@1100253014 : Code[10];
+      Text012@1100253015 : TextConst 'ENU=Must set an invoice number;ESP=Debe de indicar un n£mero de factura';
+      Text013@1100253016 : TextConst 'ESP=No se ha podido encontrar la factura %1';
+      Text014@1100253017 : TextConst 'ENU=The Voucher is allready invoiced.;ESP=El bono ya est  facturado';
+      Text015@1100253019 : TextConst 'ESP=EXTRAFIJOV';
+      Text016@1100253018 : TextConst 'ESP=EXTRAVARIV';
+      Text017@1100253020 : TextConst 'ESP=OFERTAV';
+      Text018@1100253021 : TextConst 'ENU=You cannot undo the proforma because it is already billed.;ESP=No se puede deshacer la prefactura porque ya esta facturada.';
+      Text019@1100253022 : TextConst 'ENU=Do you want to undo the proforma %1.;ESP=Quiere deshacer la prefactura %1.';
+
+    PROCEDURE LlamarFacturacion@1100253000();
+    VAR
+      lrCntp@1100253000 : Record 7009716;
+      lrBnCpt@1100253001 : Record 7010019;
+    BEGIN
+      // LlamarFacturacion
+
+      cFunSeg.TienePermiso('HOT-FAC-RSV', TRUE);  //$003
+
+      CLEAR(lrCntp);
+      lrCntp.FILTERGROUP(2);
+      lrCntp.SETRANGE(Modulo         , lrCntp.Modulo::Hotel);
+      lrCntp.SETRANGE("Coste/Ingreso", lrCntp."Coste/Ingreso"::Ingreso);
+      lrCntp.FILTERGROUP(0);
+      IF FORM.RUNMODAL(0, lrCntp) <> ACTION::LookupOK THEN
+        EXIT;
+
+      CLEAR(lrBnCpt);
+      lrBnCpt.SETCURRENTKEY("Coste/Ingreso", "N§ Factura", Concepto);
+      lrBnCpt.FILTERGROUP(2);
+      lrBnCpt.SETRANGE(Concepto       , lrCntp.Concepto);
+      lrBnCpt.SETRANGE("Coste/Ingreso", lrBnCpt."Coste/Ingreso"::Ingreso);
+      lrBnCpt.FILTERGROUP(0);
+      lrBnCpt.SETRANGE("N§ Factura"   , ''); //+$001
+      FORM.RUN(7009798, lrBnCpt);
+    END;
+
+    PROCEDURE IniciarFacturacion@1100253001(VAR prConcepto@1100253000 : Record 7010019);
+    BEGIN
+      // IniciarFacturacion
+
+      IF prConcepto."N§ Factura" <> '' THEN
+        ERROR(Text014);
+
+      IF prConcepto."N§ Prefactura" = '' THEN
+      BEGIN
+        IF prConcepto.GETFILTER("Fecha llegada") = '' THEN
+          _CrearPrefacturas(prConcepto.Concepto, prConcepto.TourOperador, prConcepto."Fecha llegada", prConcepto."Fecha llegada")
+        ELSE
+          _CrearPrefacturas(prConcepto.Concepto, prConcepto.TourOperador, prConcepto.GETRANGEMIN("Fecha llegada"),
+                           prConcepto.GETRANGEMAX("Fecha llegada"));
+      END
+      ELSE
+        _CrearFactura(prConcepto);
+    END;
+
+    LOCAL PROCEDURE _CrearPrefacturas@1100253002(pwCodCnpto@1100253004 : Code[10];pwTouroperador@1100253005 : Code[10];pwFechaInicial@1100253006 : Date;pwFechaFinal@1100253007 : Date);
+    VAR
+      lfForm@1100253000 : Form 7010114;
+      lrCond@1100253001 : Record 7010085;
+      lrCIBC@1100253003 : Record 7010019;
+      lrCntCI@1100217002 : Record 7009716;
+      lwEnc@1100253002 : Boolean;
+      lwFechaDesde@1100217000 : Date;
+      lwFechaHasta@1100217001 : Date;
+      lwFechaDesdeActual@1100217004 : Date;
+    BEGIN
+      // _CrearPrefacturas
+
+      CLEAR(lfForm);
+      CLEAR(lrCond);
+      lrCond.Usuario := USERID;
+      lwEnc := lrCond.FIND;
+      lrCond.INIT;
+      lrCond.TourOperador  := pwTouroperador;
+      lrCond."Fecha desde" := pwFechaInicial;
+      lrCond."Fecha hasta" := pwFechaFinal;
+
+      IF lwEnc THEN
+        lrCond.MODIFY
+      ELSE
+        lrCond.INSERT;
+      COMMIT;
+      lrCond.FILTERGROUP(2);
+      lrCond.SETRECFILTER;
+      lrCond.FILTERGROUP(0);
+      lfForm.SETTABLEVIEW(lrCond);
+      lfForm.RUNMODAL;
+
+      lfForm.GETRECORD(lrCond);
+      IF NOT lrCond.Correcto THEN
+        EXIT;
+
+      IF lrCond.TourOperador  = '' THEN ERROR(Text001, lrCond.FIELDCAPTION(TourOperador));
+      IF lrCond."Fecha desde" = 0D THEN ERROR(Text001, lrCond.FIELDCAPTION("Fecha desde"));
+      IF lrCond."Fecha hasta" = 0D THEN ERROR(Text001, lrCond.FIELDCAPTION("Fecha hasta"));
+
+      // $004 JPT 09/10/12 GOC-LP-12024
+      // Se crea una factura por mes dentro del periodo
+      // lwFechaDesdeActual Determina el inicio del periodo de facturacion actual.
+      // Todo lo anterior se regularizara mensualmente.
+      CLEAR(lrCntCI);
+      lrCntCI.GET(pwCodCnpto);
+      CASE lrCntCI."Periodicidad Facturacion" OF
+        lrCntCI."Periodicidad Facturacion"::Ninguna : lwFechaDesdeActual := lrCond."Fecha desde";
+        lrCntCI."Periodicidad Facturacion"::Diaria  : lwFechaDesdeActual := lrCond."Fecha hasta";
+        lrCntCI."Periodicidad Facturacion"::Semanal : lwFechaDesdeActual := CALCDATE('<-1W+1D>', lrCond."Fecha hasta");
+        ELSE lwFechaDesdeActual := DMY2DATE(1, DATE2DMY(lrCond."Fecha hasta",2), DATE2DMY(lrCond."Fecha hasta",3));
+      END;
+
+      lwFechaDesde := lrCond."Fecha desde";
+      REPEAT
+        // Se supone que el mes de "Fecha hasta" es el actual. Este se facturara el periodos que marque
+        // el concepto. Todos los meses anteriores se facturaran mensualmente.
+        // Si el mes a facturar corresponde al ultimo del periodo
+
+        IF lrCntCI."Periodicidad Facturacion" = lrCntCI."Periodicidad Facturacion"::Ninguna THEN
+          lwFechaHasta := lrCond."Fecha hasta"
+        ELSE
+          lwFechaHasta := _FechaFinMes(lwFechaDesde);
+        IF (lwFechaDesde <> lwFechaDesdeActual) AND (lwFechaHasta >= lwFechaDesdeActual) THEN
+          lwFechaHasta := lwFechaDesdeActual -1;
+        IF lwFechaHasta > lrCond."Fecha hasta" THEN
+          lwFechaHasta := lrCond."Fecha hasta";
+
+        _CrearPrefactura(lrCntCI, lrCond, lwFechaDesde, lwFechaHasta);
+
+        lwFechaDesde := lwFechaHasta +1;
+      UNTIL (lwFechaHasta = lrCond."Fecha hasta");
+    END;
+
+    LOCAL PROCEDURE _CrearPrefactura@1100217002(prCntCI@1100217005 : Record 7009716;prCond@1100217003 : Record 7010085;pwFechaDesde@1100217000 : Date;pwFechaHasta@1100217001 : Date);
+    VAR
+      lrCIBC@1100217002 : Record 7010019;
+    BEGIN
+      // _CrearPrefactura
+
+      CLEAR(lrCIBC);
+      lrCIBC.SETRANGE(TourOperador, prCond.TourOperador);
+      lrCIBC.SETRANGE("Fecha llegada" , pwFechaDesde, pwFechaHasta);
+      IF prCond.Hotel <> '' THEN
+        lrCIBC.SETRANGE("Hotel Pago", prCond.Hotel);
+      lrCIBC.SETRANGE(Concepto      , prCntCI.Concepto);
+      lrCIBC.SETRANGE("N§ Prefactura" ,'');
+      lrCIBC.SETRANGE("N§ Factura"    ,'');
+      lrCIBC.SETRANGE("Coste/Ingreso", lrCIBC."Coste/Ingreso"::Ingreso);
+      IF lrCIBC.FINDFIRST THEN  BEGIN
+
+        rPar.FINDFIRST;
+        rPar.TESTFIELD("Prefactura hotel");
+        rPar.LOCKTABLE;
+        rPar."Prefactura hotel" := INCSTR(rPar."Prefactura hotel");
+        rPar.MODIFY;
+
+        lrCIBC.MODIFYALL("N§ Prefactura", rPar."Prefactura hotel");
+
+        CLEAR(lrCIBC);
+        lrCIBC.SETCURRENTKEY("N§ Prefactura");
+        lrCIBC.SETFILTER("N§ Prefactura", rPar."Prefactura hotel");
+        IF lrCIBC.FINDFIRST THEN
+          _ImprimirPrefactura(lrCIBC);
+      END;
+    END;
+
+    LOCAL PROCEDURE _CrearFactura@1100253003(VAR prConcepto@1100253000 : Record 7010019);
+    VAR
+      lrCtas@1100253002 : Record 7009705;
+      lrCntps@1100253001 : Record 7010019;
+      lrCntps2@1100253009 : Record 7010019;
+      lrCntps3@1100253011 : Record 7010019;
+      lrTmpBono@1100253006 : TEMPORARY Record 7010013;
+      lrTmpBono2@1100253012 : TEMPORARY Record 7010013;
+      lrBono@1100253010 : Record 7010013;
+      lrCIBono@1100253015 : Record 7010018;
+      lrCab@1100253008 : Record 36;
+      lrCabInc@1100217000 : Record 7009908;
+      lwEnc@1100253003 : Boolean;
+      lwGrab@1100253007 : Boolean;
+      lwLinCom@1100253013 : Boolean;
+      lwCta@1100253004 : Code[20];
+      lwTotal@1100253005 : Decimal;
+      lwNumLin@1100253014 : Integer;
+      lcRelease@1000000000 : Codeunit 414;
+    BEGIN
+      // _CrearFactura
+
+      lrCntps.COPY(prConcepto);
+      lrCntps.SETCURRENTKEY("N§ Prefactura");
+      lrCntps.SETRANGE("N§ Prefactura", prConcepto."N§ Prefactura");
+      lrCntps.FINDFIRST;
+      IF NOT CONFIRM(Text002, FALSE, lrCntps."N§ Prefactura") THEN
+        EXIT;
+
+      CLEAR(lrCtas);
+      lrCtas.SETRANGE(Delegacion  , lrCntps.Delegacion);
+      lrCtas.SETRANGE(TourOperador, lrCntps.TourOperador);
+      lwEnc := lrCtas.FINDFIRST;
+      IF NOT lwEnc THEN BEGIN
+        lrCtas.SETRANGE(Delegacion,'');
+        lwEnc := lrCtas.FINDFIRST;
+      END;
+      IF NOT lwEnc THEN BEGIN
+        lrCtas.SETRANGE(Delegacion  , lrCntps.Delegacion);
+        lrCtas.SETRANGE(TourOperador,'');
+        lwEnc := lrCtas.FINDFIRST;
+      END;
+
+      IF NOT lwEnc THEN
+        ERROR(Text003, lrCntps.Delegacion, lrCntps.TourOperador);
+
+      CLEAR(lwCta);
+      CASE lrCntps.Concepto OF
+        'HANDFEEVEN' :
+        BEGIN
+          lrCtas.TESTFIELD("Cta. Handling fee");
+          lwCta := lrCtas."Cta. Handling fee";
+        END;
+        'REPSERVICE' :
+        BEGIN
+          lrCtas.TESTFIELD("Cta. Ingresos Rep Service");
+          lwCta := lrCtas."Cta. Ingresos Rep Service";
+        END;
+        ELSE
+        BEGIN
+          lrCtas.TESTFIELD("Cta. venta hotel");
+          lwCta := lrCtas."Cta. venta hotel";
+        END;
+      END;
+
+      CLEAR(lwTotal);
+      CLEAR(lwNumLin);
+      CLEAR(lrTmpBono);
+      IF lrCntps.FINDSET THEN BEGIN
+        REPEAT
+          lwTotal += lrCntps.Importe;
+
+          IF NOT lrTmpBono.GET(lrCntps.Delegacion, lrCntps.TourOperador, lrCntps.Bono,
+                               lrCntps."N§ Reserva", lrCntps."N§ Secuencia") THEN BEGIN
+            CLEAR(lrTmpBono);
+            lrTmpBono.Delegacion      := lrCntps.Delegacion;
+            lrTmpBono.TourOperador    := lrCntps.TourOperador;
+            lrTmpBono.Bono            := lrCntps.Bono;
+            lrTmpBono."N§ Reserva"    := lrCntps."N§ Reserva";
+            lrTmpBono."N§ Secuencia"  := lrCntps."N§ Secuencia";
+            lrTmpBono.INSERT;
+          END;
+        UNTIL lrCntps.NEXT=0;
+      END;
+
+      lwGrab := FALSE;
+      IF lwTotal = 0 THEN BEGIN
+        lwGrab := CONFIRM(Text006);
+        IF lwGrab THEN BEGIN
+          lrCntps.MODIFYALL("N§ Factura", Text007);
+          CLEAR(lrTmpBono);
+          IF lrTmpBono.FINDSET THEN BEGIN
+            REPEAT
+              lrBono.GET(lrTmpBono.Delegacion, lrTmpBono.TourOperador, lrTmpBono.Bono, lrTmpBono."N§ Reserva", lrTmpBono."N§ Secuencia");
+              lrBono.Facturado             := lrBono.CompruebaBonoFact;
+              lrBono.MODIFY;
+
+              //. Hay que marcar las lineas de C/I x bono como facturadas
+
+              lrCIBono.RESET;
+              lrCIBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+              lrCIBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+              lrCIBono.SETRANGE(Bono          , lrBono.Bono);
+              lrCIBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+              lrCIBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+              IF lrCIBono.FINDSET THEN
+                lrCIBono.MODIFYALL(Facturado, TRUE);
+            UNTIL lrTmpBono.NEXT = 0;
+          END
+        END ELSE
+          EXIT;
+      END
+      ELSE BEGIN
+        CLEAR(lrCab);
+        _CrearCabeceraFactura(lrCntps, lwTotal, lrCab);
+        CLEAR(lrTmpBono);
+        lrTmpBono.SETCURRENTKEY(Hotel,Delegacion,"Fecha llegada");
+        IF lrTmpBono.FINDSET THEN BEGIN
+          CLEAR(lrTmpBono2);
+          REPEAT
+            // Si cambia el hotel o la fecha de llegada hay que crear una linea de comentario
+            lwLinCom := (lrTmpBono.Hotel <> lrTmpBono2.Hotel) OR (lrTmpBono."Fecha llegada" <> lrTmpBono2."Fecha llegada");
+            CLEAR(lrCntps2);
+            lrCntps2.SETRANGE(Delegacion      , lrTmpBono.Delegacion);
+            lrCntps2.SETRANGE(TourOperador    , lrTmpBono.TourOperador);
+            lrCntps2.SETRANGE(Bono            , lrTmpBono.Bono);
+            lrCntps2.SETRANGE("N§ Reserva"    , lrTmpBono."N§ Reserva");
+            lrCntps2.SETRANGE("N§ Secuencia"  , lrTmpBono."N§ Secuencia");
+            lrCntps2.SETRANGE("N§ Prefactura" , lrCntps."N§ Prefactura");
+            lrCntps2.SETRANGE(Concepto        , lrCntps.Concepto);
+            lrCntps2.SETRANGE("N§ Factura"    , '');
+            lrCntps2.SETRANGE("Coste/Ingreso" , lrCntps2."Coste/Ingreso"::Ingreso);
+            lrCntps2.FINDFIRST;
+            lrCntps3.COPY(lrCntps2);
+            lrCntps3.FINDLAST;
+
+            IF lrCntps2.Importe + lrCntps3.Importe <> 0 THEN BEGIN
+              //. Si la primera linea (lrCntp2) es una regularizaci¢n la insertamos en la factura, en caso contrario
+              //. insertaremos unicamente la ultima linea (lrCntp3)
+              IF lrCntps2.Regularizacion THEN
+              BEGIN
+                _CrearLineaFactura(lrCntps2, lrCab, lwCta, lwLinCom, lwNumLin);
+                //. Si son lineas distintas
+                IF lrCntps2.GETPOSITION <> lrCntps3.GETPOSITION THEN
+                  _CrearLineaFactura(lrCntps3, lrCab, lwCta, lwLinCom, lwNumLin);
+              END
+              ELSE
+              BEGIN
+                _CrearLineaFactura(lrCntps3, lrCab, lwCta, lwLinCom, lwNumLin);
+              END;
+            END;
+
+            lrTmpBono2 := lrTmpBono;
+          UNTIL lrTmpBono.NEXT = 0;
+          // Buscamos los importes totales de la cabecera incoming
+          IF lrCabInc.GET(lrCab."Document Type", lrCab."No.") THEN BEGIN
+            lrCabInc.GetImportes;
+            lrCabInc.MODIFY;
+          END;
+          //+$007 <
+          IF lrCab.GET(lrCab."Document Type", lrCab."No.") THEN
+            lcRelease.RUN(lrCab);
+          //+$007 >
+
+          //+$009 <
+          IF lrCab.GET(lrCab."Document Type", lrCab."No.") THEN
+          BEGIN
+            lrCab."Reason Code" := 'ATENNEA';
+            lrCab.MODIFY;
+          END;
+          //+$009 >
+        END;
+
+        lrCntps.MODIFYALL("N§ Factura", lrCab."No.");
+        CLEAR(lrTmpBono);
+        IF lrTmpBono.FINDSET THEN BEGIN
+          REPEAT
+            lrBono.GET(lrTmpBono.Delegacion, lrTmpBono.TourOperador, lrTmpBono.Bono, lrTmpBono."N§ Reserva", lrTmpBono."N§ Secuencia");
+            lrBono.Facturado             := lrBono.CompruebaBonoFact;
+            lrBono."N§ Factura"          := lrCab."No.";
+            lrBono."Fecha ultima factura":= TODAY;
+            lrBono.MODIFY;
+
+            //. Hay que marcar las lineas de C/I x bono como facturadas
+
+            lrCIBono.RESET;
+            lrCIBono.SETRANGE(Delegacion    , lrBono.Delegacion);
+            lrCIBono.SETRANGE(TourOperador  , lrBono.TourOperador);
+            lrCIBono.SETRANGE(Bono          , lrBono.Bono);
+            lrCIBono.SETRANGE("N§ Reserva"  , lrBono."N§ Reserva");
+            lrCIBono.SETRANGE("N§ Secuencia", lrBono."N§ Secuencia");
+            IF lrCIBono.FINDSET THEN
+              lrCIBono.MODIFYALL(Facturado, TRUE);
+          UNTIL lrTmpBono.NEXT=0;
+        END;
+
+        lrCntps.SETRANGE("N§ Factura", lrCab."No.");
+        lrCntps.FINDFIRST;
+
+        _ImprimirFactura(lrCntps);
+      END;
+    END;
+
+    LOCAL PROCEDURE _CrearCabeceraFactura@1100253004(VAR prConcepto@1100253000 : Record 7010019;pwTotal@1100253001 : Decimal;VAR prCab@1100253012 : Record 36);
+    VAR
+      lrCab@1100253002 : Record 36;
+      lrTarRS@1100253004 : Record 7009898;
+      lrCntHotV@1100253006 : Record 7009727;
+      lrCnPto2@1100253007 : Record 7010019;
+      lrCabInc@1100253013 : Record 7009908;
+      lwSerie@1100253005 : Code[10];
+      lwTermsPag@1100253008 : Code[10];
+      lwFormaPag@1100253009 : Code[10];
+      lwCodCli@1100253014 : Code[20];
+      lwIvaInc@1100253010 : Boolean;
+      lwFechaHasta@1100253011 : Date;
+      lwFechaDesde@1100253003 : Date;
+    BEGIN
+      //_CrearCabeceraFactura
+
+      //+$006 <
+      rSerie.GET(rSerie.Modulo::Hotel);
+      rSerie.CheckSeries;
+      //+$006 >
+
+      CLEAR(lwTermsPag);
+      CLEAR(lwFormaPag);
+      CLEAR(wGRegIVAP);
+      CLEAR(lwCodCli);
+
+      CLEAR(lrCnPto2);
+      lrCnPto2.COPY(prConcepto);
+      lrCnPto2.SETCURRENTKEY("N§ Prefactura", "Coste/Ingreso", "Fecha llegada", TourOperador);
+      lrCnPto2.FINDFIRST;
+      lwFechaDesde := lrCnPto2."Fecha llegada";
+      lrCnPto2.FINDLAST;
+      lwFechaHasta := lrCnPto2."Fecha llegada";
+      lrCnPto2.FINDFIRST;
+
+      CLEAR(prCab);
+      IF pwTotal >0 THEN
+        prCab."Document Type" := prCab."Document Type"::Invoice
+      ELSE
+        prCab."Document Type" := prCab."Document Type"::"Credit Memo";
+
+      CLEAR(lwSerie);
+      lrCnPto2.COPY(prConcepto);
+
+      CASE lrCnPto2."Tipo contrato" OF
+        lrCnPto2."Tipo contrato"::Contrato :
+        BEGIN
+          CLEAR(lrCntHotV);
+          lrCntHotV.GET(lrCnPto2.Delegacion, lrCnPto2."Contrato Venta");
+          IF prCab."Document Type" = prCab."Document Type"::Invoice THEN
+          BEGIN
+            //-$006lrCntHotV.TESTFIELD("O_Cod. Serie");
+            //-$006lwSerie := lrCntHotV."O_Cod. Serie";
+
+            lwSerie := rSerie."Serie facturas"; //+$006
+          END
+          ELSE
+          BEGIN
+            //-$006rCnfVC.FINDFIRST;
+            //-$006rCnfVC.TESTFIELD("Credit Memo Nos.");
+            //-$006lwSerie := rCnfVC."Credit Memo Nos.";
+
+            lwSerie := rSerie."Serie abonos"; //+$006
+          END;
+          lwTermsPag := lrCntHotV."Cod. Terminos pago";
+          lwFormaPag := lrCntHotV."Cod. Formas pago";
+          lwIvaInc   := lrCntHotV."Impuestos incluidos";
+          lrCntHotV.TESTFIELD("Gr. registro IVA producto");
+          wGRegIVAP := lrCntHotV."Gr. registro IVA producto";
+          lrCntHotV.TESTFIELD(Cliente);
+          lwCodCli  := lrCntHotV.Cliente;
+        END;
+
+        lrCnPto2."Tipo contrato"::Tarifa :
+        BEGIN
+          CLEAR(lrTarRS);
+          lrTarRS.GET(lrCnPto2."Contrato Venta");
+          IF prCab."Document Type" = prCab."Document Type"::Invoice THEN
+          BEGIN
+            //-$006lrTarRS.TESTFIELD("Serie Facturas");
+            //-$006lwSerie := lrTarRS."Serie Facturas";
+
+            lwSerie := rSerie."Serie facturas";
+          END
+          ELSE
+          BEGIN
+            //-$006lrTarRS.TESTFIELD("Serie Abonos");
+            //-$006lwSerie := lrTarRS."Serie Abonos";
+
+            lwSerie := rSerie."Serie abonos";
+          END;
+          lwIvaInc   := lrTarRS."Precios IVA incluido";
+          lrTarRS.TESTFIELD("Grupo Registro IVA Producto");
+          wGRegIVAP := lrTarRS."Grupo Registro IVA Producto";
+          lrTarRS.TESTFIELD(Cliente);
+          lwCodCli  := lrTarRS.Cliente;
+        END;
+      END;
+
+      prCab.VALIDATE("No. Series"        , lwSerie);
+      prCab.VALIDATE("Posting No. Series", lwSerie);
+      _CheckReasonCode;
+      prCab.INSERT(TRUE);
+
+      prCab.VALIDATE("Sell-to Customer No.", lwCodCli);
+      IF rPar."Fecha registro agencia" = rPar."Fecha registro agencia"::"Fecha servicio" THEN
+      BEGIN
+        prCab.VALIDATE("Document Date", lrCnPto2."Fecha llegada");
+        prCab.VALIDATE("Posting Date" , lrCnPto2."Fecha llegada");
+      END
+      ELSE
+      BEGIN
+        prCab.VALIDATE("Document Date", WORKDATE);
+        prCab.VALIDATE("Posting Date" , WORKDATE);
+      END;
+
+      IF lwTermsPag <> '' THEN
+        prCab.VALIDATE("Payment Terms Code",  lwTermsPag);
+      IF lwFormaPag <> '' THEN
+        prCab.VALIDATE("Payment Method Code", lwFormaPag);
+
+      prCab.VALIDATE("Shortcut Dimension 1 Code", rPar.Delegacion);
+      prCab.VALIDATE("Shortcut Dimension 2 Code", lrCnPto2.TourOperador);
+
+      prCab."Posting Description" := STRSUBSTNO(Text009, _NomConcepto(lrCnPto2.Concepto), lrCnPto2.TourOperador,
+                                                lwFechaDesde, lwFechaHasta);
+      prCab.VALIDATE("Prices Including VAT", lwIvaInc);
+      prCab.VALIDATE(Hotel                 , lrCnPto2."Hotel Pago");
+      prCab.MODIFY;
+
+      // Crea la cabecera de factura incoming
+      CLEAR(lrCabInc);
+      lrCabInc.SetInf(prCab);
+      lrCabInc.Modulo           := lrCabInc.Modulo::Hotel;
+      lrCabInc."Periodo Desde"  := lwFechaDesde;
+      lrCabInc."Periodo Hasta"  := lwFechaHasta;
+      lrCabInc.Touroperador     := lrCnPto2.TourOperador;
+      lrCabInc."Fecha servicio" := lwFechaDesde;
+      lrCabInc."Fecha creacion" := CURRENTDATETIME; //+$005
+      lrCabInc.INSERT;
+    END;
+
+    LOCAL PROCEDURE _CrearLineaFactura@1100253005(prCnpto@1100253000 : Record 7010019;prCabVta@1100253001 : Record 36;pwCta@1100253002 : Code[20];VAR pwLinCom@1100253004 : Boolean;VAR pwNoLin@1100253012 : Integer);
+    VAR
+      lrLin@1100253003 : Record 37;
+      lrLin2@1100253005 : Record 37;
+      lrResH@1100253011 : Record 7009743;
+      lrLinInc@1100253009 : Record 7009909;
+      lwTexto@1100253006 : Text[50];
+      lwAdultos@1100253007 : Integer;
+      lwNi¤os@1100253008 : Integer;
+      lwImp@1100253010 : Decimal;
+    BEGIN
+      // _CrearLineaFactura
+
+      CLEAR(lrLin);
+      lrLin."Document Type" := prCabVta."Document Type";
+      lrLin."Document No."  := prCabVta."No.";
+      pwNoLin += 10000;
+      lrLin."Line No."      := pwNoLin;
+
+      lwImp := prCnpto.Importe;
+      IF prCabVta."Document Type" = prCabVta."Document Type"::"Credit Memo" THEN
+        lwImp := - lwImp;
+
+      IF pwLinCom THEN BEGIN // Incluir linea de comentario
+        lrLin2 := lrLin;
+        lrLin2."Line No." := _NexLinNo(lrLin2);
+        lrLin2.INSERT(TRUE);
+        lrLin2.Description     := STRSUBSTNO('%1: %2', cFunNom.nom_hotel(prCnpto."Hotel Pago"), prCnpto."Fecha llegada");
+        lrLin2.MODIFY;
+      END;
+      pwLinCom := FALSE;
+
+      _GetPax(prCnpto, lwAdultos, lwNi¤os);
+
+      lrLin2."Line No." := _NexLinNo(lrLin);
+      lrLin.VALIDATE(Type, lrLin.Type::"G/L Account");
+      lrLin.INSERT(TRUE);
+
+      lrLin.VALIDATE("No."                      , pwCta);
+      lrLin.VALIDATE("Shortcut Dimension 1 Code", prCabVta."Shortcut Dimension 1 Code");
+      lrLin.VALIDATE("Shortcut Dimension 2 Code", prCabVta."Shortcut Dimension 2 Code");
+      lrLin.VALIDATE("Allow Invoice Disc."      , FALSE);
+      lrLin.VALIDATE(Quantity                   , 1);
+      IF wGRegIVAP <> '' THEN
+        lrLin.VALIDATE("VAT Prod. Posting Group"  , wGRegIVAP);
+      lrLin.Description     := STRSUBSTNO('%1 %2: %3', prCnpto."Hotel Pago", prCnpto.Concepto, prCnpto."Fecha llegada");;
+      lrLin."Description 2" := _NomConcepto(prCnpto.Concepto);
+      lrLin.VALIDATE("Unit Price", lwImp);
+
+      //. Rellenar los campos Amount y "Amount Including VAT" para que la cabecera de factura muestre
+      IF prCabVta."Prices Including VAT" THEN BEGIN
+        lrLin."Amount Including VAT" := lrLin."Line Amount";
+        lrLin.Amount                 := ROUND(lrLin."Line Amount" / (1 + ((lrLin."VAT %" + lrLin."EC %") / 100) ) );
+      END
+      ELSE BEGIN
+        lrLin.Amount                 := lrLin."Line Amount";
+        lrLin."Amount Including VAT" := ROUND(lrLin."Line Amount" * (1 + ((lrLin."VAT %" + lrLin."EC %") / 100) ) );
+      END;
+
+      CLEAR(lrResH);
+      lrResH.SETCURRENTKEY(Delegacion,
+                             "N§ Reserva");
+      lrResH.SETRANGE(Delegacion  , prCnpto.Delegacion);
+      lrResH.SETRANGE("N§ Reserva", prCnpto."N§ Reserva");
+      IF lrResH.FINDFIRST THEN BEGIN
+        lrResH.CALCFIELDS(Paxes);
+        lrLin.VALIDATE(Personas      , lrResH.Paxes);
+        lrLin.VALIDATE(Dias          , lrResH.Estancia);
+      END;
+
+      lrLin.MODIFY(TRUE);
+
+      // Creamos la linea de factura incoming;
+      CLEAR(lrLinInc);
+      lrLinInc.SetInf(lrLin, prCabVta."Prices Including VAT");
+      lrLinInc.Delegacion      := prCnpto.Delegacion;
+      lrLinInc.TourOperador    := prCnpto.TourOperador;
+      lrLinInc.Bono            := prCnpto.Bono;
+      lrLinInc."N§ Reserva"    := prCnpto."N§ Reserva";
+      lrLinInc.Concepto        := prCnpto.Concepto;
+      CASE lrLinInc.Concepto OF
+        'HANDFEEVEN' : lrLinInc.Subconcepto := prCnpto."Cod Handling";
+        'EXTRAFIJOV', 'EXTRAVARIV' : lrLinInc.Subconcepto   := prCnpto."Codigo Extra";
+        'OFERTAV': lrLinInc.Subconcepto := prCnpto."Codigo Oferta";
+      END;
+      lrLinInc.Hotel           := lrResH."Hotel TO";
+      lrLinInc.Regularizacion  := prCnpto.Regularizacion;
+      lrLinInc.Fecha := prCnpto."Fecha llegada";
+      lrLinInc.Adultos         := lwAdultos;
+      lrLinInc.Ni¤os           := lwNi¤os;
+      lrLinInc.Personas        := lrResH.Paxes;
+      lrLinInc.Dias            := lrResH.Estancia;
+      IF prCnpto.Precio <> 0 THEN
+        lrLinInc.Precio := prCnpto.Precio;
+      lrLinInc.NoPrefactura    := prCnpto."N§ Prefactura";
+      lrLinInc.INSERT;
+    END;
+
+    LOCAL PROCEDURE _ImprimirPrefactura@1100253006(VAR prConcepto@1100253000 : Record 7010019);
+    BEGIN
+      // _ImprimirPrefactura
+
+      IF prConcepto."N§ Prefactura"= '' THEN
+        EXIT;
+      prConcepto.SETRANGE("N§ Prefactura",  prConcepto."N§ Prefactura");
+      REPORT.RUN(7010006, TRUE, TRUE, prConcepto);
+    END;
+
+    LOCAL PROCEDURE _ImprimirFactura@1100253007(prConcepto@1100253000 : Record 7010019);
+    VAR
+      lwIdInf@1100253004 : Integer;
+      lrCab@1100217000 : Record 7009908;
+    BEGIN
+      // _ImprimirFactura
+
+
+      CLEAR(rDat);
+      rDat.FINDFIRST;
+      IF rDat."Empresa Real"=rDat."Empresa Real"::GOC THEN BEGIN
+        _ImprimirFacturaStd(prConcepto);
+        EXIT;
+      END;
+
+      IF prConcepto."N§ Factura" = '' THEN
+        ERROR(Text012);
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Factura Venta Hotel");
+      lwIdInf := rPar."Factura Venta Hotel";
+      lrCab.SETRANGE("No.", prConcepto."N§ Factura");
+      IF lrCab.FINDFIRST THEN
+        REPORT.RUN(lwIdInf, TRUE, TRUE, lrCab);
+    END;
+
+    LOCAL PROCEDURE _ImprimirFacturaStd@1100217000(prConcepto@1100253000 : Record 7010019);
+    VAR
+      lrCabV@1100253001 : Record 36;
+      lrHFact@1100253002 : Record 112;
+      lrHAbn@1100253003 : Record 114;
+      lwIdInf@1100253004 : Integer;
+    BEGIN
+      // _ImprimirFacturaStd
+        // Imprime la factura del estandard
+
+      IF prConcepto."N§ Factura" = '' THEN
+        ERROR(Text012);
+
+      rPar.FINDFIRST;
+      CLEAR(lwIdInf); // Numero de informe
+      IF lrHFact.GET(prConcepto."N§ Factura") THEN BEGIN
+        lrHFact.SETRECFILTER;
+        rPar.TESTFIELD("Factura Venta Hotel registrada");
+        lwIdInf:= rPar."Factura Venta Hotel registrada";
+        REPORT.RUN(lwIdInf, TRUE, TRUE, lrHFact);
+      END
+      ELSE BEGIN
+        IF lrHAbn.GET(prConcepto."N§ Factura") THEN BEGIN
+          lrHAbn.SETRECFILTER;
+          rPar.TESTFIELD("Abono Venta Hotel registrado");
+          lwIdInf := rPar."Abono Venta Hotel registrado";
+          REPORT.RUN(lwIdInf, TRUE, TRUE, lrHAbn);
+        END
+        ELSE BEGIN
+          CLEAR(lrCabV);
+          lrCabV.SETFILTER("Document Type", '%1|%2', lrCabV."Document Type"::Invoice, lrCabV."Document Type"::"Credit Memo");
+          lrCabV.SETRANGE("No.", prConcepto."N§ Factura");
+          IF lrCabV.FINDFIRST THEN BEGIN
+            lrCabV.SETRECFILTER;
+            rPar.TESTFIELD("Factura Venta Hotel");
+            lwIdInf := rPar."Factura Venta Hotel";
+            REPORT.RUN(lwIdInf, TRUE, TRUE, lrCabV);
+          END
+          ELSE
+            ERROR(Text013, prConcepto."N§ Factura");
+        END;
+      END;
+    END;
+
+    PROCEDURE ImprimirDocumento@1100253008(prConcepto@1100253000 : Record 7010019);
+    BEGIN
+      // ImprimirDocumento
+
+      CASE TRUE OF
+        //prConcepto."N§ Factura" <> ''    : _ImprimirFactura(prConcepto);
+        prConcepto."N§ Prefactura" <> '' : _ImprimirPrefactura(prConcepto);
+      END;
+    END;
+
+    LOCAL PROCEDURE _NexLinNo@1100253011(prLin@1100253000 : Record 37) : Integer;
+    VAR
+      lrLin2@1100253001 : Record 37;
+      lwNum@1100253002 : Integer;
+    BEGIN
+      // _NexLinNo
+
+      lwNum := 10000;
+      CLEAR(lrLin2);
+      lrLin2.SETRANGE("Document Type", prLin."Document Type");
+      lrLin2.SETRANGE("Document No." , prLin."Document No.");
+      IF lrLin2.FINDLAST THEN
+        lwNum += lrLin2."Line No.";
+
+      EXIT(lwNum);
+    END;
+
+    LOCAL PROCEDURE _FillTxt@1100253018(pwTexto@1100253000 : Text[1024];pwCar@1100253001 : Text[1];pwModo@1100253002 : 'Delante,Detras';pwLength@1100253003 : Integer) : Text[1024];
+    VAR
+      lwText2@1100253004 : Text[1024];
+      lwLenAct@1100253005 : Integer;
+    BEGIN
+      // _FillTxt
+      // Esta funcion devuelve otra cadena que sera el parametro pwTexto dejando una longitud justa de pwLength
+      // caracteres. Si la cadena pwTexto es mas larga que pwLength, se cortar  por delante o por detras segun el parametro pwModo
+      // Si es mas corta se rellenara con el caracter pwCar por delante o por detras segun el parametro pwModo hasta tener la longitud
+      // estipulada en pwLength
+
+      lwLenAct := STRLEN(pwTexto);
+      CLEAR(lwText2);
+      CASE TRUE OF
+        lwLenAct = pwLength: lwText2 := pwTexto;
+        lwLenAct > pwLength: BEGIN
+          CASE pwModo OF
+            pwModo::Delante: lwText2 := COPYSTR(pwTexto,1, pwLength);
+            pwModo::Detras : lwText2 := COPYSTR(pwTexto, lwLenAct - pwLength + 1);
+          END;
+        END;
+        lwLenAct < pwLength: BEGIN
+          lwText2 := pwTexto;
+          IF pwCar='' THEN
+            pwCar := ' ';
+          REPEAT
+            CASE pwModo OF
+              pwModo::Delante: lwText2 := pwCar + lwText2;
+              pwModo::Detras : lwText2 := lwText2 + pwCar;
+            END;
+          UNTIL STRLEN(lwText2) = pwLength;
+        END;
+      END;
+
+      EXIT(lwText2);
+    END;
+
+    LOCAL PROCEDURE _GetPax@1100253019(prCntp@1100253000 : Record 7010019;VAR pwAdultos@1100253001 : Integer;VAR pwNi¤os@1100253002 : Integer);
+    VAR
+      lrResvH@1100253003 : Record 7009743;
+      lrParPer@1100253004 : Record 7009701;
+    BEGIN
+      // _GetPax
+      // Devuelve el numero de Adultos y Ni¤os de la reserva
+
+      CLEAR(pwAdultos);
+      CLEAR(pwNi¤os);
+
+      lrParPer.FINDFIRST;
+      CLEAR(lrResvH);
+      lrResvH.SETCURRENTKEY(Delegacion,"N§ Responsable","N§ Reserva");
+      lrResvH.SETRANGE(Delegacion      , prCntp.Delegacion);
+      lrResvH.SETRANGE("N§ Responsable", prCntp."N§ Reserva");
+      IF lrResvH.FINDSET THEN BEGIN
+        REPEAT
+           //-$004CASE lrResvH."Tipo Persona Facturacion" OF
+           CASE lrResvH."Tipo Persona" OF //$004
+             lrParPer."Codigo Adulto": pwAdultos +=1;
+             lrParPer."Codigo Ni¤o"  : pwNi¤os   +=1;
+           END;
+        UNTIL lrResvH.NEXT=0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _NomConcepto@1100253047(pwCode@1100253001 : Code[10]) : Text[30];
+    VAR
+      lrCtp@1100253000 : Record 7009716;
+      lwText@1100253002 : Text[30];
+    BEGIN
+      // _NomConcepto
+
+      CLEAR(lwText);
+      CLEAR(lrCtp);
+      IF lrCtp.GET(pwCode) THEN
+        lwText := lrCtp.Descripcion;
+      IF lwText='' THEN
+        lwText := pwCode;
+
+      EXIT(lwText);
+    END;
+
+    PROCEDURE DeshacerPrefactura@1100253009(prConcepto@1100253000 : Record 7010019);
+    VAR
+      lrConcepto@1100253001 : Record 7010019;
+    BEGIN
+      // DeshacerPrefactura
+
+      IF prConcepto."N§ Factura" <> '' THEN
+        ERROR(Text018);
+
+      IF NOT CONFIRM(Text019, FALSE, prConcepto."N§ Prefactura") THEN
+        EXIT;
+
+      lrConcepto.RESET;
+      lrConcepto.SETCURRENTKEY("N§ Prefactura");
+      lrConcepto.SETRANGE("N§ Prefactura", prConcepto."N§ Prefactura");
+      IF lrConcepto.FINDSET(TRUE) THEN
+        lrConcepto.MODIFYALL("N§ Prefactura", '');
+    END;
+
+    LOCAL PROCEDURE _FechaFinMes@1100217001(pwFecha@1100217000 : Date) : Date;
+    VAR
+      lwFecha2@1100217001 : Date;
+    BEGIN
+      // _FechaFinMes
+      // $004
+
+      CLEAR(lwFecha2);
+      lwFecha2 := DMY2DATE(1, DATE2DMY(pwFecha,2), DATE2DMY(pwFecha,3));
+      lwFecha2 := CALCDATE('<+1M-1D>', lwFecha2);
+      EXIT(lwFecha2);
+    END;
+
+    LOCAL PROCEDURE _CheckReasonCode@1000000008();
+    VAR
+      lrReason@1000000000 : Record 231;
+      TextCodAu@1000000001 : TextConst 'ENU=ATENNEA;ESP=ATENNEA';
+    BEGIN
+      // _CheckReasonCode
+
+      IF NOT lrReason.GET(TextCodAu) THEN
+      BEGIN
+        lrReason.INIT;
+        lrReason.Code        := TextCodAu;
+        lrReason.Description := lrReason.Code;
+        lrReason.INSERT;
+      END;
+    END;
+
+    BEGIN
+    {
+      JPT 23/04/12 CNT-CAR-12004 HOT-18
+
+      $001 AJS 07052012 El filtro de n§ de factura tiene que poderse quitar
+
+      $002 AJS 29052012 Nueva funcion para deshacer prefacturas
+
+      $003 AJS 23082012 Control de seguridad por usuario
+
+      $004 JPT 09/10/12 GOC-LP-12024 Mejora en facturacion hotel por concepto. Crear una factura por mes dentro del periodo
+
+      $005 AJS 17072013 He a¤adido la fecha de creacion en las facturas de Atennea
+
+      $006 AJS 23062014 He creado una nueva tabla de serie de facturacion
+
+      $007 AJS 21012015 Ejecutar el proceso estandar de lanzar factura
+
+      $008 AJS 16032015 CNT-CAR-14096, Nueva funcion en las lineas de factura del estandar para controlar la edicion manual
+
+      $009 AJS 25032015 CNT-CAR-14096, El campo Reason code se rellena al final del proceso de facturacion
+    }
+    END.
+  }
+}

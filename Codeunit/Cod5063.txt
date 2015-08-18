@@ -1,0 +1,466 @@
+OBJECT Codeunit 5063 ArchiveManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000 : TextConst 'ENU=Document %1 has been archived.;ESP=Se ha archivado el Documento %1.';
+      Text002@1003 : TextConst 'ENU=Do you want to Restore %1 %2 Version %3?;ESP=¨Confirma que desea Recuperar %1 %2 Versi¢n %3?';
+      Text003@1002 : TextConst 'ENU=%1 %2 has been restored.;ESP=Se ha recuperado %1 %2.';
+      Text004@1001 : TextConst 'ENU=Document restored from Version %1.;ESP=Se ha recuperado el Documento desde Versi¢n %1.';
+      Text005@1004 : TextConst 'ENU=%1 %2 has been partly posted.\Restore not possible.;ESP=%1 %2 se ha registrado parcialmente.\No es posible la recuperaci¢n.';
+      Text006@1005 : TextConst 'ENU=Entries exist for on or more of the following:\  - %1\  - %2\  - %3.\Restoration of document will delete these entries.\Continue with restore?;ESP=Exiten movs. para uno o m s de los siguientes:\  - %1\  - %2\  - %3.\La recuperaci¢n del documento eliminar  estos movs.\¨Desea continuar?';
+      Text007@1006 : TextConst 'ENU=Archive %1 no.: %2?;ESP=¨Archivar %1 no.: %2?';
+      Text008@1007 : TextConst 'ENU=Item Tracking Line;ESP=L¡nea seguimiento producto';
+      ReleaseSalesDoc@1008 : Codeunit 414;
+      Text009@1009 : TextConst 'ENU=Unposted %1 %2 does not exist anymore.\It is not possible to restore the %1.;ESP=Ya no existe %1 %2 sin registrar.\No se puede restaurar %1.';
+
+    PROCEDURE ArchiveSalesDocument@2(VAR SalesHeader@1004 : Record 36);
+    BEGIN
+      IF CONFIRM(
+        Text007,TRUE,SalesHeader."Document Type",
+        SalesHeader."No.")
+      THEN BEGIN
+        StoreSalesDocument(SalesHeader,FALSE);
+        MESSAGE(Text001,SalesHeader."No.");
+      END;
+    END;
+
+    PROCEDURE ArchivePurchDocument@10(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      IF CONFIRM(
+        Text007,TRUE,PurchHeader."Document Type",
+        PurchHeader."No.")
+      THEN BEGIN
+        StorePurchDocument(PurchHeader,FALSE);
+        MESSAGE(Text001,PurchHeader."No.");
+      END;
+    END;
+
+    PROCEDURE StoreSalesDocument@4(VAR SalesHeader@1000 : Record 36;InteractionExist@1005 : Boolean);
+    VAR
+      SalesLine@1002 : Record 37;
+      SalesHeaderArchive@1004 : Record 5107;
+      SalesLineArchive@1001 : Record 5108;
+    BEGIN
+      SalesHeaderArchive.INIT;
+      SalesHeaderArchive.TRANSFERFIELDS(SalesHeader);
+      SalesHeaderArchive."Archived By" := USERID;
+      SalesHeaderArchive."Date Archived" := WORKDATE;
+      SalesHeaderArchive."Time Archived" := TIME;
+      SalesHeaderArchive."Version No." := GetNextVersionNo(
+        DATABASE::"Sales Header",SalesHeader."Document Type",SalesHeader."No.",SalesHeader."Doc. No. Occurrence");
+      SalesHeaderArchive."Interaction Exist" := InteractionExist;
+      SalesHeaderArchive.INSERT;
+      StoreDocDim(
+        DATABASE::"Sales Header",SalesHeader."Document Type",
+        SalesHeader."No.",0,SalesHeader."Doc. No. Occurrence",SalesHeaderArchive."Version No.",
+         DATABASE::"Sales Header Archive");
+
+      StoreSalesDocumentComments(
+        SalesHeader."Document Type",SalesHeader."No.",
+        SalesHeader."Doc. No. Occurrence",SalesHeaderArchive."Version No.");
+
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          WITH SalesLineArchive DO BEGIN
+            INIT;
+            TRANSFERFIELDS(SalesLine);
+            "Doc. No. Occurrence" := SalesHeader."Doc. No. Occurrence";
+            "Version No." := SalesHeaderArchive."Version No.";
+            INSERT;
+            StoreDocDim(
+              DATABASE::"Sales Line",SalesLine."Document Type",SalesLine."Document No.",
+              SalesLine."Line No.",SalesHeader."Doc. No. Occurrence","Version No.",
+               DATABASE::"Sales Line Archive");
+          END
+        UNTIL SalesLine.NEXT = 0;
+    END;
+
+    PROCEDURE StorePurchDocument@12(VAR PurchHeader@1001 : Record 38;InteractionExist@1000 : Boolean);
+    VAR
+      PurchLine@1005 : Record 39;
+      PurchHeaderArchive@1004 : Record 5109;
+      PurchLineArchive@1003 : Record 5110;
+    BEGIN
+      PurchHeaderArchive.INIT;
+      PurchHeaderArchive.TRANSFERFIELDS(PurchHeader);
+      PurchHeaderArchive."Archived By" := USERID;
+      PurchHeaderArchive."Date Archived" := WORKDATE;
+      PurchHeaderArchive."Time Archived" := TIME;
+      PurchHeaderArchive."Version No." := GetNextVersionNo(
+        DATABASE::"Purchase Header",PurchHeader."Document Type",PurchHeader."No.",PurchHeader."Doc. No. Occurrence");
+      PurchHeaderArchive."Interaction Exist" := InteractionExist;
+      PurchHeaderArchive.INSERT;
+
+      StoreDocDim(
+        DATABASE::"Purchase Header",PurchHeader."Document Type",
+        PurchHeader."No.",0,PurchHeader."Doc. No. Occurrence",PurchHeaderArchive."Version No.",
+         DATABASE::"Purchase Header Archive");
+
+      StorePurchDocumentComments(
+        PurchHeader."Document Type",PurchHeader."No.",
+        PurchHeader."Doc. No. Occurrence",PurchHeaderArchive."Version No.");
+
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLine.FINDSET THEN
+        REPEAT
+          WITH PurchLineArchive DO BEGIN
+            INIT;
+            TRANSFERFIELDS(PurchLine);
+            "Doc. No. Occurrence" := PurchHeader."Doc. No. Occurrence";
+            "Version No." := PurchHeaderArchive."Version No.";
+            INSERT;
+            StoreDocDim(
+              DATABASE::"Purchase Line",PurchLine."Document Type",PurchLine."Document No.",
+              PurchLine."Line No.",PurchHeader."Doc. No. Occurrence","Version No.",
+               DATABASE::"Purchase Line Archive");
+          END
+        UNTIL PurchLine.NEXT = 0;
+    END;
+
+    PROCEDURE RestoreSalesDocument@7(VAR SalesHeaderArchive@1000 : Record 5107);
+    VAR
+      SalesHeader@1001 : Record 36;
+      SalesLine@1004 : Record 37;
+      SalesLineArchive@1003 : Record 5108;
+      DocDimArchv@1005 : Record 5106;
+      DocDim@1008 : Record 357;
+      SalesShptHeader@1000000001 : Record 110;
+      SalesInvHeader@1000000002 : Record 112;
+      ReservEntry@1000000005 : Record 337;
+      ItemChargeAssgntSales@1000000007 : Record 5809;
+      SalesCommentLine@1006 : Record 44;
+      SalesCommentLineArchive@1010 : Record 5126;
+      SalesPost@1000000000 : Codeunit 80;
+      DimMgt@1009 : Codeunit 408;
+      NextLine@1002 : Integer;
+      ConfirmRequired@1000000006 : Boolean;
+      RestoreDocument@1000000009 : Boolean;
+    BEGIN
+      IF NOT(SalesHeader.GET(SalesHeaderArchive."Document Type",SalesHeaderArchive."No.")) THEN
+        ERROR(Text009,SalesHeaderArchive."Document Type",SalesHeaderArchive."No.");
+      SalesHeader.TESTFIELD(Status, SalesHeader.Status::Open);
+      IF SalesHeader."Document Type" = SalesHeader."Document Type"::Order THEN BEGIN
+        SalesShptHeader.RESET;
+        SalesShptHeader.SETCURRENTKEY("Order No.");
+        SalesShptHeader.SETRANGE("Order No.", SalesHeader."No.");
+        IF NOT SalesShptHeader.ISEMPTY THEN
+          ERROR(Text005, SalesHeader."Document Type", SalesHeader."No.");
+        SalesInvHeader.RESET;
+        SalesInvHeader.SETCURRENTKEY("Order No.");
+        SalesInvHeader.SETRANGE("Order No.", SalesHeader."No.");
+        IF NOT SalesInvHeader.ISEMPTY THEN
+          ERROR(Text005, SalesHeader."Document Type", SalesHeader."No.");
+      END;
+
+      ConfirmRequired := FALSE;
+      ReservEntry.RESET;
+      ReservEntry.SETCURRENTKEY(
+        "Source ID",
+        "Source Ref. No.",
+        "Source Type",
+        "Source Subtype");
+
+      ReservEntry.SETRANGE("Source ID", SalesHeader."No.");
+      ReservEntry.SETRANGE("Source Type", DATABASE::"Sales Line");
+      ReservEntry.SETRANGE("Source Subtype", SalesHeader."Document Type");
+      IF ReservEntry.FINDFIRST THEN
+        ConfirmRequired := TRUE;
+
+      ItemChargeAssgntSales.RESET;
+      ItemChargeAssgntSales.SETRANGE("Document Type", SalesHeader."Document Type");
+      ItemChargeAssgntSales.SETRANGE("Document No.", SalesHeader."No.");
+      IF ItemChargeAssgntSales.FINDFIRST THEN
+        ConfirmRequired := TRUE;
+
+      RestoreDocument := FALSE;
+      IF ConfirmRequired THEN BEGIN
+        IF CONFIRM(
+          Text006, FALSE, ReservEntry.TABLECAPTION, ItemChargeAssgntSales.TABLECAPTION, Text008)
+        THEN
+          RestoreDocument := TRUE;
+      END ELSE
+        IF CONFIRM(
+          Text002,TRUE,SalesHeaderArchive."Document Type",
+          SalesHeaderArchive."No.",SalesHeaderArchive."Version No.")
+        THEN
+          RestoreDocument := TRUE;
+      IF RestoreDocument THEN BEGIN
+        SalesHeader.TESTFIELD("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+        SalesHeader.DELETE(TRUE);
+        SalesHeader.INIT;
+
+        SalesHeader.SetHideValidationDialog(TRUE);
+        SalesHeader."Document Type" := SalesHeaderArchive."Document Type";
+        SalesHeader."No." := SalesHeaderArchive."No.";
+        SalesHeader.INSERT(TRUE);
+        SalesHeader.TRANSFERFIELDS(SalesHeaderArchive);
+        SalesHeader.Status := SalesHeader.Status::Open;
+
+        IF SalesHeaderArchive."Sell-to Contact No." <> '' THEN
+          SalesHeader.VALIDATE("Sell-to Contact No.", SalesHeaderArchive."Sell-to Contact No.")
+        ELSE
+          SalesHeader.VALIDATE("Sell-to Customer No.", SalesHeaderArchive."Sell-to Customer No.");
+        IF SalesHeaderArchive."Bill-to Contact No." <> '' THEN
+          SalesHeader.VALIDATE("Bill-to Contact No.", SalesHeaderArchive."Bill-to Contact No.")
+        ELSE
+          SalesHeader.VALIDATE("Bill-to Customer No.", SalesHeaderArchive."Bill-to Customer No.");
+        SalesHeader.VALIDATE("Salesperson Code", SalesHeaderArchive."Salesperson Code");
+        SalesHeader.VALIDATE("Payment Terms Code", SalesHeaderArchive."Payment Terms Code");
+        SalesHeader.VALIDATE("Payment Discount %", SalesHeaderArchive."Payment Discount %");
+        SalesHeader."Shortcut Dimension 1 Code" := SalesHeaderArchive."Shortcut Dimension 1 Code";
+        SalesHeader."Shortcut Dimension 2 Code" := SalesHeaderArchive."Shortcut Dimension 2 Code";
+
+        DocDimArchv.SETRANGE("Table ID",DATABASE::"Sales Header Archive");
+        DocDimArchv.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+        DocDimArchv.SETRANGE("Document No.",SalesHeaderArchive."No.");
+        DocDimArchv.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+        DocDimArchv.SETRANGE("Version No.",SalesHeaderArchive."Version No.");
+
+        DocDim.SETRANGE("Table ID",DATABASE::"Sales Header");
+        DocDim.SETRANGE("Document Type",SalesHeader."Document Type");
+        DocDim.SETRANGE("Document No.",SalesHeader."No.");
+        DocDim.DELETEALL;
+
+        DimMgt.MoveDocDimArchvToDocDim(
+          DocDimArchv,
+          DATABASE::"Sales Header",
+          SalesHeader."No.",
+          SalesHeader."Document Type",
+          0);
+
+        SalesHeader.MODIFY(TRUE);
+
+        SalesCommentLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+        SalesCommentLineArchive.SETRANGE("No.",SalesHeaderArchive."No.");
+        SalesCommentLineArchive.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+        SalesCommentLineArchive.SETRANGE("Version No.",SalesHeaderArchive."Version No.");
+        IF SalesCommentLineArchive.FINDSET THEN
+          REPEAT
+            SalesCommentLine.INIT;
+            SalesCommentLine.TRANSFERFIELDS(SalesCommentLineArchive);
+            SalesCommentLine.INSERT;
+          UNTIL SalesCommentLineArchive.NEXT = 0;
+
+        SalesCommentLine.SETRANGE("Document Type",SalesHeader."Document Type");
+        SalesCommentLine.SETRANGE("No.",SalesHeader."No.");
+        SalesCommentLine.SETRANGE("Document Line No.",0);
+        IF SalesCommentLine.FINDLAST THEN
+          NextLine := SalesCommentLine."Line No.";
+        NextLine += 10000;
+        SalesCommentLine.INIT;
+        SalesCommentLine."Document Type" := SalesHeader."Document Type";
+        SalesCommentLine."No." := SalesHeader."No.";
+        SalesCommentLine."Document Line No." := 0;
+        SalesCommentLine."Line No." := NextLine;
+        SalesCommentLine.Date := WORKDATE;
+        SalesCommentLine.Comment := STRSUBSTNO(Text004,FORMAT(SalesHeaderArchive."Version No."));
+        SalesCommentLine.INSERT;
+
+        SalesLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+        SalesLineArchive.SETRANGE("Document No.",SalesHeaderArchive."No.");
+        SalesLineArchive.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+        SalesLineArchive.SETRANGE("Version No.",SalesHeaderArchive."Version No.");
+        IF SalesLineArchive.FINDSET THEN BEGIN
+          REPEAT
+            WITH SalesLine DO BEGIN
+              INIT;
+              TRANSFERFIELDS(SalesLineArchive);
+              INSERT(TRUE);
+              IF Type <> Type::" " THEN BEGIN
+                VALIDATE("No.");
+                IF SalesLineArchive."Variant Code" <> '' THEN
+                  VALIDATE("Variant Code", SalesLineArchive."Variant Code");
+                IF SalesLineArchive."Unit of Measure Code" <> '' THEN
+                  VALIDATE("Unit of Measure Code",SalesLineArchive."Unit of Measure Code");
+                IF Quantity <> 0 THEN
+                  VALIDATE(Quantity, SalesLineArchive.Quantity);
+                VALIDATE("Unit Price", SalesLineArchive."Unit Price");
+                VALIDATE("Line Discount %", SalesLineArchive."Line Discount %");
+                IF SalesLineArchive."Inv. Discount Amount" <> 0 THEN
+                  VALIDATE("Inv. Discount Amount", SalesLineArchive."Inv. Discount Amount");
+                IF Amount <> SalesLineArchive.Amount THEN
+                  VALIDATE(Amount, SalesLineArchive.Amount);
+                VALIDATE(Description, SalesLineArchive.Description);
+              END;
+              "Shortcut Dimension 1 Code" := SalesLineArchive."Shortcut Dimension 1 Code";
+              "Shortcut Dimension 2 Code" := SalesLineArchive."Shortcut Dimension 2 Code";
+
+              DocDimArchv.SETRANGE("Table ID",DATABASE::"Sales Line Archive");
+              DocDimArchv.SETRANGE("Line No.",SalesLineArchive."Line No.");
+
+              DocDim.SETRANGE("Table ID",DATABASE::"Sales Line");
+              DocDim.SETRANGE("Line No.","Line No.");
+              DocDim.DELETEALL;
+
+              DimMgt.MoveDocDimArchvToDocDim(
+                DocDimArchv,
+                DATABASE::"Sales Line",
+                "Document No.","Document Type","Line No.");
+              MODIFY(TRUE);
+            END
+          UNTIL SalesLineArchive.NEXT = 0;
+        END;
+        SalesHeader.Status := SalesHeader.Status::Released;
+        ReleaseSalesDoc.Reopen(SalesHeader);
+        MESSAGE(Text003,SalesHeader."Document Type",SalesHeader."No.");
+      END;
+    END;
+
+    PROCEDURE GetNextOccurrenceNo@3(TableId@1003 : Integer;DocType@1001 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1000 : Code[20]) : Integer;
+    VAR
+      SalesHeaderArchive@1002 : Record 5107;
+      PurchHeaderArchive@1004 : Record 5109;
+    BEGIN
+      CASE TableId OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeaderArchive.LOCKTABLE;
+            SalesHeaderArchive.SETRANGE("Document Type",DocType);
+            SalesHeaderArchive.SETRANGE("No.",DocNo);
+            IF SalesHeaderArchive.FINDLAST THEN
+              EXIT(SalesHeaderArchive."Doc. No. Occurrence" + 1)
+            ELSE
+              EXIT(1);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeaderArchive.LOCKTABLE;
+            PurchHeaderArchive.SETRANGE("Document Type",DocType);
+            PurchHeaderArchive.SETRANGE("No.",DocNo);
+            IF PurchHeaderArchive.FINDLAST THEN
+              EXIT(PurchHeaderArchive."Doc. No. Occurrence" + 1)
+            ELSE
+              EXIT(1);
+          END;
+      END;
+    END;
+
+    PROCEDURE GetNextVersionNo@1(TableId@1004 : Integer;DocType@1000 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1001 : Code[20];DocNoOccurrence@1003 : Integer) : Integer;
+    VAR
+      SalesHeaderArchive@1002 : Record 5107;
+      PurchHeaderArchive@1005 : Record 5109;
+    BEGIN
+      CASE TableId OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeaderArchive.LOCKTABLE;
+            SalesHeaderArchive.SETRANGE("Document Type",DocType);
+            SalesHeaderArchive.SETRANGE("No.",DocNo);
+            SalesHeaderArchive.SETRANGE("Doc. No. Occurrence",DocNoOccurrence);
+            IF SalesHeaderArchive.FINDLAST THEN
+              EXIT(SalesHeaderArchive."Version No." + 1)
+            ELSE
+              EXIT(1);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeaderArchive.LOCKTABLE;
+            PurchHeaderArchive.SETRANGE("Document Type",DocType);
+            PurchHeaderArchive.SETRANGE("No.",DocNo);
+            PurchHeaderArchive.SETRANGE("Doc. No. Occurrence",DocNoOccurrence);
+            IF PurchHeaderArchive.FINDLAST THEN
+              EXIT(PurchHeaderArchive."Version No." + 1)
+            ELSE
+              EXIT(1);
+          END;
+      END;
+    END;
+
+    PROCEDURE SalesDocArchiveGranule@6() : Boolean;
+    VAR
+      SalesHeaderArchive@1000 : Record 5107;
+    BEGIN
+      EXIT(SalesHeaderArchive.WRITEPERMISSION);
+    END;
+
+    PROCEDURE StoreDocDim@11(TableId@1000 : Integer;DocType@1001 : Option;DocNo@1002 : Code[20];LineNo@1003 : Integer;DocNoOccurrence@1007 : Integer;VersionNo@1004 : Integer;NewTableID@1008 : Integer);
+    VAR
+      DocDim@1006 : Record 357;
+      DocDimArchive@1005 : Record 5106;
+    BEGIN
+      DocDim.SETRANGE("Table ID",TableId);
+      DocDim.SETRANGE("Document Type",DocType);
+      DocDim.SETRANGE("Document No.",DocNo);
+      DocDim.SETRANGE("Line No.",LineNo);
+      IF DocDim.FINDSET THEN
+        REPEAT
+          DocDimArchive.INIT;
+          DocDimArchive.TRANSFERFIELDS(DocDim);
+          DocDimArchive."Table ID" := NewTableID;
+          DocDimArchive."Version No." := VersionNo;
+          DocDimArchive."Doc. No. Occurrence" := DocNoOccurrence;
+          DocDimArchive.INSERT;
+        UNTIL DocDim.NEXT = 0;
+    END;
+
+    PROCEDURE PurchaseDocArchiveGranule@5() : Boolean;
+    VAR
+      PurchaseHeaderArchive@1000 : Record 5109;
+    BEGIN
+      EXIT(PurchaseHeaderArchive.WRITEPERMISSION);
+    END;
+
+    LOCAL PROCEDURE StoreSalesDocumentComments@8(DocType@1005 : Option;DocNo@1004 : Code[20];DocNoOccurrence@1002 : Integer;VersionNo@1001 : Integer);
+    VAR
+      SalesCommentLine@1008 : Record 44;
+      SalesCommentLineArch@1007 : Record 5126;
+    BEGIN
+      SalesCommentLine.SETRANGE("Document Type",DocType);
+      SalesCommentLine.SETRANGE("No.",DocNo);
+      IF SalesCommentLine.FINDSET THEN
+        REPEAT
+          SalesCommentLineArch.INIT;
+          SalesCommentLineArch.TRANSFERFIELDS(SalesCommentLine);
+          SalesCommentLineArch."Doc. No. Occurrence" := DocNoOccurrence;
+          SalesCommentLineArch."Version No." := VersionNo;
+          SalesCommentLineArch.INSERT;
+        UNTIL SalesCommentLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE StorePurchDocumentComments@15(DocType@1005 : Option;DocNo@1004 : Code[20];DocNoOccurrence@1002 : Integer;VersionNo@1001 : Integer);
+    VAR
+      PurchCommentLine@1009 : Record 43;
+      PurchCommentLineArch@1010 : Record 5125;
+    BEGIN
+      PurchCommentLine.SETRANGE("Document Type",DocType);
+      PurchCommentLine.SETRANGE("No.",DocNo);
+      IF PurchCommentLine.FINDSET THEN
+        REPEAT
+          PurchCommentLineArch.INIT;
+          PurchCommentLineArch.TRANSFERFIELDS(PurchCommentLine);
+          PurchCommentLineArch."Doc. No. Occurrence" := DocNoOccurrence;
+          PurchCommentLineArch."Version No." := VersionNo;
+          PurchCommentLineArch.INSERT;
+        UNTIL PurchCommentLine.NEXT = 0;
+    END;
+
+    PROCEDURE ArchSalesDocumentNoConfirm@13(VAR SalesHeader@1004 : Record 36);
+    BEGIN
+      StoreSalesDocument(SalesHeader,FALSE);
+    END;
+
+    PROCEDURE ArchPurchDocumentNoConfirm@9(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      StorePurchDocument(PurchHeader,FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}

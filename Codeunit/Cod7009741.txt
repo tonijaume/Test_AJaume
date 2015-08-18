@@ -1,0 +1,165 @@
+OBJECT Codeunit 7009741 Contabilidad Hotel Payment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/02/15;
+    Time=22:57:55;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355003 : TextConst 'ENU=This payment in advance has already been registered;ESP=Este anticipo ya se ha registrado.';
+      Text001@1103355004 : TextConst 'ENU=Recovery amount must coincide with the payment in advance amount;ESP=El importe de las recuperacion debe coincidir con el importe del anticipo.';
+      Text002@1103355005 : TextConst 'ENU=Payment;ESP=Pago';
+      Text003@1103355006 : TextConst 'ENU=Recovery;ESP=Recuperacion';
+      Text004@1103355007 : TextConst 'ENU=Accounting diary:;ESP=Diario contabilizacion:';
+      rPar@1103355000 : Record 7009700;
+      GestNoSer@1103355001 : Codeunit 396;
+      wNumLineaDiario@1103355002 : Integer;
+      wDiarioGeneral@1100217000 : Code[10];
+
+    PROCEDURE ContabilizarAnticipo@1(VAR prAnticipo@1103355000 : Record 7010005);
+    VAR
+      lrRecuperacion@1103355001 : Record 7010006;
+      lrHotel@1103355002 : Record 7009724;
+      lwDescripcion@1103355003 : Text[50];
+    BEGIN
+      // ContabilizarAnticipo
+
+      // Comprobamos que el anticipo este sin registrar
+
+      IF prAnticipo."Pasado ABR" THEN
+        ERROR(Text000);
+
+      // Comprobar que el hotel este correctamente parametrizado
+
+      lrHotel.GET(prAnticipo.Hotel);
+      lrHotel.TESTFIELD("Proveedor Intermediacion");
+
+      // Comprobamos que todas las recuperaciones sumen el importe del anticipo
+
+      CLEAR(lrRecuperacion);
+      lrRecuperacion.SETRANGE(Tipo             , prAnticipo.Tipo);
+      lrRecuperacion.SETRANGE(Hotel            , prAnticipo.Hotel);
+      lrRecuperacion.SETRANGE(Contrato         , prAnticipo.Contrato);
+      lrRecuperacion.SETRANGE("Fecha concesion", prAnticipo."Fecha concesion");
+      IF lrRecuperacion.FIND('-') THEN
+        lrRecuperacion.CALCSUMS(Importe);
+
+      IF lrRecuperacion.Importe <> prAnticipo.Importe THEN
+        ERROR(Text001);
+
+      // Revisamos los parametros generales
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Serie documentos anticipos");
+      rPar.TESTFIELD("Serie documentos recuperacion");
+
+      IniciaDiario;
+
+      // Linea de diario para el anticipo
+      // Obtenemos el documento de contabilizacion
+
+      GestNoSer.InitSeries(rPar."Serie documentos anticipos", rPar."Serie documentos anticipos", prAnticipo."Fecha Pago",
+                          prAnticipo."Documento contabilizacion", rPar."Serie documentos anticipos");
+
+      lwDescripcion := Text002 + COPYSTR(prAnticipo.Descripcion, 1, 45);
+
+      LineaDiario(1, lrHotel."Proveedor Intermediacion", prAnticipo."Documento contabilizacion", prAnticipo.Importe, lwDescripcion,
+                  prAnticipo."Fecha Pago", prAnticipo.Delegacion, prAnticipo.TourOperador, prAnticipo."Fecha Pago",
+                  prAnticipo."C¢d. divisa");
+
+      prAnticipo."Pasado ABR" := TRUE;
+      prAnticipo.MODIFY(TRUE);
+
+      // Una linea de diario para cada recuperacion
+
+      IF lrRecuperacion.FIND('-') THEN BEGIN
+        REPEAT
+          GestNoSer.InitSeries(rPar."Serie documentos recuperacion", rPar."Serie documentos recuperacion",
+                              lrRecuperacion."Fecha recuperacion", lrRecuperacion."Documento contabilizacion",
+                              rPar."Serie documentos recuperacion");
+
+          lwDescripcion := Text003 + COPYSTR(prAnticipo.Descripcion, 1, 37);
+
+          LineaDiario(0, lrHotel."Proveedor Intermediacion", lrRecuperacion."Documento contabilizacion", lrRecuperacion.Importe,
+                      lwDescripcion, prAnticipo."Fecha Pago", prAnticipo.Delegacion, prAnticipo.TourOperador,
+                      lrRecuperacion."Fecha recuperacion", prAnticipo."C¢d. divisa");
+
+          lrRecuperacion."Pasado ABR" := TRUE;
+          lrRecuperacion.MODIFY(TRUE);
+        UNTIL lrRecuperacion.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE LineaDiario@3(pwTipoLinea@1103355000 : 'Debe,Haber';pwCuenta@1103355001 : Text[20];pwNumDocumento@1103355002 : Code[10];pwImporteLinea@1103355003 : Decimal;pwDescripcion@1103355004 : Text[50];pwFecha@1103355005 : Date;pwDepartamento@1103355006 : Code[10];pwTouroperador@1103355007 : Code[10];pwFechaVencimiento@1103355008 : Date;pwDivisa@1103355009 : Code[10]);
+    VAR
+      lrLin@1103355010 : Record 81;
+    BEGIN
+      // LineaDiario
+
+      wNumLineaDiario += 10000;
+
+      lrLin.INIT;
+      lrLin."Journal Template Name" := wDiarioGeneral;
+      lrLin."Journal Batch Name"    := USERID;
+      lrLin."Line No."              := wNumLineaDiario;
+
+      lrLin.VALIDATE("Posting Date"             , pwFecha);
+      lrLin.VALIDATE("Account Type"             , lrLin."Account Type"::Vendor);
+      lrLin.VALIDATE("Account No."              , pwCuenta);
+      lrLin.VALIDATE("Shortcut Dimension 1 Code", pwDepartamento);
+      lrLin.VALIDATE("Shortcut Dimension 2 Code", pwTouroperador);
+      lrLin.VALIDATE("Document Type"            , lrLin."Document Type"::" ");
+      lrLin.VALIDATE("Document No."             , pwNumDocumento);
+
+      IF pwTipoLinea = pwTipoLinea::Debe THEN
+        lrLin.VALIDATE("Debit Amount", pwImporteLinea)
+      ELSE
+        lrLin.VALIDATE("Credit Amount", pwImporteLinea);
+
+      lrLin."External Document No." := pwNumDocumento;
+      lrLin.Description             := pwDescripcion;
+      lrLin."Document Date"         := pwFecha;
+      lrLin."Due Date"              := pwFechaVencimiento;
+      lrLin."System-Created Entry"  := TRUE; //+$001
+      lrLin."Source Code"           := rPar.GetSourceCode(lrLin."Journal Template Name"); //+$002
+      lrLin.INSERT;
+    END;
+
+    PROCEDURE IniciaDiario@7();
+    VAR
+      lrLin@1103355000 : Record 81;
+      lrCab@1103355001 : Record 232;
+    BEGIN
+      // IniciaDiario
+
+      wDiarioGeneral := rPar.GetLibroDiarioGeneral;
+      rPar.CreaSeccionUsuario;
+
+      lrLin.RESET;
+      lrLin.SETRANGE("Journal Template Name", wDiarioGeneral);
+      lrLin.SETRANGE("Journal Batch Name"   , USERID);
+      IF lrLin.FINDLAST THEN
+        wNumLineaDiario := lrLin."Line No."
+      ELSE
+        wNumLineaDiario := 10000
+    END;
+
+    BEGIN
+    {
+      $001 AJS 10102013 Marcamos las lineas de diario como asiento automatico para que el usuario no lo pueda borrar
+
+      $002 AJS 09020215 Rellenar el campo Source code del diario general
+    }
+    END.
+  }
+}

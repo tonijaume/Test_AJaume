@@ -1,0 +1,775 @@
+OBJECT Codeunit 10701 Elect. Pmts Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVES6.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 272=m;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CompanyInfo@1100000 : Record 79;
+      RBMgt@1100005 : Codeunit 419;
+      LineValue@1100001 : Text[72];
+      Filename@1100003 : Text[1024];
+      ToFile@1100004 : Text[1024];
+      ToFolder@1100009 : Text[1024];
+      FileHandle@1100002 : File;
+      Text1100000@1100006 : TextConst 'ENU=In order to use Electronic Payments, one of the Bank Accounts for the vendor must have the field %1 selected.;ESP=Para poder utilizar pagos electr¢nicos, una de las cuentas bancarias del proveedor debe tener seleccionado el campo %1.';
+      Text1100001@1100007 : TextConst 'ENU=You must have exactly one %1 with %2 checked for %3 %4.;ESP=Debe tener exactamente un %1 con %2 activado para %3 %4.';
+      Text1100002@1100008 : TextConst 'ENU=Some data from the Bank Account of Vendor %1 are missing.;ESP=Falta alguna informaci¢n sobre el banco del proveedor %1.';
+      Text1100003@1100010 : TextConst 'ENU=Text Files (*.txt)|*.txt|All Files (*.*)|*.*;ESP=Fich. texto (*.txt)|*.txt|Todos fich. (*.*)|*.*';
+      TransferType@1100011 : ' ,Domestic,International,Special';
+      TotalDomesticRegs@1100012 : Integer;
+      TotalInternationalRegs@1100013 : Integer;
+      TotalSpecialRegs@1100014 : Integer;
+
+    PROCEDURE NewLine@1100000();
+    BEGIN
+      LineValue := '';
+    END;
+
+    PROCEDURE PadLine@1100001(FillCharacter@1100000 : Text[1]);
+    BEGIN
+      LineValue := PADSTR(LineValue,72,FillCharacter);
+      SaveLineValue;
+    END;
+
+    PROCEDURE CreateFile@1100002(Path@1100000 : Text[250]);
+    BEGIN
+      IF ISSERVICETIER THEN
+        Filename := RBMgt.EnvironFileName('','txt')
+      ELSE
+        Filename := Path;
+      ToFile := Path;
+
+      FileHandle.TEXTMODE(TRUE);
+      FileHandle.CREATE(Filename);
+    END;
+
+    PROCEDURE SaveLineValue@1100003();
+    BEGIN
+      FileHandle.WRITE(LineValue);
+    END;
+
+    PROCEDURE InsertAlphaNumericValue@1100004(Value@1100000 : Text[172];Size@1100001 : Integer;FillCharacter@1100002 : Text[1]);
+    BEGIN
+      LineValue := LineValue + PADSTR(COPYSTR(Value, 1, Size),Size,FillCharacter);
+    END;
+
+    PROCEDURE InsertNumericValue@1100005(Value@1100000 : Decimal;Size@1100001 : Integer);
+    BEGIN
+      LineValue := LineValue + CONVERTSTR(FORMAT(ROUND(Value,1,'<'),Size,1),' ','0');
+    END;
+
+    PROCEDURE InsertIntegerValue@1100006(Value@1100000 : Integer;Size@1100001 : Integer);
+    BEGIN
+      LineValue := LineValue + CONVERTSTR(FORMAT(Value,Size,0),' ','0');
+    END;
+
+    PROCEDURE GetCCCBankInfo@1100007(BankAccNo@1100000 : Code[20];VAR CCCBankNo@1100001 : Text[4];VAR CCCBankBranchNo@1100002 : Text[4];VAR CCCControlDigits@1100003 : Text[2];VAR CCCAccNo@1100004 : Text[10]);
+    VAR
+      BankAccount@1100005 : Record 270;
+    BEGIN
+      BankAccount.GET(BankAccNo);
+
+      BankAccount.TESTFIELD("CCC Bank No.");
+      BankAccount.TESTFIELD("CCC Bank Branch No.");
+      BankAccount.TESTFIELD("CCC Bank Account No.");
+      BankAccount.TESTFIELD("CCC Control Digits");
+      BankAccount.TESTFIELD("Country/Region Code");
+
+      CCCBankNo := BankAccount."CCC Bank No.";
+      CCCBankNo := PADSTR('',MAXSTRLEN(CCCBankNo) - STRLEN(CCCBankNo),'0') + CCCBankNo;
+
+      CCCBankBranchNo := BankAccount."CCC Bank Branch No.";
+      CCCBankBranchNo := PADSTR('',MAXSTRLEN(CCCBankBranchNo) - STRLEN(CCCBankBranchNo),'0') + CCCBankBranchNo;
+
+      CCCAccNo := BankAccount."CCC Bank Account No.";
+      CCCAccNo := PADSTR('',MAXSTRLEN(CCCAccNo) - STRLEN(CCCAccNo),'0') + CCCAccNo;
+
+      CCCControlDigits := BankAccount."CCC Control Digits";
+      CCCControlDigits := PADSTR('',MAXSTRLEN(CCCControlDigits) - STRLEN(CCCControlDigits),'0') + CCCControlDigits;
+    END;
+
+    PROCEDURE GetLastEPayFileCreation@1100008(VAR Path@1100000 : Text[150];VAR BankAcc@1100001 : Record 270);
+    VAR
+      ExportFileName@1100002 : Text[12];
+    BEGIN
+      ExportFileName := 'AEB001.txt';
+      IF BankAcc."Last E-Pay Export File Name" <> '' THEN
+        BankAcc."Last E-Pay Export File Name" := INCSTR(BankAcc."Last E-Pay Export File Name")
+      ELSE
+        BankAcc."Last E-Pay Export File Name" := ExportFileName;
+
+      IF BankAcc."Las E-Pay File Creation No." <> 0 THEN BEGIN
+        BankAcc."Las E-Pay File Creation No." := BankAcc."Las E-Pay File Creation No." + 1;
+      END ELSE
+        BankAcc."Las E-Pay File Creation No." := 1;
+
+      IF NOT ISSERVICETIER THEN
+        Path := BankAcc."E-Pay Export File Path" + '\' + BankAcc."Last E-Pay Export File Name"
+      ELSE BEGIN
+        Path := BankAcc."Last E-Pay Export File Name";
+        ToFolder := BankAcc."E-Pay Export File Path";
+      END;
+      CreateFile(Path);
+    END;
+
+    PROCEDURE GetPayeeInfo@1100009(AccNo@1100000 : Code[20];VAR PayeeCCCBankNo@1100001 : Text[4];VAR PayeeCCCBankBranchNo@1100002 : Text[4];VAR PayeeCCCControlDigits@1100003 : Text[2];VAR PayeeCCCAccNo@1100004 : Text[10];VAR PayeeAddress@1100005 : ARRAY [8] OF Text[50];VAR PayeeCCC@1100006 : Text[20];VAR IBAN@1100007 : Text[34];VAR SwiftCode@1100008 : Text[11]);
+    VAR
+      Vendor@1100009 : Record 23;
+      FormatAddr@1100010 : Codeunit 365;
+      VendorBankAccount@1100011 : Record 288;
+    BEGIN
+      Vendor.GET(AccNo);
+      FormatAddr.Vendor(PayeeAddress,Vendor);
+      VendorBankAccount.SETRANGE("Vendor No.",Vendor."No.");
+      VendorBankAccount.SETRANGE("Use For Electronic Payments",TRUE);
+      IF VendorBankAccount.COUNT <> 1 THEN
+        ERROR(Text1100001,
+              VendorBankAccount.TABLECAPTION,VendorBankAccount.FIELDCAPTION("Use For Electronic Payments"),
+              Vendor.TABLECAPTION,Vendor."No.");
+      VendorBankAccount.FIND('-');
+      VendorBankAccount.TESTFIELD("CCC Bank No.");
+      VendorBankAccount.TESTFIELD("CCC Bank Branch No.");
+      VendorBankAccount.TESTFIELD("CCC Bank Account No.");
+      VendorBankAccount.TESTFIELD("CCC Control Digits");
+
+      PayeeCCCAccNo := VendorBankAccount."CCC Bank Account No.";
+      PayeeCCCControlDigits := VendorBankAccount."CCC Control Digits";
+      PayeeCCCBankNo := VendorBankAccount."CCC Bank No.";
+      PayeeCCCBankBranchNo := VendorBankAccount."CCC Bank Branch No.";
+      IF (PayeeCCCBankNo = '') OR (PayeeCCCBankBranchNo = '') OR
+        (PayeeCCCControlDigits = '') OR (PayeeCCCAccNo = '')
+      THEN
+        ERROR(Text1100002,VendorBankAccount."Vendor No.");
+
+      PayeeCCCAccNo := PADSTR('',MAXSTRLEN(PayeeCCCAccNo) - STRLEN(PayeeCCCAccNo),'0') + PayeeCCCAccNo;
+      PayeeCCCControlDigits := PADSTR('',MAXSTRLEN(PayeeCCCControlDigits) - STRLEN(PayeeCCCControlDigits),'0')
+      + PayeeCCCControlDigits;
+
+      PayeeCCC := CONVERTSTR(PADSTR(PayeeCCCBankNo,4,' '),' ','0') + CONVERTSTR(PADSTR(PayeeCCCBankBranchNo,4,' '),' ','0') +
+        PADSTR(PayeeCCCControlDigits,2,' ') + CONVERTSTR(PADSTR(PayeeCCCAccNo,10,' '),' ','0');
+
+      IBAN := CONVERTSTR(PADSTR(VendorBankAccount.IBAN,34,' '),' ','0');
+      SwiftCode := CONVERTSTR(PADSTR(VendorBankAccount."SWIFT Code",11,' '),' ','0');
+    END;
+
+    PROCEDURE GetTransferType@1100010(AccNo@1100000 : Code[20];Amount@1100001 : Decimal;VAR TransferType@1100002 : 'National,International,Special';UpdateFromPosting@1100011 : Boolean);
+    VAR
+      CompanyInfo@1100003 : Record 79;
+      OriginResident@1100004 : Boolean;
+      PayeeResident@1100005 : Boolean;
+      LowAmount@1100006 : Boolean;
+      Domestic@1100007 : Boolean;
+      VendBankAcc@1100008 : Record 288;
+      Vendor@1100009 : Record 23;
+      VendorBankAccount@1100010 : Record 288;
+    BEGIN
+      CompanyInfo.GET();
+      CompanyInfo.TESTFIELD("Country/Region Code");
+      IF CompanyInfo."Country/Region Code" = 'ES' THEN
+        OriginResident := TRUE
+      ELSE
+        OriginResident := FALSE;
+
+      Vendor.GET(AccNo);
+      VendorBankAccount.SETRANGE("Vendor No.",Vendor."No.");
+      VendorBankAccount.SETRANGE("Use For Electronic Payments",TRUE);
+      IF NOT VendorBankAccount.FIND('-') THEN BEGIN
+        IF NOT UpdateFromPosting THEN
+          ERROR(Text1100000, VendorBankAccount.FIELDCAPTION("Use For Electronic Payments"));
+      END ELSE BEGIN
+      // IF VendorBankAccount."Country/Region Code" = 'ES' THEN
+      //   Domestic := TRUE
+      // ELSE
+      //   Domestic := FALSE;
+
+      // IF Vendor."Country/Region Code" = 'ES' THEN
+      //   PayeeResident := TRUE
+      // ELSE
+      //   PayeeResident := FALSE;
+
+      // IF Amount >= 12500 THEN
+      //   LowAmount := FALSE
+      // ELSE
+      //   LowAmount := TRUE;
+
+      // IF Domestic THEN BEGIN
+      //   IF PayeeResident THEN
+      //     TransferType := TransferType::National
+      //   ELSE
+      //     IF OriginResident AND (NOT LowAmount) THEN
+      //       TransferType := TransferType::Special
+      //     ELSE
+      //       TransferType := TransferType::National;
+      // END ELSE
+      //   IF OriginResident AND (NOT LowAmount) THEN
+      //     TransferType := TransferType::Special
+      //   ELSE
+      //    TransferType := TransferType::International;
+
+        IF VendorBankAccount."Country/Region Code" = 'ES' THEN
+          Domestic := TRUE
+        ELSE
+          Domestic := FALSE;
+
+        IF Vendor."Country/Region Code" = 'ES' THEN
+          PayeeResident := TRUE
+        ELSE
+          PayeeResident := FALSE;
+
+        IF Amount >= 12500 THEN
+          LowAmount := FALSE
+        ELSE
+          LowAmount := TRUE;
+
+        IF Domestic THEN BEGIN
+          IF PayeeResident THEN
+            TransferType := TransferType::National
+          ELSE
+            IF OriginResident AND (NOT LowAmount) THEN
+              TransferType := TransferType::Special
+            ELSE
+              TransferType := TransferType::National;
+        END ELSE
+          IF OriginResident AND (NOT LowAmount) THEN
+            TransferType := TransferType::Special
+          ELSE
+            TransferType := TransferType::International;
+      END;
+    END;
+
+    PROCEDURE InsertIntoCheckLedger@1100011(BankAccNo@1100000 : Code[20];DeliveryDate@1100001 : Date;DocType@1100002 : Option;DocNo@1100003 : Code[20];DescriptionText@1100004 : Text[50];BalAccNo@1100005 : Code[20];Amt@1100006 : Decimal);
+    VAR
+      CheckLedgerEntry@1100007 : Record 272;
+      CheckManagement@1100008 : Codeunit 367;
+    BEGIN
+      WITH CheckLedgerEntry DO BEGIN
+        INIT;
+        "Bank Account No." := BankAccNo;
+        "Posting Date" := DeliveryDate;
+        "Document Type" := DocType;
+        "Document No." := DocNo;
+        Description := DescriptionText;
+        "Bank Payment Type" := "Bank Payment Type"::"Electronic Payment";
+        "Entry Status" := "Entry Status"::Exported;
+        "Check Date" := DeliveryDate;
+        "Check No." := DocNo;
+        "Bal. Account Type" := "Bal. Account Type"::"Bank Account";
+        "Bal. Account No." := BalAccNo;
+        Amount := Amt;
+      END;
+      CheckManagement.InsertCheck(CheckLedgerEntry);
+    END;
+
+    PROCEDURE EuroAmount@1100012(Amount@1100000 : Decimal) : Text[12];
+    VAR
+      TextAmount@1100001 : Text[15];
+    BEGIN
+      TextAmount := CONVERTSTR(FORMAT(Amount),' ','0');
+      IF STRPOS(TextAmount,',') = 0 THEN
+        TextAmount := TextAmount + '00'
+      ELSE BEGIN
+        IF STRLEN(COPYSTR(TextAmount,STRPOS(TextAmount,','),STRLEN(TextAmount))) = 2 THEN
+          TextAmount := TextAmount + '0';
+        TextAmount := DELCHR(TextAmount,'=',',');
+      END;
+      IF STRPOS(TextAmount,'.') = 0 THEN
+        TextAmount := TextAmount
+      ELSE
+        TextAmount := DELCHR(TextAmount,'=','.');
+
+      WHILE STRLEN(TextAmount) < 12 DO
+        TextAmount := '0' + TextAmount;
+
+      EXIT(TextAmount);
+    END;
+
+    PROCEDURE ProcessElectronicPayment@1100013(DocumentNo@1100000 : Code[20];BankAccountNo@1100001 : Code[20]);
+    VAR
+      CheckLedgEntry@1100002 : Record 272;
+      CheckLedgEntry2@1100003 : Record 272;
+    BEGIN
+      CheckLedgEntry.RESET;
+      CheckLedgEntry.SETCURRENTKEY("Bank Account No.","Entry Status","Check No.");
+      CheckLedgEntry.SETRANGE("Bank Account No.",BankAccountNo);
+      CheckLedgEntry.SETRANGE("Entry Status",CheckLedgEntry."Entry Status"::Exported);
+      CheckLedgEntry.SETRANGE("Check No.",DocumentNo);
+      IF CheckLedgEntry.FIND('-') THEN
+        REPEAT
+          CheckLedgEntry2 := CheckLedgEntry;
+          CheckLedgEntry2."Original Entry Status" := CheckLedgEntry2."Original Entry Status"::Exported;
+          CheckLedgEntry2."Entry Status" := CheckLedgEntry2."Entry Status"::Voided;
+          CheckLedgEntry2.MODIFY;
+        UNTIL CheckLedgEntry.NEXT = 0;
+    END;
+
+    PROCEDURE InsertHeaderRecType1@1100014(DeliveryDate@1100000 : Date;PostingDate@1100001 : Date;CCCNo@1100002 : Text[20];Relation@1100003 : Text[1]);
+    VAR
+      VATRegNo@1100004 : Text[20];
+      RegisterString@1100005 : Text[2];
+    BEGIN
+      TransferType := TransferType::" ";
+      TotalDomesticRegs := 0;
+      TotalInternationalRegs := 0;
+      TotalSpecialRegs := 0;
+
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(3, 2);
+      InsertIntegerValue(62, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(FORMAT (DeliveryDate, 0, '<Day,2><Month,2><Year>'), 6, ' ');
+      InsertAlphaNumericValue(FORMAT (PostingDate, 0, '<Day,2><Month,2><Year>'), 6, ' ');
+      InsertAlphaNumericValue(CCCNo, 20, ' ');
+      InsertAlphaNumericValue(Relation, 1, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertHeaderRecType2@1100015();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(3, 2);
+      InsertIntegerValue(62, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertIntegerValue(2, 3);
+      InsertAlphaNumericValue(CompanyInfo.Name, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertHeaderRecType3@1100016();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(3, 2);
+      InsertIntegerValue(62, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertIntegerValue(3, 3);
+      InsertAlphaNumericValue(CompanyInfo.Address, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertHeaderRecType4@1100017();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(3, 2);
+      InsertIntegerValue(62, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertIntegerValue(4, 3);
+      InsertAlphaNumericValue(CompanyInfo."Post Code" + ' ' + CompanyInfo.City, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertDomesticTransferBlock@1100018(DocType@1100000 : Code[10];PaymentOrderConcept@1100001 : 'Payroll,RetPayroll,Others';ExpensesCode@1100002 : 'Payer,Payee';VatRegNoVend@1100003 : Text[12];Amount@1100004 : Text[12];PayeeCCC@1100005 : Text[20];VendorName@1100006 : Text[50]);
+    VAR
+      PmtOrderConcValue@1100007 : Text[1];
+      ExpensesCodeValue@1100008 : Text[1];
+    BEGIN
+      IF TransferType <> TransferType::Domestic THEN BEGIN
+        InsertDomesticHeaderRec;
+        TransferType := TransferType::Domestic;
+        TotalDomesticRegs := TotalDomesticRegs + 1;
+      END;
+
+      TotalDomesticRegs := TotalDomesticRegs + 2;
+
+      CASE PaymentOrderConcept OF
+        PaymentOrderConcept::Payroll: PmtOrderConcValue := '1';
+        PaymentOrderConcept::RetPayroll: PmtOrderConcValue := '8';
+        PaymentOrderConcept::Others: PmtOrderConcValue := '3';
+      END;
+      IF ExpensesCode = ExpensesCode::Payer THEN
+        ExpensesCodeValue := '1'
+      ELSE
+        ExpensesCodeValue := '2';
+      InsertDomesticRegsType1(VatRegNoVend,Amount,PayeeCCC,ExpensesCodeValue,PmtOrderConcValue,DocType);
+      InsertDomesticRegsType1To8(VatRegNoVend,PADSTR(VendorName,36,' '),DocType);
+    END;
+
+    PROCEDURE InsertDomesticHeaderRec@1100019();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(4, 2);
+      InsertIntegerValue(56, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertDomesticRegsType1@1100020(VatRegNoVend@1100000 : Text[12];JnlLineAmount@1100001 : Text[12];PayeeCCC@1100002 : Text[20];ExpensesCode@1100003 : Text[1];PmtOrderConcept@1100004 : Text[1];BillType@1100005 : Code[10]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      IF BillType = '4' THEN
+        InsertIntegerValue(57, 2)
+      ELSE
+        InsertIntegerValue(56, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(10, 3);
+      InsertAlphaNumericValue(JnlLineAmount,12, ' ');
+      InsertAlphaNumericValue(PayeeCCC, 20, ' ');
+      InsertAlphaNumericValue(ExpensesCode, 1, ' ');
+      InsertAlphaNumericValue(PmtOrderConcept, 1, ' ');
+      InsertIntegerValue(1, 1);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertDomesticRegsType1To8@1100021(VatRegNoVend@1100000 : Text[12];VendorName@1100001 : Text[50];BillType@1100002 : Code[10]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      IF BillType = '4' THEN
+        InsertIntegerValue(57, 2)
+      ELSE
+        InsertIntegerValue(56, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(11, 3);
+      InsertAlphaNumericValue(VendorName, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertDomesticTrailer@1100022(TotalDom10Amount@1100000 : Integer;TotalAmount@1100002 : Text[12]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(8, 2);
+      InsertIntegerValue(56, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertAlphaNumericValue(' ', 3, ' ');
+      InsertAlphaNumericValue(TotalAmount,12,'0');
+      InsertNumericValue(TotalDom10Amount,8);
+      TotalDomesticRegs := TotalDomesticRegs + 1;
+      InsertIntegerValue(TotalDomesticRegs, 10);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertInterTransferBlock@1100023(PaymentOrderConcept@1100000 : 'Payroll,RetPayroll,Others';ExpensesCode@1100001 : 'Payer,Payee';ExpensesCodeInter@1100002 : Boolean;VatRegNoVend@1100003 : Text[12];IBAN@1100004 : Text[34];AmountLCY@1100005 : Text[12];CountryCodeVendBankAcc@1100006 : Text[2];SwiftCode@1100007 : Text[11];VendorName@1100008 : Text[50]);
+    VAR
+      PmtOrderConcValue@1100009 : Text[1];
+      ExpensesCodeValue@1100010 : Text[1];
+    BEGIN
+      IF TransferType <> TransferType::International THEN BEGIN
+        InsertInterTransferBlockHeader;
+        TransferType := TransferType::International;
+        TotalInternationalRegs := TotalInternationalRegs + 1;
+      END;
+
+      TotalInternationalRegs := TotalInternationalRegs + 3;
+
+      CASE PaymentOrderConcept OF
+        PaymentOrderConcept::Payroll: PmtOrderConcValue := '2';
+        PaymentOrderConcept::RetPayroll: PmtOrderConcValue := '6';
+        PaymentOrderConcept::Others: PmtOrderConcValue := '7';
+      END;
+      IF ExpensesCodeInter THEN
+        ExpensesCodeValue := '3'
+      ELSE
+        IF ExpensesCode = ExpensesCode::Payer THEN
+          ExpensesCodeValue := '1'
+        ELSE
+          ExpensesCodeValue := '2';
+      InsertInterTransferBlockType1(VatRegNoVend,IBAN,PmtOrderConcValue);
+
+      InsertInterTransferBlockType2(VatRegNoVend,AmountLCY,ExpensesCodeValue,
+        CountryCodeVendBankAcc,SwiftCode);
+
+      InsertInterTransferBlockT3To9(VatRegNoVend,VendorName);
+    END;
+
+    PROCEDURE InsertInterTransferBlockHeader@1100024();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(4, 2);
+      InsertIntegerValue(60, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertInterTransferBlockType1@1100025(VatRegNoVend@1100000 : Text[12];IBAN@1100001 : Text[34];PmtOrderConcept@1100002 : Text[1]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(60, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(33, 3);
+      InsertAlphaNumericValue(IBAN,34, ' ');
+      InsertAlphaNumericValue(PmtOrderConcept, 1, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertInterTransferBlockType2@1100026(VATRegNoVend@1100000 : Text[12];JnlLineAmountLCY@1100001 : Text[12];ExpensesCode@1100002 : Text[1];CountryCodeVendBankAcc@1100003 : Text[2];SwiftCode@1100004 : Text[11]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(60, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VATRegNoVend, 12, ' ');
+      InsertIntegerValue(34, 3);
+      InsertAlphaNumericValue(JnlLineAmountLCY,12, ' ');
+      InsertAlphaNumericValue(ExpensesCode, 1, ' ');
+      InsertAlphaNumericValue(CountryCodeVendBankAcc, 2, ' ');
+      InsertAlphaNumericValue(' ', 6, ' ');
+      InsertAlphaNumericValue(SwiftCode, 2, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertInterTransferBlockT3To9@1100027(VatRegNoVend@1100000 : Text[12];VendorName@1100001 : Text[50]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(60, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(35, 3);
+      InsertAlphaNumericValue(VendorName, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertInterTransferTrailer@1100028(TotalDom33Amount@1100000 : Integer;TotalAmountLCY@1100002 : Text[12]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(8, 2);
+      InsertIntegerValue(60, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertAlphaNumericValue(' ', 3, ' ');
+      InsertAlphaNumericValue(TotalAmountLCY,12,'0');
+      InsertNumericValue(TotalDom33Amount,8);
+      TotalInternationalRegs := TotalInternationalRegs + 1;
+      InsertIntegerValue(TotalInternationalRegs, 10);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransferBlock@1100029(PaymentOrderConcept@1100000 : 'Payroll,RetPayroll,Others';ExpensesCode@1100001 : 'Payer,Payee';VatRegNoVend@1100002 : Text[12];IBAN@1100003 : Text[34];AmountLCY@1100004 : Text[12];CountryCodeVendBankAcc@1100005 : Text[2];SwiftCode@1100006 : Text[11];VendorName@1100007 : Text[50];GenJnlLineDescription@1100008 : Text[50];PaymentType@1100009 : ' ,01,02';StatisticalCode@1100010 : Code[6];VatSharesIssuer@1100011 : Text[9];FinanceOpNo@1100012 : Text[8];ISINCode@1100013 : Text[12]);
+    VAR
+      PmtOrderConcValue@1100014 : Text[1];
+      ExpensesCodeValue@1100015 : Text[1];
+      PmtType@1100016 : Text[2];
+    BEGIN
+      IF TransferType <> TransferType::Special THEN BEGIN
+        InsertSpecialTransBlockHeader;
+        TransferType := TransferType::Special;
+        TotalSpecialRegs := TotalSpecialRegs + 1;
+      END;
+
+      TotalSpecialRegs := TotalSpecialRegs + 6;
+
+      CASE PaymentOrderConcept OF
+        PaymentOrderConcept::Payroll: PmtOrderConcValue := '2';
+        PaymentOrderConcept::RetPayroll: PmtOrderConcValue := '6';
+        PaymentOrderConcept::Others: PmtOrderConcValue := '7';
+      END;
+      IF ExpensesCode = ExpensesCode::Payer THEN
+        ExpensesCodeValue := '1'
+      ELSE
+        ExpensesCodeValue := '2';
+
+      InsertSpecialTransBlockType1(VatRegNoVend,IBAN,PmtOrderConcValue);
+
+      InsertSpecialTransBlockType2(VatRegNoVend,AmountLCY,ExpensesCodeValue,FORMAT(CountryCodeVendBankAcc),SwiftCode);
+
+      InsertSpecialTransBlockT3To9(VatRegNoVend,PADSTR(VendorName,36,' '));
+
+      InsertSpecialTransBlockType11(VatRegNoVend,PADSTR(GenJnlLineDescription,35,' '));
+
+      InsertSpecialTransBlockType12(VatRegNoVend,PADSTR(GenJnlLineDescription,35,' '));
+
+      CASE PaymentType OF
+        1: PmtType := '01';
+        2: PmtType := '02';
+      ELSE
+        PmtType := PADSTR(' ',2,' ');
+      END;
+
+      InsertSpecialTransBlockType13(VatRegNoVend,PmtType,StatisticalCode,FORMAT(CountryCodeVendBankAcc),
+        PADSTR(VatSharesIssuer,9,' '),PADSTR(FinanceOpNo,8,' '),PADSTR(ISINCode,12,' '));
+    END;
+
+    PROCEDURE InsertSpecialTransBlockHeader@1100030();
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(4, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockType1@1100031(VatRegNoVend@1100000 : Text[12];IBAN@1100001 : Text[34];PmtOrderConcept@1100002 : Text[1]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(43, 3);
+      InsertAlphaNumericValue(IBAN,34, ' ');
+      InsertAlphaNumericValue(PmtOrderConcept, 1, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockType2@1100032(VATRegNoVend@1100000 : Text[12];JnlLineAmountLCY@1100001 : Text[12];ExpensesCode@1100002 : Text[1];CountryCodeVendBankAcc@1100003 : Text[2];SwiftCode@1100004 : Text[11]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VATRegNoVend, 12, ' ');
+      InsertIntegerValue(44, 3);
+      InsertAlphaNumericValue(JnlLineAmountLCY,12, ' ');
+      InsertAlphaNumericValue(ExpensesCode, 1, ' ');
+      InsertAlphaNumericValue(CountryCodeVendBankAcc, 2, ' ');
+      InsertAlphaNumericValue(' ', 6, ' ');
+      InsertAlphaNumericValue(SwiftCode, 2, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockT3To9@1100033(VatRegNoVend@1100000 : Text[12];VendorName@1100001 : Text[50]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(45, 3);
+      InsertAlphaNumericValue(VendorName, 36, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockType11@1100034(VatRegNoVend@1100000 : Text[12];JnlLineDescription@1100001 : Text[35]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(53, 3);
+      InsertAlphaNumericValue(JnlLineDescription, 35, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockType12@1100035(VATRegNoVend@1100000 : Text[12];JnlLineDescription@1100001 : Text[35]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VATRegNoVend, 12, ' ');
+      InsertIntegerValue(54, 3);
+      InsertAlphaNumericValue(JnlLineDescription, 35, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransBlockType13@1100036(VatRegNoVend@1100000 : Text[12];PmtType@1100001 : Text[2];StatisticalCode@1100002 : Text[6];CountryCodeVendBankAcc@1100003 : Text[2];VatSharesIssuer@1100004 : Text[9];FinanceOpNo@1100005 : Text[8];ISINCode@1100006 : Text[12]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(6, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(VatRegNoVend, 12, ' ');
+      InsertIntegerValue(55, 3);
+      InsertAlphaNumericValue(PmtType, 2, ' ');
+      InsertAlphaNumericValue(StatisticalCode, 6, ' ');
+      InsertAlphaNumericValue(CountryCodeVendBankAcc, 2, ' ');
+      InsertAlphaNumericValue(VatSharesIssuer, 9, ' ');
+      InsertAlphaNumericValue(FinanceOpNo, 8, ' ');
+      InsertAlphaNumericValue(ISINCode, 12, ' ');
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertSpecialTransTrailer@1100037(TotalDom33Amount@1100000 : Integer;TotalAmountLCY@1100002 : Text[12]);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(8, 2);
+      InsertIntegerValue(61, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertAlphaNumericValue(' ', 3, ' ');
+      InsertAlphaNumericValue(TotalAmountLCY,12,'0');
+      InsertNumericValue(TotalDom33Amount,8);
+      TotalSpecialRegs := TotalSpecialRegs + 1;
+      InsertIntegerValue(TotalSpecialRegs, 10);
+      PadLine(' ');
+    END;
+
+    PROCEDURE InsertGeneralTrailer@1100038(NoOfRegistersType1@1100000 : Decimal;TotalAmountRegsType8@1100002 : Decimal);
+    BEGIN
+      CompanyInfo.GET;
+      NewLine;
+      InsertIntegerValue(9, 2);
+      InsertIntegerValue(62, 2);
+      InsertAlphaNumericValue(CompanyInfo."VAT Registration No.", 9, ' ');
+      InsertIntegerValue(1, 3);
+      InsertAlphaNumericValue(' ', 12, ' ');
+      InsertAlphaNumericValue(' ', 3, ' ');
+      InsertAlphaNumericValue(EuroAmount(TotalAmountRegsType8),12,' ');
+      InsertNumericValue(NoOfRegistersType1,8);
+      InsertNumericValue(4 + TotalDomesticRegs + TotalInternationalRegs + TotalSpecialRegs + 1,10);
+      PadLine(' ');
+      FileHandle.CLOSE;
+
+      IF ISSERVICETIER THEN
+        IF NOT DOWNLOAD(Filename,'',ToFolder,Text1100003,ToFile) THEN
+          EXIT;
+    END;
+
+    BEGIN
+    END.
+  }
+}

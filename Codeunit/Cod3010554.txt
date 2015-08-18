@@ -1,0 +1,324 @@
+OBJECT Codeunit 3010554 Transfer Gl Entries To Cost Ac
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=CACEM6.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 17=rm;
+    OnRun=BEGIN
+            TransferGlEntriesYN;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1150022 : TextConst 'ENU=Income statement accounts with cost center or cost object will be transferred to cost accounting.\;ESP=Las cuentas de regularizaci¢n con centro coste u objeto coste se transferir n a contabilidad costes.\';
+      Text002@1150024 : TextConst 'ENU=All entries since the last transfer will be processed.\\;ESP=Se procesar n todos los movs. desde la £ltima transferencia.\\';
+      Text003@1150025 : TextConst 'ENU=First, the link between cost type and G/L account will be checked.\\;ESP=En primer lugar, se comprobar  el v¡nculo entre tipo coste y cuenta.\\';
+      Text004@1150026 : TextConst 'ENU=Start Job?;ESP=¨Iniciar tarea?';
+      Text005@1150027 : TextConst 'ENU=Transfer G/L entries to cost accounting.\;ESP=Transferir movs. contabilidad a contabilidad costes.\';
+      Text006@1150028 : TextConst 'ENU=G/L entry no.          #1######## \;ESP=N§ mov. contabilidad   #1######## \';
+      Text007@1150029 : TextConst 'ENU=Cost type              #2######## \;ESP=Tipo coste             #2######## \';
+      Text008@1150030 : TextConst 'ENU=Combined entries       #3######## \;ESP=Movs. agrupados        #3######## \';
+      Text009@1150031 : TextConst 'ENU="No. of cost entries    #4######## ";ESP="N§ movs. coste         #4######## "';
+      Text010@1150032 : TextConst 'ENU=G/L entries from no. %1 have been processed. %2 cost entries created.;ESP=Se han procesado movs. contabilidad desde el n§ %1. %2 movs. coste creados.';
+      Text012@1150034 : TextConst 'ENU="Combined entries per month ";ESP="Movs. agrupados por mes "';
+      Text013@1150035 : TextConst 'ENU="Combined entries per day ";ESP="Movs. agrupados por d¡a "';
+      Text014@1150036 : TextConst 'ENU=No G/L entries found to transfer to cost accounting.;ESP=No se encontraron movs. contabilidad para transferir a contabilidad costes.';
+      CaSetup@1150002 : Record 3010558;
+      GlEntry@1150003 : Record 17;
+      GlAcc@1150004 : Record 15;
+      CostType@1150005 : Record 3010551;
+      CostJourLine@1150006 : Record 3010553;
+      CaEntry@1150007 : Record 3010554;
+      CostRegister@1150008 : Record 3010555;
+      CostAccMgt@1150000 : Codeunit 3010551;
+      CostAccPostJournal@1150001 : Codeunit 3010552;
+      d@1150010 : Dialog;
+      LastLineNo@1150009 : Integer;
+      LastRegisterNo@1150011 : Integer;
+      NoOfCombinedEntries@1150017 : Integer;
+      FirstGlEntryNo@1150050 : Integer;
+      LastGlEntryNo@1150051 : Integer;
+      FirstCostEntryNo@1150052 : Integer;
+      LastCostEntryNo@1150053 : Integer;
+      NoOfJourLines@1150054 : Integer;
+      TotalDebit@1150055 : Decimal;
+      TotalCredit@1150056 : Decimal;
+      PostDate@1150020 : Date;
+      BatchRun@1150021 : Boolean;
+
+    PROCEDURE TransferGlEntriesYN@1();
+    BEGIN
+      // Processing steps (See tags *** in code)
+      // 1. Check link G/L - CA
+      // 2. Get range of GL entries to transfer. (Last no of last Xfer + 1 to end)
+      // 3. Process G/L entries and check if they have to be transferred to CA
+      // 4. Write journal line or add for combined postings
+      // 5. Write cost entry no. as reference to G/L entry
+      // 6. Record in Register
+      // 7. Post journal lines
+
+      // G/L entries are transferred to cost journal and are posted
+      IF NOT CONFIRM(Text000 + Text002 + Text003 + Text004) THEN
+        EXIT;
+
+      TransferGlEntriesRun;
+
+      MESSAGE(Text010,FirstGlEntryNo,NoOfJourLines);
+    END;
+
+    PROCEDURE TransferGlEntriesRun@1150000();
+    BEGIN
+      // Processing steps (See tags *** in code)
+      // 1. Check link G/L - CA
+      // 2. Get range of GL entries to transfer. (Last no of last Xfer + 1 to end)
+      // 3. Process G/L entries and check if they have to be transferred to CA
+      // 4. Write journal line or add for combined postings
+      // 5. Write cost entry no. as reference to G/L entry
+      // 6. Record in Register
+      // 7. Post journal lines
+
+      CLEARALL;
+
+      // 1 *** Check link. Is each G/L account only linked to one cost type?
+      CostAccMgt.LinkCostTypesToGlAccounts;
+
+      d.OPEN(Text005 + // Transfer GL to CA
+         Text006 +  // GL entry no #1
+        Text007 +  // Cost type #2
+        Text008 +  // Combined entries #3
+        Text009);  // No of cost entries #4
+
+      // Transfer with status window
+      BatchRun := TRUE;
+      GetGlEntries;
+
+      d.CLOSE;
+    END;
+
+    PROCEDURE GetGlEntries@3();
+    VAR
+      SkipGlEntry@1150000 : Boolean;
+      CombinedEntryTxt@1150001 : Text[50];
+    BEGIN
+      // 2 *** Define G/L entries for transfer
+      IF NOT CaSetup.GET THEN
+        EXIT;
+
+      CaSetup.TESTFIELD("Source Code G/L Entry to CA");
+
+      // Exit, if not autotransfer
+      IF NOT BatchRun THEN BEGIN
+        IF NOT CaSetup."Autotransfer from G/L" THEN
+          EXIT;
+        CLEARALL;
+      END;
+
+      // Get first G/L entry according to Register
+
+      CostRegister.SETCURRENTKEY(Source);
+
+      CostRegister.SETRANGE(Source,CostRegister.Source::"Transfer from G/L");
+      IF CostRegister.FIND('+') THEN
+        FirstGlEntryNo := CostRegister."To Entry No." + 1
+      ELSE
+        FirstGlEntryNo := 1;
+
+      CostRegister.RESET;
+
+      // Get lineno. of last G/L entry. For Register entry and setrange (instead of locktable)
+      IF GlEntry.FIND('+') THEN
+        LastGlEntryNo := GlEntry."Entry No.";
+
+      // Select G/L entry lines to transfer
+      GlEntry.SETRANGE("Entry No.",FirstGlEntryNo,LastGlEntryNo);
+
+      // Save first cost entry lineno as base for next lineno. and Register
+      CaEntry.LOCKTABLE;
+      IF CaEntry.FIND('+') THEN
+        LastCostEntryNo := CaEntry."Line No."
+      ELSE
+        LastCostEntryNo := 0;
+
+      FirstCostEntryNo := LastCostEntryNo + 1;  // For Register
+
+      CaSetup.GET;
+
+      // 3 *** Process G/L entries
+      IF GlEntry.FIND('-') THEN REPEAT
+
+          IF BatchRun AND ((GlEntry."Entry No." MOD 100) = 0) THEN
+            d.UPDATE(1,FORMAT(GlEntry."Entry No."));
+
+          SkipGlEntry := FALSE;  // Reset flag
+
+          // No entries with posting date prior to start date of transfer,
+          IF GlEntry."Posting Date" < CaSetup."Starting Date for G/L Transfer" THEN
+            SkipGlEntry := TRUE;
+
+          // Only G/L entries with cost center or cost object
+          IF (GlEntry."Global Dimension 1 Code" = '') AND (GlEntry."Global Dimension 2 Code" = '') THEN
+            SkipGlEntry := TRUE;
+
+          IF GlEntry.Amount = 0 THEN
+            SkipGlEntry := TRUE;
+
+          // Fill in empty doc. no.
+          IF GlEntry."Document No." = '' THEN
+            GlEntry."Document No." := '0000';
+
+          // Entries of deleted G/L acconts (Accountno = '')
+          IF NOT GlAcc.GET(GlEntry."G/L Account No.") THEN
+            SkipGlEntry := TRUE;
+
+          // Only profit/loss accounts
+          IF GlAcc."Income/Balance" = GlAcc."Income/Balance"::"Balance Sheet" THEN
+            SkipGlEntry := TRUE;
+
+          // Entries on G/L accounts that are not linked to cost type
+          IF NOT CostType.GET(GlAcc."Cost Type No.") THEN
+            SkipGlEntry := TRUE;
+
+          // If already transferred and marked with cost entry lineno.
+          IF GlEntry."Cost Entry No." <> 0 THEN
+            SkipGlEntry := TRUE;
+
+          // Do not transfer closing entries
+          IF GlEntry."Posting Date" <> NORMALDATE(GlEntry."Posting Date") THEN
+            SkipGlEntry := TRUE;
+
+          IF NOT SkipGlEntry THEN BEGIN
+            // Definie posting date for combined entries
+            CASE CostType."Combine Entries" OF
+              CostType."Combine Entries"::Month:
+                BEGIN
+                  PostDate := CALCDATE('<CM>',GlEntry."Posting Date");
+                  CombinedEntryTxt := Text012 + FORMAT(PostDate);
+                END;
+              CostType."Combine Entries"::Day:
+                BEGIN
+                  PostDate := GlEntry."Posting Date";
+                  CombinedEntryTxt := Text013 + FORMAT(PostDate);
+                END;
+              ELSE
+                PostDate := GlEntry."Posting Date";
+            END;
+
+
+            // 4 *** Write cost journal line
+            IF CostType."Combine Entries" = 0 THEN  // No combined posting
+              WriteJournalLine
+            ELSE BEGIN
+              // Add to combined posting?
+              CostJourLine.SETCURRENTKEY("Cost Type No.","Cost Center Code","Cost Object Code");
+              CostJourLine.SETRANGE("Cost Type No.",CostType."No.");
+              CostJourLine.SETRANGE("Cost Center Code",GlEntry."Global Dimension 1 Code");
+
+              IF GlEntry."Global Dimension 1 Code" = '' THEN
+                CostJourLine.SETRANGE("Cost Object Code",GlEntry."Global Dimension 2 Code");
+
+              CostJourLine.SETRANGE("Posting Date",PostDate);
+              IF NOT CostJourLine.FIND('-') THEN  // first entry
+                WriteJournalLine
+              ELSE BEGIN  // combined entry, modify exiting entry
+                CostJourLine.Text := CombinedEntryTxt;
+                CostJourLine.Amount := CostJourLine.Amount + GlEntry.Amount;
+                CostJourLine."Document No." := GlEntry."Document No.";  // last
+                CostJourLine."GL Entry No." := GlEntry."Entry No.";  // last
+                CostJourLine.MODIFY;
+                NoOfCombinedEntries := NoOfCombinedEntries + 1;
+              END;
+              CostJourLine.RESET;  // Reset setrange of combined entry
+            END;
+
+            // For Register entry
+            IF GlEntry.Amount > 0 THEN
+              TotalDebit := TotalDebit + GlEntry.Amount
+            ELSE
+              TotalCredit := TotalCredit - GlEntry.Amount;
+
+
+            // 5 *** Write cost entry lineno. to G/L entry
+            GlEntry."Cost Entry No." := CostJourLine."Cost Entry No.";
+            GlEntry.MODIFY;
+
+            IF BatchRun AND ((GlEntry."Entry No." MOD 100) = 0) THEN BEGIN
+              d.UPDATE(2,CostType."No.");
+              d.UPDATE(3,FORMAT(NoOfCombinedEntries));
+              d.UPDATE(4,FORMAT(NoOfJourLines));
+            END;
+
+          END;
+        UNTIL GlEntry.NEXT = 0;
+
+      IF NoOfJourLines = 0 THEN BEGIN
+        IF BatchRun THEN BEGIN
+          d.CLOSE;
+          ERROR(Text014);
+        END ELSE
+          EXIT;
+      END;
+
+      // 6 *** Register entry
+      CostRegister.LOCKTABLE;
+      IF CostRegister.FIND('+') THEN
+        LastRegisterNo := CostRegister."No.";
+
+      CostRegister.INIT;
+      CostRegister."No." := LastRegisterNo + 1;
+      CostRegister."Journal Batch Name" := '';
+      CostRegister.Source := CostRegister.Source::"Transfer from G/L";
+      CostRegister."From Entry No." := FirstGlEntryNo;
+      CostRegister."To Entry No." := LastGlEntryNo;
+      CostRegister."From Cost Entry No." := FirstCostEntryNo;
+      CostRegister."To Cost Entry No." := LastCostEntryNo;
+      CostRegister."No. of Entries" := NoOfJourLines;
+      CostRegister."Debit Amount" := TotalCredit;
+      CostRegister."Credit Amount" := TotalDebit;
+      CostRegister."User ID" := USERID;
+      CostRegister."Processed Date" := TODAY;
+      CostRegister.INSERT;
+
+      // 7 *** Post created lines of the journal
+      CostAccPostJournal.PostJournal(CostJourLine);
+    END;
+
+    PROCEDURE WriteJournalLine@5();
+    BEGIN
+      // Write G/L entry to cost journal line
+      CostJourLine.INIT;
+
+      CostJourLine."Batch Name" := '$' + COPYSTR(CaSetup."Source Code G/L Entry to CA",1,8) + '$';
+
+      LastLineNo := LastLineNo + 1;
+      CostJourLine."Line No." := LastLineNo;
+      CostJourLine."Cost Type No." := CostType."No.";
+      CostJourLine."Posting Date" := PostDate;
+      CostJourLine."Document No." := GlEntry."Document No.";
+      CostJourLine.Text := GlEntry.Description;
+      CostJourLine.Amount := GlEntry.Amount;
+      CostJourLine."Cost Center Code" := GlEntry."Global Dimension 1 Code";
+
+      IF CostJourLine."Cost Center Code" = '' THEN
+        CostJourLine."Cost Object Code" := GlEntry."Global Dimension 2 Code";
+
+      CostJourLine."Source Code" := CaSetup."Source Code G/L Entry to CA";
+      CostJourLine."GL Entry No." := GlEntry."Entry No.";
+      CostJourLine."System-Created Entry" := TRUE;
+      LastCostEntryNo := LastCostEntryNo + 1;
+      CostJourLine."Cost Entry No." := LastCostEntryNo;
+      CostJourLine.INSERT;
+
+      NoOfJourLines := NoOfJourLines + 1;
+    END;
+
+    BEGIN
+    END.
+  }
+}

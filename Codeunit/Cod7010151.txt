@@ -1,0 +1,812 @@
+OBJECT Codeunit 7010151 Funciones Facturar Circuitos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/03/15;
+    Time=13:24:42;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    TableNo=7010188;
+    OnRun=VAR
+            rPaxTO@1103355000 : Record 7010188;
+            iOpcio@1103355001 : Integer;
+            iOpcio2@1103355002 : Integer;
+            rCir@1103355003 : Record 7010187;
+          BEGIN
+            cFunSeg.TienePermiso('CIR-FAC-SER', TRUE); //$002
+
+            rPaxTO.COPY(Rec);
+
+            rCir.GET(rPaxTO.Delegacion, rPaxTO.Circuito, rPaxTO.Orden);
+            IF (rCir."Efectivo Gu¡a" = 0) OR (rCir."Guia Efectivo" = '') THEN
+              IF NOT CONFIRM(Text000, FALSE, rCir.FIELDCAPTION("Efectivo Gu¡a"), rCir.FIELDCAPTION("Guia Efectivo")) THEN
+                EXIT;
+
+            IF rCir."Pendiente calcular" THEN
+              ERROR(Text001 + Text002, rCir.Circuito, rCir.Orden, rCir.Fecha);
+
+            iOpcio := 0;
+            iOpcio := STRMENU(Text003, 2);
+
+            CASE iOpcio OF
+
+              // Facturar
+
+              1: Crear_Factura(rPaxTO);
+
+              // Prefacturar
+
+              2: BEGIN
+                iOpcio2 := 0;
+                iOpcio2 := STRMENU(Text004, 1);
+                CASE iOpcio2 OF
+                  1: Crear_Prefactura(rPaxTO);
+                  2: Imprimir_Prefactura(rPaxTO."N§ Prefactura");
+                END;
+              END;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355004 : TextConst 'ENU=%1 or %2 has not been assigned. Continue?;ESP=No se ha asignado %1 o %2. ¨Continuar?';
+      Text001@1103355005 : TextConst 'ENU=Unable to invoice or proforma invoice because circuit %1, order %2 of %3 is;ESP=No se puede facturar o prefacturar ya que el circuito %1, orden %2 de %3 est ';
+      Text002@1103355006 : TextConst 'ENU=remaining od calculation.;ESP=pendiente de c lculo.';
+      Text003@1103355007 : TextConst 'ENU=Invoice,Proforma invoice;ESP=Facturar,Prefacturar';
+      Text004@1103355008 : TextConst 'ENU=Create Proforma Invoice,Reprint Proforma Invoice;ESP=Crear Prefactura,Reimprimir Prefactura';
+      Text005@1103355009 : TextConst 'ENU=Circuit parameters card does not exist;ESP=No existe la ficha de par metros circuito';
+      Text006@1103355010 : TextConst 'ENU=Unable to proforma invoice if total amount is 0;ESP=No se puede prefacturar si el importe total es 0';
+      Text007@1103355011 : TextConst 'ENU=Unable to get the requirements of proforma invoice;ESP=No se han podido obtener las condiciones de la prefactura';
+      Text008@1103355012 : TextConst 'ENU=Must indicate a Touroperator;ESP=Tiene que indicar un TourOperador';
+      Text009@1103355013 : TextConst 'ENU=Must indicate date from and date to;ESP=Debe indicar fecha desde y fecha hasta';
+      Text010@1103355014 : TextConst 'ENU=Date from must be minor or equal than date to;ESP=La fecha desde debe ser menor o igual que la fecha hasta';
+      Text011@1103355015 : TextConst 'ENU=There is nothing to print;ESP=No hay nada para imprimir';
+      Text012@1103355016 : TextConst 'ENU=Reprint the invoice;ESP=Reimprima la factura';
+      Text013@1103355017 : TextConst 'ENU=GENERATEIBR;ESP=GENERARFPR';
+      Text014@1103355018 : TextConst 'ENU=Agency parameters foldes does not exist;ESP=No existe el fichero de par metros agencia';
+      Text015@1103355019 : TextConst 'ENU=Circuit parameters folder does not exist;ESP=No existe el fichero parametros circuito';
+      Text016@1103355020 : TextConst 'ENU=Must specify a correct registered excursion sale invoice in agency parameters;ESP=Debe especificar una factura venta excursion registrada correcta en par metros agencia';
+      Text017@1103355021 : TextConst 'ENU=Invoice Proforma n§ #1########\;ESP=Facturar Prefactura n§ #1########';
+      Text018@1103355022 : TextConst 'ENU=Department           #2########;ESP=Departamento           #2########';
+      Text019@1103355023 : TextConst 'ENU=Proforma %1 is already invoiced (invoice %2);ESP=La prefactura %1 ya esta facturada (factura %2)';
+      Text020@1103355024 : TextConst 'ENU=Unable to invoice if total amount is 0;ESP=No se puede facturar si el importe total es 0';
+      Text021@1103355025 : TextConst 'ENU=Ledger account folder for Local Office %1 does not exist\, TourOperator %2, neither generic card;ESP=No existe el fichero de cuentas para la Delegaci¢n %1, TourOperador %2, ni la ficha generica.';
+      Text022@1103355026 : TextConst 'ENU=Invoicing circuit'' \;ESP=Facturando circuito...';
+      Text023@1103355027 : TextConst 'ENU=Undo proforma no. #1########;ESP=Deshacer prefactura n§ #1########';
+      Text024@1103355028 : TextConst 'ENU=Proforma %1 does not exist;ESP=No existe la prefactura %1';
+      Text025@1103355029 : TextConst 'ENU=This proforma is already invoiced, unable to undo it;ESP=Esta prefactura ya esta facturada, no se puede deshacer';
+      Text026@1103355030 : TextConst 'ENU=Client %1 does not exist;ESP=El cliente %1 no existe';
+      Text028@1103355032 : TextConst 'ENU=Circuit sale invoices incomes;ESP=Ingresos fras. venta Circuito';
+      Text029@1103355033 : TextConst 'ENU=" from";ESP=" desde"';
+      Text030@1103355034 : TextConst 'ENU=" to";ESP=" hasta"';
+      Text031@1103355035 : TextConst 'ENU=#1###################### out of #2###### (#3###);ESP=#1###################### de #2###### (#3###)';
+      Text032@1103355036 : TextConst 'ENU=CANC.;ESP=ANUL.';
+      Text033@1103355037 : TextConst 'ENU=Circuit;ESP=Circuito';
+      Text034@1103355038 : TextConst 'ENU=PERSON;ESP=PERSONA';
+      Text035@1103355039 : TextConst 'ENU=Touroperator %1 does not exist;ESP=No existe el Touroperador %1.';
+      Text036@1103355040 : TextConst 'ENU=Sale tariff for Touroperator %1 was not found;ESP=No se ha encontrado tarifa de venta para el TourOperador %1';
+      Text037@1103355041 : TextConst 'ENU=Credit memo invoice #1########;ESP=Abonar factura #1########';
+      Text038@1103355042 : TextConst 'ENU=Circuit parameters folder does not exist;ESP=No existe el fichero par metros circuito';
+      Text039@1103355043 : TextConst 'ENU=Must send the invoice to central before it is credit memo;ESP=Debe enviar la factura a central antes de abonarla';
+      Text040@1103355044 : TextConst 'ENU=Must send the credit memo to central before crediting it;ESP=Debe enviar el abono a central antes de abonarlo';
+      Text041@1103355045 : TextConst 'ENU=Sale invoice %1 does not exist;ESP=No existe la factura de venta %1.';
+      Text042@1103355046 : TextConst 'ENU=Sale credit memo %1 does not exist;ESP=No existe el abono de venta %1.';
+      Text043@1103355047 : TextConst 'ENU=Correct credit memo?;ESP=Abono correcto?';
+      Text044@1103355048 : TextConst 'ENU=An error in the credit memo has been occurred, repeat the process;ESP=Se ha producido un error en el abono, repita el proceso.';
+      rPar@1103355000 : Record 7009700;
+      rParC@1103355001 : Record 7010185;
+      cFunSeg@1100217000 : Codeunit 7009751;
+      Finestra@1103355003 : Dialog;
+
+    PROCEDURE Crear_Prefactura@5(VAR rPaxTO@1103355000 : Record 7010188);
+    VAR
+      rCond@1103355001 : Record 7010085;
+      NumPrefact@1103355002 : Code[10];
+      FechaDesde@1103355003 : Date;
+      FechaHasta@1103355004 : Date;
+    BEGIN
+      // Crear_Prefactura
+      //
+      rPaxTO.LOCKTABLE;
+      Coger_Datos_Prefactura(rPaxTO, rCond);
+
+      IF NOT rCond.Correcto THEN
+        EXIT;
+
+      IF rCond.Circuito <> '' THEN
+        rPaxTO.SETRANGE(Circuito     , rCond.Circuito);
+      rPaxTO.SETRANGE(TourOperador   , rCond.TourOperador);
+      rPaxTO.SETRANGE(Fecha          , rCond."Fecha desde", rCond."Fecha hasta");
+      rPaxTO.SETRANGE("N§ Prefactura", '');
+      IF rPaxTO.FIND('-') THEN BEGIN
+        rParC.RESET;
+        IF NOT rParC.FIND('-') THEN
+          ERROR(Text005);
+        rParC.LOCKTABLE;
+        IF rParC."Prefactura Circuito" = '' THEN
+          rParC."Prefactura Circuito" := '1'
+        ELSE
+          rParC."Prefactura Circuito" := INCSTR(rParC."Prefactura Circuito");
+        rParC.MODIFY;
+
+        NumPrefact := rParC."Prefactura Circuito";
+
+        rPaxTO.MODIFYALL("N§ Prefactura", NumPrefact);
+        rPaxTO.SETRANGE("N§ Prefactura", NumPrefact);
+        IF rPaxTO.FIND('-') THEN
+          IF Total_Prefactura(rPaxTO, FechaDesde, FechaHasta) = 0 THEN
+            ERROR(Text006);
+      END;
+      COMMIT;
+      Imprimir_Prefactura(NumPrefact);
+    END;
+
+    PROCEDURE Coger_Datos_Prefactura@1(VAR rPaxTO@1103355000 : Record 7010188;VAR rCond@1103355001 : Record 7010085);
+    BEGIN
+      // Coger_Datos_Prefactura
+      //
+      rCond.RESET;
+      IF rCond.GET(USERID) THEN
+        rCond.DELETE;
+      rCond.INIT;
+      rCond.Usuario := USERID;
+      rCond.TourOperador := rPaxTO.TourOperador;
+      rCond.Circuito     := rPaxTO.Circuito;
+      rCond."Fecha desde":= rPaxTO.Fecha;
+      rCond."Fecha hasta":= rPaxTO.Fecha;
+      rCond.INSERT;
+
+      rCond.SETRECFILTER;
+
+      COMMIT;
+      FORM.RUNMODAL(FORM::"Ficha Cond.Prefactura Circuito", rCond);
+      IF NOT rCond.GET(USERID) THEN
+        ERROR(Text007);
+
+      IF NOT rCond.Correcto THEN
+        EXIT;
+
+      IF rCond.TourOperador = '' THEN
+        ERROR(Text008);
+
+      IF (rCond."Fecha desde" = 0D) OR (rCond."Fecha hasta" = 0D) THEN
+        ERROR(Text009);
+
+      IF (rCond."Fecha desde" > rCond."Fecha hasta") THEN
+        ERROR(Text010);
+    END;
+
+    PROCEDURE Imprimir_Prefactura@6(VAR NumPrefac@1103355000 : Code[10]);
+    VAR
+      rPaxTO@1103355001 : Record 7010188;
+    BEGIN
+      // Imprimir_Prefactura
+      //
+      IF NumPrefac = '' THEN
+        ERROR(Text011);
+
+      rPaxTO.SETCURRENTKEY("N§ Prefactura");
+      rPaxTO.SETRANGE("N§ Prefactura", NumPrefac);
+      IF NOT rPaxTO.FIND('-') THEN
+        ERROR(Text011);
+      IF rPaxTO."N§ Factura" <> '' THEN
+        ERROR(Text012);
+
+      REPORT.RUNMODAL(REPORT::"Prefactura Circuito", TRUE, FALSE, rPaxTO);
+    END;
+
+    PROCEDURE Crear_Factura@2(VAR rPaxTO@1103355000 : Record 7010188);
+    VAR
+      rPaxTOaux@1103355001 : Record 7010188;
+      rCI@1103355002 : Record 7010190;
+      lrCI@1103355003 : Record 7010190;
+      rCIaux@1103355004 : Record 7010190;
+      rCabVta@1103355005 : Record 36;
+      rTarVta@1103355006 : Record 7010191;
+      rCtas@1103355007 : Record 7009705;
+      rProv@1103355008 : Record 23;
+      rCir@1103355009 : Record 7010187;
+      rGrup@1103355010 : Record 93;
+      NumPrefact@1103355011 : Code[10];
+      Max@1103355012 : Integer;
+      Min@1103355013 : Integer;
+      TotalImporte@1103355014 : Decimal;
+      FechaDesde@1103355015 : Date;
+      FechaHasta@1103355016 : Date;
+      Signo@1103355017 : Integer;
+      nRegs@1103355018 : Integer;
+      i@1103355019 : Integer;
+      cVal@1103355020 : Codeunit 7010240;
+      rCom@1103355021 : Record 44;
+      w_departamento@1103355022 : Code[10];
+      lcRelease@1000000000 : Codeunit 414;
+    BEGIN
+      // Crear_Factura
+      //
+      rCI.RESET;
+      rCI.SETCURRENTKEY(Usuario);
+      rCI.SETRANGE(Usuario, Text013);
+      IF rCI.FIND('-') THEN
+        rCI.MODIFYALL(Usuario, '');
+
+      rPar.FIND('-');
+
+      rParC.FIND('-');
+
+      rParC.TESTFIELD("Factura Venta Circuito");
+
+      rParC.TESTFIELD("Cta. Caja");
+
+      NumPrefact     := rPaxTO."N§ Prefactura";
+      w_departamento := rPaxTO.Delegacion;
+      Finestra.OPEN(Text017 +
+                    Text018);
+      Finestra.INPUT(1, NumPrefact);
+      Finestra.INPUT(2, w_departamento);
+      Finestra.CLOSE;
+
+      IF NumPrefact = '' THEN
+        EXIT;
+
+      rPaxTOaux.SETCURRENTKEY("N§ Prefactura");
+      rPaxTOaux.SETRANGE("N§ Prefactura", NumPrefact);
+      IF rPaxTOaux.FIND('-') THEN BEGIN
+        IF rPaxTOaux."N§ Factura" <> '' THEN
+          ERROR(Text019, NumPrefact, rPaxTOaux."N§ Factura", rPaxTOaux);
+        TotalImporte := Total_Prefactura(rPaxTOaux, FechaDesde, FechaHasta);
+        IF TotalImporte = 0 THEN
+          ERROR(Text020);
+        IF NOT rCtas.GET(rPar.Delegacion, rPaxTOaux.TourOperador) THEN BEGIN
+          IF NOT rCtas.GET(rPar.Delegacion, '') THEN BEGIN
+            ERROR(Text021,
+                   rPar.Delegacion, rPaxTOaux.TourOperador);
+          END;
+        END;
+        rCtas.TESTFIELD("Cta. venta circuito");
+
+        Finestra.OPEN(Text022 +
+                      '@1@@@@@@@@@@@@@@@@@@@@');
+        nRegs := rPaxTOaux.COUNT;
+        i := 0;
+        Buscar_Contrato_Venta(rPaxTOaux, rTarVta);
+        Insertar_Cabecera(rCabVta, TotalImporte, rTarVta, FechaDesde, FechaHasta, rPaxTOaux, Signo, w_departamento);
+        REPEAT
+          IF rCir.GET(rPaxTOaux.Delegacion, rPaxTOaux.Circuito, rPaxTOaux.Orden) THEN
+            IF rProv.GET(rCir."Guia Efectivo") THEN BEGIN
+              rProv.TESTFIELD("Vendor Posting Group");
+              IF rGrup.GET(rProv."Vendor Posting Group") THEN BEGIN
+                rGrup.TESTFIELD("Cta. FPR Circuito");
+                rGrup.TESTFIELD("Cta. Gastos guia circuitos");
+              END
+            END;
+          rCir.SETRANGE("Filtro TO"        , rPaxTOaux.TourOperador);
+          rCir.SETRANGE("Filtro N§ Factura", '');
+          rCir.CALCFIELDS("Paxes Calculo", Ingreso);
+
+          i := i + 1;
+          Finestra.UPDATE(1, ROUND((i / nRegs) * 10000, 1));
+          IF rCir.Ingreso <> 0 THEN BEGIN
+            Buscar_Max_Min_Linea(rPaxTOaux, Max, Min);
+
+            rCI.RESET;
+            rCI.SETRANGE(Delegacion         , rPaxTOaux.Delegacion);
+            rCI.SETRANGE(Circuito           , rPaxTOaux.Circuito);
+            rCI.SETRANGE(Orden              , rPaxTOaux.Orden);
+            rCI.SETRANGE("Coste/Ingreso"    , rCI."Coste/Ingreso"::Ingreso);
+            rCI.SETRANGE("N§ linea Auxiliar", rPaxTOaux."N§ Linea");
+            rCI.SETRANGE("N§ Factura"       , '');
+            IF rCI.FINDSET THEN
+              REPEAT
+                IF (rCI."N§ Linea" = Min) OR (rCI."N§ Linea" = Max) THEN BEGIN
+                  Insertar_Linea(rCabVta, rCI, Signo, rTarVta, rCtas, FALSE);
+
+                  IF (Max > 0) AND rParC."Desglose factura circuito" THEN
+                    Insertar_Pax(rCabVta, rPaxTOaux);
+
+                  // ----  Insertar las lineas por extras asociadas al cierre  ----
+
+                  lrCI.RESET; lrCI.INIT;
+                  lrCI.SETRANGE(Delegacion         , rCI.Delegacion);
+                  lrCI.SETRANGE(Circuito           , rCI.Circuito);
+                  lrCI.SETRANGE(Orden              , rCI.Orden);
+                  lrCI.SETRANGE("Coste/Ingreso"    , rCI."Coste/Ingreso"::Ingreso);
+                  lrCI.SETRANGE("N§ linea Auxiliar", rCI."N§ linea Auxiliar");
+                  lrCI.SETRANGE("N§ Cierre"        , rCI."N§ Cierre");
+                  lrCI.SETRANGE(Extra              , TRUE);
+                  IF lrCI.FINDSET THEN BEGIN
+                    REPEAT
+                      Insertar_Linea(rCabVta, lrCI, Signo, rTarVta, rCtas, TRUE);
+                    UNTIL lrCI.NEXT = 0;
+                  END;
+                END;
+
+                rCIaux := rCI;
+                rCIaux."N§ Factura" := rCabVta."No.";
+                rCIaux.MODIFY;
+              UNTIL rCI.NEXT = 0;
+          END;
+
+          rCI.RESET;
+          rCI.SETRANGE(Delegacion     , rPaxTOaux.Delegacion);
+          rCI.SETRANGE(Circuito       , rPaxTOaux.Circuito);
+          rCI.SETRANGE(Orden          , rPaxTOaux.Orden);
+          rCI.SETRANGE("Coste/Ingreso", rCI."Coste/Ingreso"::Coste);
+          rCI.SETRANGE(TourOperador   , rPaxTOaux.TourOperador);
+          rCI.SETRANGE("Pendiente FPR", TRUE);
+          IF rCI.FIND('-') THEN
+            rCI.MODIFYALL(Usuario, Text013);
+        UNTIL rPaxTOaux.NEXT = 0;
+
+        rPaxTOaux.MODIFYALL("N§ Factura", rCabVta."No.");
+        Finestra.CLOSE;
+
+        rCI.RESET;
+        rCI.SETCURRENTKEY(Usuario);
+        rCI.SETRANGE(Usuario, Text013);
+
+        //+$006 <
+        IF rCabVta.GET(rCabVta."Document Type", rCabVta."No.") THEN
+          lcRelease.RUN(rCabVta);
+        //+$006 >
+
+        //+$008 <
+        IF rCabVta.GET(rCabVta."Document Type", rCabVta."No.") THEN
+        BEGIN
+          rCabVta."Reason Code" := 'ATENNEA';
+          rCabVta.MODIFY;
+        END;
+        //+$008 >
+
+        CLEAR(cVal);
+        cVal.Pasar_Factura_Venta(rCabVta."No.", rCabVta."Document Type");
+        cVal.Generar_FPR(rCI, w_departamento);
+
+        rCI.RESET;
+        rCI.SETCURRENTKEY(Usuario);
+        rCI.SETRANGE(Usuario, Text013);
+        IF rCI.FIND('-') THEN
+          rCI.MODIFYALL(Usuario, '');
+
+        COMMIT;
+        rCom.RESET;
+        rCom.SETRANGE("Document Type", rCabVta."Document Type");
+        rCom.SETRANGE("No."          , rCabVta."No.");
+        FORM.RUNMODAL(FORM::"Sales Comment Sheet", rCom);
+        rCom.RESET;
+
+        COMMIT;
+
+        REPORT.RUNMODAL(rParC."Factura Venta Circuito", TRUE, FALSE, rCabVta);
+      END;
+    END;
+
+    PROCEDURE Deshacer_Prefactura@3(VAR rPaxTO@1103355000 : Record 7010188);
+    VAR
+      rPaxTOaux@1103355001 : Record 7010188;
+      NumPrefac@1103355002 : Code[10];
+    BEGIN
+      // Deshacer_Prefactura
+      //
+      NumPrefac := rPaxTO."N§ Prefactura";
+      Finestra.OPEN(Text023);
+      Finestra.INPUT(1, NumPrefac);
+      Finestra.CLOSE;
+      IF NumPrefac = '' THEN
+        EXIT;
+
+      rPaxTOaux.SETCURRENTKEY("N§ Prefactura");
+      rPaxTOaux.SETRANGE("N§ Prefactura", NumPrefac);
+      IF NOT rPaxTOaux.FIND('-') THEN
+        ERROR(Text024, NumPrefac);
+
+      rPaxTOaux.SETFILTER("N§ Factura", '<>%1', '');
+      IF rPaxTOaux.FIND('-') THEN
+        ERROR(Text025);
+
+      rPaxTOaux.SETRANGE("N§ Factura");
+      rPaxTOaux.MODIFYALL("N§ Prefactura", '');
+    END;
+
+    PROCEDURE Total_Prefactura@7(VAR rPaxTO@1103355000 : Record 7010188;VAR FechaDesde@1103355001 : Date;VAR FechaHasta@1103355002 : Date) : Decimal;
+    VAR
+      rPaxTOaux@1103355003 : Record 7010188;
+      rCI@1103355004 : Record 7010190;
+      Importe@1103355005 : Decimal;
+    BEGIN
+      // Total_Prefactura
+      //
+      CLEAR(FechaDesde);
+      CLEAR(FechaHasta);
+
+      Importe := 0;
+
+      rPaxTOaux.SETCURRENTKEY("N§ Prefactura");
+      rPaxTOaux.SETRANGE("N§ Prefactura", rPaxTO."N§ Prefactura");
+      rPaxTOaux.SETRANGE(Delegacion     , rPaxTO.Delegacion);
+      IF rPaxTOaux.FIND('-') THEN BEGIN
+        FechaDesde := rPaxTOaux.Fecha;
+        FechaHasta := rPaxTOaux.Fecha;
+        REPEAT
+          rCI.RESET;
+          rCI.SETRANGE(Delegacion         , rPaxTOaux.Delegacion);
+          rCI.SETRANGE(Circuito           , rPaxTOaux.Circuito);
+          rCI.SETRANGE(Orden              , rPaxTOaux.Orden);
+          rCI.SETRANGE("Coste/Ingreso"    , rCI."Coste/Ingreso"::Ingreso);
+          rCI.SETRANGE("N§ linea Auxiliar", rPaxTOaux."N§ Linea");
+          rCI.SETRANGE("N§ Factura"       , '');
+          IF rCI.FIND('-') THEN
+            REPEAT
+              Importe := Importe + rCI."Importe Con Impuesto";
+              IF rCI.Fecha < FechaDesde THEN
+                FechaDesde := rCI.Fecha
+              ELSE IF rCI.Fecha > FechaHasta THEN
+                FechaHasta := rCI.Fecha;
+            UNTIL rCI.NEXT = 0;
+        UNTIL rPaxTOaux.NEXT = 0;
+      END;
+
+      EXIT(Importe);
+    END;
+
+    PROCEDURE Insertar_Cabecera@10(VAR rCabVta@1103355000 : Record 36;Importe@1103355001 : Decimal;rTarVta@1103355002 : Record 7010191;FechaDesde@1103355003 : Date;FechaHasta@1103355004 : Date;rPaxTO@1103355005 : Record 7010188;VAR Signo@1103355006 : Integer;pw_departamento@1103355007 : Code[10]);
+    VAR
+      rCabVtaAux@1103355008 : Record 36;
+      lrSerie@1103355009 : Record 7009921;
+      rCliente@1103355010 : Record 18;
+    BEGIN
+      // Insertar_Cabecera
+
+      IF NOT rCliente.GET(rTarVta.Cliente) THEN
+        ERROR(Text026, rTarVta.Cliente);
+
+      //-$004rConfVta.FIND('-');
+      //+$004 <
+      lrSerie.GET(lrSerie.Modulo::Circuitos);
+      lrSerie.CheckSeries;
+      //+$004 <
+
+      CLEAR(rCabVta);
+      IF Importe < 0 THEN
+      BEGIN
+        rCabVta.VALIDATE("Document Type"    , rCabVta."Document Type"::"Credit Memo");
+        Signo := -1;
+
+        //-$004rConfVta.TESTFIELD("Posted Credit Memo Nos.");
+        //-$004rCabVta.VALIDATE("No. Series"          , rConfVta."Posted Credit Memo Nos.");
+
+        rCabVta.VALIDATE("No. Series", lrSerie."Serie abonos"); //+$004
+      END
+      ELSE
+      BEGIN
+        rCabVta.VALIDATE("Document Type"    , rCabVta."Document Type"::Invoice);
+        Signo := 1;
+
+        //-$004rTarVta.TESTFIELD("Cod. Serie");
+        //-$004rCabVta.VALIDATE("No. Series"          , rTarVta."Cod. Serie");
+
+        rCabVta.VALIDATE("No. Series", lrSerie."Serie facturas"); //+$004
+      END;
+
+      _CheckReasonCode;
+      rCabVta.INSERT(TRUE);
+
+      rCabVta.VALIDATE("Posting No. Series"       , rCabVta."No. Series");
+      rCabVta.VALIDATE("Sell-to Customer No."     , rCliente."No.");
+      rCabVta.VALIDATE("Posting Date"             , FechaDesde);
+      rCabVta.VALIDATE("Document Date"            , FechaDesde);
+      rCabVta.VALIDATE("Payment Terms Code"       , rTarVta."Cod. Terminos Pago");
+      rCabVta.VALIDATE("Payment Method Code"      , rTarVta."Cod. Formas Pago");
+      rCabVta.VALIDATE("Shortcut Dimension 1 Code", pw_departamento);
+      rCabVta.VALIDATE("Shortcut Dimension 2 Code", rPaxTO.TourOperador);
+
+      rCabVta."Posting Description" := rPaxTO.TourOperador + Text029 +
+                                     STRSUBSTNO('%1', FechaDesde) +
+                                     Text030 +
+                                     STRSUBSTNO('%1', FechaHasta);
+
+      rCabVta.VALIDATE("Prices Including VAT", rTarVta."Impuestos incluidos");
+      rCabVta.MODIFY;
+
+      rCabVta.SETRANGE("No."          , rCabVta."No.");
+      rCabVta.SETRANGE("Document Type", rCabVta."Document Type");
+    END;
+
+    PROCEDURE Insertar_Linea@13(rCabVta@1103355000 : Record 36;rCI@1103355001 : Record 7010190;Signo@1103355002 : Integer;rTarVta@1103355003 : Record 7010191;rCtas@1103355004 : Record 7009705;pw_linea_extras@1103355005 : Boolean);
+    VAR
+      rLinVta@1103355006 : Record 37;
+      rLinVtaAux@1103355007 : Record 37;
+      cNom@1103355008 : Codeunit 7009702;
+    BEGIN
+      // Insertar_Linea
+      //
+
+      CLEAR(rLinVta);
+      rLinVta."Document Type" := rCabVta."Document Type";
+      rLinVta."Document No."  := rCabVta."No.";
+
+      rLinVtaAux.RESET;
+      rLinVtaAux.SETRANGE("Document Type", rCabVta."Document Type");
+      rLinVtaAux.SETRANGE("Document No."  , rCabVta."No.");
+      IF rLinVtaAux.FINDLAST THEN
+        rLinVta."Line No." := rLinVtaAux."Line No." + 10000
+      ELSE
+        rLinVta."Line No." := 10000;
+
+      rLinVta.VALIDATE(Type, rLinVta.Type::"G/L Account");
+      rLinVta.INSERT(TRUE);
+
+      rLinVta.VALIDATE("No."                      , rCtas."Cta. venta circuito");
+      rLinVta.VALIDATE("Shortcut Dimension 1 Code", rCabVta."Shortcut Dimension 1 Code");
+      rLinVta.VALIDATE("Shortcut Dimension 2 Code", rCabVta."Shortcut Dimension 2 Code");
+      rLinVta.VALIDATE("Allow Invoice Disc."      , FALSE);
+      IF pw_linea_extras THEN
+        rLinVta.VALIDATE(Quantity, 1)
+      ELSE
+        rLinVta.VALIDATE(Quantity, rCI.Paxes);
+      rLinVta.VALIDATE("VAT Prod. Posting Group", rTarVta."Grupo registro iva prod.");
+      rLinVta.Description := STRSUBSTNO(Text031, COPYSTR(cNom.nom_circuito(rCI.Circuito), 1, 24),
+                                        rCI.Fecha, COPYSTR(rCI.Codigo, 1, 5));
+      IF rCI.Regularizacion THEN
+        rLinVta.Description := Text032 + rLinVta.Description;
+      rLinVta."Description 2" := Text033;
+
+      rLinVta.VALIDATE("Unit Price", rCI.Precio);
+      IF rTarVta."Impuestos incluidos" THEN
+        rLinVta."Amount Including VAT" := rCI."Importe Con Impuesto"
+      ELSE
+        rLinVta.Amount := rCI."Importe Sin Impuesto";
+      rLinVta."Line Discount %" := 0;
+      rLinVta.MODIFY(TRUE);
+    END;
+
+    PROCEDURE Insertar_Pax@14(rCabVta@1103355000 : Record 36;rPaxTO@1103355001 : Record 7010188);
+    VAR
+      rResCir@1103355002 : Record 7010186;
+      rLinVta@1103355003 : Record 37;
+      rLinVta2@1103355004 : Record 37;
+    BEGIN
+      // Insertar_Pax
+      //
+      rResCir.RESET;
+      rResCir.SETCURRENTKEY(Delegacion,
+                            "N§ Interno");
+      rResCir.SETRANGE(Delegacion  , rPaxTO.Delegacion);
+      rResCir.SETRANGE("N§ Interno", rPaxTO."N§ Interno");
+      IF rResCir.FIND('-') THEN
+        REPEAT
+          CLEAR(rLinVta);
+          rLinVta.VALIDATE("Document Type", rCabVta."Document Type");
+          rLinVta.VALIDATE("Document No."  , rCabVta."No.");
+          // Buscamos el n£mero de l¡nea que corresponde
+          //
+          rLinVta2.RESET;
+          rLinVta2.SETRANGE("Document Type", rCabVta."Document Type");
+          rLinVta2.SETRANGE("Document No."  , rCabVta."No.");
+          IF NOT rLinVta2.FINDLAST THEN
+            rLinVta.VALIDATE("Line No.", 10000)
+          ELSE
+            rLinVta.VALIDATE("Line No.", rLinVta2."Line No." + 10000);
+
+          rLinVta.VALIDATE(Type, rLinVta.Type::" ");
+          rLinVta.INSERT(TRUE);
+
+          rLinVta.Description := STRSUBSTNO('#1############################  #2########', COPYSTR(rResCir.Nombre, 1, 30),
+                                            rResCir."Tipo Persona"); //+$005
+          rLinVta."Description 2" := Text034;
+          rLinVta.MODIFY;
+        UNTIL rResCir.NEXT = 0;
+    END;
+
+    PROCEDURE Buscar_Max_Min_Linea@4(VAR rPaxTO@1103355000 : Record 7010188;VAR Max@1103355001 : Integer;VAR Min@1103355002 : Integer);
+    VAR
+      rCI@1103355003 : Record 7010190;
+      regMin@1103355004 : Boolean;
+      regMax@1103355005 : Boolean;
+    BEGIN
+      // Buscar_Max_Min_linea
+      //
+      rCI.RESET;
+      rCI.SETRANGE(Delegacion         , rPaxTO.Delegacion);
+      rCI.SETRANGE(Circuito           , rPaxTO.Circuito);
+      rCI.SETRANGE(Orden              , rPaxTO.Orden);
+      rCI.SETRANGE("Coste/Ingreso"    , rCI."Coste/Ingreso"::Ingreso);
+      rCI.SETRANGE("N§ linea Auxiliar", rPaxTO."N§ Linea");
+      rCI.SETRANGE(Extra              , FALSE);
+      rCI.SETRANGE("N§ Factura"       , '');
+      IF rCI.FIND('-') THEN BEGIN
+        Min := rCI."N§ Linea";
+        IF rCI.Regularizacion THEN
+          regMin := TRUE;
+      END;
+
+      IF rCI.FINDLAST THEN BEGIN
+        Max := rCI."N§ Linea";
+        IF rCI.Regularizacion THEN
+          regMax := TRUE;
+      END;
+
+      IF NOT regMin AND regMax THEN
+        Max := 0
+      ELSE
+        IF NOT regMin AND NOT regMax THEN
+          Min := Max
+        ELSE IF regMin AND regMax THEN
+          Max := Min;
+    END;
+
+    PROCEDURE Buscar_Contrato_Venta@18(rPaxTO@1103355000 : Record 7010188;VAR rTarVta@1103355001 : Record 7010191);
+    VAR
+      rTO@1103355002 : Record 7009717;
+      w_to@1103355003 : Code[10];
+    BEGIN
+      // Buscar_Contrato_Venta
+      //
+      rTarVta.RESET;
+      IF NOT rTarVta.GET(rPaxTO.Delegacion, rPaxTO.Tarifa) THEN BEGIN
+        IF NOT rTO.GET(rPaxTO.TourOperador) THEN
+          ERROR(Text035, rPaxTO.TourOperador);
+
+        //-$001IF rTO."Grupo Touroperador" = '' THEN
+        //-$001  w_to := rPaxTO.TourOperador
+        //-$001ELSE
+        //-$001  w_to := rTO."Grupo Touroperador";
+
+        w_to := rPaxTO.TourOperador; //+$001
+
+        rTarVta.SETRANGE (TourOperador  , w_to);
+        rTarVta.SETFILTER("Fecha inicio", '<=%1', rPaxTO.Fecha);
+        rTarVta.SETFILTER("Fecha final" , '>=%1', rPaxTO.Fecha);
+        rTarVta.SETRANGE (Confirmado    , TRUE);
+        IF NOT rTarVta.FIND('-') THEN
+          ERROR(Text036, w_to);
+      END;
+    END;
+
+    PROCEDURE Abonar_Circuito@8(VAR rPaxTO@1103355000 : Record 7010188);
+    VAR
+      rCabVta@1103355001 : Record 36;
+      rCabVta2@1103355002 : Record 36;
+      rHisVta@1103355003 : Record 112;
+      rHisAbo@1103355004 : Record 114;
+      rCIcir@1103355005 : Record 7010190;
+      NumFra@1103355006 : Code[20];
+      iabono@1103355007 : Report 292;
+      TipoDoc@1103355008 : 'Oferta,Pedido abierto,Pedido,Factura,Abono,Albar n regis.,Factura regis.,Abono regis.';
+      rPaxTO2@1103355009 : Record 7010188;
+    BEGIN
+      // Abonar_Circuito
+      //
+      NumFra := rPaxTO."N§ Factura";
+      Finestra.OPEN(Text037);
+      Finestra.INPUT(1, NumFra);
+      Finestra.CLOSE;
+      IF NumFra = '' THEN
+        EXIT;
+
+      rPar.FIND('-');
+
+      rParC.FIND('-');
+
+      rParC.TESTFIELD("Factura Venta Circuito");
+
+      rCIcir.RESET;
+      rCIcir.SETCURRENTKEY(TourOperador, "N§ Factura");
+      rCIcir.SETRANGE("N§ Factura", NumFra);
+      IF rCIcir.FIND('-') THEN
+        rCIcir.CALCSUMS(Importe)
+      ELSE
+        ERROR(Text011);
+
+      rCabVta.RESET;
+      // Hay que buscar la factura por el n§, no por el n§ documento externo
+
+      IF rCIcir.Importe > 0 THEN
+        IF rCabVta.GET(rCabVta."Document Type"::Invoice, NumFra) THEN BEGIN
+
+          CODEUNIT.RUN(CODEUNIT::"Sales-Post", rCabVta);
+        END
+      ELSE
+        IF rCabVta.GET(rCabVta."Document Type"::"Credit Memo", NumFra) THEN BEGIN
+
+          CODEUNIT.RUN(CODEUNIT::"Sales-Post", rCabVta);
+        END;
+
+      IF rCIcir.Importe > 0 THEN BEGIN
+        rHisVta.SETCURRENTKEY("Pre-Assigned No.");
+        rHisVta.SETRANGE("Pre-Assigned No.", NumFra);
+        IF NOT rHisVta.FIND('-') THEN
+          ERROR(Text041, NumFra);
+      END
+      ELSE BEGIN
+        rHisAbo.SETCURRENTKEY("Pre-Assigned No.");
+        rHisAbo.SETRANGE("Pre-Assigned No.", NumFra);
+        IF NOT rHisAbo.FIND('-') THEN
+          ERROR(Text042, NumFra);
+      END;
+
+      CLEAR(rCabVta2);
+
+      IF rCIcir.Importe > 0 THEN
+        rCabVta2.VALIDATE("Document Type", rCabVta2."Document Type"::"Credit Memo")
+      ELSE
+        rCabVta2.VALIDATE("Document Type", rCabVta2."Document Type"::Invoice);
+
+      _CheckReasonCode;
+      rCabVta2."Reason Code" := 'ATENNEA';
+      rCabVta2.INSERT(TRUE);
+      iabono.SetSalesHeader(rCabVta2);
+
+      IF rCIcir.Importe > 0 THEN
+        iabono.DefOpciones(TipoDoc::"Factura regis.", rHisVta."No."  , TRUE, FALSE, TRUE)
+      ELSE
+        iabono.DefOpciones(TipoDoc::"Abono regis.", rHisVta."No."  , TRUE, FALSE, TRUE);
+      iabono.USEREQUESTFORM := FALSE;
+      iabono.RUNMODAL;
+      CLEAR(iabono);
+
+      COMMIT;
+      rCabVta2.SETRANGE("Document Type", rCabVta2."Document Type");
+      rCabVta2.SETRANGE("No."            , rCabVta2."No.");
+
+      REPORT.RUNMODAL(rParC."Factura Venta Circuito", TRUE, FALSE, rCabVta2);
+
+      IF NOT CONFIRM(Text043) THEN
+        ERROR (Text044);
+
+      rPaxTO2.RESET;
+      rPaxTO2.SETCURRENTKEY("N§ Factura");
+      rPaxTO2.SETRANGE("N§ Factura", NumFra);
+      IF rPaxTO2.FIND('-') THEN BEGIN
+        rPaxTO2.MODIFYALL("N§ Prefactura", '');
+        rPaxTO2.MODIFYALL("N§ Factura"   , '');
+      END;
+
+      rCIcir.RESET;
+      rCIcir.SETCURRENTKEY(TourOperador, "N§ Factura");
+      rCIcir.SETRANGE("N§ Factura", NumFra);
+      IF rCIcir.FIND('-') THEN
+        rCIcir.MODIFYALL("N§ Factura", '');
+    END;
+
+    LOCAL PROCEDURE _CheckReasonCode@1000000008();
+    VAR
+      lrReason@1000000000 : Record 231;
+      TextCodAu@1000000001 : TextConst 'ENU=ATENNEA;ESP=ATENNEA';
+    BEGIN
+      // _CheckReasonCode
+
+      IF NOT lrReason.GET(TextCodAu) THEN
+      BEGIN
+        lrReason.INIT;
+        lrReason.Code        := TextCodAu;
+        lrReason.Description := lrReason.Code;
+        lrReason.INSERT;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 25102011 Modifico la funcion Buscar_Contrato_Venta para que no se pueda utilizar el Grupo touroperador
+
+      $002 AJS 23082012 Control de seguridad por usuario
+
+      $003 AJS 26082013 Elimino las referencias a la tabla Maestro de claves porque es obsoleta
+
+      $004 AJS 23062014 He creado una tabla de series de facturacion
+
+      $005 AJS 28102014 Recorto el nombre del pasajero al pasarlo a la descripcion de la linea factura
+
+      $006 AJS 21012015 Ejecutar el proceso estandar de Lanzar factura
+
+      $007 AJS 16032015 CNT-CAR-14096, Nueva funcion en las lineas de factura del estandar para controlar la edicion manual
+
+      $008 AJS 25032015 CNT-CAR-14096, El campo Reason code se rellena al final del proceso de facturacion
+    }
+    END.
+  }
+}

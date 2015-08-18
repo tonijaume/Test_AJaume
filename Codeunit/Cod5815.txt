@@ -1,0 +1,329 @@
+OBJECT Codeunit 5815 Undo Sales Shipment Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    TableNo=111;
+    Permissions=TableData 37=imd,
+                TableData 111=imd,
+                TableData 339=rmd,
+                TableData 359=imd,
+                TableData 6507=ri;
+    OnRun=VAR
+            UpdateItemAnalysisView@1000 : Codeunit 7150;
+          BEGIN
+            SETRANGE(Type,Type::Item);
+            IF NOT FIND('-') THEN
+              ERROR(Text006);
+
+            IF NOT HideDialog THEN
+              IF NOT CONFIRM(Text000) THEN
+                EXIT;
+
+            SalesShptLine.COPY(Rec);
+            Code;
+            UpdateItemAnalysisView.UpdateAll(0,TRUE);
+            Rec := SalesShptLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesShptHeader@1004 : Record 110;
+      SalesShptLine@1001 : Record 111;
+      TempWhseJnlLine@1017 : TEMPORARY Record 7311;
+      TempGlobalItemLedgEntry@1026 : TEMPORARY Record 32;
+      TempGlobalItemEntryRelation@1025 : TEMPORARY Record 6507;
+      InvtSetup@1007 : Record 313;
+      UndoPostingMgt@1024 : Codeunit 5817;
+      ItemJnlPostLine@1000 : Codeunit 22;
+      Text000@1003 : TextConst 'ENU=Do you really want to undo the selected Shipment lines?;ESP=¨Quiere realmente deshacer las l¡ns. env¡o seleccionadas?';
+      Text001@1009 : TextConst 'ENU=Undo quantity posting...;ESP=Deshacer registro cantidad...';
+      Text002@1002 : TextConst 'ENU=There is not enough space to insert correction lines.;ESP=No hay espacio suficiente para insertar l¡ns. correcci¢n.';
+      WhseUndoQty@1015 : Codeunit 7320;
+      InvtAdjmt@1008 : Codeunit 5895;
+      HideDialog@1005 : Boolean;
+      Text003@1006 : TextConst 'ENU=Checking lines...;ESP=Comprobando l¡neas...';
+      Text004@1016 : TextConst 'ENU=Some shipment lines may have unused service items. Do you want to delete them?;ESP=Algunas l¡ns. env¡o pueden tener prods. servicio sin utilizar. ¨Desea eliminarlos?';
+      NextLineNo@1014 : Integer;
+      Text005@1010 : TextConst 'ENU=This shipment has already been invoiced. Undo Shipment can be applied only to posted, but not invoiced shipments.;ESP=Este env¡o ya se ha facturado. La operaci¢n Deshacer env¡o s¢lo se puede aplicar a env¡os registrados pero no facturados.';
+      Text006@1011 : TextConst 'ENU=Undo Shipment can be performed only for lines of type Item. Please select a line of the Item type and repeat the procedure.;ESP=La operaci¢n Deshacer env¡o s¢lo se puede aplicar a l¡neas de tipo Producto. Seleccione una l¡nea de tipo Producto y repita el procedimiento.';
+
+    PROCEDURE SetHideDialog@8(NewHideDialog@1000 : Boolean);
+    BEGIN
+      HideDialog := NewHideDialog;
+    END;
+
+    LOCAL PROCEDURE Code@2();
+    VAR
+      ServItem@1003 : Record 5940;
+      Window@1001 : Dialog;
+      ItemShptEntryNo@1002 : Integer;
+      DocLineNo@1004 : Integer;
+      DeleteServItems@1000 : Boolean;
+    BEGIN
+      WITH SalesShptLine DO BEGIN
+        CLEAR(ItemJnlPostLine);
+        SETCURRENTKEY("Item Shpt. Entry No.");
+        SETRANGE(Correction,FALSE);
+
+        REPEAT
+          IF NOT HideDialog THEN
+            Window.OPEN(Text003);
+          CheckSalesShptLine(SalesShptLine);
+        UNTIL NEXT = 0;
+
+        ServItem.SETCURRENTKEY("Sales/Serv. Shpt. Document No.");
+        ServItem.SETRANGE("Sales/Serv. Shpt. Document No.","Document No.");
+        IF ServItem.FIND('-') THEN
+          IF NOT HideDialog THEN
+            DeleteServItems := CONFIRM(Text004,TRUE)
+          ELSE
+            DeleteServItems := TRUE;
+
+        FIND('-');
+        REPEAT
+          TempGlobalItemLedgEntry.RESET;
+          IF NOT TempGlobalItemLedgEntry.ISEMPTY THEN
+            TempGlobalItemLedgEntry.DELETEALL;
+          TempGlobalItemEntryRelation.RESET;
+          IF NOT TempGlobalItemEntryRelation.ISEMPTY THEN
+            TempGlobalItemEntryRelation.DELETEALL;
+
+          IF NOT HideDialog THEN
+            Window.OPEN(Text001);
+
+          ItemShptEntryNo := PostItemJnlLine(SalesShptLine,DocLineNo);
+
+          InsertNewShipmentLine(SalesShptLine,ItemShptEntryNo,DocLineNo);
+
+          UpdateOrderLine(SalesShptLine);
+
+          IF ("Blanket Order No." <> '') AND ("Blanket Order Line No." <> 0) THEN
+            UpdateBlanketOrder(SalesShptLine);
+
+          IF DeleteServItems THEN
+            DeleteSalesShptLineServItems(SalesShptLine);
+
+          "Quantity Invoiced" := Quantity;
+          "Qty. Invoiced (Base)" := "Quantity (Base)";
+          "Qty. Shipped Not Invoiced" := 0;
+          Correction := TRUE;
+          MODIFY;
+
+        UNTIL NEXT = 0;
+
+        InvtSetup.GET;
+        IF InvtSetup."Automatic Cost Adjustment" <>
+           InvtSetup."Automatic Cost Adjustment"::Never
+        THEN BEGIN
+          InvtAdjmt.SetProperties(TRUE,InvtSetup."Automatic Cost Posting");
+          InvtAdjmt.MakeMultiLevelAdjmt;
+        END;
+
+        WhseUndoQty.PostTempWhseJnlLine(TempWhseJnlLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckSalesShptLine@3(SalesShptLine@1001 : Record 111);
+    VAR
+      TempItemLedgEntry@1015 : TEMPORARY Record 32;
+    BEGIN
+      WITH SalesShptLine DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        IF "Qty. Shipped Not Invoiced" <> Quantity THEN
+          ERROR(Text005);
+        TESTFIELD("Drop Shipment",FALSE);
+
+        UndoPostingMgt.TestSalesShptLine(SalesShptLine);
+        UndoPostingMgt.CollectItemLedgEntries(TempItemLedgEntry,DATABASE::"Sales Shipment Line",
+          "Document No.","Line No.","Quantity (Base)","Item Shpt. Entry No.");
+        UndoPostingMgt.CheckItemLedgEntries(TempItemLedgEntry,"Line No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE PostItemJnlLine@5(SalesShptLine@1000 : Record 111;VAR DocLineNo@1003 : Integer) : Integer;
+    VAR
+      ItemJnlLine@1001 : Record 83;
+      SalesLine@1006 : Record 37;
+      SalesShptHeader@1004 : Record 110;
+      SalesShptLine2@1007 : Record 111;
+      SourceCodeSetup@1002 : Record 242;
+      TempApplyToEntryList@1005 : TEMPORARY Record 32;
+      LineSpacing@1008 : Integer;
+    BEGIN
+      WITH SalesShptLine DO BEGIN
+        SalesShptLine2.SETRANGE("Document No.","Document No.");
+        SalesShptLine2."Document No." := "Document No.";
+        SalesShptLine2."Line No." := "Line No.";
+        SalesShptLine2.FIND('=');
+
+        IF SalesShptLine2.FIND('>') THEN BEGIN
+          LineSpacing := (SalesShptLine2."Line No." - "Line No.") DIV 2;
+          IF LineSpacing = 0 THEN
+            ERROR(Text002);
+        END ELSE
+          LineSpacing := 10000;
+        DocLineNo := "Line No." + LineSpacing;
+
+        SourceCodeSetup.GET;
+        SalesShptHeader.GET("Document No.");
+        ItemJnlLine.INIT;
+        ItemJnlLine."Entry Type" := ItemJnlLine."Entry Type"::Sale;
+        ItemJnlLine."Item No." := "No.";
+        ItemJnlLine."Posting Date" := SalesShptHeader."Posting Date";
+        ItemJnlLine."Document No." := "Document No.";
+        ItemJnlLine."Document Line No." := DocLineNo;
+        ItemJnlLine."Gen. Bus. Posting Group" := "Gen. Bus. Posting Group";
+        ItemJnlLine."Gen. Prod. Posting Group" := "Gen. Prod. Posting Group";
+        ItemJnlLine."Location Code" := "Location Code";
+        ItemJnlLine."Source Code" := SourceCodeSetup.Sales;
+        ItemJnlLine."Applies-to Entry" := "Item Shpt. Entry No.";
+        ItemJnlLine.Correction := TRUE;
+        ItemJnlLine."Variant Code" := "Variant Code";
+        ItemJnlLine."Bin Code" := "Bin Code";
+        ItemJnlLine.Quantity := -"Quantity (Base)";
+        ItemJnlLine."Quantity (Base)" := -"Quantity (Base)";
+        ItemJnlLine."Document Date" := SalesShptHeader."Document Date";
+
+        WhseUndoQty.InsertTempWhseJnlLine(ItemJnlLine,
+          DATABASE::"Sales Line",
+          SalesLine."Document Type"::Order,
+          "Order No.",
+          "Order Line No.",
+          TempWhseJnlLine."Reference Document"::"Posted Shipment",
+          TempWhseJnlLine,
+          NextLineNo);
+
+        IF "Item Shpt. Entry No." <> 0 THEN BEGIN
+          ItemJnlPostLine.RUN(ItemJnlLine);
+          EXIT(ItemJnlLine."Item Shpt. Entry No.");
+        END ELSE BEGIN
+          UndoPostingMgt.CollectItemLedgEntries(TempApplyToEntryList,DATABASE::"Sales Shipment Line",
+            "Document No.","Line No.","Quantity (Base)","Item Shpt. Entry No.");
+
+          UndoPostingMgt.PostItemJnlLineAppliedToList(ItemJnlLine,TempApplyToEntryList,
+            Quantity,"Quantity (Base)",TempGlobalItemLedgEntry,TempGlobalItemEntryRelation);
+
+          EXIT(0); // "Item Shpt. Entry No."
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertNewShipmentLine@1(OldSalesShptLine@1000 : Record 111;ItemShptEntryNo@1001 : Integer;DocLineNo@1004 : Integer);
+    VAR
+      NewSalesShptLine@1002 : Record 111;
+    BEGIN
+      WITH OldSalesShptLine DO BEGIN
+        NewSalesShptLine.INIT;
+        NewSalesShptLine.COPY(OldSalesShptLine);
+        NewSalesShptLine."Line No." := DocLineNo;
+        NewSalesShptLine."Appl.-from Item Entry" := "Item Shpt. Entry No.";
+        NewSalesShptLine."Item Shpt. Entry No." := ItemShptEntryNo;
+        NewSalesShptLine.Quantity := -Quantity;
+        NewSalesShptLine."Qty. Shipped Not Invoiced" := 0;
+        NewSalesShptLine."Quantity (Base)" := -"Quantity (Base)";
+        NewSalesShptLine."Quantity Invoiced" := NewSalesShptLine.Quantity;
+        NewSalesShptLine."Qty. Invoiced (Base)" := NewSalesShptLine."Quantity (Base)";
+        NewSalesShptLine.Correction := TRUE;
+        NewSalesShptLine.INSERT;
+
+        CopyShipmentLineDimensions(OldSalesShptLine,NewSalesShptLine);
+
+        InsertItemEntryRelation(TempGlobalItemEntryRelation,NewSalesShptLine);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateOrderLine@4(SalesShptLine@1000 : Record 111);
+    VAR
+      SalesLine@1001 : Record 37;
+    BEGIN
+      WITH SalesShptLine DO BEGIN
+        SalesLine.GET(SalesLine."Document Type"::Order,"Order No.","Order Line No.");
+        UndoPostingMgt.UpdateSalesLine(SalesLine,Quantity,"Quantity (Base)",TempGlobalItemLedgEntry);
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyShipmentLineDimensions@6(FromSalesShptLine@1000 : Record 111;ToSalesShptLine@1001 : Record 111);
+    VAR
+      ToPostedDocDim@1002 : Record 359;
+      FromPostedDocDim@1003 : Record 359;
+    BEGIN
+      FromPostedDocDim.SETRANGE("Table ID",DATABASE::"Sales Shipment Line");
+      FromPostedDocDim.SETRANGE("Document No.",FromSalesShptLine."Document No.");
+      FromPostedDocDim.SETRANGE("Line No.",FromSalesShptLine."Line No.");
+
+      IF FromPostedDocDim.FIND('-') THEN
+        REPEAT
+          ToPostedDocDim.COPY(FromPostedDocDim);
+          ToPostedDocDim."Document No." := ToSalesShptLine."Document No.";
+          ToPostedDocDim."Line No." := ToSalesShptLine."Line No.";
+          ToPostedDocDim.INSERT;
+        UNTIL FromPostedDocDim.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateBlanketOrder@7(SalesShptLine@1000 : Record 111);
+    VAR
+      BlanketOrderLine@1001 : Record 37;
+    BEGIN
+      WITH SalesShptLine DO BEGIN
+        IF BlanketOrderLine.GET(
+             BlanketOrderLine."Document Type"::"Blanket Order","Blanket Order No.","Blanket Order Line No.")
+        THEN BEGIN
+          BlanketOrderLine.TESTFIELD(Type,Type);
+          BlanketOrderLine.TESTFIELD("No.","No.");
+          BlanketOrderLine.TESTFIELD("Sell-to Customer No.","Sell-to Customer No.");
+
+          IF BlanketOrderLine."Qty. per Unit of Measure" = "Qty. per Unit of Measure" THEN
+            BlanketOrderLine."Quantity Shipped" := BlanketOrderLine."Quantity Shipped" - Quantity
+          ELSE
+            BlanketOrderLine."Quantity Shipped" :=
+              BlanketOrderLine."Quantity Shipped" -
+              ROUND("Qty. per Unit of Measure" / BlanketOrderLine."Qty. per Unit of Measure" * Quantity,0.00001);
+
+          BlanketOrderLine."Qty. Shipped (Base)" := BlanketOrderLine."Qty. Shipped (Base)" - "Quantity (Base)";
+          BlanketOrderLine.InitOutstanding;
+          BlanketOrderLine.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertItemEntryRelation@12(VAR TempItemEntryRelation@1003 : TEMPORARY Record 6507;NewSalesShptLine@1000 : Record 111);
+    VAR
+      ItemEntryRelation@1002 : Record 6507;
+    BEGIN
+      IF TempItemEntryRelation.FIND('-') THEN BEGIN
+        REPEAT
+          ItemEntryRelation := TempItemEntryRelation;
+          ItemEntryRelation.TransferFieldsSalesShptLine(NewSalesShptLine);
+          ItemEntryRelation.INSERT;
+        UNTIL TempItemEntryRelation.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE DeleteSalesShptLineServItems@10(SalesShptLine@1000 : Record 111);
+    VAR
+      ServItem@1003 : Record 5940;
+    BEGIN
+      ServItem.SETCURRENTKEY("Sales/Serv. Shpt. Document No.","Sales/Serv. Shpt. Line No.");
+      ServItem.SETRANGE("Sales/Serv. Shpt. Document No.",SalesShptLine."Document No.");
+      ServItem.SETRANGE("Sales/Serv. Shpt. Line No.",SalesShptLine."Line No.");
+      ServItem.SETRANGE("Shipment Type",ServItem."Shipment Type"::Sales);
+      IF ServItem.FIND('-') THEN
+        REPEAT
+          IF ServItem.CheckIfCanBeDeleted = '' THEN
+            IF ServItem.DELETE(TRUE) THEN;
+        UNTIL ServItem.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}

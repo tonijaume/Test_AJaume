@@ -1,0 +1,480 @@
+OBJECT Codeunit 7010403 Funciones Grupos
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/06/15;
+    Time=11:32:05;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355000 : TextConst 'ESP="Factura "';
+      Text50001@1103355001 : TextConst 'ESP=Calculando Importe Facturado Grupo @1@@@@@@@@@';
+      Text50002@1103355002 : TextConst 'ESP=Calculando Importe Producido Grupo @1@@@@@@@@@';
+      Text50003@1103355003 : TextConst 'ESP=Calculando Importe Grupo @1@@@@@@@@@';
+      Text50004@1103355004 : TextConst 'ESP=Calculando Importe Facturado Parte @1@@@@@@@@@';
+      Text50005@1103355005 : TextConst 'ESP=Calculando Importe Producido Parte @1@@@@@@@@@';
+      Text50006@1103355006 : TextConst 'ESP=Calculando Importe Parte @1@@@@@@@@@';
+      rParte@1100244000 : Record 7010360;
+      rGrupo@1100244004 : Record 7010373;
+      rPar@1100244010 : Record 7010311;
+      rCond@1100244013 : Record 7010420;
+      rPreFact@1100244018 : Record 7010415;
+      cFuncPartes@1100244001 : Codeunit 7010318;
+      err1@1100244002 : TextConst 'ESP=Debe confirmar el grupo %1 antes de proceder a su facturaci¢n.';
+      err2@1100244003 : TextConst 'ESP=El Parte %1 debe estar confirmado antes de facturarlo.';
+      err3@1100244016 : TextConst 'ESP=Debe introducir Fecha factura en Grupo %1 para proceder a su facturaci¢n.';
+      Text001@1100244005 : TextConst 'ESP=Se va a facturar los partes del grupo %1. ¨Desea continuar?.';
+      Text002@1100244007 : TextConst 'ESP=¨Desea confirmar todos los partes asociados al Grupo %1?.';
+      cCalcR@1100253000 : Codeunit 7010407;
+      cFunFac@1100244008 : Codeunit 7010321;
+      cFacCli@1100244009 : Codeunit 7010406;
+      Text003@1100244015 : TextConst 'ESP=No hay ning£n parte asociado al Grupo %1 pendiente de facturar.';
+      Text_Menu@1100244012 : TextConst 'ESP=&Prefactura,&Factura';
+      cFactAuto@1100244014 : Codeunit 7035326;
+      Text004@1100244017 : TextConst 'ESP=No hay ning£n parte asociado al Grupo %1.';
+      Text005@1103350000 : TextConst 'ESP=" (EXTERIOR)"';
+
+    PROCEDURE ConfGrupo@1100244001(pwGrupo@1100244000 : Record 7010373);
+    BEGIN
+      //BRM 24/05/04 Confirmaremos todos los partes pertenecientes a un grupo
+      IF NOT CONFIRM(Text002,FALSE,pwGrupo."Codigo Grupo") THEN
+        EXIT;
+
+      rParte.RESET;
+      rParte.SETCURRENTKEY("Cod Grupo");
+      rParte.SETRANGE("Cod Grupo",pwGrupo."Codigo Grupo");
+      IF rParte.FINDSET(TRUE) THEN REPEAT
+        cFuncPartes.confirmar_partes(rParte,FALSE,pwGrupo."Codigo Grupo",0);
+      UNTIL rParte.NEXT=0;
+    END;
+
+    PROCEDURE FacturarGrupo@1100244000(prGrupo@1100244000 : Record 7010373);
+    VAR
+      w_opcion@1100244001 : Integer;
+      w_FechaDesde@1100244002 : Date;
+      w_FechaHasta@1100244003 : Date;
+    BEGIN
+      // FacturarGrupo
+      //BRM 24/05/04 Facturamos el grupo y todos los partes pertenecientes a un grupo
+      IF NOT prGrupo.Confirmado THEN
+        ERROR(err1,prGrupo."Codigo Grupo");
+
+      IF prGrupo."Fecha Factura" = 0D THEN
+        ERROR(err3,prGrupo."Codigo Grupo");
+
+      IF NOT CONFIRM(Text001,FALSE,prGrupo."Codigo Grupo") THEN
+        EXIT;
+
+      rParte.RESET;
+      rParte.SETCURRENTKEY("Cod Grupo");
+      rParte.SETRANGE("Cod Grupo", prGrupo."Codigo Grupo");
+      rParte.SETRANGE(Facturado  , FALSE);
+      IF NOT rParte.FINDFIRST THEN
+      BEGIN
+        MESSAGE(Text003,prGrupo."Codigo Grupo");
+        EXIT;
+      END
+      ELSE
+      BEGIN
+        REPEAT
+         IF NOT rParte.Confirmado THEN
+           ERROR(err2, rParte."N§ Parte");
+        UNTIL rParte.NEXT = 0;
+      END;
+
+      // AJS 04.04.2006
+      // Las fechas desde-hasta las vamos a tomar del grupo, ya no es necesario ir a buscar a coste ingreso
+
+      prGrupo.TESTFIELD("Fecha Llegada Prevista");
+      prGrupo.TESTFIELD("Fecha Salida Prevista");
+
+      rPar.FINDFIRST;
+
+      w_opcion :=1;
+      w_opcion := STRMENU(Text_Menu, w_opcion);
+      IF w_opcion = 0 THEN
+        EXIT;
+
+      // Si est  marcado separar factura por tipo flota se generaran dos facturas:
+      // una para vehiculos propios y otra por vehiculos externos;
+
+      IF prGrupo."Separar Factura por Tipo Flota" THEN BEGIN
+        CreaFactura(prGrupo, w_opcion, 1);
+        CreaFactura(prGrupo, w_opcion, 2);
+      END
+      ELSE
+        CreaFactura(prGrupo, w_opcion, 0);
+
+      prGrupo.MODIFY;
+    END;
+
+    PROCEDURE CreaFactura@1103350001(VAR prGrupo@1103350001 : Record 7010373;pwopcion@1103350000 : Integer;PwPropVeh@1103350006 : 'Todos,Propios,Externos');
+    VAR
+      lrCab@1103350003 : Record 36;
+      lrPI@1103355000 : Record 7035392;
+      lwPrefacturaOK@1103350002 : Boolean;
+    BEGIN
+      // CreaFactura
+
+      // AJF 07/01/09
+      // Evito borrar el registro, ya que ahora tiene datos permanentes.
+      rCond.RESET;
+      IF rCond.GET(USERID) THEN
+        rCond.LimpiaRegistro
+      ELSE
+      BEGIN
+        rCond.INIT;
+        rCond.Usuario := USERID;
+        rCond.INSERT;
+      END;
+
+      // ---- Localizar las condiciones de facturacion de cliente-to para el tipo de servicio  ----
+      // ---- que se intenta facturar.                                                         ----
+
+      rCond."Tipo prefactura"  := prGrupo."Tipo Impresion Factura";
+      rCond."Tipo factura"     := prGrupo."Tipo Impresion Factura";
+      rCond."Tipo Servicio Fijo" := rCond."Tipo Servicio Fijo"::Todos;
+
+      rCond.Cliente             := prGrupo.Cliente;
+      rCond.Touroperador        := prGrupo.TTOO;
+      rCond."Cod. Grupo"        := prGrupo."Codigo Grupo";
+      rCond."Fecha desde"       := prGrupo."Fecha Llegada Prevista";
+      rCond."Fecha hasta"       := prGrupo."Fecha Salida Prevista";
+      rCond."Fecha Factura"     := prGrupo."Fecha Factura";
+      rCond."Prefactura Prueba" := pwopcion = 1;
+
+      IF prGrupo."Texto Registro Factura" <> '' THEN
+        rCond."Texto Registro"   := prGrupo."Texto Registro Factura"
+      ELSE
+        rCond."Texto Registro"   := Text50000 + prGrupo."Codigo Grupo" + ' ' + prGrupo.Nombre;
+
+      IF PwPropVeh = PwPropVeh::Externos THEN
+        rCond."Texto Registro" := rCond."Texto Registro" + Text005;
+
+      rCond."Facturacion Automatica" := TRUE;
+      rCond.Imprimir              := pwopcion = 1;
+      rCond."Propiedad vehiculos" := PwPropVeh;
+      rCond."Texto alternativo"   := prGrupo."Texto Alternativo";
+      rCond.GetCondiciones(FALSE,FALSE); // Esto determina si ser  serie standard o alternativa
+      rCond.MODIFY;
+
+      CASE rPar."Empresa Real" OF
+        rPar."Empresa Real"::TRN, rPar."Empresa Real"::UEX,
+        rPar."Empresa Real"::TER, rPar."Empresa Real"::CNT:
+          lwPrefacturaOK := cFacCli.CrearPrefactura(lrPI,rCond,TRUE);
+        ELSE
+          lwPrefacturaOK := cFunFac.crear_prefactura(lrPI,rCond,TRUE);
+      END;
+
+      IF lwPrefacturaOK THEN
+      BEGIN
+        IF pwopcion = 2 THEN
+        BEGIN // Si es factura
+          CASE rPar."Empresa Real" OF
+            rPar."Empresa Real"::TRN, rPar."Empresa Real"::UEX,
+            rPar."Empresa Real"::TER, rPar."Empresa Real"::CNT:
+              cFacCli.CrearFactura(lrPI, rCond, TRUE, FALSE);
+            ELSE
+              cFunFac.crear_factura(lrPI,rCond,TRUE);
+          END;
+
+          rPreFact.GET(rCond."N§ Prefactura");
+          prGrupo.Facturado := TRUE;
+          prGrupo."N§ Factura" := rPreFact."N§ Factura";
+
+          // Imprimir
+          // Si es prefactura, la misma funci¢n la imprimir 
+
+          COMMIT;
+          rPreFact.GET(rCond."N§ Prefactura");
+          rPreFact.SETRECFILTER;
+          lrCab.GET(rPreFact."Tipo Documento",rPreFact."N§ Factura");
+          lrCab.SETRECFILTER;
+
+          cFacCli.ImprimirFactura(rPreFact);
+        END;
+      END;
+    END;
+
+    PROCEDURE CalcularImporteGrupo@1100244002(VAR prGrupo@1100244000 : Record 7010373);
+    VAR
+      lrCI@1100244001 : Record 7010414;
+      lrPI@1103355000 : Record 7035392;
+      lrMargen@1100244002 : Record 7010412;
+      vVentana@1100244003 : Dialog;
+      vPorce@1100244004 : Decimal;
+      vTrozo@1100244005 : Decimal;
+    BEGIN
+      //BRM 26/05/04 Vamos a calcular el coste del grupo
+      //Margen indica q es una simulacion
+
+      rParte.RESET;
+      rParte.SETCURRENTKEY("Cod Grupo");
+      rParte.SETRANGE("Cod Grupo", prGrupo."Codigo Grupo");
+      IF NOT rParte.FINDFIRST THEN BEGIN
+        MESSAGE(Text004, prGrupo."Codigo Grupo");
+        EXIT;
+
+      END ELSE BEGIN
+        prGrupo.Importe := 0;
+
+        IF rParte.Confirmado THEN BEGIN
+          //Si los partes del grupo est n confirmados
+          // Facturado
+          lrCI.RESET;
+          lrCI.SETCURRENTKEY("Cod Grupo");
+          lrCI.SETRANGE("Cod Grupo", prGrupo."Codigo Grupo");
+          //lrCI.SETRANGE(Concepto, lrCI.Concepto::Ingreso);
+          IF lrCI.FINDSET THEN BEGIN
+            vTrozo := 100 / lrCI.COUNTAPPROX;
+            vPorce := 0;
+            vVentana.OPEN(Text50001);
+
+            REPEAT
+              vPorce := vPorce + vTrozo;
+              vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+              prGrupo.Importe := prGrupo.Importe + lrCI."Importe sin impuesto DL";
+            UNTIL lrCI.NEXT=0;
+          END;
+
+          // Producido
+          CLEAR(lrPI);
+          lrPI.RESET;
+          lrPI.SETCURRENTKEY("Cod Grupo");
+          lrPI.SETRANGE("Cod Grupo",prGrupo."Codigo Grupo");
+          IF lrPI.FINDSET THEN BEGIN
+            vTrozo := 100 / lrPI.COUNTAPPROX;
+            vPorce := 0;
+            vVentana.OPEN(Text50002);
+            REPEAT
+              vPorce := vPorce + vTrozo;
+              vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+              prGrupo.Importe := prGrupo.Importe + lrPI."Importe sin impuesto DL";
+            UNTIL lrPI.NEXT=0;
+          END;
+
+        END ELSE BEGIN
+
+          vTrozo := 100 / rParte.COUNTAPPROX;
+          vPorce := 0;
+          vVentana.OPEN(Text50003);
+
+          REPEAT
+           vPorce := vPorce + vTrozo;
+           vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+
+           rParte."Tipo Calculo" := rParte."Tipo Calculo"::Margen;
+           rParte.MODIFY(TRUE);
+           COMMIT;
+           // JPT 27/12/05 Cambio a las nuevas funcines de calculo
+           // cCalcPartes.calculo_parte(rParte,FALSE, TRUE, TRUE,FALSE);
+           cCalcR.CalculoParte(rParte,FALSE, TRUE, TRUE,FALSE, TRUE);
+          UNTIL rParte.NEXT=0;
+
+          rParte.RESET;
+          rParte.SETCURRENTKEY("Cod Grupo");
+          rParte.SETRANGE("Cod Grupo",prGrupo."Codigo Grupo");
+          IF rParte.FINDSET THEN REPEAT
+            lrMargen.RESET;
+            lrMargen.SETRANGE("N§ Parte",rParte."N§ Parte");
+            lrMargen.SETRANGE(Concepto,lrMargen.Concepto::Ingreso);
+            IF lrMargen.FINDSET THEN REPEAT
+              prGrupo.Importe := prGrupo.Importe + lrMargen."Importe sin impuesto DL";
+            UNTIL lrMargen.NEXT=0;
+          UNTIL rParte.NEXT=0;
+        END;
+
+        prGrupo."Usuario Modificacion" := USERID;
+        prGrupo."Fecha Ult. Modificacion" := WORKDATE;
+        prGrupo."Hora Ult. Modificacion" := TIME;
+        prGrupo.MODIFY;
+
+      END;
+    END;
+
+    PROCEDURE CalcularImporteParte@1100244003(VAR prGrupo@1100244006 : Record 7010373;prParte@1100244000 : Record 7010360);
+    VAR
+      lrCI@1100244001 : Record 7010414;
+      lrPI@1103355000 : Record 7035392;
+      lrMargen@1100244002 : Record 7010412;
+      vVentana@1100244003 : Dialog;
+      vPorce@1100244004 : Decimal;
+      vTrozo@1100244005 : Decimal;
+    BEGIN
+      // CalcularImporteParte
+      //BRM 26/05/04 Vamos a calcular el coste del grupo
+      //Margen indica q es una simulacion
+
+      prGrupo.Importe := 0;
+
+      IF prParte.Confirmado THEN BEGIN
+
+        //Si los partes del grupo est n confirmados sumamos registros Coste-Ingreso
+        lrCI.RESET;
+        lrCI.SETRANGE("N§ Parte", prParte."N§ Parte");
+        //lrCI.SETRANGE(Concepto  , lrCI.Concepto::Ingreso);
+        IF lrCI.FINDSET THEN BEGIN
+          vTrozo := 100 / lrCI.COUNTAPPROX;
+          vPorce := 0;
+          vVentana.OPEN(Text50004);
+
+          REPEAT
+            vPorce := vPorce + vTrozo;
+            vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+            prGrupo.Importe := prGrupo.Importe + lrCI."Importe sin impuesto DL";
+          UNTIL lrCI.NEXT=0;
+        END;
+
+        // Produccion ingreso
+        lrPI.RESET;
+        lrPI.SETRANGE("N§ Parte", prParte."N§ Parte");
+        IF lrPI.FINDSET THEN BEGIN
+          vTrozo := 100 / lrPI.COUNTAPPROX;
+          vPorce := 0;
+          vVentana.OPEN(Text50005);
+
+          REPEAT
+            vPorce := vPorce + vTrozo;
+            vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+            prGrupo.Importe := prGrupo.Importe + lrPI."Importe sin impuesto DL";
+          UNTIL lrPI.NEXT=0;
+        END;
+
+
+      END ELSE BEGIN
+
+        //Si los partes del grupo no est n confirmados calculamos registros margen y los sumamos
+        prParte."Tipo Calculo" := prParte."Tipo Calculo"::Margen;
+        prParte.MODIFY(TRUE);
+        COMMIT;
+        // JPT 27/12/05 Cambio a las nuevas funciones de calculo
+        // cCalcPartes.calculo_parte(pw_Parte,FALSE, TRUE, TRUE,FALSE);
+        cCalcR.CalculoParte(prParte, FALSE, TRUE, TRUE,FALSE, TRUE);
+
+        lrMargen.RESET;
+        lrMargen.SETRANGE("N§ Parte", prParte."N§ Parte");
+        lrMargen.SETRANGE(Concepto,lrMargen.Concepto::Ingreso);
+        IF lrMargen.FINDSET THEN BEGIN
+          vTrozo := 100 / lrMargen.COUNTAPPROX;
+          vPorce := 0;
+          vVentana.OPEN(Text50006);
+
+          REPEAT
+            vPorce := vPorce + vTrozo;
+            vVentana.UPDATE(1,ROUND(vPorce * 100,1));
+            prGrupo.Importe := prGrupo.Importe + lrMargen."Importe sin impuesto DL";
+          UNTIL lrMargen.NEXT=0;
+        END;
+
+      END;
+
+      prGrupo."Usuario Modificacion" := USERID;
+      prGrupo."Fecha Ult. Modificacion" := WORKDATE;
+      prGrupo."Hora Ult. Modificacion" := TIME;
+      prGrupo.MODIFY;
+    END;
+
+    PROCEDURE ImprimirFactura@1100244004(prGrupo@1100244000 : Record 7010373);
+    VAR
+      lwNoInformeFra@1100244001 : Integer;
+      lrCab@1100244003 : Record 36;
+      lrLista@1100244002 : Record 2000000001;
+      rPreFact2@1100244004 : Record 7010415;
+    BEGIN
+      rPar.FINDFIRST;
+
+      CASE prGrupo."Tipo Impresion Factura" OF
+        prGrupo."Tipo Impresion Factura"::"Sin resumen": BEGIN
+          rPar.TESTFIELD("Factura sin resumen");
+          lwNoInformeFra := rPar."Factura sin resumen";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Texto alternativo",
+        prGrupo."Tipo Impresion Factura"::"Resumen x Referencia": BEGIN
+          rPar.TESTFIELD("Factura Texto alternativo");
+          lwNoInformeFra := rPar."Factura Texto alternativo";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Codigo": BEGIN
+          rPar.TESTFIELD("Factura Resumen-Codigo");
+          lwNoInformeFra := rPar."Factura Resumen-Codigo";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Zona": BEGIN
+          rPar.TESTFIELD("Factura Resumen-Zona");
+          lwNoInformeFra := rPar."Factura Resumen-Zona";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Vuelo": BEGIN
+          rPar.TESTFIELD("Factura Resumen-Vuelo");
+          lwNoInformeFra := rPar."Factura Resumen-Vuelo";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Dia-Codigo" : BEGIN
+          rPar.TESTFIELD("Factura Resumen Dia-Codigo");
+          lwNoInformeFra := rPar."Factura Resumen Dia-Codigo";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Zona-Detalle"   : BEGIN
+          rPar.TESTFIELD("Factura Zona-Detalle");
+          lwNoInformeFra := rPar."Factura Zona-Detalle";
+        END;
+
+        prGrupo."Tipo Impresion Factura"::"Resumen x Zona Dia-Codigo": BEGIN
+          rPar.TESTFIELD("Factura Zona-Dia-Codigo");
+          lwNoInformeFra := rPar."Factura Zona-Dia-Codigo";
+        END;
+
+      END;
+
+      CASE rPar."Empresa Real" OF
+
+        rPar."Empresa Real"::TRN,
+        rPar."Empresa Real"::SJO,
+        rPar."Empresa Real"::CNT:
+
+         BEGIN
+           rPreFact.RESET;
+           rPreFact.SETRANGE("N§ Factura",prGrupo."N§ Factura");
+           IF rPreFact.FINDFIRST THEN
+           BEGIN
+             rPreFact2.GET(rPreFact."N§ Prefactura");
+             rPreFact2.SETRECFILTER;
+             IF (lwNoInformeFra <> 0) THEN BEGIN
+               lrLista.RESET;
+               IF lrLista.GET(lrLista.Type::Report, '', lwNoInformeFra) THEN
+                 REPORT.RUNMODAL(lrLista.ID, TRUE, TRUE, rPreFact2);
+             END;
+           END;
+         END;
+
+        rPar."Empresa Real"::UEX,
+        rPar."Empresa Real"::IBZ:
+         BEGIN
+          IF lrCab.GET(lrCab."Document Type"::Invoice, prGrupo."N§ Factura") THEN BEGIN
+             lrCab.SETRECFILTER;
+             IF (lwNoInformeFra <> 0) THEN
+             BEGIN
+               lrLista.RESET;
+               IF lrLista.GET(lrLista.Type::Report, '', lwNoInformeFra) THEN
+                 REPORT.RUNMODAL(lrLista.ID, TRUE, TRUE, lrCab);
+             END;
+          END;
+        END;
+
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

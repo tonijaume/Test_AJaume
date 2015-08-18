@@ -1,0 +1,507 @@
+OBJECT Form 160 Sales Statistics
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVW16.00,NAVES6.00;
+  }
+  PROPERTIES
+  {
+    Width=13420;
+    Height=11220;
+    CaptionML=[ENU=Sales Statistics;
+               ESP=Estad¡sticas ventas];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    LinksAllowed=No;
+    SourceTable=Table36;
+    OnOpenForm=BEGIN
+                 SalesSetup.GET;
+                 AllowInvDisc :=
+                   NOT (SalesSetup."Calc. Inv. Discount" AND CustInvDiscRecExists("Invoice Disc. Code"));
+                 AllowVATDifference :=
+                   SalesSetup."Allow VAT Difference" AND
+                   NOT ("Document Type" IN ["Document Type"::Quote,"Document Type"::"Blanket Order"]);
+                 CurrForm.EDITABLE :=
+                   AllowVATDifference OR AllowInvDisc;
+                 SetVATSpecification;
+               END;
+
+    OnQueryCloseForm=BEGIN
+                       GetVATSpecification;
+                       IF TempVATAmountLine.GetAnyLineModified THEN
+                         UpdateVATOnSalesLines;
+                       EXIT(TRUE);
+                     END;
+
+    OnActivateForm=BEGIN
+                     IF "No." = PrevNo THEN
+                       GetVATSpecification;
+                   END;
+
+    OnAfterGetRecord=VAR
+                       SalesLine@1000 : Record 37;
+                       TempSalesLine@1001 : TEMPORARY Record 37;
+                     BEGIN
+                       CurrForm.CAPTION(STRSUBSTNO(Text000,"Document Type"));
+                       IF PrevNo = "No." THEN
+                         EXIT;
+                       PrevNo := "No.";
+                       FILTERGROUP(2);
+                       SETRANGE("No.",PrevNo);
+                       FILTERGROUP(0);
+                       CLEAR(SalesLine);
+                       CLEAR(TotalSalesLine);
+                       CLEAR(TotalSalesLineLCY);
+                       CLEAR(SalesPost);
+
+                       SalesPost.GetSalesLines(Rec,TempSalesLine,0);
+                       CLEAR(SalesPost);
+                       SalesPost.SumSalesLinesTemp(
+                         Rec,TempSalesLine,0,TotalSalesLine,TotalSalesLineLCY,
+                         VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+
+                       AdjProfitLCY := TotalSalesLineLCY.Amount - TotalAdjCostLCY;
+                       IF TotalSalesLineLCY.Amount <> 0 THEN
+                         AdjProfitPct := ROUND(AdjProfitLCY / TotalSalesLineLCY.Amount * 100,0.1);
+
+                       IF "Prices Including VAT" THEN BEGIN
+                         TotalAmount2 := TotalSalesLine.Amount;
+                         TotalAmount1 := TotalAmount2 + VATAmount;
+                         TotalSalesLine."Line Amount" := TotalAmount1 + TotalSalesLine."Inv. Discount Amount"
+                           + TotalSalesLine."Pmt. Disc. Given Amount";
+                       END ELSE BEGIN
+                         TotalAmount1 := TotalSalesLine.Amount;
+                         TotalAmount2 := TotalSalesLine."Amount Including VAT";
+                       END;
+
+                       IF Cust.GET("Bill-to Customer No.") THEN
+                         Cust.CALCFIELDS("Balance (LCY)")
+                       ELSE
+                         CLEAR(Cust);
+                       IF Cust."Credit Limit (LCY)" = 0 THEN
+                         CreditLimitLCYExpendedPct := 0
+                       ELSE
+                         IF Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" < 0 THEN
+                           CreditLimitLCYExpendedPct := 0
+                         ELSE
+                           IF Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" > 1 THEN
+                             CreditLimitLCYExpendedPct := 10000
+                           ELSE
+                             CreditLimitLCYExpendedPct := ROUND(Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" * 10000,1);
+
+                       SalesLine.CalcVATAmountLines(0,Rec,TempSalesLine,TempVATAmountLine);
+                       TempVATAmountLine.MODIFYALL(Modified,FALSE);
+                       SetVATSpecification;
+                     END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           CurrForm.UPDATECONTROLS;
+                         END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;TabControl   ;220  ;220  ;12980;7370 ;HorzGlue=Both;
+                                                 VertGlue=Top;
+                                                 PageNamesML=[ENU=General,Customer;
+                                                              ESP=General,Cliente] }
+    { 75  ;TextBox      ;3850 ;3190 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=VAT Amount;
+                                                            ESP=Importe IVA];
+                                                 SourceExpr=VATAmount;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 76  ;TextBox      ;3850 ;3850 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Total Incl. VAT;
+                                                            ESP=Total IVA incl.];
+                                                 SourceExpr=TotalAmount2;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code";
+                                                 CaptionClass=GetCaptionClass(Text001,TRUE) }
+    { 86  ;Label        ;440  ;3850 ;3300 ;440  ;ParentControl=76 }
+    { 78  ;TextBox      ;10230;3850 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Cost (LCY);
+                                                            ESP=Coste original (DL)];
+                                                 SourceExpr=TotalSalesLineLCY."Unit Cost (LCY)";
+                                                 AutoFormatType=1 }
+    { 88  ;Label        ;6820 ;3850 ;3300 ;440  ;ParentControl=78 }
+    { 79  ;TextBox      ;3850 ;5170 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Profit (LCY);
+                                                            ESP=Bf§ original (DL)];
+                                                 SourceExpr=ProfitLCY;
+                                                 AutoFormatType=1 }
+    { 89  ;Label        ;440  ;5170 ;3300 ;440  ;ParentControl=79 }
+    { 80  ;TextBox      ;3850 ;2640 ;2750 ;440  ;ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Total;
+                                                            ESP=Total];
+                                                 SourceExpr=TotalAmount1;
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code";
+                                                 CaptionClass=GetCaptionClass(Text001,FALSE);
+                                                 OnActivate=BEGIN
+                                                              CurrForm.UPDATE;
+                                                            END;
+
+                                                 OnValidate=BEGIN
+                                                              UpdateTotalAmount;
+                                                            END;
+                                                             }
+    { 84  ;Label        ;440  ;2640 ;3300 ;440  ;ParentControl=80 }
+    { 81  ;TextBox      ;3850 ;6380 ;1650 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Original Profit %;
+                                                            ESP=% Bf§ original];
+                                                 DecimalPlaces=1:1;
+                                                 SourceExpr=ProfitPct }
+    { 90  ;Label        ;440  ;6380 ;3300 ;440  ;ParentControl=81 }
+    { 93  ;TextBox      ;3850 ;1540 ;2750 ;440  ;ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Inv. Discount Amount;
+                                                            ESP=Importe dto. factura];
+                                                 SourceExpr=TotalSalesLine."Inv. Discount Amount";
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code";
+                                                 OnActivate=BEGIN
+                                                              CurrForm.UPDATE;
+                                                            END;
+
+                                                 OnValidate=BEGIN
+                                                              UpdateInvDiscAmount;
+                                                            END;
+                                                             }
+    { 94  ;Label        ;440  ;1540 ;3300 ;440  ;ParentControl=93 }
+    { 2   ;TextBox      ;3850 ;4510 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Amount (LCY);
+                                                            ESP=Importe (DL)];
+                                                 SourceExpr=TotalSalesLineLCY.Amount;
+                                                 AutoFormatType=1 }
+    { 3   ;Label        ;440  ;4510 ;3300 ;440  ;ParentControl=2;
+                                                 CaptionML=[ENU=Sales (LCY);
+                                                            ESP=Ventas (DL)] }
+    { 82  ;TextBox      ;10230;2640 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Gross Weight;
+                                                            ESP=Peso bruto];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalSalesLine."Gross Weight" }
+    { 83  ;Label        ;6820 ;2640 ;3300 ;440  ;ParentControl=82 }
+    { 91  ;TextBox      ;10230;2090 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Net Weight;
+                                                            ESP=Peso neto];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalSalesLine."Net Weight" }
+    { 92  ;Label        ;6820 ;2090 ;3300 ;440  ;ParentControl=91 }
+    { 73  ;TextBox      ;10230;1540 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Parcels;
+                                                            ESP=Lotes];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalSalesLine."Units per Parcel" }
+    { 74  ;Label        ;6820 ;1540 ;3300 ;440  ;ParentControl=73 }
+    { 71  ;TextBox      ;10230;3190 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Volume;
+                                                            ESP=Volumen];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalSalesLine."Unit Volume" }
+    { 72  ;Label        ;6820 ;3190 ;3300 ;440  ;ParentControl=71 }
+    { 129 ;TextBox      ;3850 ;990  ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Amount;
+                                                            ESP=Importe];
+                                                 SourceExpr=TotalSalesLine."Line Amount";
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code";
+                                                 CaptionClass=GetCaptionClass(Text002,FALSE) }
+    { 130 ;Label        ;440  ;990  ;3300 ;440  ;ParentControl=129 }
+    { 95  ;TextBox      ;10230;990  ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Quantity;
+                                                            ESP=Cantidad];
+                                                 DecimalPlaces=0:6;
+                                                 SourceExpr=TotalSalesLine.Quantity }
+    { 96  ;Label        ;6820 ;990  ;3300 ;440  ;ParentControl=95 }
+    { 6   ;TextBox      ;440  ;3190 ;3300 ;440  ;Editable=No;
+                                                 Focusable=No;
+                                                 ParentControl=75;
+                                                 InPage=0;
+                                                 Border=No;
+                                                 LeaderDots=Yes;
+                                                 CaptionML=[ENU=VAT Amount;
+                                                            ESP=Importe IVA];
+                                                 SourceExpr=VATAmountText }
+    { 8   ;TextBox      ;10230;4400 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Cost (LCY);
+                                                            ESP=Coste actualizado (DL)];
+                                                 SourceExpr=TotalAdjCostLCY;
+                                                 AutoFormatType=1 }
+    { 9   ;Label        ;6820 ;4400 ;3300 ;440  ;ParentControl=8 }
+    { 10  ;TextBox      ;3850 ;5720 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Profit (LCY);
+                                                            ESP=Beneficio actualizado (DL)];
+                                                 SourceExpr=AdjProfitLCY;
+                                                 AutoFormatType=1 }
+    { 11  ;Label        ;440  ;5720 ;3300 ;440  ;ParentControl=10 }
+    { 12  ;TextBox      ;3850 ;6930 ;1650 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Adjusted Profit %;
+                                                            ESP=% beneficio actualizado];
+                                                 DecimalPlaces=1:1;
+                                                 SourceExpr=AdjProfitPct }
+    { 13  ;Label        ;440  ;6930 ;3300 ;440  ;ParentControl=12 }
+    { 7   ;TextBox      ;10230;4950 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Cost Adjmt. Amount (LCY);
+                                                            ESP=Importe coste ajustado (DL)];
+                                                 SourceExpr=TotalAdjCostLCY - TotalSalesLineLCY."Unit Cost (LCY)";
+                                                 AutoFormatType=1;
+                                                 OnLookup=BEGIN
+                                                            LookupAdjmtValueEntries(0);
+                                                          END;
+                                                           }
+    { 14  ;Label        ;6820 ;4950 ;3300 ;440  ;ParentControl=7 }
+    { 1100002;TextBox   ;3850 ;2090 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=0;
+                                                 CaptionML=[ENU=Pmt. Disc. Given Amount;
+                                                            ESP=Dto. P.P.];
+                                                 SourceExpr=TotalSalesLine."Pmt. Disc. Given Amount";
+                                                 AutoFormatType=1;
+                                                 AutoFormatExpr="Currency Code" }
+    { 1100003;Label     ;440  ;2090 ;3300 ;440  ;ParentControl=1100002 }
+    { 68  ;TextBox      ;3850 ;1540 ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Credit Limit (LCY);
+                                                            ESP=Cr‚dito m ximo (DL)];
+                                                 SourceExpr=Cust."Credit Limit (LCY)";
+                                                 AutoFormatType=1 }
+    { 69  ;Label        ;440  ;1540 ;3300 ;440  ;ParentControl=68 }
+    { 67  ;TextBox      ;3850 ;990  ;2750 ;440  ;Editable=No;
+                                                 ParentControl=1;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Balance (LCY);
+                                                            ESP=Saldo (DL)];
+                                                 SourceExpr=Cust."Balance (LCY)";
+                                                 AutoFormatType=1 }
+    { 70  ;Label        ;440  ;990  ;3300 ;440  ;ParentControl=67 }
+    { 4   ;Indicator    ;6710 ;1540 ;2750 ;440  ;ParentControl=1;
+                                                 InPage=1;
+                                                 CaptionML=[ENU=Expended % of Credit Limit (LCY);
+                                                            ESP=% L¡mite cr‚dito usado (DL)];
+                                                 ToolTipML=[ENU=Expended % of Credit Limit (LCY);
+                                                            ESP=% L¡mite cr‚dito usado (DL)];
+                                                 SourceExpr=CreditLimitLCYExpendedPct }
+    { 34  ;CommandButton;11000;10450;2200 ;550  ;HorzGlue=Right;
+                                                 VertGlue=Bottom;
+                                                 PushAction=FormHelp }
+    { 5   ;SubForm      ;220  ;7810 ;12980;2420 ;Name=SubForm;
+                                                 HorzGlue=Both;
+                                                 VertGlue=Both;
+                                                 Border=No;
+                                                 SubFormID=Form576;
+                                                 OnDeactivate=BEGIN
+                                                                GetVATSpecification;
+                                                              END;
+                                                               }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Sales %1 Statistics;ESP=Estad¡sticas %1 ventas';
+      Text001@1001 : TextConst 'ENU=Total;ESP=Total';
+      Text002@1002 : TextConst 'ENU=Amount;ESP=Importe';
+      Text003@1003 : TextConst 'ENU=%1 must not be 0.;ESP=%1 no debe ser 0.';
+      Text004@1004 : TextConst 'ENU=%1 must not be greater than %2.;ESP=%1 no debe ser m s grande de %2';
+      Text005@1005 : TextConst 'ENU=You cannot change the invoice discount because there is a %1 record for %2 %3.;ESP=No puede cambiar el dto. factura porque hay un %1 registro para %2 %3.';
+      TotalSalesLine@1006 : Record 37;
+      TotalSalesLineLCY@1007 : Record 37;
+      Cust@1008 : Record 18;
+      TempVATAmountLine@1009 : TEMPORARY Record 290;
+      SalesSetup@1010 : Record 311;
+      SalesPost@1011 : Codeunit 80;
+      TotalAmount1@1012 : Decimal;
+      TotalAmount2@1013 : Decimal;
+      VATAmount@1014 : Decimal;
+      VATAmountText@1015 : Text[30];
+      ProfitLCY@1016 : Decimal;
+      ProfitPct@1017 : Decimal;
+      AdjProfitLCY@1024 : Decimal;
+      AdjProfitPct@1023 : Decimal;
+      TotalAdjCostLCY@1022 : Decimal;
+      CreditLimitLCYExpendedPct@1018 : Decimal;
+      PrevNo@1019 : Code[20];
+      AllowInvDisc@1020 : Boolean;
+      AllowVATDifference@1021 : Boolean;
+
+    LOCAL PROCEDURE UpdateHeaderInfo@5();
+    VAR
+      CurrExchRate@1000 : Record 330;
+      UseDate@1001 : Date;
+    BEGIN
+      TotalSalesLine."Inv. Discount Amount" := TempVATAmountLine.GetTotalInvDiscAmount;
+      TotalAmount1 :=
+        TotalSalesLine."Line Amount" - TotalSalesLine."Inv. Discount Amount" - TotalSalesLine."Pmt. Disc. Given Amount";
+      VATAmount := TempVATAmountLine.GetTotalVATAmount;
+      IF "Prices Including VAT" THEN BEGIN
+        TotalAmount1 := TempVATAmountLine.GetTotalAmountInclVAT;
+        TotalAmount2 := TotalAmount1 - VATAmount;
+        TotalSalesLine."Line Amount" := TotalAmount1 + TotalSalesLine."Inv. Discount Amount" +
+          TotalSalesLine."Pmt. Disc. Given Amount";
+      END ELSE
+        TotalAmount2 := TotalAmount1 + VATAmount;
+
+      IF "Prices Including VAT" THEN
+        TotalSalesLineLCY.Amount := TotalAmount2
+      ELSE
+        TotalSalesLineLCY.Amount := TotalAmount1;
+      IF "Currency Code" <> '' THEN BEGIN
+        IF ("Document Type" IN ["Document Type"::"Blanket Order","Document Type"::Quote]) AND
+           ("Posting Date" = 0D)
+        THEN
+          UseDate := WORKDATE
+        ELSE
+          UseDate := "Posting Date";
+
+        TotalSalesLineLCY.Amount :=
+          CurrExchRate.ExchangeAmtFCYToLCY(
+            UseDate,"Currency Code",TotalSalesLineLCY.Amount,"Currency Factor");
+      END;
+      ProfitLCY := TotalSalesLineLCY.Amount - TotalSalesLineLCY."Unit Cost (LCY)";
+      IF TotalSalesLineLCY.Amount = 0 THEN
+        ProfitPct := 0
+      ELSE
+        ProfitPct := ROUND(100 * ProfitLCY / TotalSalesLineLCY.Amount,0.01);
+
+      AdjProfitLCY := TotalSalesLineLCY.Amount - TotalAdjCostLCY;
+      IF TotalSalesLineLCY.Amount = 0 THEN
+        AdjProfitPct := 0
+      ELSE
+        AdjProfitPct := ROUND(100 * AdjProfitLCY / TotalSalesLineLCY.Amount,0.01);
+    END;
+
+    LOCAL PROCEDURE GetVATSpecification@21();
+    BEGIN
+      CurrForm.SubForm.FORM.GetTempVATAmountLine(TempVATAmountLine);
+      IF TempVATAmountLine.GetAnyLineModified THEN
+        UpdateHeaderInfo;
+    END;
+
+    LOCAL PROCEDURE SetVATSpecification@11();
+    BEGIN
+      CurrForm.SubForm.FORM.SetTempVATAmountLine(TempVATAmountLine);
+      CurrForm.SubForm.FORM.InitGlobals(
+        "Currency Code",AllowVATDifference,AllowVATDifference,
+        "Prices Including VAT",AllowInvDisc,"VAT Base Discount %");
+    END;
+
+    LOCAL PROCEDURE UpdateTotalAmount@16();
+    VAR
+      SaveTotalAmount@1000 : Decimal;
+    BEGIN
+      CheckAllowInvDisc;
+      IF "Prices Including VAT" THEN BEGIN
+        SaveTotalAmount := TotalAmount1;
+        UpdateInvDiscAmount;
+        TotalAmount1 := SaveTotalAmount;
+      END;
+      WITH TotalSalesLine DO
+        "Inv. Discount Amount" := "Line Amount" - TotalAmount1;
+      UpdateInvDiscAmount;
+    END;
+
+    LOCAL PROCEDURE UpdateInvDiscAmount@3();
+    VAR
+      InvDiscBaseAmount@1000 : Decimal;
+    BEGIN
+      CheckAllowInvDisc;
+      InvDiscBaseAmount := TempVATAmountLine.GetTotalInvDiscBaseAmount(FALSE,"Currency Code");
+      IF InvDiscBaseAmount = 0 THEN
+        ERROR(Text003,TempVATAmountLine.FIELDCAPTION("Inv. Disc. Base Amount"));
+
+      IF TotalSalesLine."Inv. Discount Amount" / InvDiscBaseAmount > 1 THEN
+        ERROR(
+          Text004,
+          TotalSalesLine.FIELDCAPTION("Inv. Discount Amount"),
+          TempVATAmountLine.FIELDCAPTION("Inv. Disc. Base Amount"));
+
+      TempVATAmountLine.SetInvoiceDiscountAmount(
+        TotalSalesLine."Inv. Discount Amount","Currency Code","Prices Including VAT","VAT Base Discount %");
+      CurrForm.SubForm.FORM.SetTempVATAmountLine(TempVATAmountLine);
+      UpdateHeaderInfo;
+
+      "Invoice Discount Calculation" := "Invoice Discount Calculation"::Amount;
+      "Invoice Discount Value" := TotalSalesLine."Inv. Discount Amount";
+      MODIFY;
+      UpdateVATOnSalesLines;
+    END;
+
+    LOCAL PROCEDURE GetCaptionClass@2(FieldCaption@1000 : Text[100];ReverseCaption@1001 : Boolean) : Text[80];
+    BEGIN
+      IF "Prices Including VAT" XOR ReverseCaption THEN
+        EXIT('2,1,' + FieldCaption)
+      ELSE
+        EXIT('2,0,' + FieldCaption);
+    END;
+
+    LOCAL PROCEDURE UpdateVATOnSalesLines@1();
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      GetVATSpecification;
+      IF TempVATAmountLine.GetAnyLineModified THEN BEGIN
+        SalesLine.UpdateVATOnLines(0,Rec,SalesLine,TempVATAmountLine);
+        SalesLine.UpdateVATOnLines(1,Rec,SalesLine,TempVATAmountLine);
+      END;
+      PrevNo := '';
+    END;
+
+    LOCAL PROCEDURE CustInvDiscRecExists@4(InvDiscCode@1000 : Code[20]) : Boolean;
+    VAR
+      CustInvDisc@1001 : Record 19;
+    BEGIN
+      CustInvDisc.SETRANGE(Code,InvDiscCode);
+      EXIT(CustInvDisc.FIND('-'));
+    END;
+
+    LOCAL PROCEDURE CheckAllowInvDisc@8();
+    VAR
+      CustInvDisc@1000 : Record 19;
+    BEGIN
+      IF NOT AllowInvDisc THEN
+        ERROR(
+          Text005,
+          CustInvDisc.TABLECAPTION,FIELDCAPTION("Invoice Disc. Code"),"Invoice Disc. Code");
+    END;
+
+    BEGIN
+    END.
+  }
+}

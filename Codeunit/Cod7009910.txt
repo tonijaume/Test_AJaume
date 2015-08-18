@@ -1,0 +1,317 @@
+OBJECT Codeunit 7009910 Pagos GOC
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/02/15;
+    Time=23:03:41;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 272=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355002 : TextConst 'ENU=Must go to a bank account;ESP=Tiene que atacar a una cuenta de banco';
+      Text001@1103355003 : TextConst 'ENU="Two different suppliers are settling ";ESP=Se estan liquidando dos proveedores distintos';
+      Text002@1103355004 : TextConst 'ENU=Confirm to cancel transfer %1?;ESP=¨Confirma que desea anular la transferencia %1?';
+      rGrupo@1103355000 : Record 93;
+      rProv@1103355001 : Record 23;
+      rPar@1000000000 : Record 7009700;
+
+    PROCEDURE EmitirTransferencia@1(VAR prLinDia@1103355000 : Record 81);
+    VAR
+      lwBanco@1103355001 : Code[10];
+    BEGIN
+      // EmitirTransferencia
+
+      IF prLinDia."Account Type" = prLinDia."Account Type"::"Bank Account" THEN
+        lwBanco := prLinDia."Account No."
+      ELSE
+        IF prLinDia."Bal. Account Type"= prLinDia."Bal. Account Type":: "Bank Account" THEN
+          lwBanco := prLinDia."Bal. Account No."
+        ELSE
+          ERROR (Text000);
+    END;
+
+    PROCEDURE IRPFCheque@2(prProv@1103355000 : Record 23;prBanco@1103355001 : Record 270;prLinDia@1103355002 : Record 81;pwImporte@1103355003 : Decimal) : Decimal;
+    VAR
+      lrLin2@1103355004 : Record 81;
+      lwImpFinal@1103355005 : Decimal;
+      lwImpIRPF@1103355006 : Decimal;
+      lwNoLin@1103355007 : Integer;
+    BEGIN
+      // IRPFCheque
+      // Devuelve el total a pagar una vez descontado el irpf
+
+      IF prProv."% IRPF"= 0 THEN
+        EXIT(pwImporte);
+
+      IF NOT rGrupo.GET(prProv."Vendor Posting Group") THEN
+        EXIT(pwImporte);
+
+      lwImpIRPF   := pwImporte / prProv."% IRPF" * 100;
+      lwImpFinal  := pwImporte - lwImpIRPF;
+
+
+
+      // Busca el numero de linea
+
+      lwNoLin := BuscaNoLin(prLinDia."Journal Template Name", prLinDia."Journal Batch Name");
+
+      CLEAR(lrLin2);
+      lrLin2."Journal Template Name" := prLinDia."Journal Template Name";
+      lrLin2."Journal Batch Name"    := prLinDia."Journal Batch Name";
+      lrLin2."Line No."              := lwNoLin;
+
+      lrLin2.VALIDATE("Account Type" , lrLin2."Account Type"::"G/L Account");
+      lrLin2.VALIDATE("Account No."  , rGrupo."Cta. IRPF");
+      lrLin2.VALIDATE("Posting Date" , TODAY);
+      lrLin2.VALIDATE("Document Type", prLinDia."Document Type");
+      lrLin2.VALIDATE("Document No." , prLinDia."Document No.");
+      lrLin2.VALIDATE("Credit Amount", lwImpIRPF);
+      lrLin2.VALIDATE("Check Printed", prLinDia."Check Printed");
+      lrLin2."Source Code"   := rPar.GetSourceCode(lrLin2."Journal Template Name"); //+$002
+      lrLin2.INSERT(TRUE);
+
+      EXIT(lwImpFinal);
+    END;
+
+    PROCEDURE DescTodoIRPF@5(VAR prLinDia@1103355000 : Record 81);
+    VAR
+      lrLin1@1103355001 : Record 81;
+      lrLin2@1103355002 : Record 81;
+      lrLin3@1103355003 : Record 81;
+    BEGIN
+      // DescTodoIRPF
+
+      lrLin1.COPY(prLinDia);
+      lrLin1.SETCURRENTKEY("Journal Template Name","Journal Batch Name","Posting Date","Document No.");
+      CLEAR(lrLin2);
+      IF lrLin1.FIND('-') THEN BEGIN
+        REPEAT
+          lrLin1.GET(lrLin1."Journal Template Name",lrLin1."Journal Batch Name",lrLin1."Line No.");
+          IF (lrLin1."Posting Date" <> lrLin2."Posting Date") OR (lrLin1."Document No." <> lrLin2."Document No.")  THEN
+            DescIRPF(lrLin1);
+          lrLin2:=lrLin1;
+        UNTIL lrLin1.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE DescIRPF@3(VAR prLinDia@1103355000 : Record 81);
+    VAR
+      lrLin1@1103355001 : Record 81;
+      lrLin2@1103355002 : Record 81;
+      lrLin3@1103355003 : Record 81;
+      lrDivisa@1103355004 : Record 4;
+      lrConfCont@1103355005 : Record 98;
+      lwIRPF@1103355006 : Decimal;
+      lwTotalIRPF@1103355007 : Decimal;
+      lwProveedor@1103355008 : Code[20];
+      lwPrecision@1103355009 : Decimal;
+    BEGIN
+      // DescIRPF
+
+      prLinDia.GET(prLinDia."Journal Template Name",prLinDia."Journal Batch Name",prLinDia."Line No.");
+
+      lrLin2.RESET;
+      lrLin2.SETCURRENTKEY("Journal Template Name",
+                           "Journal Batch Name",
+                           "Posting Date","Document No.");
+      lrLin2.SETRANGE("Journal Template Name", prLinDia."Journal Template Name");
+      lrLin2.SETRANGE("Journal Batch Name"   , prLinDia."Journal Batch Name");
+      lrLin2.SETRANGE("Posting Date"         , prLinDia."Posting Date");
+      lrLin2.SETRANGE("Document No."         , prLinDia."Document No.");
+      lrLin2.SETRANGE(DescIRPF               , 0);
+      lrLin2.SETRANGE("Check Printed"        , TRUE);
+      IF lrLin2.FIND('-') THEN BEGIN
+        CLEAR(lwTotalIRPF);
+        CLEAR(lwProveedor);
+        REPEAT
+          CASE lrLin2."Account Type" OF
+
+            lrLin2."Account Type"::Vendor : BEGIN
+              IF lwProveedor = '' THEN BEGIN
+                lwProveedor := lrLin2."Account No.";
+                rProv.GET(lwProveedor);
+                IF rProv."% IRPF" = 0 THEN
+                  EXIT;
+                rProv.TESTFIELD("Vendor Posting Group");
+                rGrupo.GET(rProv."Vendor Posting Group");
+                rGrupo.TESTFIELD(rGrupo."Cta. IRPF");
+              END
+              ELSE
+                IF lwProveedor <> lrLin2."Account No." THEN
+                  ERROR(Text001);
+
+              // Busca la precision de redondeo
+
+              IF lrLin2."Currency Code" = '' THEN BEGIN
+                lrConfCont.GET;
+                lwPrecision := lrConfCont."Amount Rounding Precision";
+              END
+              ELSE BEGIN
+                lrDivisa.GET(lrLin2."Currency Code");
+                lwPrecision := lrDivisa."Amount Rounding Precision";
+              END;
+
+              // Ponemos la contrapartida en otra linea
+              IF lrLin2."Bal. Account No." <> '' THEN BEGIN
+                IF lrLin2."Bal. Account Type" = lrLin2."Bal. Account Type"::"Bank Account" THEN BEGIN
+                  lwIRPF := ROUND (lrLin2.Amount * rProv."% IRPF" / 100,lwPrecision);
+
+                  lrLin3.RESET;
+                  lrLin3 := lrLin2;
+                  lrLin3."Line No."      := BuscaNoLin(prLinDia."Journal Template Name",prLinDia."Journal Batch Name");
+                  lrLin3."Check Printed" := FALSE;
+
+                  lrLin3.VALIDATE("Account Type"             , lrLin2."Bal. Account Type");
+                  lrLin3.VALIDATE("Account No."              , lrLin2."Bal. Account No.");
+                  lrLin3.VALIDATE(Amount                     , -ROUND(lrLin2.Amount - lwIRPF,lwPrecision));
+                  lrLin3.VALIDATE("Bal. Account No."         , '');
+                  lrLin3.VALIDATE(DescIRPF                   , lrLin2.DescIRPF::Descontado);
+                  lrLin3.VALIDATE("Shortcut Dimension 1 Code", prLinDia."Shortcut Dimension 1 Code");
+                  lrLin3."Source Code"   := rPar.GetSourceCode(lrLin3."Journal Template Name"); //+$002
+                  lrLin3.INSERT(TRUE);
+
+                  lrLin3."Check Printed" := TRUE;
+                  lrLin3.MODIFY;
+
+                  lwTotalIRPF -= lwIRPF;
+
+                  lrLin2.VALIDATE("Bal. Account No." , '');
+                  lrLin2.VALIDATE("Bank Payment Type", 0);
+                  lrLin2.MODIFY;
+                END;
+              END;
+
+            END;
+            lrLin2."Account Type"::"Bank Account" : BEGIN
+              lwIRPF := ROUND (lrLin2.Amount * rProv."% IRPF" / 100,lwPrecision);
+
+              lrLin2.VALIDATE(Amount         , lrLin2.Amount - lwIRPF);
+              lrLin2.VALIDATE(DescIRPF       , lrLin2.DescIRPF::Descontado);
+              lrLin2.VALIDATE("Check Printed", TRUE);
+              lrLin2.MODIFY;
+
+              lwTotalIRPF += lwIRPF;
+            END;
+          END;
+        UNTIL lrLin2.NEXT = 0;
+
+        // Ahora introduce la linea de IRPF
+
+        IF lwTotalIRPF <> 0 THEN BEGIN
+          lrLin2.RESET;
+          lrLin2.INIT;
+          lrLin2."Journal Template Name"   := prLinDia."Journal Template Name";
+          lrLin2."Journal Batch Name" := prLinDia."Journal Batch Name";
+          lrLin2."Line No."              := BuscaNoLin(prLinDia."Journal Template Name",prLinDia."Journal Batch Name");
+
+          lrLin2.VALIDATE("Account Type"             , lrLin2."Account Type"::"G/L Account");
+          lrLin2.VALIDATE("Account No."              , rGrupo."Cta. IRPF");
+          lrLin2.VALIDATE("Posting Date"             , prLinDia."Posting Date");
+          lrLin2.VALIDATE("Document Type"            , prLinDia."Document Type");
+          lrLin2.VALIDATE("Document No."             , prLinDia."Document No.");
+          lrLin2.VALIDATE("Currency Code"            , prLinDia."Currency Code");
+          lrLin2.VALIDATE("Currency Factor"          , prLinDia."Currency Factor");
+          lrLin2.VALIDATE(Amount                     , lwTotalIRPF);
+          lrLin2.VALIDATE("Applies-to ID"            , prLinDia."Applies-to ID");
+          lrLin2.VALIDATE("Shortcut Dimension 1 Code", prLinDia."Shortcut Dimension 1 Code");
+          lrLin2.VALIDATE(DescIRPF                   , lrLin2.DescIRPF::IRPF);
+          lrLin2.VALIDATE("Source Code"              , prLinDia."Source Code");
+          lrLin2.VALIDATE("System-Created Entry"     , TRUE);
+          lrLin2."Source Code"   := rPar.GetSourceCode(lrLin2."Journal Template Name"); //+$002
+          lrLin2.INSERT(TRUE);
+
+          lrLin2."Check Printed" := TRUE;
+          lrLin2.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE BuscaNoLin@6(pwLibro@1103355000 : Code[10];pwSeccion@1103355001 : Code[10]) : Integer;
+    VAR
+      lrLin2@1103355002 : Record 81;
+      lwNo@1103355003 : Integer;
+    BEGIN
+      // BuscaNoLin
+      // Busca el siguiente numero de linea de diario general
+
+      lrLin2.RESET;
+      lrLin2.SETRANGE("Journal Template Name"  , pwLibro);
+      lrLin2.SETRANGE("Journal Batch Name", pwSeccion);
+      IF lrLin2.FIND('+') THEN
+        lwNo := lrLin2."Line No." + 10000
+      ELSE
+        lwNo := 10000;
+
+      EXIT(lwNo);
+    END;
+
+    PROCEDURE AnulaTransferencia@4(VAR prLin@1103355000 : Record 81);
+    VAR
+      LinDiaGen@1103355001 : Record 81;
+      LinDiaGen2@1103355002 : Record 81;
+      lrMovChq@1103355003 : Record 272;
+    BEGIN
+      // AnulaTransferencia
+
+      prLin.TESTFIELD("Bank Payment Type" , prLin."Bank Payment Type"::Transferencia);
+      prLin.TESTFIELD("Check Printed",TRUE);
+      IF CONFIRM(Text002,FALSE,prLin."Document No.") THEN BEGIN
+        LinDiaGen.RESET;
+        LinDiaGen.COPY(prLin);
+        LinDiaGen.SETRANGE("Journal Template Name"   , prLin."Journal Template Name");
+        LinDiaGen.SETRANGE("Journal Batch Name" , prLin."Journal Batch Name");
+        LinDiaGen.SETRANGE("Document No."          , prLin."Document No.");
+        IF LinDiaGen.FINDFIRST THEN BEGIN
+          LinDiaGen2 := LinDiaGen;
+          LinDiaGen2.SETRANGE(DescIRPF,LinDiaGen2.DescIRPF::IRPF);
+          LinDiaGen2.SETRANGE("Document No.", LinDiaGen."Document No.");
+          IF LinDiaGen2.FINDSET THEN
+            LinDiaGen2.DELETEALL;
+          IF prLin."Account Type" = prLin."Account Type"::"Bank Account" THEN BEGIN
+            LinDiaGen.MODIFYALL("Bank Payment Type" , prLin."Bank Payment Type");
+            LinDiaGen.MODIFYALL("Bal. Account Type"  , prLin."Account Type");
+            LinDiaGen.MODIFYALL("Bal. Account No."  , prLin."Account No.");
+
+            //+$001
+            prLin.GET(prLin."Journal Template Name", prLin."Journal Batch Name", prLin."Line No.");
+            prLin.DELETE;
+          END;
+
+          IF LinDiaGen.FINDSET THEN //+$001
+          BEGIN
+            LinDiaGen.MODIFYALL("Check Printed",FALSE);
+            LinDiaGen.MODIFYALL("Document No.",'');
+          END;
+        END;
+
+        // Tambien tiene que anular todos los movimientos de mov cheque
+        lrMovChq.RESET;
+        lrMovChq.SETCURRENTKEY("Document No.", "Posting Date");
+        lrMovChq.SETRANGE("Document Type"     , prLin."Document Type");
+        lrMovChq.SETRANGE("Document No."      , prLin."Document No.");
+        lrMovChq.SETRANGE("Posting Date"      , prLin."Posting Date");
+        lrMovChq.SETRANGE("Bank Payment Type" , lrMovChq."Bank Payment Type"::"Electronic Payment");
+        IF lrMovChq.FINDSET(TRUE) THEN
+          lrMovChq.DELETEALL(TRUE);
+
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 08052012 Correccion de problemas por paso a version SQL
+
+      $002 AJS 09022015 Rellenar el campo Source code del diario general
+    }
+    END.
+  }
+}

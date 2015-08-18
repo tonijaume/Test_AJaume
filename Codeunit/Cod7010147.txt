@@ -1,0 +1,445 @@
+OBJECT Codeunit 7010147 Confirmar Excursi¢n
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20/01/15;
+    Time=[ 9:55:18];
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            //RegeneraFPRServicio('CTC', 8641);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355006 : TextConst 'ENU=This service is already confirmed;ESP=Este servicio ya esta confirmado';
+      Text001@1103355007 : TextConst 'ENU=Confirm Service &Current,Confirm Services &Filtereds;ESP=Confirmar Servicio &Actual,Confirmar Servicios &Filtrados';
+      Text002@1103355008 : TextConst 'ENU="   Confirming service \";ESP="  Confirmando servicio \"';
+      Text003@1103355009 : TextConst 'ENU="   Service: #1######";ESP="   Servicio: #1######"';
+      Text004@1103355010 : TextConst 'ENU=There is a non-settled booking in service %1.;ESP=Existe una reserva (%1) sin liquidar en el servicio %2.';
+      Text005@1103355011 : TextConst 'ENU=Unable to confirm the service %1, it has errors;ESP=No se puede confirmar el servicio %1, tiene errores';
+      Text006@1103355012 : TextConst 'ENU=This function confirm the excursion after reviewing the margins\;ESP=Esta funci¢n confirma la excursi¢n despu‚s de revisar los margenes\';
+      Text007@1103355013 : TextConst 'ENU=Moreover it also created registrations of Cost/Income                \;ESP=Adem s tambi‚n crea los registros de Coste/Ingreso                \';
+      Text008@1103355014 : TextConst 'ENU=This function will be useful to confirm paxes no. Of excursion     \;ESP=Esta funci¢n servir  para confirmar el n§ pax de la excursi¢n     \';
+      Text009@1103355015 : TextConst 'ENU=(reals) and used suppliers;ESP=(reales) y los proveedores usados';
+      rPar@1100217002 : Record 7009700;
+      rServicio@1103355001 : Record 7010163;
+      rReserva@1103355002 : Record 7010162;
+      codVAL@1103355003 : Codeunit 7010143;
+      Window@1103355004 : Dialog;
+      Opcion@1103355005 : Integer;
+      Text010@1100253000 : TextConst 'ENU=The customer (%3) of the reservation (%2) in service (%1) is blocked.;ESP=El Servicio %1 Reserva %2 Tiene el Cliente  relacionado %3 en estado Bloqueado.';
+      Text011@1100253001 : TextConst 'ENU=The vendor (%3) of the feature (%2) in service (%1) is blocked.;ESP=El Servicio %1 Prestacion %2 Tiene el Proveedor de %3  en estado Bloqueado.';
+      Text012@1100253002 : TextConst 'ENU=There''s not provider confirmation in reservation %1;ESP=La reserva %1 no tiene numero de confirmaci¢n de proveedor.';
+      Text013@1100217000 : TextConst 'ENU=There are reservations for excursion %1 and day %2 without service.;ESP=Existen reservas de %1 para el dia %2 sin servicio.';
+      Text014@1100217001 : TextConst 'ENU=You must setup the IPR account for vendor %1 before confirming the service %2.;ESP=Debe configurar la cuenta de FPR del proveedor %1 antes de confirmar el servicio %2.';
+      Text015@1100217003 : TextConst 'ENU=The service %1 of excursion %2 has no features assigned.;ESP=El servicio %1 de la excursion %2 no tiene prestaciones asignadas.';
+      Text016@1000000000 : TextConst 'ENU=Touroperator booking No. is compulsory in the credit reservations.;ESP=El numero de booking touroperador es obligatorio en las reserva a credito.';
+
+    PROCEDURE ConfirmarExcursion@2(VAR prSer@1103355000 : Record 7010163);
+    VAR
+      lrRep@1100253000 : Record 7010241;
+      lrRsv@1100253001 : Record 7010162;
+      lrServ@1100253002 : Record 7010163;
+      locrMargen@1100253003 : Record 7010174;
+      lrCabVta@1100217001 : Record 36;
+      lcFacturar@1100217000 : Codeunit 7010140;
+    BEGIN
+      rPar.FINDFIRST;
+
+      lrServ.COPY(prSer);
+
+      IF (lrServ.Estado = lrServ.Estado::Confirmada) THEN
+        ERROR(Text000);
+
+      Opcion := STRMENU(Text001);
+      IF Opcion = 0 THEN
+        EXIT;
+
+      IF Opcion = 1 THEN
+        lrServ.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+
+      IF lrServ.FINDSET THEN
+      BEGIN
+        Window.OPEN(Text002+
+                    '-----------------------\'+
+                    Text003);
+        REPEAT
+          Window.UPDATE(1, lrServ."N§ Servicio");
+
+          // $006 Comprueba clientes y proveedores bloqueados
+          CompBloqueos(lrServ);
+
+          rServicio := lrServ;
+
+          // Comprobar que todas las reservas han sido liquidadas al Guia de venta antes de
+          // confirmar el servicio en funcion de un parametro general.
+
+          IF rPar."Liquidar antes de confirmar" THEN
+          BEGIN
+            rReserva.RESET;
+
+            //-$004rReserva.SETCURRENTKEY("N§ Servicio",
+            //-$004                       "Tipo Entrada",
+            //-$004                       "Liquidado GV");
+            //-$004rReserva.SETRANGE("N§ Servicio" , rServicio."N§ Servicio");
+
+            //+$004
+            rReserva.SETCURRENTKEY("Fecha Excursion", Producto);
+            rReserva.SETRANGE("Fecha Excursion", lrServ.Fecha);
+            rReserva.SETRANGE(Producto         , lrServ.Excursion);
+            //+$004
+
+            rReserva.SETRANGE("Liquidado GV", FALSE);
+            rReserva.SETRANGE(Anulada       , FALSE); //+$005
+            IF rReserva.FINDSET THEN
+            BEGIN
+              REPEAT
+                //$002
+                lrRep.GET(rReserva."Guia Venta");
+                IF NOT lrRep."Trabaja a credito" THEN
+                  ERROR(Text004, rReserva."N§ Ticket", rServicio."N§ Servicio")
+                ELSE
+                BEGIN
+                  //+$003
+                  lrRsv := rReserva;
+                  lrRsv."Liquidado GV" := TRUE;
+                  lrRsv.MODIFY;
+                  //-$003
+                END;
+              UNTIL rReserva.NEXT = 0;
+            END;
+          END;
+
+          _CheckSinPrestaciones(lrServ.Delegacion, lrServ."N§ Servicio", lrServ.Excursion); //+$014
+
+          CompruebaCobros(lrServ); // JPT 01/02/11 GOC-CAR-10002
+
+          CompruebaConfExc(lrServ); // $009
+
+          //+$017 <
+          IF rPar."No confirmar reserva sin servi" THEN
+            _CompruebaSinServicio(lrServ); //+$012
+          //+$017 >
+
+          _CheckCuentasFPR(lrServ); //+$013
+
+          rServicio."Tipo Calculo":= rServicio."Tipo Calculo"::"C/I";;
+          rServicio.MODIFY;
+
+          COMMIT();
+
+          codVAL.CostesIngresosExcursion(rServicio, TRUE); //+$019
+
+          //$010  <
+          IF rPar."Facturar tickets x fecha venta" THEN
+            lcFacturar.GeneraFPR(lrServ.Delegacion, lrServ."N§ Servicio", '', lrServ.Oficina, FALSE);
+          //$010  >
+
+          rServicio.GET(rServicio.Delegacion, rServicio."N§ Servicio");
+          //. Si el servicio tiene errores no se confirma
+
+          rServicio.CALCFIELDS(Errores);
+          IF rServicio.Errores THEN
+            ERROR(Text005, rServicio."N§ Servicio");
+
+          rServicio."Tipo Calculo"         := rServicio."Tipo Calculo"::"C/I";
+          rServicio.Estado                 := rServicio.Estado::Confirmada;
+          rServicio."Usuario Confirmacion" := USERID;
+          rServicio."Fecha Confirmacion"   := TODAY;
+          rServicio."Hora Confirmacion"    := TIME;
+          rServicio.MODIFY;
+
+          //+$007
+          locrMargen.RESET;
+          locrMargen.SETRANGE(Delegacion   , rServicio.Delegacion);
+          locrMargen.SETRANGE("N§ Servicio", rServicio."N§ Servicio");
+          IF locrMargen.FINDSET(TRUE) THEN
+            locrMargen.DELETEALL;
+          //+$007
+
+          ConfirmarReservas(lrServ);
+
+        UNTIL lrServ.NEXT = 0;
+
+        Window.CLOSE;
+      END;
+
+      //. Quitamos el filtro de numero servicio para que la ventana muestre los servicios restantes
+      prSer.SETRANGE("N§ Servicio");
+    END;
+
+    PROCEDURE ConfirmarReservas@4(VAR rSer@1103355000 : Record 7010163);
+    BEGIN
+      rReserva.RESET;
+      rReserva.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      rReserva.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+      IF rReserva.FINDFIRST THEN
+        rReserva.MODIFYALL(Confirmada, TRUE);
+
+      rReserva.RESET;
+    END;
+
+    PROCEDURE CompruebaCobros@1100253000(VAR rSer@1103355000 : Record 7010163);
+    VAR
+      lrRep@1100253000 : Record 7010241;
+    BEGIN
+      // CompruebaCobros
+
+      // Comprobamos que las reservas tienen el cobro introducido
+      CLEAR(rReserva);
+      rReserva.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      rReserva.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+      IF rReserva.FINDSET THEN BEGIN
+        REPEAT
+          //$001
+          lrRep.GET(rReserva."Guia Venta");
+          IF (NOT lrRep."Trabaja a credito") AND (rReserva."Ingreso reserva" <> 0) THEN //$007
+            rReserva.CompruebaCobro;
+
+          //+$020 <
+          IF rReserva."Reserva a credito" THEN
+          BEGIN
+            IF rReserva."Booking Touroperador" = '' THEN
+              ERROR(Text016);
+          END;
+          //+$020 >
+        UNTIL rReserva.NEXT = 0;
+      END;
+
+      CLEAR(rReserva);
+    END;
+
+    PROCEDURE CompBloqueos@1100253001(PrSer@1100253000 : Record 7010163);
+    VAR
+      lrRes@1100253001 : Record 7010162;
+      lrRep@1100253002 : Record 7010241;
+      lrCli@1100253003 : Record 18;
+      lrPrest@1100253004 : Record 7010170;
+      lrCntC@1100253005 : Record 7010142;
+      lrProv@1100253006 : Record 23;
+      lrCtaTO@1100217000 : Record 7009705;
+    BEGIN
+      // CompBloqueos
+      // $006 JPT 12/03/12 GOC-LP-12015 Prolongar bloqueo de cliente/proveedor en excursiones
+      // Se genera un error si cliente o proveedor de la excursi¢n est n bloqueados
+
+
+      CLEAR(lrPrest);
+      lrPrest.SETRANGE(Delegacion   , PrSer.Delegacion);
+      lrPrest.SETRANGE("N§ Servicio", PrSer."N§ Servicio");
+      IF lrPrest.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrCntC);
+          lrCntC.SETRANGE(Delegacion           , lrPrest.Delegacion);
+          lrCntC.SETRANGE("N§ Contrato compra" , lrPrest."N§ Contrato");
+          IF lrCntC.FINDFIRST THEN
+          BEGIN
+            IF lrProv.GET(lrCntC.Proveedor) THEN
+            BEGIN
+              IF lrProv.Blocked = lrProv.Blocked::All THEN
+                ERROR(Text011, PrSer."N§ Servicio", lrPrest.Descripcion, lrProv."No.");
+            END;
+          END;
+        UNTIL lrPrest.NEXT=0;
+      END;
+
+      CLEAR(lrRes);
+      lrRes.SETCURRENTKEY("N§ Servicio");
+      lrRes.SETRANGE("N§ Servicio", PrSer."N§ Servicio");
+      lrRes.SETRANGE(Delegacion   , PrSer.Delegacion);
+      IF lrRes.FINDSET THEN BEGIN
+        REPEAT
+          IF lrRep.GET(lrRes."Guia Venta") THEN BEGIN
+            IF lrCli.GET(lrRep."Cliente Facturacion") THEN
+              IF lrCli.Blocked = lrCli.Blocked::All THEN
+                ERROR(Text010, PrSer."N§ Servicio", lrRes."N§ Reserva", lrCli."No.");
+          END;
+          //+$016 <
+          lrCtaTO.GET(lrRes.Delegacion, lrRes.TourOperador);
+          lrCtaTO.TESTFIELD("Cta. compra excursiones");
+          //+$016 >
+        UNTIL lrRes.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE CompruebaConfExc@1100253003(VAR rSer@1103355000 : Record 7010163);
+    VAR
+      lrRes@1100253003 : Record 7010162;
+      lrExc@1100253001 : Record 7009710;
+    BEGIN
+      // CompruebaConfExc
+
+      // $009 JPT 29/05/12  CNT-CAR-12004/EXC-15 - Providers confirmations
+
+      CLEAR(lrExc);
+      IF NOT lrExc.GET(rSer.Excursion) THEN
+        EXIT;
+
+      IF NOT lrExc."Precisa confirmacion proveedor" THEN
+        EXIT;
+
+      CLEAR(lrRes);
+      lrRes.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      lrRes.SETRANGE("N§ Servicio"           , rSer."N§ Servicio");
+      lrRes.SETRANGE(Anulada                 , FALSE);
+      lrRes.SETRANGE(Reembolsada             , FALSE);
+      lrRes.SETRANGE("Confirmacion proveedor", '');
+      IF lrRes.FINDFIRST THEN
+        ERROR(Text012);
+    END;
+
+    LOCAL PROCEDURE _CompruebaSinServicio@1100217000(prServ@1100217000 : Record 7010163);
+    VAR
+      lrRsv@1100217001 : Record 7010162;
+    BEGIN
+      // _CompruebaSinServicio
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Fecha Excursion", Producto);
+      lrRsv.SETRANGE ("Fecha Excursion", prServ.Fecha);
+      lrRsv.SETRANGE (Producto         , prServ.Excursion);
+      lrRsv.SETRANGE (Anulada          , FALSE);
+      lrRsv.SETRANGE (Reembolsada      , FALSE);
+      lrRsv.SETRANGE ("N§ Servicio"    , 0);
+      lrRsv.SETFILTER("N§ Ticket"      , '<>%1', '');
+      IF lrRsv.FINDFIRST THEN
+        ERROR(Text013, prServ.Excursion, prServ.Fecha);
+    END;
+
+    LOCAL PROCEDURE _CheckCuentasFPR@1100217001(prSer@1100217000 : Record 7010163);
+    VAR
+      prPrest@1100217001 : Record 7010170;
+      rCont@1100217002 : Record 7010142;
+      rVendor@1100217003 : Record 23;
+      rVPG@1100217004 : Record 93;
+      lrGLAcc@1100217005 : Record 15;
+    BEGIN
+      //. Esta comprobacion solo hacemos cuando se crea el FPR en el momento de confirmar
+      IF NOT rPar."Facturar tickets x fecha venta" THEN
+        EXIT;
+
+      //. Recorremos las prestaciones activas
+      prPrest.RESET;
+      prPrest.SETRANGE(Delegacion   , prSer.Delegacion);
+      prPrest.SETRANGE("N§ Servicio", prSer."N§ Servicio");
+      prPrest.SETRANGE(Aplicacion   , TRUE);
+      IF prPrest.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Buscamos el contrato asociado
+          IF rCont.GET(prPrest.Delegacion, prPrest."N§ Contrato", prPrest."Tipo Contrato") THEN
+          BEGIN
+            //. Buscamos el proveedor del contrato
+            rVendor.GET(rCont.Proveedor);
+            //. Buscamos el grupo contable proveedor de la ficha
+            rVPG.GET(rVendor."Vendor Posting Group");
+            //. Verificamos que la cuenta este configurada
+            IF rVPG."Cta. FPR Excursiones" = '' THEN
+              ERROR(Text014, rVendor."No.", prSer."N§ Servicio");
+            //+$015 Verificamos que la cuenta este marcada como Entrada directa
+            lrGLAcc.GET(rVPG."Cta. FPR Excursiones");
+            lrGLAcc.TESTFIELD("Direct Posting", TRUE);
+          END;
+        UNTIL prPrest.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CheckSinPrestaciones@1100217003(pwDelegacion@1100217002 : Code[10];pwNumServ@1100217000 : Integer;pwExcursion@1100217003 : Code[20]);
+    VAR
+      rPrest@1100217001 : Record 7010170;
+      lrExc@1100217004 : Record 7009710;
+    BEGIN
+      // _CheckSinPrestaciones
+
+      rPrest.RESET;
+      rPrest.SETRANGE(Delegacion   , pwDelegacion);
+      rPrest.SETRANGE("N§ Servicio", pwNumServ);
+      IF rPrest.ISEMPTY THEN
+      BEGIN
+        //+$018
+        lrExc.GET(pwExcursion);
+
+        IF NOT lrExc."Excursion sin coste" THEN
+          ERROR(Text015, pwNumServ, pwExcursion);
+        //+$018
+      END;
+    END;
+
+    PROCEDURE RegeneraFPRServicio@1100217002(pwDelegacion@1100217003 : Code[10];pwServicio@1100217000 : Integer);
+    VAR
+      lcFacturar@1100217002 : Codeunit 7010140;
+      lrServicio@1100217001 : Record 7010163;
+    BEGIN
+      lrServicio.GET(pwDelegacion, pwServicio);
+      lcFacturar.GeneraFPR(lrServicio.Delegacion, lrServicio."N§ Servicio", '', lrServicio.Oficina, FALSE);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 08022011 Modifico la funcion CompruebaCobros para que unicamente haga la comprobacion si el
+                        representante no trabaja a credito.
+
+      $002 AJS 08022011 Modifico la funcion ConfirmarExcursion para que unicamente de error de reserva no
+                        liquidada si el representante no trabaja a credito.
+
+      $003 AJS 25032011 Modifico la funcion ConfirmarExcursion para que las reservas de los representantes
+                        que trabajan a credito se marquen como liquidadas automaticamente.
+
+      $004 AJS 21052011 Modifico la funcion ConfirmarExcursion para que la comprobacion de reservas liquidadas
+                        se haga sobre todas las reservas de la misma fecha/excursion
+
+      $005 AJS 08062011 Modifico la funcion ConfirmarExcursion para excluir los tickets anulados de la comprobacion
+
+      $006 JPT 12/03/12 GOC-LP-12015 Prolongar bloqueo de cliente/proveedor en excursiones
+           Se genera un error si cliente o proveedor de la excursi¢n est n bloqueados
+
+      $007 AJS 16042012 Una vez confirmada la excursion se borran los registros de la tabla de margenes
+
+      $008 AJS 29042012 Modifico la funcion CompruebaCobros para que solo haga la comprobacion si el ingreso de la
+                        reserva es distinto de cero
+
+      $009 JPT 29/05/12  CNT-CAR-12004/EXC-15 - Providers confirmations - Aseguramos que la reserva tenga la confirmaci¢n de proveedor
+                                                al confirmar servicio.
+
+      $010 AJS 21092012 Si se utiliza la facturacion antes de confirmar hay que generar el asiento de FPR en el momento de
+                        confirmar el servicio
+
+      $011 AJS 21092012 Cuando se desconfirma un servicio hay que retroceder el asiento de FPR que se creo al confirmar
+
+      $012 AJS 13022013 Modifico la funcion ConfirmarExcursion para comprobar si hay reservas sin servicio para la misma fecha
+                        y excursion que estamos confirmando
+
+      $013 AJS 18062013 Agregar un control para verificar que el grupo contable proveedor tiene la cuenta de FPR correctamente
+                        configurada
+
+      $014 AJS 05072013 Agregar un control para evitar que se confirmen excursiones sin prestaciones
+
+      $015 AJS 05072103 En el control de cuentas hay que verificar que tengan la marca de Entrada directa
+
+      $016 AJS 22102013 Al confirmar verificamos que los touroperadores tengan su registro de cuentas TO-Delegacion
+
+      $017 AJS 13112013 Nuevo parametro para especificar si controlamos que no hay reservas sin servicio antes de confirmar
+
+      $018 AJS 24022014 Nuevo parametro para indicar si una excursion es sin coste
+
+      $019 AJS 13052014 Nuevo parametro en funcion de calcular servicios
+
+      $020 AJS 03122014 El campo Booking touroperador es obligatorio en las reservas a credito
+
+      $021 AJS 20012015 Traduccion de TextConstants
+    }
+    END.
+  }
+}

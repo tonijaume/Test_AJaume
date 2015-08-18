@@ -1,0 +1,715 @@
+OBJECT Codeunit 23 Item Jnl.-Post Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=83;
+    Permissions=TableData 233=imd,
+                TableData 7313=r;
+    OnRun=BEGIN
+            ItemJnlLine.COPY(Rec);
+            Code;
+            Rec := ItemJnlLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=cannot exceed %1 characters;ESP=no puede superar %1 caracteres';
+      Text001@1001 : TextConst 'ENU=Journal Batch Name    #1##########\\;ESP=Nombre secci¢n diario #1##########\\';
+      Text002@1002 : TextConst 'ENU=Checking lines        #2######\;ESP=Comprobando l¡neas    #2######\';
+      Text003@1003 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@\;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@\';
+      Text004@1004 : TextConst 'ENU=Updating lines        #5###### @6@@@@@@@@@@@@@;ESP=Actualizando l¡ns.    #5###### @6@@@@@@@@@@@@@';
+      Text005@1005 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@';
+      Text006@1006 : TextConst 'ENU=A maximum of %1 posting number series can be used in each journal.;ESP=Se puede utilizar un m ximo de %1 n£meros de serie de registro en cada diario.';
+      Text007@1007 : TextConst 'ENU=<Month Text>;ESP=<Month Text>';
+      Text008@1008 : TextConst 'ENU=There are new postings made in the period you want to revalue item no. %1.\;ESP=Hay nuevos registros en el periodo en que quiere revalorizar el n§ prod. %1.\';
+      Text009@1009 : TextConst 'ENU=You must calculate the inventory value again.;ESP=Debe calcular el valor de inventario otra vez.';
+      ItemJnlTemplate@1010 : Record 82;
+      ItemJnlBatch@1011 : Record 233;
+      ItemJnlLine@1012 : Record 83;
+      ItemJnlLine2@1013 : Record 83;
+      ItemJnlLine3@1014 : Record 83;
+      LedgEntryDim@1042 : Record 355;
+      ItemLedgEntry@1015 : Record 32;
+      WhseEntry@1049 : Record 7312;
+      ItemReg@1016 : Record 46;
+      WhseReg@1025 : Record 7313;
+      GLSetup@1017 : Record 98;
+      InvtSetup@1050 : Record 313;
+      AccountingPeriod@1018 : Record 50;
+      NoSeries@1019 : TEMPORARY Record 308;
+      Location@1043 : Record 14;
+      CalcInvtValue@1020 : Report 5899;
+      ItemJnlCheckLine@1021 : Codeunit 21;
+      ItemJnlPostLine@1022 : Codeunit 22;
+      NoSeriesMgt@1023 : Codeunit 396;
+      NoSeriesMgt2@1024 : ARRAY [10] OF Codeunit 396;
+      DimMgt@1026 : Codeunit 408;
+      WMSMgmt@1046 : Codeunit 7302;
+      WhseJnlPostLine@1048 : Codeunit 7301;
+      InvtAdjmt@1045 : Codeunit 5895;
+      Window@1027 : Dialog;
+      ItemRegNo@1028 : Integer;
+      WhseRegNo@1044 : Integer;
+      StartLineNo@1029 : Integer;
+      Day@1030 : Integer;
+      Week@1031 : Integer;
+      Month@1032 : Integer;
+      MonthText@1033 : Text[30];
+      NoOfRecords@1034 : Integer;
+      LineCount@1035 : Integer;
+      LastDocNo@1036 : Code[20];
+      LastDocNo2@1037 : Code[20];
+      LastPostedDocNo@1038 : Code[20];
+      NoOfPostingNoSeries@1039 : Integer;
+      PostingNoSeriesNo@1040 : Integer;
+      "0DF"@1041 : DateFormula;
+      WhseTransaction@1047 : Boolean;
+      PhysInvtCount@1052 : Boolean;
+
+    LOCAL PROCEDURE Code@3();
+    VAR
+      JnlLineDim@1000 : Record 356;
+      TempJnlLineDim@1001 : TEMPORARY Record 356;
+      TempHandlingSpecification@1004 : TEMPORARY Record 336;
+      UpdateAnalysisView@1002 : Codeunit 410;
+      UpdateItemAnalysisView@1006 : Codeunit 7150;
+      PhysInvtCountMgt@1007 : Codeunit 7380;
+      OriginalQuantity@1003 : Decimal;
+      OriginalQuantityBase@1005 : Decimal;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+        SETRANGE("Journal Template Name","Journal Template Name");
+        SETRANGE("Journal Batch Name","Journal Batch Name");
+
+        ItemJnlTemplate.GET("Journal Template Name");
+        ItemJnlBatch.GET("Journal Template Name","Journal Batch Name");
+        IF STRLEN(INCSTR(ItemJnlBatch.Name)) > MAXSTRLEN(ItemJnlBatch.Name) THEN
+          ItemJnlBatch.FIELDERROR(
+            Name,
+            STRSUBSTNO(
+              Text000,
+              MAXSTRLEN(ItemJnlBatch.Name)));
+
+        IF ItemJnlTemplate.Recurring THEN BEGIN
+          SETRANGE("Posting Date",0D,WORKDATE);
+          SETFILTER("Expiration Date",'%1 | %2..',0D,WORKDATE);
+        END;
+
+        IF NOT FIND('=><') THEN BEGIN
+          "Line No." := 0;
+          COMMIT;
+          EXIT;
+        END;
+
+        IF ItemJnlTemplate.Recurring THEN
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text003 +
+            Text004)
+        ELSE
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text005);
+
+        Window.UPDATE(1,"Journal Batch Name");
+
+        // Check Lines
+        LineCount := 0;
+        StartLineNo := "Line No.";
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(2,LineCount);
+          CheckRecurringLine(ItemJnlLine);
+
+          IF (("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND ("Item Charge No." = '')) OR
+             (("Invoiced Quantity" <> 0) AND (Amount <> 0))
+          THEN BEGIN
+            JnlLineDim.SETRANGE("Table ID",DATABASE::"Item Journal Line");
+            JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+            JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+            JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+            JnlLineDim.SETRANGE("Allocation Line No.",0);
+            TempJnlLineDim.DELETEALL;
+            DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+            ItemJnlCheckLine.RunCheck(ItemJnlLine,TempJnlLineDim);
+
+            IF (Quantity <> 0) AND
+               ("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND
+               ("Item Charge No." = '')
+            THEN
+              CheckWMSBin(ItemJnlLine);
+
+            IF ("Value Entry Type" = "Value Entry Type"::Revaluation) AND
+               ("Inventory Value Per" = ItemJnlLine."Inventory Value Per"::" ") AND
+               "Partial Revaluation"
+            THEN
+              CheckRemainingQty;
+          END;
+
+          IF NEXT = 0 THEN
+            FINDFIRST;
+        UNTIL "Line No." = StartLineNo;
+        NoOfRecords := LineCount;
+
+        // Find next register no.
+        LedgEntryDim.LOCKTABLE;
+        ItemLedgEntry.LOCKTABLE;
+        IF RECORDLEVELLOCKING THEN
+          IF ItemLedgEntry.FINDLAST THEN;
+        IF WhseTransaction THEN BEGIN
+          WhseEntry.LOCKTABLE;
+          IF RECORDLEVELLOCKING THEN
+            IF WhseEntry.FINDLAST THEN;
+        END;
+
+        ItemReg.LOCKTABLE;
+        IF ItemReg.FINDLAST THEN
+          ItemRegNo := ItemReg."No." + 1
+        ELSE
+          ItemRegNo := 1;
+
+        WhseReg.LOCKTABLE;
+        IF WhseReg.FINDLAST THEN
+          WhseRegNo := WhseReg."No." + 1
+        ELSE
+          WhseRegNo := 1;
+
+        GLSetup.GET;
+        PhysInvtCount := FALSE;
+
+        // Post lines
+        LineCount := 0;
+        LastDocNo := '';
+        LastDocNo2 := '';
+        LastPostedDocNo := '';
+        FINDSET;
+        REPEAT
+          IF NOT EmptyLine AND
+             (ItemJnlBatch."No. Series" <> '') AND
+             ("Document No." <> LastDocNo2)
+          THEN
+            TESTFIELD("Document No.",NoSeriesMgt.GetNextNo(ItemJnlBatch."No. Series","Posting Date",FALSE));
+          LastDocNo2 := "Document No.";
+          MakeRecurringTexts(ItemJnlLine);
+          IF "Posting No. Series" = '' THEN
+            "Posting No. Series" := ItemJnlBatch."No. Series"
+          ELSE
+            IF NOT EmptyLine THEN
+              IF "Document No." = LastDocNo THEN
+                "Document No." := LastPostedDocNo
+              ELSE BEGIN
+                IF NOT NoSeries.GET("Posting No. Series") THEN BEGIN
+                  NoOfPostingNoSeries := NoOfPostingNoSeries + 1;
+                  IF NoOfPostingNoSeries > ARRAYLEN(NoSeriesMgt2) THEN
+                    ERROR(
+                      Text006,
+                      ARRAYLEN(NoSeriesMgt2));
+                  NoSeries.Code := "Posting No. Series";
+                  NoSeries.Description := FORMAT(NoOfPostingNoSeries);
+                  NoSeries.INSERT;
+                END;
+                LastDocNo := "Document No.";
+                EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+                "Document No." := NoSeriesMgt2[PostingNoSeriesNo].GetNextNo("Posting No. Series","Posting Date",FALSE);
+                LastPostedDocNo := "Document No.";
+              END;
+
+          JnlLineDim.SETRANGE("Table ID",DATABASE::"Item Journal Line");
+          JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+          JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+          JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+          JnlLineDim.SETRANGE("Allocation Line No.",0);
+          TempJnlLineDim.DELETEALL;
+          DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+
+          IF "Inventory Value Per" <> "Inventory Value Per"::" " THEN
+            ItemJnlPostSumLine(ItemJnlLine,TempJnlLineDim)
+          ELSE
+            IF (("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND ("Item Charge No." = '')) OR
+               (("Invoiced Quantity" <> 0) AND (Amount <> 0))
+            THEN BEGIN
+              LineCount := LineCount + 1;
+              Window.UPDATE(3,LineCount);
+              Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+              OriginalQuantity := Quantity;
+              OriginalQuantityBase := "Quantity (Base)";
+              ItemJnlPostLine.RunWithCheck(ItemJnlLine,TempJnlLineDim);
+              IF NOT ItemJnlPostLine.GetPostItemJnlLine THEN
+                ItemJnlPostLine.CheckItemTracking;
+              IF ItemJnlLine."Value Entry Type" <> ItemJnlLine."Value Entry Type"::Revaluation THEN BEGIN
+                ItemJnlPostLine.CollectTrackingSpecification(TempHandlingSpecification);
+                PostWhseJnlLine(ItemJnlLine,OriginalQuantity,OriginalQuantityBase,TempHandlingSpecification);
+              END;
+            END;
+
+          IF IsPhysInvtCount(ItemJnlTemplate,"Phys Invt Counting Period Code","Phys Invt Counting Period Type") THEN BEGIN
+            IF NOT PhysInvtCount THEN BEGIN
+              PhysInvtCountMgt.InitTempItemSKUList;
+              PhysInvtCount := TRUE;
+            END;
+            PhysInvtCountMgt.AddToTempItemSKUList("Item No.","Location Code","Variant Code","Phys Invt Counting Period Type");
+          END;
+        UNTIL NEXT = 0;
+
+        // Copy register no. and current journal batch name to item journal
+        IF NOT ItemReg.FINDLAST OR (ItemReg."No." <> ItemRegNo) THEN
+          ItemRegNo := 0;
+        IF NOT WhseReg.FINDLAST OR (WhseReg."No." <> WhseRegNo) THEN
+          WhseRegNo := 0;
+
+        INIT;
+
+        "Line No." := ItemRegNo;
+        IF "Line No." = 0 THEN
+          "Line No." := WhseRegNo;
+
+        InvtSetup.GET;
+        IF InvtSetup."Automatic Cost Adjustment" <>
+           InvtSetup."Automatic Cost Adjustment"::Never
+        THEN BEGIN
+          InvtAdjmt.SetProperties(TRUE,InvtSetup."Automatic Cost Posting");
+          InvtAdjmt.MakeMultiLevelAdjmt;
+        END;
+
+        // Update/delete lines
+        IF "Line No." <> 0 THEN BEGIN
+          IF NOT RECORDLEVELLOCKING THEN BEGIN
+            JnlLineDim.LOCKTABLE(TRUE,TRUE);
+            LOCKTABLE(TRUE,TRUE);
+          END;
+          IF ItemJnlTemplate.Recurring THEN BEGIN
+            // Recurring journal
+            LineCount := 0;
+            ItemJnlLine2.COPYFILTERS(ItemJnlLine);
+            ItemJnlLine2.FINDSET;
+            REPEAT
+              LineCount := LineCount + 1;
+              Window.UPDATE(5,LineCount);
+              Window.UPDATE(6,ROUND(LineCount / NoOfRecords * 10000,1));
+              IF ItemJnlLine2."Posting Date" <> 0D THEN
+                ItemJnlLine2.VALIDATE("Posting Date",CALCDATE(ItemJnlLine2."Recurring Frequency",ItemJnlLine2."Posting Date"));
+              IF (ItemJnlLine2."Recurring Method" = ItemJnlLine2."Recurring Method"::Variable) AND
+                 (ItemJnlLine2."Item No." <> '')
+              THEN BEGIN
+                ItemJnlLine2.Quantity := 0;
+                ItemJnlLine2."Invoiced Quantity" := 0;
+                ItemJnlLine2.Amount := 0;
+              END;
+              ItemJnlLine2.MODIFY;
+            UNTIL ItemJnlLine2.NEXT = 0;
+          END ELSE BEGIN
+            // Not a recurring journal
+            ItemJnlLine2.COPYFILTERS(ItemJnlLine);
+            ItemJnlLine2.SETFILTER("Item No.",'<>%1','');
+            IF ItemJnlLine2.FINDLAST THEN; // Remember the last line
+
+            JnlLineDim.SETRANGE("Table ID",DATABASE::"Item Journal Line");
+            JnlLineDim.COPYFILTER("Journal Template Name","Journal Template Name");
+            JnlLineDim.COPYFILTER("Journal Batch Name","Journal Batch Name");
+            JnlLineDim.SETRANGE("Allocation Line No.",0);
+            ItemJnlLine3.COPY(ItemJnlLine);
+            IF ItemJnlLine3.FINDSET THEN
+              REPEAT
+                JnlLineDim.SETRANGE("Journal Line No.",ItemJnlLine3."Line No.");
+                JnlLineDim.DELETEALL;
+                ItemJnlLine3.DELETE;
+              UNTIL ItemJnlLine3.NEXT = 0;
+            ItemJnlLine3.RESET;
+            ItemJnlLine3.SETRANGE("Journal Template Name","Journal Template Name");
+            ItemJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF NOT ItemJnlLine3.FINDLAST THEN
+              IF INCSTR("Journal Batch Name") <> '' THEN BEGIN
+                ItemJnlBatch.DELETE;
+                ItemJnlBatch.Name := INCSTR("Journal Batch Name");
+                IF ItemJnlBatch.INSERT THEN;
+                "Journal Batch Name" := ItemJnlBatch.Name;
+              END;
+
+            ItemJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF (ItemJnlBatch."No. Series" = '') AND NOT ItemJnlLine3.FINDLAST AND
+               NOT (ItemJnlLine2."Entry Type" IN [ItemJnlLine2."Entry Type"::Consumption,ItemJnlLine2."Entry Type"::Output])
+            THEN BEGIN
+              ItemJnlLine3.INIT;
+              ItemJnlLine3."Journal Template Name" := "Journal Template Name";
+              ItemJnlLine3."Journal Batch Name" := "Journal Batch Name";
+              ItemJnlLine3."Line No." := 10000;
+              ItemJnlLine3.INSERT;
+              ItemJnlLine3.SetUpNewLine(ItemJnlLine2);
+              ItemJnlLine3.MODIFY;
+            END;
+          END;
+        END;
+        IF ItemJnlBatch."No. Series" <> '' THEN
+          NoSeriesMgt.SaveNoSeries;
+        IF NoSeries.FINDSET THEN
+          REPEAT
+            EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+            NoSeriesMgt2[PostingNoSeriesNo].SaveNoSeries;
+          UNTIL NoSeries.NEXT = 0;
+
+        IF PhysInvtCount THEN
+          PhysInvtCountMgt.UpdateItemSKUListPhysInvtCount;
+
+        Window.CLOSE;
+        COMMIT;
+        CLEAR(ItemJnlCheckLine);
+        CLEAR(ItemJnlPostLine);
+        CLEAR(WhseJnlPostLine);
+        CLEAR(InvtAdjmt)
+      END;
+      UpdateAnalysisView.UpdateAll(0,TRUE);
+      UpdateItemAnalysisView.UpdateAll(0,TRUE);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE CheckRecurringLine@1(VAR ItemJnlLine2@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine2 DO BEGIN
+        IF "Item No." <> '' THEN
+          IF ItemJnlTemplate.Recurring THEN BEGIN
+            TESTFIELD("Recurring Method");
+            TESTFIELD("Recurring Frequency");
+            IF "Recurring Method" = "Recurring Method"::Variable THEN
+              TESTFIELD(Quantity);
+          END ELSE BEGIN
+            TESTFIELD("Recurring Method",0);
+            TESTFIELD("Recurring Frequency","0DF");
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MakeRecurringTexts@2(VAR ItemJnlLine2@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine2 DO BEGIN
+        IF ("Item No." <> '') AND ("Recurring Method" <> 0) THEN BEGIN // Not recurring
+          Day := DATE2DMY("Posting Date",1);
+          Week := DATE2DWY("Posting Date",2);
+          Month := DATE2DMY("Posting Date",2);
+          MonthText := FORMAT("Posting Date",0,Text007);
+          AccountingPeriod.SETRANGE("Starting Date",0D,"Posting Date");
+          IF NOT AccountingPeriod.FINDLAST THEN
+            AccountingPeriod.Name := '';
+          "Document No." :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO("Document No.",Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN("Document No.")),
+              '>');
+          Description :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO(Description,Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN(Description)),
+              '>');
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ItemJnlPostSumLine@5800(ItemJnlLine4@1000 : Record 83;VAR TempJnlLineDim@1001 : TEMPORARY Record 356);
+    VAR
+      Item@1002 : Record 27;
+      ItemLedgEntry4@1003 : Record 32;
+      ItemLedgEntry5@1005 : Record 32;
+      JnlLineDim@1004 : Record 356;
+      Remainder@1006 : Decimal;
+      RemAmountToDistribute@1007 : Decimal;
+      RemQuantity@1008 : Decimal;
+      DistributeCosts@1009 : Boolean;
+      IncludeExpectedCost@1010 : Boolean;
+      PostingDate@1012 : Date;
+      IsLastEntry@1011 : Boolean;
+    BEGIN
+      DistributeCosts := TRUE;
+      RemAmountToDistribute := ItemJnlLine.Amount;
+      RemQuantity := ItemJnlLine.Quantity;
+      IF ItemJnlLine.Amount <> 0 THEN BEGIN
+        LineCount := LineCount + 1;
+        Window.UPDATE(3,LineCount);
+        Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+        WITH ItemLedgEntry4 DO BEGIN
+          Item.GET(ItemJnlLine4."Item No.");
+          IncludeExpectedCost := (Item."Costing Method" = Item."Costing Method"::Standard) AND
+            (ItemJnlLine4."Inventory Value Per" <> ItemJnlLine4."Inventory Value Per"::" ");
+          RESET;
+          SETCURRENTKEY("Item No.",Positive,"Location Code","Variant Code");
+          SETRANGE("Item No.",ItemJnlLine."Item No.");
+          SETRANGE(Positive,TRUE);
+          PostingDate := ItemJnlLine."Posting Date";
+
+          IF (ItemJnlLine4."Location Code" <> '') OR
+             (ItemJnlLine4."Inventory Value Per" IN
+              [ItemJnlLine."Inventory Value Per"::Location,
+               ItemJnlLine4."Inventory Value Per"::"Location and Variant"])
+          THEN
+            SETRANGE("Location Code",ItemJnlLine."Location Code");
+          IF (ItemJnlLine."Variant Code" <> '') OR
+             (ItemJnlLine4."Inventory Value Per" IN
+              [ItemJnlLine."Inventory Value Per"::Variant,
+               ItemJnlLine4."Inventory Value Per"::"Location and Variant"])
+          THEN
+            SETRANGE("Variant Code",ItemJnlLine."Variant Code");
+          IF FINDSET THEN
+            REPEAT
+              IF IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) THEN BEGIN
+                ItemLedgEntry5 := ItemLedgEntry4;
+
+                ItemJnlLine4."Entry Type" := "Entry Type";
+                IF "Remaining Quantity" <> Quantity THEN
+                  ItemJnlLine4.Quantity :=
+                    CalcInvtValue.CalculateRemQuantity("Entry No.",ItemJnlLine."Posting Date")
+                ELSE
+                  ItemJnlLine4.Quantity := Quantity;
+
+                ItemJnlLine4."Quantity (Base)" := ItemJnlLine4.Quantity;
+                ItemJnlLine4."Invoiced Quantity" := ItemJnlLine4.Quantity;
+                ItemJnlLine4."Invoiced Qty. (Base)" := ItemJnlLine4.Quantity;
+                ItemJnlLine4.Amount := ROUND(ItemJnlLine4.Quantity * ItemJnlLine4."Unit Amount");
+                ItemJnlLine4."Location Code" := "Location Code";
+                ItemJnlLine4."Variant Code" := "Variant Code";
+                ItemJnlLine4."Applies-to Entry" := "Entry No.";
+                ItemJnlLine4."Source No." := "Source No.";
+                ItemJnlLine4."Prod. Order No." := "Prod. Order No.";
+                ItemJnlLine4."Prod. Order Line No." := "Prod. Order Line No.";
+
+                IF ItemJnlLine4.Quantity <> 0 THEN BEGIN
+                  IF Item."Costing Method" = Item."Costing Method"::Average THEN BEGIN
+                    IF ItemJnlLine."Applied Amount" <> 0 THEN
+                      ItemJnlLine4.Amount :=
+                        ROUND(
+                          CalcInvtValue.CalculateRemInvValue(
+                            "Entry No.",Quantity,ItemJnlLine4.Quantity,FALSE),
+                          GLSetup."Amount Rounding Precision") *
+                        ItemJnlLine.Amount / ABS(ItemJnlLine."Applied Amount") + Remainder
+                    ELSE
+                      ItemJnlLine4.Amount :=
+                        ItemJnlLine4.Quantity * ItemJnlLine.Amount / ItemJnlLine.Quantity + Remainder;
+                  END ELSE
+                    ItemJnlLine4.Amount :=
+                      ItemJnlLine."Inventory Value (Revalued)" * ItemJnlLine4.Quantity /
+                      ItemJnlLine.Quantity -
+                        ROUND(
+                          CalcInvtValue.CalculateRemInvValue(
+                            "Entry No.",Quantity,ItemJnlLine4.Quantity,
+                            IncludeExpectedCost AND NOT "Completely Invoiced"),
+                          GLSetup."Amount Rounding Precision") + Remainder;
+
+                  RemQuantity := RemQuantity - ItemJnlLine4.Quantity;
+
+                  IF RemQuantity = 0 THEN BEGIN
+                    IF NEXT > 0 THEN
+                      REPEAT
+                        IF IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) THEN BEGIN
+                          RemQuantity := CalcInvtValue.CalculateRemQuantity("Entry No.",ItemJnlLine."Posting Date");
+                          IF RemQuantity > 0 THEN
+                            ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                        END;
+                      UNTIL NEXT = 0;
+
+                    ItemJnlLine4.Amount := RemAmountToDistribute;
+                    DistributeCosts := FALSE;
+                  END ELSE BEGIN
+                    REPEAT
+                      IsLastEntry := NEXT = 0;
+                    UNTIL IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) OR IsLastEntry;
+                    IF IsLastEntry OR (RemQuantity < 0) THEN
+                      ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                    Remainder := ItemJnlLine4.Amount - ROUND(ItemJnlLine4.Amount,GLSetup."Amount Rounding Precision");
+                    ItemJnlLine4.Amount := ROUND(ItemJnlLine4.Amount,GLSetup."Amount Rounding Precision");
+                    RemAmountToDistribute := RemAmountToDistribute - ItemJnlLine4.Amount;
+                  END;
+                  ItemJnlLine4."Unit Cost" := ItemJnlLine4.Amount / ItemJnlLine4.Quantity;
+
+                  IF ItemJnlLine4.Amount <> 0 THEN BEGIN
+                    IF IncludeExpectedCost AND NOT ItemLedgEntry5."Completely Invoiced" THEN BEGIN
+                      ItemJnlLine4."Applied Amount" := ROUND(
+                        ItemJnlLine4.Amount * (ItemLedgEntry5.Quantity - ItemLedgEntry5."Invoiced Quantity") / ItemLedgEntry5.Quantity,
+                        GLSetup."Amount Rounding Precision");
+                    END ELSE
+                      ItemJnlLine4."Applied Amount" := 0;
+
+                    JnlLineDim.SETRANGE("Table ID",DATABASE::"Item Journal Line");
+                    JnlLineDim.SETRANGE("Journal Template Name",ItemJnlLine4."Journal Template Name");
+                    JnlLineDim.SETRANGE("Journal Batch Name",ItemJnlLine4."Journal Batch Name");
+                    JnlLineDim.SETRANGE("Journal Line No.",ItemJnlLine4."Line No.");
+                    JnlLineDim.SETRANGE("Allocation Line No.",0);
+                    TempJnlLineDim.DELETEALL;
+                    DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+
+                    ItemJnlPostLine.RunWithCheck(ItemJnlLine4,TempJnlLineDim);
+                  END;
+                END ELSE BEGIN
+                  REPEAT
+                    IsLastEntry := NEXT = 0;
+                  UNTIL IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) OR IsLastEntry;
+                  IF IsLastEntry THEN
+                    ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                END;
+              END ELSE
+                DistributeCosts := NEXT <> 0;
+            UNTIL NOT DistributeCosts;
+        END;
+
+        IF ItemJnlLine."Update Standard Cost" THEN
+          UpdateStdCost;
+      END;
+    END;
+
+    LOCAL PROCEDURE IncludeEntryInCalc@7(ItemLedgEntry@1000 : Record 32;PostingDate@1002 : Date;IncludeExpectedCost@1001 : Boolean) : Boolean;
+    BEGIN
+      WITH ItemLedgEntry DO BEGIN
+        IF IncludeExpectedCost THEN
+          EXIT("Posting Date" IN [0D..PostingDate]);
+        EXIT("Completely Invoiced" AND ("Last Invoice Date" IN [0D..PostingDate]));
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateStdCost@5();
+    VAR
+      Item@1000 : Record 27;
+      SKU@1002 : Record 5700;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        IF SKU.GET("Location Code","Item No.","Variant Code") THEN BEGIN
+          SKU.VALIDATE("Standard Cost","Unit Cost (Revalued)");
+          SKU.MODIFY;
+        END ELSE BEGIN
+          Item.GET("Item No.");
+          Item.VALIDATE("Standard Cost","Unit Cost (Revalued)");
+          Item."Single-Level Material Cost" := "Single-Level Material Cost";
+          Item."Single-Level Capacity Cost" := "Single-Level Capacity Cost";
+          Item."Single-Level Subcontrd. Cost" := "Single-Level Subcontrd. Cost";
+          Item."Single-Level Cap. Ovhd Cost" := "Single-Level Cap. Ovhd Cost";
+          Item."Single-Level Mfg. Ovhd Cost" := "Single-Level Mfg. Ovhd Cost";
+          Item."Rolled-up Material Cost" := "Rolled-up Material Cost";
+          Item."Rolled-up Capacity Cost" := "Rolled-up Capacity Cost";
+          Item."Rolled-up Subcontracted Cost" := "Rolled-up Subcontracted Cost";
+          Item."Rolled-up Mfg. Ovhd Cost" := "Rolled-up Mfg. Ovhd Cost";
+          Item."Rolled-up Cap. Overhead Cost" := "Rolled-up Cap. Overhead Cost";
+          Item."Last Unit Cost Calc. Date" := "Posting Date";
+          Item.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckRemainingQty@4();
+    VAR
+      RemainingQty@1000 : Decimal;
+    BEGIN
+      RemainingQty := CalcInvtValue.CalculateRemQuantity(
+        ItemJnlLine."Applies-to Entry",ItemJnlLine."Posting Date");
+
+      IF RemainingQty <> ItemJnlLine.Quantity THEN
+        ERROR(Text008 + Text009,ItemJnlLine."Item No.");
+    END;
+
+    LOCAL PROCEDURE PostWhseJnlLine@7302(ItemJnlLine@1000 : Record 83;OriginalQuantity@1001 : Decimal;OriginalQuantityBase@1006 : Decimal;VAR TempHandlingSpecification@1003 : TEMPORARY Record 336);
+    VAR
+      WhseJnlLine@1002 : Record 7311;
+      TempWhseJnlLine2@1005 : TEMPORARY Record 7311;
+      ItemTrackingMgt@1004 : Codeunit 6500;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        Quantity := OriginalQuantity;
+        "Quantity (Base)" := OriginalQuantityBase;
+        GetLocation("Location Code");
+        IF NOT ("Entry Type" IN ["Entry Type"::Consumption,"Entry Type"::Output]) THEN
+          IF Location."Bin Mandatory" THEN
+            IF WMSMgmt.CreateWhseJnlLine(ItemJnlLine,ItemJnlTemplate.Type,WhseJnlLine,FALSE,FALSE) THEN BEGIN
+              ItemTrackingMgt.SplitWhseJnlLine(WhseJnlLine,TempWhseJnlLine2,TempHandlingSpecification,FALSE);
+              IF TempWhseJnlLine2.FINDSET THEN
+                REPEAT
+                  WMSMgmt.CheckWhseJnlLine(TempWhseJnlLine2,1,0,FALSE);
+                  WhseJnlPostLine.RUN(TempWhseJnlLine2);
+                UNTIL TempWhseJnlLine2.NEXT = 0;
+            END;
+
+        IF "Entry Type" = "Entry Type"::Transfer THEN BEGIN
+          GetLocation("New Location Code");
+          IF Location."Bin Mandatory" THEN
+            IF WMSMgmt.CreateWhseJnlLine(ItemJnlLine,ItemJnlTemplate.Type,WhseJnlLine,TRUE,FALSE) THEN BEGIN
+              ItemTrackingMgt.SplitWhseJnlLine(WhseJnlLine,TempWhseJnlLine2,TempHandlingSpecification,TRUE);
+              IF TempWhseJnlLine2.FINDSET THEN
+                REPEAT
+                  WMSMgmt.CheckWhseJnlLine(TempWhseJnlLine2,1,0,TRUE);
+                  WhseJnlPostLine.RUN(TempWhseJnlLine2);
+                UNTIL TempWhseJnlLine2.NEXT = 0;
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CheckWMSBin@8(ItemJnlLine@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        GetLocation("Location Code");
+        IF Location."Bin Mandatory" THEN
+          WhseTransaction := TRUE;
+        CASE "Entry Type" OF
+          "Entry Type"::Purchase,"Entry Type"::Sale,
+          "Entry Type"::"Positive Adjmt.","Entry Type"::"Negative Adjmt.":
+            BEGIN
+              IF Location."Directed Put-away and Pick" THEN BEGIN
+                WMSMgmt.CheckAdjmtBin(
+                  Location,Quantity,
+                  ("Entry Type" IN
+                   ["Entry Type"::Purchase,
+                    "Entry Type"::"Positive Adjmt."]));
+              END;
+            END;
+          "Entry Type"::Transfer:
+            BEGIN
+              IF Location."Directed Put-away and Pick" THEN
+                WMSMgmt.CheckAdjmtBin(Location,-Quantity,FALSE);
+              GetLocation("New Location Code");
+              IF Location."Directed Put-away and Pick" THEN
+                WMSMgmt.CheckAdjmtBin(Location,Quantity,TRUE);
+              IF Location."Bin Mandatory" THEN
+                WhseTransaction := TRUE;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7301(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        CLEAR(Location)
+      ELSE
+        IF Location.Code <> LocationCode THEN
+          Location.GET(LocationCode);
+    END;
+
+    PROCEDURE GetWhseRegNo@6() : Integer;
+    BEGIN
+      EXIT(WhseRegNo);
+    END;
+
+    PROCEDURE GetItemRegNo@9() : Integer;
+    BEGIN
+      EXIT(ItemRegNo);
+    END;
+
+    LOCAL PROCEDURE IsPhysInvtCount@10(ItemJnlTemplate2@1000 : Record 82;PhysInvtCountingPeriodCode@1002 : Code[10];PhysInvtCountingPeriodType@1003 : ' ,Item,SKU') : Boolean;
+    BEGIN
+      EXIT(
+        (ItemJnlTemplate2.Type = ItemJnlTemplate2.Type::"Phys. Inventory") AND
+        (PhysInvtCountingPeriodType <> PhysInvtCountingPeriodType::" ") AND
+        (PhysInvtCountingPeriodCode <> ''));
+    END;
+
+    BEGIN
+    END.
+  }
+}

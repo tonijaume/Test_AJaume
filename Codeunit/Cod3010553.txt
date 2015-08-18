@@ -1,0 +1,473 @@
+OBJECT Codeunit 3010553 Cost Account Allocation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=CACEM5.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CalcAllShares;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AllocTarget@1150004 : Record 3010557;
+      AccPeriod@1150005 : Record 50;
+      Item@1150006 : Record 27;
+      GlAcc@1150008 : Record 15;
+      CostType@1150009 : Record 3010551;
+      Employee@1150013 : Record 5200;
+      d@1150000 : Dialog;
+      StartDate@1150001 : Date;
+      EndDate@1150002 : Date;
+      TotalShare@1150003 : Decimal;
+      Text000@1150014 : TextConst 'ENU=The dynamic shares of all allocation keys will be newly calculated. \;ESP=Se volver n a calcular las participaciones din micas de todas las claves de asignaci¢n. \';
+      Text001@1150015 : TextConst 'ENU=The basis for possible date filters is the current workdate %1.\\;ESP=La base de posibles filtros de fecha es la fecha de trabajo actual %1.\\';
+      Text002@1150016 : TextConst 'ENU=Start Job?;ESP=¨Iniciar tarea?';
+      Text004@1150018 : TextConst 'ENU=Update allocation keys\;ESP=Actualizar claves asignaci¢n\';
+      Text005@1150019 : TextConst 'ENU=Allocation Targets #1########\;ESP=Destinos asig.     #1########\';
+      Text006@1150020 : TextConst 'ENU=Actual ID          #2########\;ESP=Id. real           #2########\';
+      Text007@1150021 : TextConst 'ENU=Actual Lineno.      #3########;ESP=N§ l¡n. real        #3########';
+      Text008@1150022 : TextConst 'ENU=%1 allocation keys updated.;ESP=Se han actualizado %1 claves asignaci¢n.';
+      Text012@1150026 : TextConst 'ENU=The next accounting period for workdate %1 is not defined.\;ESP=El siguiente periodo contable para la fecha de trabajo %1 no est  definido.\';
+      Text013@1150027 : TextConst 'ENU=Please check the accounting period setup.;ESP=Compruebe la configuraci¢n del periodo contable.';
+      Text015@1150029 : TextConst 'ENU=Previous year is not defined in the accounting periods.\;ESP=A¤o anterior no est  definido en los periodos contables.\';
+      Text016@1150030 : TextConst 'ENU=ID %1, line no. %2.;ESP=Id. %1, n§ l¡nea %2.';
+      Text017@1150045 : TextConst 'ENU=The %1 %2 cannot be used to calculate %3. ID: %4, line no. %5.;ESP=%1 %2 no se puede utilizar para calcular %3. Id.: %4, n§ l¡nea %5.';
+
+    PROCEDURE CalcAllShares@3();
+    VAR
+      NoCalculated@1150002 : Integer;
+    BEGIN
+      // All allocation keys will be updated.
+      // For each line of allocation targets, the function CalcLineShare is run.
+      // For each ID, the percentage of the group is calculated with validate(share).
+
+      IF NOT CONFIRM(Text000 + Text001 + Text002,TRUE,WORKDATE) THEN
+        ERROR('');
+
+      NoCalculated := CalcAllSharesRun;
+
+      MESSAGE(Text008,NoCalculated);
+    END;
+
+    PROCEDURE CalcAllSharesRun@1150001() NoCalculated : Integer;
+    VAR
+      AllocSource@1150000 : Record 3010556;
+      AllocTarget@1150001 : Record 3010557;
+    BEGIN
+      // All allocation keys will be updated.
+      // For each line of allocation targets, the function CalcLineShare is run.
+      // For each ID, the percentage of the group is calculated with validate(share).
+
+      d.OPEN(Text004 + // Upd. alloc. keys
+         Text005 +  // Targets #1
+        Text006 +  // Actual ID #2
+        Text007);  // Actual line no #3
+
+      d.UPDATE(1,FORMAT(AllocTarget.COUNT));
+      IF AllocSource.FIND('-') THEN REPEAT
+          d.UPDATE(2,AllocSource.ID);
+
+          AllocTarget.RESET;
+          AllocTarget.SETRANGE(ID,AllocSource.ID);
+          IF AllocTarget.FIND('-') THEN REPEAT
+              d.UPDATE(3,FORMAT(AllocTarget."Line No."));
+              CalcLineShare(AllocTarget);
+              NoCalculated := NoCalculated + 1;
+            UNTIL AllocTarget.NEXT = 0;
+
+          AllocTarget.VALIDATE(Share);  // Calc percentage on last line per ID
+        UNTIL AllocSource.NEXT = 0;
+      d.CLOSE;
+
+      EXIT(NoCalculated);
+    END;
+
+    PROCEDURE CalcIdShares@2(VAR AllocSource@1150000 : Record 3010556);
+    BEGIN
+      // For all shares with identical ID, the allocation keys are updated.
+      // For each line of allocation targets, the function CalcLineShare is run.
+      // At the end, validate(sharel) updates the percentage per line.
+
+      AllocTarget.RESET;
+      AllocTarget.SETRANGE(ID,AllocSource.ID);
+      IF AllocTarget.FIND('-') THEN REPEAT
+          CalcLineShare(AllocTarget);
+        UNTIL AllocTarget.NEXT = 0;
+
+      // Recalc percentage
+      AllocTarget.VALIDATE(Share);
+    END;
+
+    PROCEDURE CalcLineShare@1(VAR AllocTarget@1150000 : Record 3010557);
+    BEGIN
+      // The shares of the allocation targets can depend on different bases.
+      // Depending on the option field "Base, the corresponding value is calculated from
+      // existing data in other areas of the system.
+      // Usually, FlowFilters are set and the records processed that correspond to the Filters.
+      // For each record, the FlowFields are calculated and summed up.
+
+      // To define new dynamic relations:
+      // 1. Define new option in Alloc. Target (3010557 Field 30)
+      // 2. Add a new CASE block that runs though the corresponding records and sums up
+      // 3. Adapte TableRelation from No. Filter (3010557 Field 31) and Group Filter ( Field 35)
+
+      // Option                        FlowFilter                 Tablefilter        REMARK
+      // 0 - Static allocation        No Allocation
+      // 1 - GL Acc. Net Change       CC, CO, Date               Number
+      // 2 - GL Acc. budget           CC, CO, Date, Budgetname   Number
+      // 3 - Cost Type Net Change     CC, CO, Date               Number
+      // 4 - Cost Type Budget         CC, CO, Date, Budgetname   Number
+      // 5 - free
+      // 6 - free
+      // 7 - Gross Salary Sum         CC, Date                   Number, CostCenter RESERVED CH
+      // 8 - No. of Staff             CC                         Number             RESERVED CH
+      // 9 - No. of Employees         CC                         Number
+      // 10 - free
+      // 11 - Item Sales Qty.          CC, CO, Date               Number, Inv. PG
+      // 12 - Item Purchase Qty.       CC, CO, Date               Number, Inv. PG
+      // 13 - Item Sales Amount        CC, CO, Date               Number, Inv. PG
+      // 14 - Item Purchase Amount     CC, CO, Date               Number, Inv. PG
+
+
+      WITH AllocTarget DO BEGIN
+
+        IF Base = Base::Static THEN
+          EXIT;
+        TotalShare := 0;
+        CalcDateFilter(AllocTarget);  // From/To date based on Filter Date
+
+        // *** Calc. share on base
+        CASE Base OF
+
+          // 1 - GL net change, on GL entry amount
+          Base::"G/L Movement":
+            BEGIN
+              GlAcc.SETFILTER("Account Type",'%1',GlAcc."Account Type"::Posting);
+              GlAcc.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              GlAcc.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              GlAcc.SETRANGE("Date Filter",StartDate,EndDate);
+              GlAcc.SETFILTER("No.","No. Filter");
+              IF GlAcc.FIND('-') THEN REPEAT
+                  GlAcc.CALCFIELDS("Net Change");
+                  TotalShare := TotalShare + GlAcc."Net Change";
+                UNTIL GlAcc.NEXT = 0;
+            END;
+
+
+          // 2 - GL Budget, on budget entries, Group: Budgetname
+          Base::"G/L Budget":
+            BEGIN
+              GlAcc.SETFILTER("Account Type",'%1',GlAcc."Account Type"::Posting);
+              GlAcc.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              GlAcc.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              GlAcc.SETRANGE("Date Filter",StartDate,EndDate);
+              GlAcc.SETFILTER("Budget Filter","Group Filter");
+              GlAcc.SETFILTER("No.","No. Filter");
+              IF GlAcc.FIND('-') THEN REPEAT
+                  GlAcc.CALCFIELDS("Budgeted Amount");
+                  TotalShare := TotalShare + GlAcc."Budgeted Amount";
+                UNTIL GlAcc.NEXT = 0;
+            END;
+
+
+          // 3 - Cost type net change, on cost entry amount
+          Base::"Cost Type Movement":
+            BEGIN
+              CostType.SETFILTER("Line Type",'%1',CostType."Line Type"::"Cost Type");
+              CostType.SETFILTER("Cost Center Filter","Cost Center Filter");
+              CostType.SETFILTER("Cost Object Filter","Cost Object Filter");
+              CostType.SETRANGE("Date Filter",StartDate,EndDate);
+              CostType.SETFILTER("No.","No. Filter");
+              IF CostType.FIND('-') THEN REPEAT
+                  CostType.CALCFIELDS("Net Change");
+                  TotalShare := TotalShare + CostType."Net Change";
+                UNTIL CostType.NEXT = 0;
+            END;
+
+
+          // 4 - Cost type budget, on cost budget entry amount
+          Base::"Cost Type Budget":
+            BEGIN
+              CostType.SETFILTER("Line Type",'%1',CostType."Line Type"::"Cost Type");
+              CostType.SETFILTER("Cost Center Filter","Cost Center Filter");
+              CostType.SETFILTER("Cost Object Filter","Cost Object Filter");
+              CostType.SETFILTER("Budget Filter","Group Filter");
+              CostType.SETRANGE("Date Filter",StartDate,EndDate);
+              CostType.SETFILTER("No.","No. Filter");
+              IF CostType.FIND('-') THEN REPEAT
+                  CostType.CALCFIELDS("Budget Amount");
+                  TotalShare := TotalShare + CostType."Budget Amount";
+                UNTIL CostType.NEXT = 0;
+            END;
+
+
+          // 7 - Gross salary. On salary entry base gross salary. No CC/CO Filters
+          Base::"7":
+            BEGIN
+              // ONLY PY CH
+
+            END;
+
+
+          // 8 - No. of Staff. Group Filter on Cost Center
+          Base::"8":
+            BEGIN
+              // ONLY PY CH
+
+            END;
+
+          // 9 - No. of Employees
+          Base::"No of Employees":
+            BEGIN
+              Employee.SETCURRENTKEY(Status);
+              Employee.SETRANGE(Status,Employee.Status::Active);
+              Employee.SETFILTER("Global Dimension 1 Code","Cost Center Filter");
+              Employee.SETFILTER("Global Dimension 2 Code","Cost Object Filter");
+              TotalShare := Employee.COUNT;
+            END;
+
+
+          // 11 - Item sales. On item entry, qty. invoiced. Group Filter on inv. PG
+          Base::"Items Sold (Qty)":
+            BEGIN
+              Item.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              Item.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              Item.SETRANGE("Date Filter",StartDate,EndDate);
+              Item.SETFILTER("No.","No. Filter");
+              Item.SETFILTER("Inventory Posting Group","Group Filter");
+              IF Item.FIND('-') THEN REPEAT
+                  Item.CALCFIELDS("Sales (Qty.)");
+                  TotalShare := TotalShare + Item."Sales (Qty.)";
+                UNTIL Item.NEXT = 0;
+            END;
+
+
+          // 12 - Item purchase. On item entry, qty. invoiced. Group Filter on inv. PG
+          Base::"Items Purchased (Qty)":
+            BEGIN
+              Item.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              Item.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              Item.SETRANGE("Date Filter",StartDate,EndDate);
+              Item.SETFILTER("No.","No. Filter");
+              Item.SETFILTER("Inventory Posting Group","Group Filter");
+              IF Item.FIND('-') THEN REPEAT
+                  Item.CALCFIELDS("Purchases (Qty.)");
+                  TotalShare := TotalShare + Item."Purchases (Qty.)";
+                UNTIL Item.NEXT = 0;
+            END;
+
+
+          // 13 - Item sales amount. On item entry amount. Group Filter on inv. PG
+          Base::"Items Sold (Amount)":
+            BEGIN
+              Item.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              Item.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              Item.SETRANGE("Date Filter",StartDate,EndDate);
+              Item.SETFILTER("No.","No. Filter");
+              Item.SETFILTER("Inventory Posting Group","Group Filter");
+              IF Item.FIND('-') THEN REPEAT
+                  Item.CALCFIELDS("Sales (LCY)");
+                  TotalShare := TotalShare + Item."Sales (LCY)";
+                UNTIL Item.NEXT = 0;
+            END;
+
+
+          // 14 - Item purch. amount. On item entry amount. Group Filter on inv. PG
+          Base::"Items Purchased (Amount)":
+            BEGIN
+              Item.SETFILTER("Global Dimension 1 Filter","Cost Center Filter");
+              Item.SETFILTER("Global Dimension 2 Filter","Cost Object Filter");
+              Item.SETRANGE("Date Filter",StartDate,EndDate);
+              Item.SETFILTER("No.","No. Filter");
+              Item.SETFILTER("Inventory Posting Group","Group Filter");
+              IF Item.FIND('-') THEN REPEAT
+                  Item.CALCFIELDS("Purchases (LCY)");
+                  TotalShare := TotalShare + Item."Purchases (LCY)";
+                UNTIL Item.NEXT = 0;
+            END;
+
+        END;  // CASE
+
+        // Write new share
+        IF TotalShare <> Share THEN BEGIN
+          Share := ROUND(TotalShare,0.00001);
+          MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE CalcDateFilter@4(AllocTarget@1150000 : Record 3010557);
+    VAR
+      PeriodStart@1150001 : Date;
+      NextPeriodStart@1150002 : Date;
+      LastPeriodStart@1150003 : Date;
+      LastYearPeriodStart@1150004 : Date;
+      LastYearNextPeriodStart@1150005 : Date;
+      YearStart@1150006 : Date;
+      NextYearStart@1150007 : Date;
+      LastYearStart@1150008 : Date;
+    BEGIN
+      // *** Calc start date and end date based on date filter code
+      AccPeriod.RESET;
+      StartDate := 0D;
+      EndDate := 0D;
+
+      IF AllocTarget."Date Filter Code" = 0 THEN
+        EXIT;
+
+      // *** prepare key dates from accounting periods
+      // Next period exists?
+      AccPeriod.SETFILTER("Starting Date",'>%1',WORKDATE);
+      IF NOT AccPeriod.FIND('-') THEN
+        ERROR(Text012 + Text013,WORKDATE);
+
+      // Next period start
+      AccPeriod.SETFILTER("Starting Date",'>%1',WORKDATE);
+      AccPeriod.FIND('-');
+      NextPeriodStart := AccPeriod."Starting Date";
+      AccPeriod.SETRANGE("Starting Date");  // reset filter
+
+      // Actual period start
+      AccPeriod.NEXT(-1);
+      PeriodStart := AccPeriod."Starting Date";
+
+      // Last period start
+      AccPeriod.NEXT(-1);
+      LastPeriodStart := AccPeriod."Starting Date";
+
+      // Last year next period start
+      AccPeriod.SETFILTER("Starting Date",'>%1',CALCDATE('<-1Y>',WORKDATE));
+      AccPeriod.FIND('-');
+      LastYearNextPeriodStart := AccPeriod."Starting Date";
+      AccPeriod.SETRANGE("Starting Date");  // reset filter
+
+      // Last year period start
+      IF AccPeriod.NEXT(-1) = 0 THEN
+
+        IF AllocTarget."Date Filter Code" IN
+           [AllocTarget."Date Filter Code"::"Period of Last Year",AllocTarget."Date Filter Code"::"Last Fiscal Year"]
+        THEN
+
+          ERROR(Text015 + Text016,AllocTarget.ID,AllocTarget."Line No.");
+      LastYearPeriodStart := AccPeriod."Starting Date";
+
+      // Next fiscal year start
+      AccPeriod.SETRANGE("New Fiscal Year",TRUE);
+      AccPeriod.SETFILTER("Starting Date",'>%1',WORKDATE);
+      AccPeriod.FIND('-');
+      NextYearStart := AccPeriod."Starting Date";
+      AccPeriod.SETRANGE("Starting Date");  // reset filter
+
+      // actual year start
+      AccPeriod.NEXT(-1);
+      YearStart := AccPeriod."Starting Date";
+
+      // last year start
+      IF AccPeriod.NEXT(-1) = 0 THEN
+
+        IF AllocTarget."Date Filter Code" IN
+           [AllocTarget."Date Filter Code"::"Period of Last Year",AllocTarget."Date Filter Code"::"Last Fiscal Year"]
+        THEN
+
+          ERROR(Text015 + Text016,AllocTarget.ID,AllocTarget."Line No.");
+      LastYearStart := AccPeriod."Starting Date";
+
+
+      // *** define start date and end date according to filter code
+      CASE AllocTarget."Date Filter Code" OF
+
+        AllocTarget."Date Filter Code"::Week:
+          BEGIN
+            StartDate := CALCDATE('<-CW>',WORKDATE);
+            EndDate := CALCDATE('<CW>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::"Last Week":
+          BEGIN
+            StartDate := CALCDATE('<-CW-1W>',WORKDATE);
+            EndDate := CALCDATE('<CW-1W>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::Month:
+          BEGIN
+            StartDate := CALCDATE('<-CM>',WORKDATE);
+            EndDate := CALCDATE('<CM>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::"Last Month":
+          BEGIN
+            StartDate := CALCDATE('<-CM-1M>',WORKDATE);
+            EndDate := CALCDATE('<CM>',StartDate);
+          END;
+
+        AllocTarget."Date Filter Code"::"Month of Last Year":
+          BEGIN
+            StartDate := CALCDATE('<-CM-1Y>',WORKDATE);
+            EndDate := CALCDATE('<CM-1Y>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::Year:
+          BEGIN
+            StartDate := CALCDATE('<-CY>',WORKDATE);
+            EndDate := CALCDATE('<CY>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::"Last Year":
+          BEGIN
+            StartDate := CALCDATE('<-CY-1Y>',WORKDATE);
+            EndDate := CALCDATE('<CY-1Y>',WORKDATE);
+          END;
+
+        AllocTarget."Date Filter Code"::Period:
+          BEGIN
+            StartDate := PeriodStart;
+            EndDate := NextPeriodStart - 1;
+          END;
+
+        AllocTarget."Date Filter Code"::"Last Period":
+          BEGIN
+            StartDate := LastPeriodStart;
+            EndDate := PeriodStart - 1;
+          END;
+
+        AllocTarget."Date Filter Code"::"Period of Last Year":
+          BEGIN
+            StartDate := LastYearPeriodStart;
+            EndDate := LastYearNextPeriodStart - 1;
+          END;
+
+        AllocTarget."Date Filter Code"::"Fiscal Year":
+          BEGIN
+            StartDate := YearStart;
+            EndDate := NextYearStart - 1;
+          END;
+
+        AllocTarget."Date Filter Code"::"Last Fiscal Year":
+          BEGIN
+            StartDate := LastYearStart;
+            EndDate := YearStart - 1;
+          END;
+      END;
+    END;
+
+    PROCEDURE CheckFilter@5(AllocTarget@1150000 : Record 3010557;_Filtername@1150001 : Text[30];_Filtercontents@1150002 : Text[30];_Testvalue@1150003 : Text[30]);
+    BEGIN
+      // Compare filter contents with test value
+      IF _Filtercontents <> _Testvalue THEN
+        ERROR(
+          Text017,
+          _Filtername,_Filtercontents,AllocTarget.Base,AllocTarget.ID,
+          AllocTarget."Line No.");
+    END;
+
+    BEGIN
+    END.
+  }
+}

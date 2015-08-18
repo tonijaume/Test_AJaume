@@ -1,0 +1,1301 @@
+OBJECT Codeunit 7009784 WS - Transfer interface
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/03/15;
+    Time=10:41:31;
+    Modified=Yes;
+    Version List=AIC2009,CNT-CAR-14063,COM;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            _TestCrear;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100217000 : TextConst 'ENU=The amount of the payments are not enough to pay the reservation.;ESP=El importe de los cobros no coincide con el total de la reserva.';
+      Text002@1100217001 : TextConst 'ENU=Booking %1 is cancelled, the operation cannot be completed.;ESP=El bono %1 esta cancelado, no se puede continuar con la operacion.';
+      Text003@1000000000 : TextConst 'ENU=Booking %1 not found.;ESP=Bono %1 no encontrado.';
+      rPar@1000000001 : Record 7009700;
+      rParInt@1000000002 : Record 7010081;
+      Text004@1000000003 : TextConst 'ENU=Booking %1 is already confirmed, the operation cannot be completed.;ESP=El bono %1 ha sido confirmado anteriormente, no se puede continuar con la operacion.';
+      Text005@1000000004 : TextConst 'ENU=There is no sale contract for the touroperator.;ESP=No se ha encontrado contrato de venta para el touroperador.';
+      Text006@1000000005 : TextConst 'ENU=There is no sale price.;ESP=No se ha encontrado precio venta.';
+      Text007@1000000006 : TextConst 'ENU=TRANSFER;ESP=TRANSFER';
+      Text008@1000000007 : TextConst 'ENU=This action cannot be completed. You are out of release.;ESP=No se puede realizar esta acci¢n por estar fuera de plazo.';
+      Text009@1000000008 : TextConst 'ENU=Voucher not found.;ESP=No se ha encontrado el voucher indicado.';
+
+    PROCEDURE GetTransferMasterData@1100217001(pwCodTTOO@1000000000 : Code[10];pwAllDestinations@1100217002 : Boolean;VAR xmlTransferData@1100217000 : XMLport 7009707) : Boolean;
+    BEGIN
+      // GetTransferMasterData
+
+      CLEAR(xmlTransferData);
+      xmlTransferData.PassParameters(pwCodTTOO, pwAllDestinations);
+      xmlTransferData.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE RequestTransferReservation@1100217002(VAR xmlReserva@1100217000 : XMLport 7009708) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7009924;
+      lrWSPersonTMP@1100217002 : TEMPORARY Record 7009925;
+      lrWSPayTMP@1000000003 : TEMPORARY Record 7009926;
+      lrWSRsv@1100217005 : Record 7009924;
+      lrWSPerson@1100217007 : Record 7009925;
+      lrWSPay@1000000002 : Record 7009926;
+    BEGIN
+      // RequestExcursionReservation
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP, lrWSPersonTMP, lrWSPayTMP);
+
+      //. Busca el numero de bono
+      lrWSRsvTMP.Bono := _GetNoBono;
+
+      // Creamos la cabecera de reserva
+      rPar.RESET;
+      rPar.FINDFIRST;
+
+      rParInt.RESET;
+      rParInt.FINDFIRST;
+      rParInt.TESTFIELD(rParInt."Paquete Solo Transfer");
+
+      _CrearReserva(lrWSRsvTMP, lrWSPersonTMP);
+
+      //. Pasamos los registros de la tabla temporal a un apuntador real
+
+      lrWSRsv := lrWSRsvTMP;
+      lrWSRsv.INSERT(TRUE);
+
+      // Calculamos precios de la reserva
+      _calculo_ingreso(lrWSRsv);
+
+      IF lrWSPersonTMP.FINDFIRST THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrWSPerson);
+          lrWSPerson."Reservation ID" := lrWSRsv.ID;
+          lrWSPerson.Name := lrWSPersonTMP.Name;
+          lrWSPerson."Person type" := lrWSPersonTMP."Person type";
+          lrWSPerson.INSERT(TRUE);
+        UNTIL lrWSPersonTMP.NEXT = 0;
+      END;
+
+      //. Devolvemos el registro al XMLPort
+
+      lrWSRsv.SETRECFILTER;
+
+      xmlReserva.SetTables(lrWSRsv, lrWSPerson, lrWSPay, TRUE);
+      xmlReserva.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddPaymentInfo@1000000007(VAR xmlReserva@1100217000 : XMLport 7009708) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217003 : TEMPORARY Record 7009924;
+      lrWSPersonTMP@1100217002 : TEMPORARY Record 7009925;
+      lrWSPayTMP@1100217001 : TEMPORARY Record 7009926;
+      lrWSRsv@1000000001 : Record 7009924;
+      lrWSPay@1000000000 : Record 7009926;
+    BEGIN
+      // AddPaymentInfo
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP, lrWSPersonTMP, lrWSPayTMP);
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY(Bono);
+      lrWSRsv.SETRANGE(Bono, lrWSRsvTMP.Bono);
+      lrWSRsv.FINDFIRST;
+
+      // Pasamos los cobros a la tabla f¡sica
+      IF lrWSPayTMP.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrWSPay.RESET;
+          lrWSPay.INIT;
+          lrWSPay := lrWSPayTMP;
+          lrWSPay."Reservation ID" := lrWSRsv.ID;
+          lrWSPay."Reservation currency amount" := _CambioDivisa(lrWSPay."Currency code",
+                                                   lrWSRsv."Reservation Currency Code", lrWSPay.Amount);
+
+          lrWSPay.INSERT(TRUE);
+        UNTIL lrWSPayTMP.NEXT = 0;
+      END;
+
+      lrWSRsv.CALCFIELDS(lrWSRsv."Payments amount");
+      IF lrWSRsv."Payments amount" < lrWSRsv."Reservation income" THEN
+        ERROR(Text001);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ConfirmTransferReservation@1000000005(BookingNumber@1100217000 : Code[10];CustomerPaymentType@1000000002 : Integer) : Boolean;
+    VAR
+      lrWSRsv@1100217001 : Record 7009924;
+      lrWSPay@1000000005 : Record 7009926;
+      lrCobro@1000000004 : Record 7009927;
+      lrCabRsv@1000000001 : Record 7009741;
+      lrRsvTra@1000000003 : Record 7009744;
+      rElemTran@1000000006 : Record 7009792;
+      cFunRes@1000000000 : Codeunit 7009703;
+    BEGIN
+      // ConfirmETransferReservation
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY(Bono);
+      lrWSRsv.SETRANGE(Bono, BookingNumber);
+      lrWSRsv.FINDFIRST;
+
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, BookingNumber);
+
+      lrWSRsv.Confirmed := TRUE;
+      lrWSRsv."Customer Payment Type" := CustomerPaymentType;
+      lrWSRsv.MODIFY;
+
+      // Buscamos la cabecera de reserva y ejecutamos la confirmaci¢n para generar reserva transfer
+      lrCabRsv.RESET;
+      lrCabRsv.SETCURRENTKEY(Generada, TourOperador, Bono);
+      lrCabRsv.SETRANGE(TourOperador, lrWSRsv.Touroperador);
+      lrCabRsv.SETRANGE(Bono        , lrWSRsv.Bono);
+      IF NOT lrCabRsv.FINDFIRST THEN
+        ERROR(Text003, lrWSRsv.Bono);
+
+      IF lrCabRsv.Generada THEN
+        ERROR(Text004, lrWSRsv.Bono);
+
+      cFunRes.generar_cabecera(lrCabRsv, FALSE);
+
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Delegacion, "N§ Interno");
+      lrRsvTra.SETRANGE(Delegacion  , lrCabRsv.Delegacion);
+      lrRsvTra.SETRANGE("N§ Interno", lrCabRsv."N§ Interno");
+      lrRsvTra.FINDFIRST;
+
+      lrRsvTra."User Type"      := lrWSRsv."User Type";
+      lrRsvTra."User Id"        := lrWSRsv."User Id";
+      lrRsvTra."Reserva online" := TRUE;
+      IF lrWSRsv."User Type" = 'REP' THEN
+        lrRsvTra."Guia Venta"     := lrWSRsv."User Id";
+      lrRsvTra."Fecha Venta"    := lrWSRsv."Creation Date";
+      lrRsvTra."C¢d. divisa"    := lrWSRsv."Reservation Currency Code"; //+$001
+      //. Le pasamos la fecha venta pero en el Validate busca la ultima fecha de cambio de la divisa, es correcto
+      lrRsvTra.VALIDATE("Fecha cambio");
+
+      // Se marca la reserva seg£n el tipo de pago
+      CASE CustomerPaymentType OF
+        0: lrRsvTra."Tipo pago reserva" := lrRsvTra."Tipo pago reserva"::Online;
+        1: lrRsvTra."Tipo pago reserva" := lrRsvTra."Tipo pago reserva"::Destino;
+        2: lrRsvTra."Tipo pago reserva" := lrRsvTra."Tipo pago reserva"::Credito;
+      END;
+
+      lrRsvTra."Adultos Bono"          := lrWSRsv.Adults;
+      lrRsvTra."Ni¤os Bono"            := lrWSRsv.Childs;
+      lrRsvTra."Precio entrada adulto" := lrWSRsv."Adults Arr price";
+      lrRsvTra."Precio entrada ni¤o"   := lrWSRsv."Childs Arr price";
+      lrRsvTra."Precio salida adulto"  := lrWSRsv."Adults Dep price";
+      lrRsvTra."Precio salida ni¤o"    := lrWSRsv."Childs Dep price";
+      lrRsvTra."Ingreso reserva"       := lrWSRsv."Reservation income";
+      lrRsvTra.busca_importes_netos;
+      lrRsvTra.MODIFY;
+
+      lrWSRsv."ID Reserva responsable" := lrRsvTra."N§ Reserva";
+      lrWSRsv.MODIFY;
+
+      // Si hay voucher descuento introducimos un elemento a transportar
+      IF lrWSRsv."Voucher Discount Code" <> '' THEN
+      BEGIN
+        rElemTran.INIT;
+        rElemTran.Delegacion              := lrRsvTra.Delegacion;
+        rElemTran."N§ Reserva"            := lrRsvTra."N§ Reserva";
+        rElemTran."N§ Orden"              := 100000;
+        rElemTran."Tipo elemento"         := lrWSRsv."Voucher Discount Code";
+        rElemTran."Numero elementos"      := 1;
+        rElemTran.Humano                  := FALSE;
+        rElemTran."Num Voucher Descuento" := lrWSRsv."Voucher Discount No";
+        rElemTran.LOCKTABLE;
+        rElemTran.INSERT;
+      END;
+
+      // Creamos los cobros en la reserva transfer
+      lrWSPay.RESET;
+      lrWSPay.SETRANGE(lrWSPay."Reservation ID", lrWSRsv.ID);
+      IF lrWSPay.FINDSET THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrCobro);
+          lrCobro.VALIDATE(Delegacion   , lrRsvTra.Delegacion);
+          lrCobro.VALIDATE("Num Reserva", lrRsvTra."N§ Reserva");
+          lrCobro.INSERT(TRUE);
+
+          lrCobro.VALIDATE("Forma de Pago"   , lrWSPay."Payment Method");
+          lrCobro.VALIDATE("Cod. Divisa"     , lrWSPay."Currency code");
+          lrCobro.VALIDATE("Importe Recibido", lrWSPay.Amount);
+          lrCobro."Autorizacion operacion" := lrWSPay."Creditcard operation";
+          lrCobro.MODIFY(TRUE);
+        UNTIL lrWSPay.NEXT = 0;
+      END;
+
+      IF lrWSRsv."User Type" = 'REP' THEN
+      BEGIN
+        lrRsvTra.CALCFIELDS("Importe cobros");
+        IF lrRsvTra."Importe cobros" < lrRsvTra."Ingreso reserva" THEN
+          ERROR(Text001);
+      END;
+
+      // En el caso de tipo cobro online se realiza el asiento de cliente a banco
+      IF CustomerPaymentType = 0 THEN
+      BEGIN
+        lrCobro.RESET;
+        lrCobro.SETRANGE(Delegacion   , lrRsvTra.Delegacion);
+        lrCobro.SETRANGE("Num Reserva", lrRsvTra."N§ Reserva");
+        IF lrCobro.FINDFIRST THEN
+        BEGIN
+          REPEAT
+            _AsientosLiquidacion(lrWSRsv, lrCobro, lrCabRsv);
+          UNTIL lrCobro.NEXT = 0;
+        END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CancelTransferReservation@1000000004(pwBookingNumber@1100217000 : Code[10]) : Boolean;
+    VAR
+      lrWSRsv@1100217001 : Record 7009924;
+      lrCabRsv@1100217002 : Record 7009741;
+      lrRsvTra@1000000000 : Record 7009744;
+      lrCobro@1000000001 : Record 7009927;
+      rPreV@1000000002 : Record 7009790;
+      vRelease@1000000003 : Integer;
+    BEGIN
+      // CancelTransferReservation
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY(Bono);
+      lrWSRsv.SETRANGE(Bono, pwBookingNumber);
+      lrWSRsv.FINDFIRST;
+
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, pwBookingNumber);
+
+      // Comprobamos si est  dentro del release de precios
+      lrCabRsv.RESET;
+      lrCabRsv.SETCURRENTKEY(Bono);
+      lrCabRsv.SETRANGE(Bono, pwBookingNumber);
+      IF lrCabRsv.FINDFIRST THEN
+      BEGIN
+        rPreV.RESET;
+        rPreV.SETRANGE(Delegacion     , lrCabRsv.Delegacion);
+        rPreV.SETRANGE("N§ Contrato"  , lrWSRsv."Num Contrato Venta");
+        rPreV.SETRANGE("Codigo precio", rPreV."Codigo precio"::"Precio Base");
+        // entrada
+        IF lrWSRsv."ID Precio entrada" <> 0 THEN
+        BEGIN
+          rPreV.SETRANGE("Orden precio", lrWSRsv."ID Precio entrada");
+          IF rPreV.FINDFIRST THEN
+          BEGIN
+            vRelease := lrWSRsv."Arr Service Date" - WORKDATE;
+            IF (vRelease < rPreV.Release) THEN
+              ERROR(Text008);
+          END;
+        END;
+        // salida
+        IF lrWSRsv."ID Precio salida" <> 0 THEN
+        BEGIN
+          rPreV.SETRANGE("Orden precio", lrWSRsv."ID Precio salida");
+          IF rPreV.FINDFIRST THEN
+          BEGIN
+            vRelease := lrWSRsv."Dep Service Date" - WORKDATE;
+            IF (vRelease < rPreV.Release) THEN
+              ERROR(Text008);
+          END;
+        END;
+      END;
+
+      lrWSRsv.Cancelled := TRUE;
+      lrWSRsv."ID Reserva responsable" := 0;
+      lrWSRsv.MODIFY;
+
+      // Si la reserva es con pago online se debe hacer contraasiento del pago
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Bono, "Fecha entrada", "Fecha salida");
+      lrRsvTra.SETRANGE(Bono, lrWSRsv.Bono);
+      IF lrRsvTra.FINDFIRST THEN
+      BEGIN
+        IF lrRsvTra."Tipo pago reserva" = lrRsvTra."Tipo pago reserva"::Online THEN
+        BEGIN
+          lrCobro.RESET;
+          lrCobro.SETRANGE(Delegacion   , lrRsvTra.Delegacion);
+          lrCobro.SETRANGE("Num Reserva", lrRsvTra."N§ Reserva");
+          IF lrCobro.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              lrCobro.Importe := - lrCobro.Importe;
+              _AsientosLiquidacion(lrWSRsv,lrCobro,lrCabRsv);
+            UNTIL lrCobro.NEXT = 0;
+          END;
+        END;
+      END;
+
+      lrCabRsv.RESET;
+      lrCabRsv.SETCURRENTKEY(lrCabRsv.Bono);
+      lrCabRsv.SETRANGE(Bono, pwBookingNumber);
+      IF lrCabRsv.FINDFIRST THEN
+        lrCabRsv.DELETE(TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ViewMyBookings@1000000010(UserId@1000000000 : Text[30];VAR xmlReserva@1100217000 : XMLport 7009709) : Boolean;
+    VAR
+      lrWSExcRsv2@1100217001 : Record 7010257;
+      lrWSExcRsv@1100217005 : Record 7010257;
+      lrWSExcSup@1100217007 : Record 7010258;
+      lrWSExcPay@1100217008 : Record 7010259;
+      vLimpiarTablas@1000000001 : Boolean;
+      lrWSTraRsv2@1000000005 : Record 7009924;
+      lrWSTraRsv@1000000004 : Record 7009924;
+      lrWSTraPerson@1000000003 : Record 7009925;
+      lrWSTraPay@1000000002 : Record 7009926;
+    BEGIN
+      // ViewMyBookings
+
+      // Exportamos reservas de excursiones y de transfer de usuario indicado
+
+      //. Buscamos las reservas de excursiones
+      //. Filtrar fecha excursi¢n igual o posterior a hoy
+
+      vLimpiarTablas := TRUE;
+
+      lrWSExcRsv.RESET;
+      lrWSExcRsv.SETRANGE ("User Id"     , UserId);
+      lrWSExcRsv.SETFILTER("Service Date", '>=%1', TODAY);
+      IF lrWSExcRsv.FINDFIRST THEN
+      BEGIN
+        vLimpiarTablas := TRUE;
+        REPEAT
+          lrWSExcRsv2.RESET;
+          lrWSExcRsv2.SETRANGE(ID, lrWSExcRsv.ID);
+
+          //. Buscamos los suplementos de la reserva
+          lrWSExcSup.RESET;
+          lrWSExcSup.SETRANGE("Reservation ID"  , lrWSExcRsv2.ID);
+          IF lrWSExcSup.FINDFIRST THEN
+          BEGIN
+          END;
+
+          //. Buscamos los pagos
+          lrWSExcPay.RESET;
+          lrWSExcPay.SETRANGE("Reservation ID"  , lrWSExcRsv2.ID);
+          IF lrWSExcPay.FINDFIRST THEN
+          BEGIN
+          END;
+
+          xmlReserva.SetExcursionTables(lrWSExcRsv2, lrWSExcSup, lrWSExcPay, vLimpiarTablas);
+          vLimpiarTablas := FALSE;
+        UNTIL lrWSExcRsv.NEXT = 0;
+      END;
+
+      //. Buscamos las reservas de transfer
+      //. Filtrar fecha de llegada o salida igual o posterior a hoy  o blanco
+
+      vLimpiarTablas := TRUE;
+
+      lrWSTraRsv.RESET;
+      lrWSTraRsv.SETRANGE ("User Id", UserId);
+      lrWSTraRsv.SETFILTER("Arr Service Date", '>=%1|%2', TODAY, 0D);
+      lrWSTraRsv.SETFILTER("Dep Service Date", '>=%1|%2', TODAY, 0D);
+      IF lrWSTraRsv.FINDFIRST THEN
+      BEGIN
+        vLimpiarTablas := TRUE;
+        REPEAT
+          lrWSTraRsv2.RESET;
+          lrWSTraRsv2.SETRANGE(ID, lrWSTraRsv.ID);
+
+          //. Buscamos las personas de la reserva
+          lrWSTraPerson.RESET;
+          lrWSTraPerson.SETRANGE("Reservation ID"  , lrWSTraRsv2.ID);
+          IF lrWSTraPerson.FINDFIRST THEN
+          BEGIN
+          END;
+
+          //. Buscamos los pagos
+          lrWSTraPay.RESET;
+          lrWSTraPay.SETRANGE("Reservation ID"  , lrWSTraRsv2.ID);
+          IF lrWSTraPay.FINDFIRST THEN
+          BEGIN
+          END;
+
+          xmlReserva.SetTransferTables(lrWSTraRsv2, lrWSTraPerson, lrWSTraPay, vLimpiarTablas);
+          vLimpiarTablas := FALSE;
+        UNTIL lrWSTraRsv.NEXT = 0;
+      END;
+
+      xmlReserva.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateBooking@1000000009(VAR xmlReserva@1100217000 : XMLport 7009708) : Boolean;
+    VAR
+      lrWSRsvTMP@1100217001 : TEMPORARY Record 7009924;
+      lrWSPersonTMP@1100217002 : TEMPORARY Record 7009925;
+      lrWSPayTMP@1100217003 : TEMPORARY Record 7009926;
+      lrWSRsv@1100217005 : Record 7009924;
+      lrWSPerson@1100217007 : Record 7009925;
+      lrWSPay@1100217008 : Record 7009926;
+      lrCabRsv@1100217004 : Record 7009741;
+      lrRsvTra@1000000000 : Record 7009744;
+      lrCobro@1000000001 : Record 7009927;
+    BEGIN
+      // UpdateBooking
+
+      xmlReserva.IMPORT;
+      xmlReserva.GetTables(lrWSRsvTMP, lrWSPersonTMP, lrWSPayTMP);
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY(Bono);
+      lrWSRsv.SETRANGE(Bono, lrWSRsvTMP.Bono);
+      lrWSRsv.FINDFIRST;
+
+      // cancelamos la reserva actual
+      // Si la reserva es con pago online se debe hacer contraasiento del pago
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Bono, "Fecha entrada", "Fecha salida");
+      lrRsvTra.SETRANGE(Bono, lrWSRsv.Bono);
+      IF lrRsvTra.FINDFIRST THEN
+      BEGIN
+        IF lrRsvTra."Tipo pago reserva" = lrRsvTra."Tipo pago reserva"::Online THEN
+        BEGIN
+          lrCobro.RESET;
+          lrCobro.SETRANGE(Delegacion   , lrRsvTra.Delegacion);
+          lrCobro.SETRANGE("Num Reserva", lrRsvTra."N§ Reserva");
+          IF lrCobro.FINDFIRST THEN
+          BEGIN
+            REPEAT
+              lrCobro.Importe := - lrCobro.Importe;
+              _AsientosLiquidacion(lrWSRsv,lrCobro,lrCabRsv);
+            UNTIL lrCobro.NEXT = 0;
+          END;
+        END;
+      END;
+
+      lrCabRsv.RESET;
+      lrCabRsv.SETCURRENTKEY(lrCabRsv.Bono);
+      lrCabRsv.SETRANGE(Bono, lrWSRsv.Bono);
+      IF lrCabRsv.FINDFIRST THEN
+        lrCabRsv.DELETE(TRUE);
+
+      // Creamos la cabecera de reserva
+      rPar.RESET;
+      rPar.FINDFIRST;
+
+      rParInt.RESET;
+      rParInt.FINDFIRST;
+      rParInt.TESTFIELD(rParInt."Paquete Solo Transfer");
+
+      _CrearReserva(lrWSRsvTMP, lrWSPersonTMP);
+
+
+      //. Pasamos los registros de la tabla temporal a un apuntador real
+
+      lrWSRsv := lrWSRsvTMP;
+      lrWSRsv."Modification Date" := WORKDATE;
+      lrWSRsv."Modification Time" := TIME;
+      lrWSRsv.Confirmed           := FALSE;
+      lrWSRsv.Cancelled           := FALSE;
+      lrWSRsv.MODIFY(TRUE);
+
+      // Calculamos precios de la reserva
+      _calculo_ingreso(lrWSRsv);
+
+      // Borramos el detalle de personas y lo volvemos a crear
+      lrWSPerson.RESET;
+      lrWSPerson.SETRANGE("Reservation ID", lrWSRsv.ID);
+      IF lrWSPerson.FINDFIRST THEN
+        lrWSPerson.DELETEALL;
+
+      IF lrWSPersonTMP.FINDFIRST THEN
+      BEGIN
+        REPEAT
+          CLEAR(lrWSPerson);
+          lrWSPerson."Reservation ID" := lrWSRsv.ID;
+          lrWSPerson.Name             := lrWSPersonTMP.Name;
+          lrWSPerson."Person type"    := lrWSPersonTMP."Person type";
+          lrWSPerson.INSERT(TRUE);
+        UNTIL lrWSPersonTMP.NEXT = 0;
+      END;
+
+      //. Devolvemos el registro al XMLPort
+
+      lrWSRsv.SETRECFILTER;
+
+      xmlReserva.SetTables(lrWSRsv, lrWSPerson, lrWSPay, TRUE);
+      xmlReserva.EXPORT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE TransferApplyPromotion@1000000002(BookingNumber@1000000000 : Code[10];SupplementCode@1000000001 : Code[10];VoucherNumber@1000000002 : Code[10];VAR NewAmount@1000000003 : Decimal);
+    VAR
+      lrWSRsv@1000000008 : Record 7009924;
+    BEGIN
+      // TransferApplyPromotion
+
+      //. Buscamos la reserva
+
+      lrWSRsv.RESET;
+      lrWSRsv.SETCURRENTKEY(Bono);
+      lrWSRsv.SETRANGE(Bono, BookingNumber);
+      IF NOT lrWSRsv.FINDFIRST THEN
+        ERROR(Text003, BookingNumber);
+
+      IF lrWSRsv.Cancelled THEN
+        ERROR(Text002, BookingNumber);
+
+      IF lrWSRsv.Confirmed THEN
+        ERROR(Text004, BookingNumber);
+
+      //. Rellenamos el campos de Voucher
+      lrWSRsv."Voucher Discount Code" := SupplementCode;
+      lrWSRsv."Voucher Discount No"   := VoucherNumber;
+      lrWSRsv.MODIFY;
+
+      //. Calculamos la reserva
+      _calculo_ingreso(lrWSRsv);
+
+      //. Devolvemos el importe
+      NewAmount := lrWSRsv."Reservation income";
+    END;
+
+    LOCAL PROCEDURE _GetNoBono@1100217003() : Code[10];
+    VAR
+      NoSeriesMgt@1100217004 : Codeunit 396;
+    BEGIN
+      // _GetNoBono
+
+      rPar.RESET;
+      rPar.FINDFIRST;
+      rPar.TESTFIELD(rPar."Serie bono reserva online");
+
+      //. Buscamos el siguiente numero de ticket
+      EXIT( NoSeriesMgt.GetNextNo(rPar."Serie bono reserva online", TODAY, TRUE) );
+    END;
+
+    LOCAL PROCEDURE _CrearReserva@1000000003(VAR prWSRsvTMP@1000000000 : TEMPORARY Record 7009924;VAR prWSPersonTMP@1000000002 : TEMPORARY Record 7009925) : Integer;
+    VAR
+      lrCabRsv@1100217001 : Record 7009741;
+      lrAcoRsv@1100217002 : Record 7009748;
+      lrComRsv@1000000001 : Record 7009762;
+    BEGIN
+      // _CrearReserva
+
+      CLEAR(lrCabRsv);
+      lrCabRsv.Delegacion := rPar.Delegacion;
+      lrCabRsv.INSERT(TRUE);
+
+      lrCabRsv.VALIDATE("Modificacion importacion", TRUE);
+      lrCabRsv.VALIDATE(TourOperador              , prWSRsvTMP.Touroperador);
+      lrCabRsv.VALIDATE("TourOperador Venta"      , prWSRsvTMP.Touroperador);
+      lrCabRsv.VALIDATE(Bono                      , prWSRsvTMP.Bono);
+      lrCabRsv.VALIDATE("Fecha venta"             , WORKDATE);
+      lrCabRsv.VALIDATE(Adultos                   , prWSRsvTMP.Adults);
+      lrCabRsv.VALIDATE(Ni¤os                     , prWSRsvTMP.Childs);
+      lrCabRsv.VALIDATE("Canal venta"             , prWSRsvTMP."Canal venta");
+      lrCabRsv.VALIDATE("User Id"                 , prWSRsvTMP."User Id");
+      lrCabRsv.VALIDATE("User Type"               , prWSRsvTMP."User Type");
+      lrCabRsv.VALIDATE("Tipo importacion"        , lrCabRsv."Tipo importacion"::WS);
+      lrCabRsv.VALIDATE("Tipo Operacion"          , lrCabRsv."Tipo Operacion"::Regular);
+      lrCabRsv.VALIDATE("Modificacion importacion", FALSE);
+      IF prWSPersonTMP.FINDFIRST THEN
+      BEGIN
+        lrCabRsv.Nombre := prWSPersonTMP.Name;
+        lrCabRsv."Tipo Persona" := _ConversionTipoPersona(lrCabRsv.TourOperador, prWSPersonTMP."Person type");
+      END;
+      lrCabRsv."Reserva online" := TRUE;
+      lrCabRsv.MODIFY(TRUE);
+
+      //. Con la creacion de la cabecera de reserva se crea un acompa¤ante de manera automatica
+      //. lo borramos para no interferir con los acompa¤antes que se creen despues
+
+      lrAcoRsv.RESET;
+      lrAcoRsv.SETRANGE(Delegacion  , lrCabRsv.Delegacion);
+      lrAcoRsv.SETRANGE("N§ Interno", lrCabRsv."N§ Interno");
+      IF lrAcoRsv.FINDSET(TRUE) THEN
+        lrAcoRsv.DELETEALL;
+
+      //. Comentarios
+      IF prWSRsvTMP.Comment <> '' THEN
+      BEGIN
+        lrComRsv.RESET;
+        lrComRsv.Delegacion     := rPar.Delegacion;
+        lrComRsv."N§ Interno"   := lrCabRsv."N§ Interno";
+        lrComRsv."N§ Orden"     := 10;
+        lrComRsv."Tipo Reserva" := lrComRsv."Tipo Reserva"::Cabecera;
+        lrComRsv.Fecha          := TODAY;
+        lrComRsv.Texto          := prWSRsvTMP.Comment;
+        lrComRsv.INSERT;
+      END;
+
+      _CrearAcompa¤antesReserva(lrCabRsv, prWSRsvTMP, prWSPersonTMP);
+
+      _CrearPeriodoReserva(lrCabRsv, prWSRsvTMP);
+
+      EXIT(lrCabRsv."N§ Interno");
+    END;
+
+    LOCAL PROCEDURE _CrearPeriodoReserva@1100217012(prCabRsv@1000000001 : Record 7009741;VAR prWSRsvTMP@1000000000 : TEMPORARY Record 7009924) : Integer;
+    VAR
+      lrPerRsv@1100217002 : Record 7009742;
+    BEGIN
+      // _CrearPeriodoReserva
+
+      CLEAR(lrPerRsv);
+      lrPerRsv.Delegacion                 := rPar.Delegacion;
+      lrPerRsv."N§ Interno"               := prCabRsv."N§ Interno";
+      lrPerRsv."N§ Periodo"               := 1;
+      lrPerRsv."Modificacion importacion" := TRUE;
+      lrPerRsv.INSERT(TRUE);
+
+      lrPerRsv.VALIDATE(Paquete             , rParInt."Paquete Solo Transfer");
+      lrPerRsv.VALIDATE("TourOperador Venta", prWSRsvTMP.Touroperador);
+      lrPerRsv.VALIDATE("Tipo Reserva"      , lrPerRsv."Tipo Reserva"::Ok);
+      lrPerRsv.VALIDATE("Hotel reservado"   , prWSRsvTMP."Arr Hotel");
+      lrPerRsv.VALIDATE("Fecha entrada"     , prWSRsvTMP."Arr Service Date");
+      lrPerRsv.VALIDATE("Fecha salida"      , prWSRsvTMP."Dep Service Date");
+
+      lrPerRsv."Compa¤ia entrada"     := prWSRsvTMP."Arr Airline";
+      lrPerRsv."Vuelo entrada"        := prWSRsvTMP."Arr Flight Number";
+      lrPerRsv."Hora entrada"         := prWSRsvTMP."Arr Arrival Time";
+      lrPerRsv."IATA destino entrada" := prWSRsvTMP."Arr Airport";
+
+      lrPerRsv."Compa¤ia salida"      := prWSRsvTMP."Dep Airline";
+      lrPerRsv."Vuelo salida"         := prWSRsvTMP."Dep Flight Number";
+      lrPerRsv."Hora salida"          := prWSRsvTMP."Dep Arrival Time";
+      lrPerRsv."IATA origen salida"   := prWSRsvTMP."Dep Airport";
+
+      lrPerRsv."Fecha venta" := WORKDATE;
+      lrPerRsv."Tipo operacion" := lrPerRsv."Tipo operacion"::Regular;
+
+      lrPerRsv.VALIDATE("Servicio transfer entrada", prWSRsvTMP."Arr Service Type");
+      lrPerRsv.VALIDATE("Servicio transfer salida", prWSRsvTMP."Dep Service Type");
+
+      lrPerRsv."Modificacion importacion" := FALSE;
+      lrPerRsv.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE _CrearAcompa¤antesReserva@1100217005(prCabRsv@1000000001 : Record 7009741;VAR prWSRsvTMP@1000000002 : TEMPORARY Record 7009924;VAR prWSPersonTMP@1000000000 : TEMPORARY Record 7009925);
+    VAR
+      lrAcoRsv@1100217004 : Record 7009748;
+      vNumPerCre@1000000003 : Integer;
+    BEGIN
+      // _CrearAcompa¤anteReserva
+
+      vNumPerCre := 0;
+      IF prWSPersonTMP.FINDFIRST THEN BEGIN
+        REPEAT
+          //.Crear el registro de acompa¤ante reserva
+          CLEAR(lrAcoRsv);
+          lrAcoRsv.VALIDATE(Delegacion        , rPar.Delegacion);
+          lrAcoRsv.VALIDATE("N§ Interno"      , prCabRsv."N§ Interno");
+          lrAcoRsv."Modificacion importacion" := TRUE;
+          lrAcoRsv.INSERT(TRUE);
+
+          lrAcoRsv.VALIDATE(Nombre            , prWSPersonTMP.Name);
+          lrAcoRsv.VALIDATE("Tipo Persona"    , _ConversionTipoPersona(prCabRsv.TourOperador, prWSPersonTMP."Person type"));
+
+          //. Datos de vuelo llegada
+          IF prWSRsvTMP."Arr Service Date" <> 0D THEN BEGIN
+            lrAcoRsv."Fecha entrada"        := prWSRsvTMP."Arr Service Date";
+            lrAcoRsv."Compa¤ia entrada"     := prWSRsvTMP."Arr Airline";
+            lrAcoRsv."Vuelo entrada"        := prWSRsvTMP."Arr Flight Number";
+            lrAcoRsv."Hora entrada"         := prWSRsvTMP."Arr Arrival Time";
+            lrAcoRsv."IATA destino entrada" := prWSRsvTMP."Arr Airport";
+          END;
+
+          //. Datos de vuelo salida
+          IF prWSRsvTMP."Dep Service Date" <> 0D THEN BEGIN
+            lrAcoRsv."Fecha salida"        := prWSRsvTMP."Dep Service Date";
+            lrAcoRsv."Compa¤ia salida"     := prWSRsvTMP."Dep Airline";
+            lrAcoRsv."Vuelo salida"        := prWSRsvTMP."Dep Flight Number";
+            lrAcoRsv."Hora salida"         := prWSRsvTMP."Dep Arrival Time";
+            lrAcoRsv."IATA origen salida"  := prWSRsvTMP."Dep Airport";
+          END;
+
+          lrAcoRsv.VALIDATE(Touroperador , prCabRsv.TourOperador);
+          lrAcoRsv.VALIDATE(Bono         , prCabRsv.Bono);
+          lrAcoRsv."Modificacion importacion" := FALSE;
+          lrAcoRsv.MODIFY;
+
+          vNumPerCre += 1;
+        UNTIL prWSPersonTMP.NEXT = 0;
+      END;
+
+      // Comprobamos si el n£mero de personas detalladas es inferior al de la reserva y creamos el resto
+      IF vNumPerCre < prWSRsvTMP.Adults + prWSRsvTMP.Childs THEN BEGIN
+        REPEAT
+          //.Crear el registro de acompa¤ante reserva
+          CLEAR(lrAcoRsv);
+          lrAcoRsv.VALIDATE(Delegacion        , rPar.Delegacion);
+          lrAcoRsv.VALIDATE("N§ Interno"      , prCabRsv."N§ Interno");
+          lrAcoRsv."Modificacion importacion" := TRUE;
+          lrAcoRsv.INSERT(TRUE);
+
+          lrAcoRsv.VALIDATE(Nombre            , prCabRsv.Nombre);
+          lrAcoRsv.VALIDATE("Tipo Persona"    , prCabRsv."Tipo Persona");
+
+          //. Datos de vuelo llegada
+          IF prWSRsvTMP."Arr Service Date" <> 0D THEN BEGIN
+            lrAcoRsv."Fecha entrada"        := prWSRsvTMP."Arr Service Date";
+            lrAcoRsv."Compa¤ia entrada"     := prWSRsvTMP."Arr Airline";
+            lrAcoRsv."Vuelo entrada"        := prWSRsvTMP."Arr Flight Number";
+            lrAcoRsv."Hora entrada"         := prWSRsvTMP."Arr Arrival Time";
+            lrAcoRsv."IATA destino entrada" := prWSRsvTMP."Arr Airport";
+          END;
+
+          //. Datos de vuelo salida
+          IF prWSRsvTMP."Dep Service Date" <> 0D THEN BEGIN
+            lrAcoRsv."Fecha salida"        := prWSRsvTMP."Dep Service Date";
+            lrAcoRsv."Compa¤ia salida"     := prWSRsvTMP."Dep Airline";
+            lrAcoRsv."Vuelo salida"        := prWSRsvTMP."Dep Flight Number";
+            lrAcoRsv."Hora salida"         := prWSRsvTMP."Dep Arrival Time";
+            lrAcoRsv."IATA origen salida"  := prWSRsvTMP."Dep Airport";
+          END;
+
+          lrAcoRsv.VALIDATE(Touroperador , prCabRsv.TourOperador);
+          lrAcoRsv.VALIDATE(Bono         , prCabRsv.Bono);
+          lrAcoRsv."Modificacion importacion" := FALSE;
+          lrAcoRsv.MODIFY;
+
+          vNumPerCre += 1;
+        UNTIL vNumPerCre >= prWSRsvTMP.Adults + prWSRsvTMP.Childs;
+      END;
+    END;
+
+    LOCAL PROCEDURE _ConversionTipoPersona@8(par_touroperador@1103355000 : Code[10];par_persona@1103355001 : Code[10]) : Code[10];
+    VAR
+      lrConv@1103355002 : Record 7009722;
+    BEGIN
+      // _ConversionTipoPersona
+
+      CLEAR(lrConv);
+      lrConv.SETRANGE(TourOperador     , par_touroperador);
+      lrConv.SETRANGE("Tipo Persona TO", par_persona);
+      lrConv.FINDFIRST;
+
+      EXIT(lrConv."Tipo Persona");
+    END;
+
+    LOCAL PROCEDURE _TestOut@1100217004();
+    VAR
+      xmlTransferRsv@1100217000 : XMLport 7009708;
+      lrWSRsv@1000000002 : Record 7009924;
+      lrWSPerson@1000000001 : Record 7009925;
+      lrWSPay@1000000000 : Record 7009926;
+      lwInStream@1100217004 : InStream;
+      lwFile@1100217005 : File;
+    BEGIN
+      CLEAR(lwInStream);
+      lwFile.CREATE('C:\XMLTRANSFER.XML');
+      lwFile.CREATEINSTREAM(lwInStream);
+
+      CLEAR(xmlTransferRsv);
+      xmlTransferRsv.SETSOURCE(lwInStream);
+      xmlTransferRsv.GetTables(lrWSRsv, lrWSPerson, lrWSPay);
+      xmlTransferRsv.IMPORT;
+    END;
+
+    LOCAL PROCEDURE _CambioDivisa@1000000006(pwDivOrigen@1100217000 : Code[10];pwDivDestino@1100217001 : Code[10];pwImporte@1100217003 : Decimal) : Decimal;
+    VAR
+      lwImporte@1100217002 : Decimal;
+      lrDivisa@1100217004 : Record 4;
+      rCamb@1000000000 : Record 330;
+    BEGIN
+      // CambioDivisa
+
+      IF pwDivOrigen = pwDivDestino THEN
+        EXIT(pwImporte);
+
+      CLEAR(lrDivisa);
+      IF pwDivDestino <> '' THEN
+        lrDivisa.GET(pwDivDestino);
+
+      lwImporte  := ROUND(rCamb.ExchangeAmtFCYToFCY(WORKDATE, pwDivOrigen, pwDivDestino, pwImporte),
+                       lrDivisa."Amount Rounding Precision");
+
+      EXIT(lwImporte);
+    END;
+
+    LOCAL PROCEDURE _calculo_ingreso@4(VAR prWSRsv@1103355000 : Record 7009924);
+    VAR
+      rConV@1000000000 : Record 7009788;
+      rPreV@1000000002 : Record 7009790;
+      rElemento@1000000003 : Record 7009715;
+      vRelease@1000000001 : Integer;
+      lwOrigen@1000000004 : Code[20];
+      lwDestino@1000000005 : Code[20];
+    BEGIN
+      // calculo_ingreso
+
+      IF NOT _busca_contrato_venta(prWSRsv, rConV) THEN
+        ERROR(Text005);
+
+      prWSRsv."Num Contrato Venta" := rConV."N§ Contrato Venta";
+      prWSRsv."Adults Arr price" := 0;
+      prWSRsv."Childs Arr price" := 0;
+      prWSRsv."Adults Dep price" := 0;
+      prWSRsv."Childs Dep price" := 0;
+      prWSRsv."Adults Arr income" := 0;
+      prWSRsv."Childs Arr income" := 0;
+      prWSRsv."Adults Dep income" := 0;
+      prWSRsv."Childs Dep income" := 0;
+      prWSRsv."Reservation income" := 0;
+
+      rPreV.RESET;
+      rPreV.SETRANGE (Delegacion      , rConV.Delegacion);
+      rPreV.SETRANGE ("N§ Contrato"   , rConV."N§ Contrato Venta");
+      rPreV.SETFILTER("Rango desde"   , '<=%1', prWSRsv.Adults + prWSRsv.Childs);
+      rPreV.SETFILTER("Rango hasta"   , '>=%1', prWSRsv.Adults + prWSRsv.Childs);
+      rPreV.SETRANGE ("Tipo elemento" , '');
+      rPreV.SETFILTER("Tipo operacion", '%1|%2', rPreV."Tipo operacion"::Ambos, rPreV."Tipo operacion"::Regular);
+      rPreV.SETRANGE ("Codigo precio" , rPreV."Codigo precio"::"Precio Base");
+      rPreV.SETRANGE (Activo          , TRUE);
+
+      // Calculamos los d¡as de antelaci¢n para controlar release
+      IF prWSRsv."Arr Service Date" <> 0D THEN
+        vRelease := prWSRsv."Arr Service Date" - prWSRsv."Creation Date"
+      ELSE
+        IF prWSRsv."Dep Service Date" <> 0D THEN
+          vRelease := prWSRsv."Dep Service Date" - prWSRsv."Creation Date";
+
+      // calculo ingreso entradas
+      IF prWSRsv."Arr Airport" <> '' THEN
+      BEGIN
+        lwOrigen  := _traduce_zona_venta(rConV, prWSRsv."Arr Airport", '', 0);
+        lwDestino := _traduce_zona_venta(rConV, '', prWSRsv."Arr Hotel", 1);
+
+        rPreV.SETFILTER("Fecha desde"  , '<=%1', prWSRsv."Arr Service Date");
+        rPreV.SETFILTER("Fecha hasta"  , '>=%1', prWSRsv."Arr Service Date");
+        rPreV.SETRANGE(Origen          , lwOrigen);
+        rPreV.SETRANGE(Destino         , lwDestino);
+        rPreV.SETRANGE ("Tipo Traslado", prWSRsv."Arr Service Type");
+        IF NOT rPreV.FINDFIRST THEN
+        BEGIN
+          rPreV.SETRANGE(Origen , lwDestino);
+          rPreV.SETRANGE(Destino, lwOrigen);
+          IF NOT rPreV.FINDFIRST THEN
+            ERROR(Text006);
+        END
+        ELSE
+        BEGIN
+          IF vRelease < rPreV.Release THEN
+            ERROR(Text008);
+        END;
+
+        // Calculamos el importe base
+        IF rPreV."Tipo Aplicacion" = rPreV."Tipo Aplicacion"::Vehiculo THEN
+        BEGIN
+          prWSRsv."Reservation income" := rPreV.Precio;
+        END
+        ELSE
+        BEGIN
+          prWSRsv."Adults Arr price"   := rPreV."Precio Adulto";
+          prWSRsv."Childs Arr price"   := rPreV."Precio Ni¤o";
+          prWSRsv."Adults Arr income"  := prWSRsv.Adults * rPreV."Precio Adulto";
+          prWSRsv."Childs Arr income"  := prWSRsv.Childs * rPreV."Precio Ni¤o";
+          prWSRsv."Reservation income" += prWSRsv."Adults Arr income" + prWSRsv."Childs Arr income";
+        END;
+        prWSRsv."ID Precio entrada" := rPreV."Orden precio";
+      END;
+
+      // calculo ingreso salidas
+      IF prWSRsv."Dep Airport" <> '' THEN
+      BEGIN
+        lwOrigen  := _traduce_zona_venta(rConV, '', prWSRsv."Dep Hotel", 1);
+        lwDestino := _traduce_zona_venta(rConV, prWSRsv."Dep Airport", '', 0);
+
+        rPreV.SETFILTER("Fecha desde"  , '<=%1', prWSRsv."Dep Service Date");
+        rPreV.SETFILTER("Fecha hasta"  , '>=%1', prWSRsv."Dep Service Date");
+        rPreV.SETRANGE(Origen          , lwOrigen);
+        rPreV.SETRANGE(Destino         , lwDestino);
+        rPreV.SETRANGE ("Tipo Traslado", prWSRsv."Dep Service Type");
+        IF NOT rPreV.FINDFIRST THEN
+        BEGIN
+          rPreV.SETRANGE(Origen , lwDestino);
+          rPreV.SETRANGE(Destino, lwOrigen);
+          IF NOT rPreV.FINDFIRST THEN
+            ERROR(Text006);
+        END
+        ELSE
+        BEGIN
+          IF vRelease < rPreV.Release THEN
+            ERROR(Text008);
+        END;
+
+        // Calculamos el importe base
+        IF rPreV."Tipo Aplicacion" = rPreV."Tipo Aplicacion"::Vehiculo THEN
+        BEGIN
+          prWSRsv."Reservation income" := rPreV.Precio;
+        END
+        ELSE
+        BEGIN
+          prWSRsv."Adults Dep price"   := rPreV."Precio Adulto";
+          prWSRsv."Childs Dep price"   := rPreV."Precio Ni¤o";
+          prWSRsv."Adults Dep income"  := prWSRsv.Adults * rPreV."Precio Adulto";
+          prWSRsv."Childs Dep income"  := prWSRsv.Childs * rPreV."Precio Ni¤o";
+          prWSRsv."Reservation income" += prWSRsv."Adults Dep income" + prWSRsv."Childs Dep income";
+        END;
+        prWSRsv."ID Precio salida" := rPreV."Orden precio";
+      END;
+
+      // Calculamos descuento del voucher
+      IF prWSRsv."Voucher Discount Code" <> '' THEN
+      BEGIN
+        rElemento.RESET;
+        rElemento.SETRANGE("Tipo elemento", prWSRsv."Voucher Discount Code");
+        IF rElemento.FINDFIRST THEN
+        BEGIN
+          rPreV.SETRANGE(Origen);
+          rPreV.SETRANGE(Destino);
+          rPreV.SETRANGE("Codigo precio", rPreV."Codigo precio"::Suplemento);
+          rPreV.SETRANGE ("Tipo elemento", rElemento."Tipo elemento");
+          IF rPreV.FINDFIRST THEN
+          BEGIN
+            CASE rPreV."Tipo Aplicacion" OF
+              rPreV."Tipo Aplicacion"::Pax:
+                BEGIN
+                  IF prWSRsv."Adults Arr price" <> 0 THEN
+                    prWSRsv."Adults Arr price" := prWSRsv."Adults Arr price" + rPreV.Precio;
+                  IF prWSRsv."Childs Arr price" <> 0 THEN
+                    prWSRsv."Childs Arr price" := prWSRsv."Childs Arr price" + rPreV.Precio;
+
+                  prWSRsv."Adults Arr income" := prWSRsv.Adults * prWSRsv."Adults Arr price";
+                  prWSRsv."Childs Arr income" := prWSRsv.Childs * prWSRsv."Childs Arr price";
+
+                  IF prWSRsv."Adults Dep price" <> 0 THEN
+                    prWSRsv."Adults Dep price" := prWSRsv."Adults Dep price" + rPreV.Precio;
+                  IF prWSRsv."Childs Dep price" <> 0 THEN
+                    prWSRsv."Childs Dep price" := prWSRsv."Childs Dep price" + rPreV.Precio;
+
+                  prWSRsv."Adults Dep income" := prWSRsv.Adults * prWSRsv."Adults Dep price";
+                  prWSRsv."Childs Dep income" := prWSRsv.Childs * prWSRsv."Childs Dep price";
+
+                  prWSRsv."Reservation income" := prWSRsv."Adults Arr income" + prWSRsv."Childs Arr income" +
+                                                  prWSRsv."Adults Dep income" + prWSRsv."Childs Dep income";
+                END;
+              rPreV."Tipo Aplicacion"::Vehiculo:
+                BEGIN
+                  IF prWSRsv."Adults Arr price" <> 0 THEN
+                    prWSRsv."Adults Arr price" := prWSRsv."Adults Arr price" + rPreV.Precio;
+
+                  IF prWSRsv."Adults Dep price" <> 0 THEN
+                    prWSRsv."Adults Dep price" := prWSRsv."Adults Dep price" + rPreV.Precio;
+
+                  prWSRsv."Adults Arr income" := prWSRsv.Adults * prWSRsv."Adults Arr price";
+                  prWSRsv."Childs Arr income" := prWSRsv.Childs * prWSRsv."Childs Arr price";
+                  prWSRsv."Adults Dep income" := prWSRsv.Adults * prWSRsv."Adults Dep price";
+                  prWSRsv."Childs Dep income" := prWSRsv.Childs * prWSRsv."Childs Dep price";
+
+                  prWSRsv."Reservation income" := prWSRsv."Adults Arr income" + prWSRsv."Childs Arr income" +
+                                                  prWSRsv."Adults Dep income" + prWSRsv."Childs Dep income";
+                END;
+            END;
+          END;
+        END
+        ELSE
+          ERROR(Text009);
+      END;
+
+      prWSRsv.MODIFY;
+    END;
+
+    LOCAL PROCEDURE _busca_contrato_venta@1000000008(VAR prWsRsv@1103355000 : Record 7009924;VAR prConV@1100217000 : Record 7009788) ok : Boolean;
+    BEGIN
+      // busca_contrato_venta
+
+      ok := FALSE;
+
+      prConV.RESET;
+      prConV.SETCURRENTKEY(TourOperador,
+                           "Fecha inicio contrato",
+                           "Fecha final contrato");
+      prConV.SETRANGE (TourOperador                 , prWsRsv.Touroperador);
+      prConV.SETFILTER("Fecha inicio contrato"      , '<=%1', prWsRsv."Arr Service Date");
+      prConV.SETFILTER("Fecha final contrato"       , '>=%1', prWsRsv."Arr Service Date");
+      prConV.SETRANGE (prConV."Tipo de Facturacion" , prConV."Tipo de Facturacion"::Separado);
+      prConV.SETRANGE (Comercializadora             , FALSE); //+$003
+      prConV.SETRANGE (Confirmado                   , TRUE);
+      IF prConV.FINDFIRST THEN
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _traduce_zona_venta@13(prConV@1103355000 : Record 7009788;pAer@1000000000 : Code[10];pHotel@1000000002 : Code[10];pTipo@1000000003 : 'Aeropuerto,Hotel') : Code[10];
+    VAR
+      lrAeropuerto@1100217000 : Record 7009704;
+      rZonTra@1000000001 : Record 7009791;
+      lrHotel@1000000004 : Record 7009724;
+    BEGIN
+      // traduce_zona_venta
+
+      rZonTra.RESET;
+      rZonTra.SETRANGE(Contrato       , prConV."N§ Contrato Venta");
+      rZonTra.SETRANGE("Tipo contrato", rZonTra."Tipo contrato"::Venta);
+      CASE pTipo OF
+        pTipo::Aeropuerto:
+          BEGIN
+            IF NOT lrAeropuerto.GET(pAer) THEN
+              CLEAR(lrAeropuerto);
+            rZonTra.SETRANGE("Zona fisica", lrAeropuerto."Zona fisica");
+          END;
+        pTipo::Hotel:
+          BEGIN
+            IF NOT lrHotel.GET(pHotel) THEN
+              CLEAR(lrHotel);
+            rZonTra.SETRANGE("Zona fisica", lrHotel."Zona Fisica");
+          END;
+      END;
+      IF rZonTra.FINDFIRST THEN
+        EXIT(rZonTra.Zona);
+    END;
+
+    LOCAL PROCEDURE _AsientosLiquidacion@1100253016(VAR prWSRsv@1000000000 : Record 7009924;VAR prCobroRsv@1000000001 : Record 7009927;VAR prCabRsv@1000000003 : Record 7009741);
+    VAR
+      rConV@1000000002 : Record 7009788;
+      rCfgToDlg@1000000004 : Record 7009705;
+      lrCustomer@1100253009 : Record 18;
+      lrBank@1000000005 : Record 270;
+      lrDiv@1100253013 : Record 4;
+      rTipCam@1000000007 : Record 330;
+      lrConfCont@1100253014 : Record 98;
+      lwTextoDiario@1100253006 : Text[80];
+      lwImporte@1000000006 : Decimal;
+    BEGIN
+      // AsientosLiquidacion
+
+      // buscamos el cliente del contrato
+      rConV.RESET;
+      rConV.GET(prCabRsv.Delegacion, prWSRsv."Num Contrato Venta");
+      rConV.TESTFIELD(rConV.Cliente);
+      lrCustomer.GET(rConV.Cliente);
+
+      // Buscamos el banco en el setup contable touroperador
+      rCfgToDlg.RESET;
+      rCfgToDlg.GET(prCabRsv.Delegacion, prWSRsv.Touroperador);
+      rCfgToDlg.TESTFIELD(rCfgToDlg."Banco cobros online");
+      lrBank.GET(rCfgToDlg."Banco cobros online");
+      lrBank.TESTFIELD(lrBank."Currency Code");
+
+      lwImporte := prCobroRsv.Importe;
+
+      IF lrBank."Currency Code" <> prCobroRsv."Cod. Divisa" THEN BEGIN
+        lwImporte := rTipCam.ExchangeAmtFCYToFCY(prCobroRsv."Fecha cambio cobro",prCobroRsv."Cod. Divisa",
+                                                 lrBank."Currency Code", lwImporte);
+      END;
+
+      lwTextoDiario := prCabRsv.Bono;
+
+      // Insertamos linea banco
+      _InsertaLineaDiario(prCabRsv.Bono, 3, lrBank."No.", prCobroRsv."Forma de Pago",
+                          lrBank."Currency Code", lwImporte, 0, lwTextoDiario);
+      // Insertamos linea cliente
+      _InsertaLineaDiario(prCabRsv.Bono, 1, lrCustomer."No.", prCobroRsv."Forma de Pago",
+                          lrBank."Currency Code", lwImporte, 1, lwTextoDiario);
+    END;
+
+    LOCAL PROCEDURE _InsertaLineaDiario@1000000016(pwNumDoc@1100253000 : Code[10];pwTipoMov@1100253001 : 'Cuenta,Cliente,Proveedor,Banco,Activo,Empresa vinculada asociada';pwNumCuenta@1100253002 : Code[20];pwFormaPago@1100253003 : Code[10];pwDivisa@1100253004 : Code[10];pwImporte@1100253005 : Decimal;pwDebeHaber@1100253009 : 'Debe,Haber';pwDescripcion@1100253010 : Text[80]);
+    VAR
+      lrLin@1100253011 : Record 81;
+      lwLibro@1100253006 : Code[10];
+      lwSecc@1100253007 : Code[10];
+    BEGIN
+      // _InsertaLineaDiario
+
+      lwLibro := _BuscaLibroDiario;
+      lwSecc  := Text007;
+      _BuscaSeccionDiario(lwLibro, lwSecc);
+
+      // Si es negativo giramos el asiento
+      IF pwImporte < 0 THEN BEGIN
+        pwDebeHaber := ABS(pwDebeHaber-1);
+        pwImporte   := ABS(pwImporte);
+      END;
+
+      CLEAR(lrLin);
+      lrLin."Line No."              := _LastGLLine(lwLibro,lwSecc) +1;
+      lrLin."Journal Template Name" := lwLibro;
+      lrLin."Journal Batch Name"    := lwSecc;
+      lrLin."System-Created Entry"  := TRUE;
+      lrLin.VALIDATE("Posting Date", WORKDATE);
+      //lrLin."Transaction No."       := pwNumLiquidacion;
+      lrLin."Document Type"         := lrLin."Document Type"::Payment;
+      lrLin."Document No."          := pwNumDoc;
+      lrLin.VALIDATE("Account Type", pwTipoMov);
+      lrLin.VALIDATE("Account No." , pwNumCuenta);
+      IF pwFormaPago <> '' THEN
+        lrLin.Description := pwDescripcion
+      ELSE
+        lrLin.Description := pwDescripcion;
+      lrLin.VALIDATE("Currency Code" , pwDivisa);
+
+      CASE pwDebeHaber OF
+        pwDebeHaber::Debe : lrLin.VALIDATE("Debit Amount" , pwImporte);
+        pwDebeHaber::Haber: lrLin.VALIDATE("Credit Amount", pwImporte);
+      END;
+      //lrLin.VALIDATE("Shortcut Dimension 1 Code", wCodDim1);
+      lrLin."Posting Group"             :='';
+      lrLin."Gen. Bus. Posting Group"   :='';
+      lrLin."Gen. Prod. Posting Group"  :='';
+      lrLin."VAT Bus. Posting Group"    :='';
+      lrLin."VAT Prod. Posting Group"   :='';
+
+      lrLin.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _BuscaLibroDiario@1100253012() : Code[10];
+    VAR
+      lrDiaG@1100253000 : Record 80;
+    BEGIN
+      // _BuscaLibroDiario
+
+      CLEAR(lrDiaG);
+      lrDiaG.SETRANGE(Type     , lrDiaG.Type::General);
+      lrDiaG.SETRANGE(Recurring, FALSE);
+      lrDiaG.FINDFIRST;
+
+      EXIT(lrDiaG.Name);
+    END;
+
+    LOCAL PROCEDURE _BuscaSeccionDiario@1100253013(pwLibroDiario@1100253000 : Code[10];pwSeccion@1100253001 : Code[10]);
+    VAR
+      lrSec@1100253002 : Record 232;
+    BEGIN
+      // _BuscaSeccionDiario
+
+      CLEAR(lrSec);
+      IF NOT lrSec.GET(pwLibroDiario, pwSeccion) THEN BEGIN
+        CLEAR(lrSec);
+        lrSec."Journal Template Name" := pwLibroDiario;
+        lrSec.Name                    := pwSeccion;
+        lrSec.Description             := pwSeccion;
+        lrSec.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE _LastGLLine@1100253021(pwLibroDiario@1100253002 : Code[10];pwSeccion@1100253001 : Code[10]) : Integer;
+    VAR
+      lrLin@1100253000 : Record 81;
+    BEGIN
+      // _LastGLLine
+
+      CLEAR(lrLin);
+      lrLin.SETRANGE("Journal Template Name", pwLibroDiario);
+      lrLin.SETRANGE("Journal Batch Name"   , pwSeccion);
+      IF lrLin.FINDLAST THEN
+        EXIT(lrLin."Line No.")
+    END;
+
+    LOCAL PROCEDURE _CrearReservaTMP@1000000000(prWSRsvTMP@1000000000 : Record 7009924;prWSPersonTMP@1000000002 : Record 7009925) : Integer;
+    VAR
+      lrCabRsv@1100217001 : Record 7009741;
+      lrAcoRsv@1100217002 : Record 7009748;
+      lrComRsv@1000000001 : Record 7009762;
+    BEGIN
+      // _CrearReserva
+
+      CLEAR(lrCabRsv);
+      lrCabRsv.Delegacion := rPar.Delegacion;
+      lrCabRsv.INSERT(TRUE);
+
+      lrCabRsv.VALIDATE("Modificacion importacion", TRUE);
+      lrCabRsv.VALIDATE(TourOperador              , prWSRsvTMP.Touroperador);
+      lrCabRsv.VALIDATE("TourOperador Venta"      , prWSRsvTMP.Touroperador);
+      lrCabRsv.VALIDATE(Bono                      , prWSRsvTMP.Bono);
+      lrCabRsv.VALIDATE("Fecha venta"             , WORKDATE);
+      lrCabRsv.VALIDATE(Adultos                   , prWSRsvTMP.Adults);
+      lrCabRsv.VALIDATE(Ni¤os                     , prWSRsvTMP.Childs);
+      lrCabRsv.VALIDATE("Canal venta"             , prWSRsvTMP."Canal venta");
+      lrCabRsv.VALIDATE("User Id"                 , prWSRsvTMP."User Id");
+      lrCabRsv.VALIDATE("User Type"               , prWSRsvTMP."User Type");
+      lrCabRsv.VALIDATE("Tipo importacion"        , lrCabRsv."Tipo importacion"::WS);
+      lrCabRsv.VALIDATE("Tipo Operacion"          , lrCabRsv."Tipo Operacion"::Regular);
+      lrCabRsv.VALIDATE("Modificacion importacion", FALSE);
+      IF prWSPersonTMP.FINDFIRST THEN
+      BEGIN
+        lrCabRsv.Nombre := prWSPersonTMP.Name;
+        lrCabRsv."Tipo Persona" := _ConversionTipoPersona(lrCabRsv.TourOperador, prWSPersonTMP."Person type");
+      END;
+      lrCabRsv."Reserva online" := TRUE;
+      lrCabRsv.MODIFY(TRUE);
+
+      //. Con la creacion de la cabecera de reserva se crea un acompa¤ante de manera automatica
+      //. lo borramos para no interferir con los acompa¤antes que se creen despues
+
+      lrAcoRsv.RESET;
+      lrAcoRsv.SETRANGE(Delegacion  , lrCabRsv.Delegacion);
+      lrAcoRsv.SETRANGE("N§ Interno", lrCabRsv."N§ Interno");
+      IF lrAcoRsv.FINDSET(TRUE) THEN
+        lrAcoRsv.DELETEALL;
+
+      //. Comentarios
+      IF prWSRsvTMP.Comment <> '' THEN
+      BEGIN
+        lrComRsv.RESET;
+        lrComRsv.Delegacion     := rPar.Delegacion;
+        lrComRsv."N§ Interno"   := lrCabRsv."N§ Interno";
+        lrComRsv."N§ Orden"     := 10;
+        lrComRsv."Tipo Reserva" := lrComRsv."Tipo Reserva"::Cabecera;
+        lrComRsv.Fecha          := TODAY;
+        lrComRsv.Texto          := prWSRsvTMP.Comment;
+        lrComRsv.INSERT;
+      END;
+
+      _CrearAcompa¤antesReserva(lrCabRsv, prWSRsvTMP, prWSPersonTMP);
+
+      _CrearPeriodoReserva(lrCabRsv, prWSRsvTMP);
+
+      EXIT(lrCabRsv."N§ Interno");
+    END;
+
+    LOCAL PROCEDURE _TestCrear@1000000001();
+    VAR
+      rWSRsv@1000000001 : Record 7009924;
+      rWSPerson@1000000000 : Record 7009925;
+    BEGIN
+      // _TestCrear
+
+      rPar.FINDFIRST;
+
+      rWSRsv.FINDLAST;
+
+      rWSPerson.FINDLAST;
+
+      //_CrearReservaTMP(rWSRsv, rWSPerson);
+
+      _calculo_ingreso(rWSRsv);
+    END;
+
+    BEGIN
+    {
+      // ARM 19092014 Nueva API segun el CNT-CAR-14063
+
+      $001 AJS 27102014 Al confirmar la reserva hay que rellenar la divisa de venta
+
+      $002 AJS 29102014 Nueva funcion TransferApplyPromotion para aplicar un descuento sobre la reserva antes de confirmar
+
+      $003 AJS 13032015 Esta funcion no trabaja con los contratos de comercializadora
+    }
+    END.
+  }
+}

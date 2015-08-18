@@ -1,0 +1,261 @@
+OBJECT Codeunit 5500 Production Schedule Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=VAR
+            ProdOrder@1000 : Record 5405;
+          BEGIN
+            ScheduleOrder(ProdOrder,TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InitialProdOrder1@1005 : Record 5405;
+      ProdSched@1000 : Automation "{0B98B992-D42C-4BC1-9324-C2A664D4FE72} 9.0:{331D7B5A-0BE5-461E-B0F7-7E9102395303}:Unknown Automation Server.Unknown Class" WITHEVENTS;
+      Text000@1001 : TextConst 'ENU=Error showing schedule data on the Production Schedule.;ESP=Error al mostrar los datos de la Previsi¢n de producci¢n.';
+      Text001@1002 : TextConst 'ENU=The production schedule is already running.;ESP=La previsi¢n de producci¢n ya se est  ejecutando.';
+      Text002@1003 : TextConst 'ENU=Error creating schedule order xml.;ESP=Error al crear el archivo xml de ¢rdenes de previsi¢n.';
+      OutboundXML@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D96A05-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.DOMDocument60" WITHEVENTS;
+      Editable1@1006 : Boolean;
+      Text003@1007 : TextConst 'ENU=Work Center calendar is missing.;ESP=No se encuentra el calendario del centro de trabajo.';
+      Text004@1008 : TextConst 'ENU=Machine Center is missing.;ESP=No se encuentra el Centro m quina.';
+      Text005@1009 : TextConst 'ENU=Machine Center calendar is missing.;ESP=No se encuentra el calendario del Centro m quina.';
+      Text006@1010 : TextConst 'ENU=Production Order is missing.;ESP=No se encuentra la orden de producci¢n.';
+      Text007@1011 : TextConst 'ENU=Routing line of a production order is referring to non-existent next/previous operation.;ESP=La l¡nea de ruta de una orden de producci¢n hace referencia a una operaci¢n anterior o posterior que no existe.';
+      Text008@1012 : TextConst 'ENU=Invalid reference to an operation.;ESP=La referencia a la operaci¢n no es v lida.';
+      Text009@1013 : TextConst 'ENU=WorkCenter / Machine Center is not valid.;ESP=El centro de trabajo o de m quina no es v lido.';
+      Text010@1014 : TextConst 'ENU=Invalid reference to a Work Center;ESP=La referencia al centro de trabajo no es v lida';
+      Text011@1015 : TextConst 'ENU=Invalid reference to a Machine Center;ESP=La referencia al centro de m quina no es v lida';
+
+    PROCEDURE ScheduleOrder@1(InitialProdOrder@1003 : Record 5405;Editable@1006 : Boolean);
+    VAR
+      XMLType@1007 : 'Schedule Order';
+      ReturnValue@1000 : Integer;
+    BEGIN
+      Initialize(InitialProdOrder,Editable);
+      CreateOutboundXML(XMLType::"Schedule Order");
+      ReturnValue := ProdSched.ScheduleOrder(OutboundXML);
+      IF ReturnValue <> 0 THEN BEGIN
+        CLEAR(ProdSched);
+        HandleError(ReturnValue,Text000);
+      END
+    END;
+
+    PROCEDURE Initialize@7(InitialProdOrder@1000 : Record 5405;Editable@1001 : Boolean);
+    BEGIN
+      InitialProdOrder1 := InitialProdOrder;
+      Editable1 := Editable;
+
+      IF ISCLEAR(OutboundXML) THEN
+        CREATE(OutboundXML);
+
+      IF ISCLEAR(ProdSched) THEN
+        CREATE(ProdSched)
+      ELSE
+        ERROR(Text001);
+    END;
+
+    PROCEDURE CreateOutboundXML@6(XMLType@1000 : 'Schedule Order');
+    VAR
+      ProdSchedSetup@1001 : Record 5500;
+      IStream@1003 : InStream;
+      OStream@1002 : OutStream;
+      ScheduleOrder@1004 : XMLport 5500;
+    BEGIN
+      ProdSchedSetup.LOCKTABLE;
+      ProdSchedSetup.GET;
+      ProdSchedSetup.GanttXML.CREATEOUTSTREAM(OStream);
+
+      CASE XMLType OF
+        XMLType::"Schedule Order":
+          BEGIN
+            ScheduleOrder.SETDESTINATION(OStream);
+            ScheduleOrder.InitializeHeader(InitialProdOrder1,Editable1);
+            IF ScheduleOrder.EXPORT THEN BEGIN
+              ProdSchedSetup.GanttXML.CREATEINSTREAM(IStream);
+              OutboundXML.load(IStream);
+            END ELSE
+              ERROR(Text002);
+          END
+      END;
+    END;
+
+    PROCEDURE ConvertFromDDMMYY@2(DateIn@1000 : Text[30]) : Text[30];
+    VAR
+      Day@1001 : Integer;
+      Month@1002 : Integer;
+      Year@1003 : Integer;
+    BEGIN
+      EVALUATE(Day,COPYSTR(DateIn,1,2));
+      EVALUATE(Month,COPYSTR(DateIn,4,2));
+      EVALUATE(Year,COPYSTR(FORMAT(DATE2DMY(TODAY, 3)),1,2) + COPYSTR(DateIn,7,2));
+      EXIT(FORMAT(DMY2DATE(Day,Month,Year)));
+    END;
+
+    PROCEDURE ConvertToDDMMYY@9(DateIn@1000 : Date) : Text[30];
+    BEGIN
+      EXIT(FORMAT(DateIn, 0, '<Day,2>-<Month,2>-<Year>'));
+    END;
+
+    PROCEDURE DivideFactor@4(Value@1000 : Decimal) : Text[30];
+    VAR
+      IntegerPart@1001 : Text[30];
+      DecimalPart@1002 : Text[30];
+      Separator@1003 : Text[1];
+    BEGIN
+      DecimalPart := FORMAT(Value,0,'<Decimal>');
+      DecimalPart := DELCHR(CONVERTSTR(DecimalPart,',.;:','    '),'=',' ');
+
+      EXIT(FORMAT(POWER(10,STRLEN(DecimalPart)),0,'<Integer><Decimal>'));
+    END;
+
+    PROCEDURE HandleError@12(ErrorNo@1000 : Integer;ErrorDescription@1001 : Text[1024]);
+    BEGIN
+      CASE ErrorNo OF
+        -1:
+          ERROR(Text000);
+        1002:
+          ERROR(Text003);
+        1003:
+          ERROR(Text004);
+        1004:
+          ERROR(Text005);
+        1005:
+          ERROR(Text006);
+        1006:
+          ERROR(Text007);
+        1007:
+          ERROR(Text008);
+        1008:
+          ERROR(Text009);
+        1009:
+          ERROR(Text010);
+        1010:
+          ERROR(Text011);
+        ELSE
+          ERROR(ErrorDescription);
+      END
+    END;
+
+    EVENT ProdSched@1000::OnCancel@1();
+    BEGIN
+      CLEAR(ProdSched);
+    END;
+
+    EVENT ProdSched@1000::OnCommit@4(VAR InitialDataSetDOM60@1102601002 : Automation ":{00020400-0000-0000-C000-000000000046}:''.IDISPATCH";VAR SimulatedChangesDOM60@1102601001 : Automation ":{00020400-0000-0000-C000-000000000046}:''.IDISPATCH";VAR ConflictingChangesDOM60@1102601000 : Automation ":{00020400-0000-0000-C000-000000000046}:''.IDISPATCH");
+    VAR
+      ProdSchedSetup@1010 : Record 5500;
+      istream@1009 : InStream;
+      ostream@1008 : OutStream;
+      CheckForConflict@1007 : XMLport 5504;
+      UpdateSchedule@1006 : XMLport 5505;
+      InitialDataSetXML@1005 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D969C0-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.Unknown Class";
+      SimulatedChangesXML@1004 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D969C0-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.Unknown Class";
+      ConflictingChangesXML@1003 : Automation "{F5078F18-C551-11D3-89B9-0000F81FE221} 6.0:{88D969C0-F192-11D4-A65F-0040963251E5}:'Microsoft XML, v6.0'.Unknown Class";
+    BEGIN
+      CREATE(InitialDataSetXML);
+      CREATE(SimulatedChangesXML);
+      CREATE(ConflictingChangesXML);
+
+      InitialDataSetXML := InitialDataSetDOM60;
+      SimulatedChangesXML := SimulatedChangesDOM60;
+
+      ProdSchedSetup.LOCKTABLE;
+      ProdSchedSetup.GET;
+      ProdSchedSetup.GanttXML.CREATEOUTSTREAM(ostream);
+      InitialDataSetXML.save(ostream);
+      ProdSchedSetup.GanttXML.CREATEINSTREAM(istream);
+      CheckForConflict.SETSOURCE(istream);
+      IF NOT CheckForConflict.IMPORT THEN BEGIN
+        ConflictingChangesXML.loadXML('<CommitSuccessful>0</CommitSuccessful>');
+        ConflictingChangesXML.save(ConflictingChangesDOM60);
+        CLEAR(ConflictingChangesXML);
+        EXIT;
+      END;
+
+      IF CheckForConflict.ChangesExist THEN
+        CheckForConflict.GetConflicts(ConflictingChangesXML)
+      ELSE BEGIN
+        ProdSchedSetup.LOCKTABLE;
+        ProdSchedSetup.GET;
+        ProdSchedSetup.GanttXML.CREATEOUTSTREAM(ostream);
+        SimulatedChangesXML.save(ostream);
+        ProdSchedSetup.GanttXML.CREATEINSTREAM(istream);
+        UpdateSchedule.SETSOURCE(istream);
+        IF UpdateSchedule.IMPORT THEN
+          IF UpdateSchedule.ChangesExist THEN
+            UpdateSchedule.GetConflicts(ConflictingChangesXML)
+          ELSE
+            ConflictingChangesXML.loadXML('<CommitSuccessful>1</CommitSuccessful>')
+        ELSE
+          ConflictingChangesXML.loadXML('<CommitSuccessful>0</CommitSuccessful>');
+      END;
+      ConflictingChangesXML.save(ConflictingChangesDOM60);
+
+      CLEAR(ConflictingChangesXML);
+      CLEAR(SimulatedChangesXML);
+      CLEAR(InitialDataSetXML);
+    END;
+
+    EVENT ProdSched@1000::OnError@2(VAR Number@1102601004 : Integer;VAR Source@1102601003 : Text[1024];VAR Description@1102601002 : Text[1024];VAR HelpFile@1102601001 : Text[1024];VAR HelpContext@1102601000 : Integer);
+    BEGIN
+      CLEAR(ProdSched);
+      HandleError(Number,Description);
+    END;
+
+    EVENT ProdSched@1000::OnOperationMoved@3(VAR POStatus@1102601012 : Text[1024];VAR PONo@1102601011 : Text[1024];VAR RoutingRefNo@1102601010 : Text[1024];VAR RoutingNo@1102601009 : Text[1024];VAR OPNo@1102601008 : Text[1024];VAR ResType@1102601007 : Text[1024];VAR ResNo@1102601006 : Text[1024];VAR StartDate@1102601005 : Text[1024];VAR StartTime@1102601004 : Text[1024];VAR EndDate@1102601003 : Text[1024];VAR EndTime@1102601002 : Text[1024];VAR CapNeed@1102601001 : Text[1024];VAR CapNeedDivideFactor@1102601000 : Text[1024]);
+    VAR
+      ProdOrderRtngLine@1025 : Record 5409;
+      ProdSchedCalc@1024 : Codeunit 5501;
+      StartDate1@1023 : Date;
+      EndDate1@1022 : Date;
+      StartTime1@1021 : Time;
+      EndTime1@1020 : Time;
+      ResourceType1@1019 : 'Work Center,Machine Center';
+      ProdOrderStatus1@1018 : 'Simulated,Planned,Firm Planned,Released,Finished';
+      ResourceNo1@1017 : Code[20];
+      ProdOrderNo1@1016 : Code[20];
+      RoutingNo1@1015 : Code[20];
+      OperationNo1@1014 : Code[10];
+      RoutingReferenceNo1@1013 : Integer;
+    BEGIN
+      EVALUATE(ProdOrderStatus1,POStatus);
+      EVALUATE(ProdOrderNo1,PONo);
+      EVALUATE(RoutingReferenceNo1,RoutingRefNo);
+      EVALUATE(RoutingNo1,RoutingNo);
+      EVALUATE(OperationNo1,OPNo);
+      EVALUATE(ResourceType1, ResType);
+      EVALUATE(ResourceNo1, ResNo);
+      EVALUATE(StartDate1, ConvertFromDDMMYY(StartDate));
+      EVALUATE(StartTime1, StartTime);
+      EVALUATE(EndDate1, ConvertFromDDMMYY(EndDate));
+      EVALUATE(EndTime1, EndTime);
+
+      ProdSchedCalc.Initialize(StartDate1,StartTime1,EndDate1,EndTime1,ResourceType1,ResourceNo1,CapNeed,CapNeedDivideFactor,FALSE);
+
+      IF ProdOrderRtngLine.GET(ProdOrderStatus1,ProdOrderNo1,RoutingReferenceNo1,RoutingNo1,OperationNo1) THEN
+        IF ProdSchedCalc.RUN(ProdOrderRtngLine) THEN;
+      ProdSchedCalc.GetResult(StartDate,StartTime,EndDate,EndTime,CapNeed,CapNeedDivideFactor);
+    END;
+
+    EVENT OutboundXML@1004::ondataavailable@198();
+    BEGIN
+    END;
+
+    EVENT OutboundXML@1004::onreadystatechange@-609();
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}

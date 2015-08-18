@@ -1,0 +1,933 @@
+OBJECT Table 7010014 Factura hotel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/12/13;
+    Time=16:17:04;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               lrFactHot@1103355000 : Record 7010014;
+             BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Hotel Payment" THEN //+$002
+                 ERROR(Text001);
+
+               lrFactHot.RESET;
+               IF lrFactHot.FINDLAST THEN
+                 ID := lrFactHot.ID + 1
+               ELSE
+                 ID := 1;
+
+               Usuario          := USERID;
+               "Fecha creacion" := TODAY;
+
+               // AJS 24.03.2009
+
+               ComprobarFacturaDuplicada;
+
+               RefrescarEstadoCtaProveedor;
+             END;
+
+    OnModify=BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Hotel Payment" THEN //+$002
+                 ERROR(Text002);
+
+               IF xRec."Pte. Revision" = "Pte. Revision" THEN
+                 IF NOT "Pte. Revision" THEN
+                   ERROR(Text003);
+
+               IF Contabilizada THEN
+                 ERROR(Text004);
+
+               ComprobarFacturaDuplicada;
+
+               // JPT 01/02/08 Gestion Documental FTP
+               RefrescarEstadoCtaProveedor;
+
+               // Tambien lo aplicamos al proveedor anterior
+               IF xRec.Proveedor <> Proveedor THEN
+                 cFunGesDoc.RefrescarEstadoCta(xRec.Proveedor);
+             END;
+
+    OnDelete=VAR
+               lrLin@1103355000 : Record 7009861;
+             BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Hotel Payment" THEN //+$002
+                 ERROR(Text005);
+
+               IF Contabilizada THEN
+                 ERROR(Text006);
+
+               // Elimina las lineas de validaci¢n
+
+               lrLin.RESET;
+               lrLin.SETRANGE(No, ID);
+               IF  lrLin.FIND('-') THEN
+                 lrLin.DELETEALL;
+
+               RefrescarEstadoCtaProveedor;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text007);
+             END;
+
+    CaptionML=[ENU=Hotel invoice;
+               ESP=Factura hotel];
+    LookupFormID=Form7010043;
+    DrillDownFormID=Form7010063;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Hotel               ;Code20        ;TableRelation=Hotel.Hotel WHERE (NoName=CONST(No));
+                                                   OnValidate=BEGIN
+
+                                                                Delegacion := COPYSTR(Hotel, 1, 3);
+                                                                rHot.GET(Hotel);
+                                                                VALIDATE(Proveedor, rHot."Proveedor Intermediacion");
+
+                                                                // AJS 23.01.2008
+
+                                                                "Factura a prepagar" := rHot."Hotel con Prepago";
+                                                              END;
+
+                                                   OnLookup=BEGIN
+
+                                                              LookupHotel;
+                                                            END;
+
+                                                   CaptionML=[ENU=Hotel;
+                                                              ESP=Hotel];
+                                                   NotBlank=Yes;
+                                                   Description=FK Hotel }
+    { 3   ;   ;Num. Factura        ;Code20        ;CaptionML=[ENU=Invoice No.;
+                                                              ESP=Num. Factura];
+                                                   NotBlank=Yes }
+    { 4   ;   ;ID                  ;Integer       ;CaptionML=[ENU=ID;
+                                                              ESP=ID];
+                                                   Description=PK }
+    { 5   ;   ;Fecha factura       ;Date          ;CaptionML=[ENU=Invoice date;
+                                                              ESP=Fecha factura];
+                                                   NotBlank=Yes }
+    { 7   ;   ;Fecha llegada       ;Date          ;OnValidate=BEGIN
+                                                                IF "Fecha aportacion" = 0D THEN
+                                                                  "Fecha aportacion" := "Fecha llegada";
+                                                              END;
+
+                                                   CaptionML=[ENU=Arrival Date;
+                                                              ESP=Fecha llegada] }
+    { 9   ;   ;Importe hotel       ;Decimal       ;OnValidate=BEGIN
+                                                                ImporteValidado := 0;
+                                                                rBono.MARKEDONLY(TRUE);
+                                                                IF rBono.FIND('-') THEN BEGIN
+                                                                  REPEAT
+                                                                    IF rBono."Importe validacion" = 0 THEN BEGIN
+                                                                      IF NOT rBono."Bote directo" THEN BEGIN
+                                                                        rBono.CALCFIELDS("Importe ya validado");
+                                                                        ImporteValidado := ImporteValidado + (rBono."Coste final" - rBono."Importe ya validado");
+                                                                      END;
+                                                                    END
+                                                                    ELSE
+                                                                      ImporteValidado := ImporteValidado + rBono."Importe validacion";
+                                                                  UNTIL rBono.NEXT = 0;
+                                                                END;
+
+                                                                {* Calculo  automatico de la aportacion de los guias de venta *}
+
+                                                                IF "Calcular aportacion automatica" THEN BEGIN
+                                                                  ImporteAportacion := 0;
+                                                                  rAport.SETRANGE(Delegacion   , Delegacion);
+                                                                  rAport.SETRANGE("N§ Contrato", "Num. Contrato");
+                                                                  IF rAport.FIND('-') THEN
+                                                                    REPEAT
+                                                                      IF (rAport."Fecha desde" <= "Fecha aportacion") AND
+                                                                         (rAport."Fecha hasta" >= "Fecha aportacion") THEN
+                                                                        ImporteAportacion := ("Importe hotel" * rAport.Porcentaje) / 100;
+                                                                    UNTIL rAport.NEXT = 0;
+                                                                  rAport.SETRANGE(Delegacion);
+                                                                  rAport.SETRANGE("N§ Contrato");
+                                                                END;
+
+                                                                IF "Importe hotel" <> (ImporteValidado - ImporteAportacion) THEN
+                                                                  ERROR(Text014 + Text015, ImporteValidado, ImporteAportacion);
+                                                                "Aportacion real guias" := ImporteAportacion;
+                                                              END;
+
+                                                   CaptionML=[ENU=Hotel Amount;
+                                                              ESP=Importe Hotel];
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 11  ;   ;Importe calculado   ;Decimal       ;CaptionML=[ENU=Calculated amount;
+                                                              ESP=Importe Calculado];
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 13  ;   ;Tipo contrato       ;Option        ;CaptionML=[ENU=Contract type;
+                                                              ESP=Tipo contrato];
+                                                   OptionCaptionML=[ENU=Interm. ITS,Interm. ATT,On its own behalf;
+                                                                    ESP=Interm. ITS,Interm. ATT,En nombre propio];
+                                                   OptionString=Interm. ITS,Interm. ATT,En nombre propio }
+    { 15  ;   ;Reclamacion         ;Boolean       ;CaptionML=[ENU=Claim;
+                                                              ESP=Reclamacion] }
+    { 17  ;   ;Aportacion teorica guias;Decimal   ;CaptionML=[ENU=Contribution theorical guides;
+                                                              ESP=Aportacion teorica guias];
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 19  ;   ;Aportacion real guias;Decimal      ;CaptionML=[ENU=Contribution real guides;
+                                                              ESP=Aportacion real guias];
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 21  ;   ;Delegacion          ;Code10        ;TableRelation=Delegacion.Codigo;
+                                                   OnValidate=BEGIN
+                                                                CompruebaLineas;
+                                                              END;
+
+                                                   CaptionML=[ENU=Local Office;
+                                                              ESP=Delegacion];
+                                                   Description=FK Delegacion }
+    { 23  ;   ;TourOperador        ;Code10        ;TableRelation=TourOperador.TourOperador;
+                                                   OnValidate=VAR
+                                                                lrLinVal@1103355000 : Record 7009861;
+                                                              BEGIN
+                                                                // Modifica las lineas
+
+                                                                lrLinVal.RESET;
+                                                                lrLinVal.SETRANGE(No              , ID);
+                                                                //lrLinVal.SETRANGE(Hotel            , Hotel);
+                                                                //lrLinVal.SETRANGE("N§ Factura"     , "N§ Factura");
+                                                                //lrLinVal.SETRANGE("Fecha factura"  , "Fecha factura");
+                                                                IF lrLinVal.FIND('-') THEN
+                                                                  lrLinVal.MODIFYALL(TourOperador , TourOperador);
+                                                                CompruebaLineas;
+                                                              END;
+
+                                                   CaptionML=[ENU=TourOperator;
+                                                              ESP=TourOperador];
+                                                   Description=FK TourOperador }
+    { 25  ;   ;Fecha validacion    ;Date          ;CaptionML=[ENU=Validation date;
+                                                              ESP=Fecha validacion] }
+    { 27  ;   ;Contabilizada       ;Boolean       ;CaptionML=[ENU=Posted;
+                                                              ESP=Contabilizada];
+                                                   Editable=No }
+    { 29  ;   ;C¢d. divisa         ;Code10        ;TableRelation=Currency.Code;
+                                                   OnValidate=VAR
+                                                                lrLinfra@1103355000 : Record 7009861;
+                                                              BEGIN
+                                                                // Cambia el codigo de divisa de las l¡neas de validaci¢n JPT-14/11/03
+
+                                                                lrLinfra.RESET;
+                                                                lrLinfra.SETRANGE(No              , ID);
+                                                                //lrLinfra.SETRANGE(Hotel           , Hotel);
+                                                                //lrLinfra.SETRANGE("N§ Factura"    , "N§ Factura");
+                                                                //lrLinfra.SETRANGE("Fecha factura" , "Fecha factura");
+                                                                IF lrLinfra.FIND('-') THEN
+                                                                  lrLinfra.MODIFYALL("C¢d. divisa","C¢d. divisa");
+                                                              END;
+
+                                                   CaptionML=[ENU=Currency code;
+                                                              ESP=C¢d. divisa] }
+    { 31  ;   ;Pte. Revision       ;Boolean       ;InitValue=Yes;
+                                                   OnValidate=BEGIN
+
+                                                                IF NOT "Pte. Revision" THEN BEGIN // Comprueba campos
+                                                                  TESTFIELD("Global Dimension 1 Code");
+                                                                END;
+                                                                MODIFY;
+                                                              END;
+
+                                                   CaptionML=[ENU=Pending Review;
+                                                              ESP=Pte. Revision] }
+    { 33  ;   ;Grabar Factura      ;Boolean       ;CaptionML=[ENU=Record invoice;
+                                                              ESP=Grabar Factura];
+                                                   Editable=No }
+    { 35  ;   ;Calcular aportacion automatica;Boolean;
+                                                   InitValue=Yes;
+                                                   CaptionML=[ENU=Calculate automatic contribution;
+                                                              ESP=Calcular aportacion automatica] }
+    { 37  ;   ;Factura de garantia ;Boolean       ;CaptionML=[ENU=Guarantee invoice;
+                                                              ESP=Factura de garantia] }
+    { 39  ;   ;Contrato propio     ;Boolean       ;CaptionML=[ENU=Own contract;
+                                                              ESP=Contrato propio] }
+    { 41  ;   ;Importe ya en FPR   ;Decimal       ;CaptionML=[ENU=Amount already in Invoices to be received;
+                                                              ESP=Importe ya en FPR];
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 43  ;   ;Tipo asiento        ;Option        ;CaptionML=[ENU=Ledger entry type;
+                                                              ESP=Tipo asiento];
+                                                   OptionCaptionML=[ENU=1st Validation,2nd Validation;
+                                                                    ESP=1¦ Validacion,2¦ Validacion];
+                                                   OptionString=1¦ Validacion,2¦ Validacion }
+    { 45  ;   ;Num. Contrato       ;Code10        ;CaptionML=[ENU=Contract No.;
+                                                              ESP=Num. Contrato] }
+    { 47  ;   ;Factura Early Booking;Boolean      ;CaptionML=[ENU=Early Booking No.;
+                                                              ESP=Factura Early Booking] }
+    { 49  ;   ;Fecha aportacion    ;Date          ;CaptionML=[ENU=Contribution date;
+                                                              ESP=Fecha aportacion] }
+    { 51  ;   ;Global Dimension 1 Code;Code20     ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   CaptionML=[ENU=Global Dimension 1 Code;
+                                                              ESP=Global Dimension 1 Code];
+                                                   Description="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   CaptionClass='1,1,1' }
+    { 52  ;   ;Fecha Desde         ;Date          ;OnValidate=BEGIN
+                                                                CompruebaFechas;
+                                                              END;
+
+                                                   CaptionML=[ENU=Date From;
+                                                              ESP=Fecha desde];
+                                                   Description=GOC }
+    { 53  ;   ;Fecha Hasta         ;Date          ;OnValidate=BEGIN
+                                                                CompruebaFechas;
+                                                              END;
+
+                                                   CaptionML=[ENU=Date To;
+                                                              ESP=Fecha hasta];
+                                                   Description=GOC }
+    { 54  ;   ;Importe Hotel Validacion;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Lin Fra Validacion"."Importe Hotel" WHERE (No=FIELD(ID)));
+                                                   CaptionML=[ENU=Validation amount hotel;
+                                                              ESP=Importe Hotel Validacion];
+                                                   Description=GOC;
+                                                   Editable=No;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 55  ;   ;Importe Calculado Validacion;Decimal;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Sum("Lin Fra Validacion"."Importe Calculado" WHERE (No=FIELD(ID)));
+                                                   CaptionML=[ENU=Validation calculated amount;
+                                                              ESP=Importe Calculado Validacion];
+                                                   Description=GOC;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="C¢d. divisa" }
+    { 57  ;   ;Usuario             ;Code20        ;TableRelation=User."User ID";
+                                                   CaptionML=[ENU=User;
+                                                              ESP=Usuario];
+                                                   Description=FK Usuario;
+                                                   Editable=No }
+    { 58  ;   ;Num documento NAV   ;Code20        ;CaptionML=[ENU=NAV Document No.;
+                                                              ESP=Num documento NAV] }
+    { 59  ;   ;Proveedor           ;Code20        ;TableRelation=Vendor.No.;
+                                                   OnValidate=BEGIN
+                                                                RefrescarEstadoCtaProveedor;
+
+                                                                // AJS 04.07.2008
+                                                                // Recogemos la divisa de la ficha de proveedor
+
+                                                                rProv.GET(Proveedor);
+
+                                                                VALIDATE("C¢d. divisa", rProv."Currency Code");
+                                                              END;
+
+                                                   CaptionML=[ENU=Supplier;
+                                                              ESP=Proveedor];
+                                                   NotBlank=Yes }
+    { 60  ;   ;Texto registro      ;Text50        ;CaptionML=[ENU=Registration text;
+                                                              ESP=Texto registro] }
+    { 61  ;   ;Validacion HP especial;Boolean     ;OnValidate=BEGIN
+                                                                // Si tiene lineas no se puede modificar porque se pueden generar incongruencias
+
+                                                                rLinFra.RESET;
+                                                                rLinFra.SETRANGE(No, ID);
+                                                                IF rLinFra.FINDFIRST THEN
+                                                                  ERROR(Text020);
+                                                              END;
+
+                                                   CaptionML=[ENU=Special HP validation;
+                                                              ESP=Validacion HP especial];
+                                                   Description=Marca el tipo de bonos que se incluyen }
+    { 62  ;   ;Codigo barras PDF   ;Code20        ;OnValidate=BEGIN
+
+                                                                ComprobarPDFDuplicado;
+                                                              END;
+
+                                                   CaptionML=[ENU=PDF Barcode;
+                                                              ESP=Codigo barras PDF];
+                                                   Description=Este codigo de barras ser  el nombre del fichero escaneado con la factura }
+    { 63  ;   ;Fecha creacion      ;Date          ;CaptionML=[ENU=Creation Date;
+                                                              ESP=Fecha creacion] }
+    { 64  ;   ;Observaciones       ;Text250       ;OnLookup=BEGIN
+                                                              rText.RESET;
+
+                                                              CLEAR(fText);
+                                                              fText.SETTABLEVIEW(rText);
+                                                              fText.LOOKUPMODE(TRUE);
+                                                              IF fText.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                                                fText.GETRECORD(rText);
+
+                                                                Observaciones := rText.Description;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Comments;
+                                                              ESP=Observaciones] }
+    { 65  ;   ;Filtro estancias de salida;Boolean ;OnValidate=BEGIN
+                                                                CompruebaFechas;
+                                                              END;
+
+                                                   CaptionML=[ENU=Check-out stays filter;
+                                                              ESP=Filtro estancias de salida] }
+    { 66  ;   ;Factura a prepagar  ;Boolean       ;CaptionML=[ENU=Invoice to be paid in advance;
+                                                              ESP=Factura a prepagar] }
+    { 67  ;   ;No Exportacion REWE ;Integer       ;CaptionML=[ENU=No exportation REWE;
+                                                              ESP=No Exportacion REWE];
+                                                   Description=Marca el numero de exportacion de REWE }
+    { 68  ;   ;Hotel TO            ;Code20        ;CaptionML=[ENU=TO Hotel;
+                                                              ESP=Hotel TO] }
+    { 69  ;   ;NCF                 ;Code20        ;CaptionML=[ENU=NCF;
+                                                              ESP=NCF] }
+    { 70  ;   ;Divisa Contrato     ;Code10        ;CaptionML=[ENU=Contract Currency;
+                                                              ESP=Divisa Contrato] }
+  }
+  KEYS
+  {
+    {    ;ID                                      ;Clustered=Yes }
+    {    ;Hotel,Num. Factura,Fecha factura        ;SumIndexFields=Importe hotel;
+                                                   KeyGroups=RENUMERING }
+    {    ;Fecha factura,Factura Early Booking,Contabilizada;
+                                                   SumIndexFields=Importe hotel;
+                                                   KeyGroups=RENUMERING }
+    {    ;Hotel,Fecha factura                     ;KeyGroups=RENUMERING }
+    {    ;Num documento NAV,Fecha factura         ;KeyGroups=RENUMERING }
+    {    ;Contabilizada                           ;SumIndexFields=Importe hotel;
+                                                   KeyGroups=RENUMERING }
+    {    ;Proveedor,Num. Factura,Fecha factura    ;KeyGroups=RENUMERING }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355011 : TextConst 'ENU=Agency parameters does not exist;ESP=No existe el fichero de Parametros de la Agencia.';
+      Text001@1103355012 : TextConst 'ENU=Hotel invoices only can be registered in Central.;ESP=Solo es posible dar de alta Facturas de Hotel en Central.';
+      Text002@1103355013 : TextConst 'ENU=Hotel invoices only can be modified in Central.;ESP=Solo es posible modificar Facturas de Hotel en Central.';
+      Text003@1103355014 : TextConst 'ENU=Invoice cannot be modified because it is pending of review;ESP=No puede modificarse la factura ya que no est  como Pte Revisi¢n';
+      Text004@1103355015 : TextConst 'ENU=Invoice cannot be modified because it is already validated;ESP=No puede modificarse la factura ya que ya est  valiada';
+      Text005@1103355016 : TextConst 'ENU=Only is possible to cancel Hotel invoices in Central;ESP=Solo es posible dar de baja Facturas de Hotel en Central.';
+      Text006@1103355017 : TextConst 'ENU=Unable to DELETE  the invoice because it is already validated;ESP=No puede BORRAR la factura ya que ya est  valiada';
+      Text007@1103355018 : TextConst 'ENU=Unable to rename invoices;ESP=No es posible renombrar facturas';
+      Text008@1103355019 : TextConst 'ENU=Only is possible to rename Hotel invoices in Central.;ESP=Solo es posible renombrar Facturas de Hotel en Central.';
+      Text009@1103355020 : TextConst 'ENU=Must indicate the same hotel as the Voucher;ESP=Debe indicar el mismo hotel que figura en el Bono.';
+      Text010@1103355021 : TextConst 'ENU=Hotel code %1 does not exist;ESP=No existe el codigo de Hotel %1.';
+      Text011@1103355022 : TextConst 'ENU=Associated supplier to hotel does not exist;ESP=No existe el proveedor asociado al hotel.';
+      Text012@1103355023 : TextConst 'ENU=Supplier posting group %1 does not exist;ESP=No existe el Grupo contable proveedor %1.';
+      Text013@1103355024 : TextConst 'ENU=Invoice %1 of hotel %2 with posting date %3 already exists;ESP=Ya existe la factura %1 del hotel %2 con fecha registro %3.';
+      Text014@1103355025 : TextConst 'ENU=Hotel amount must be the same as\;ESP=El importe del hotel debe ser igual al Importe\';
+      Text015@1103355026 : TextConst 'ENU=the calculated (%1) minus the guide contributions (%2);ESP=calculado (%1) menos la aportacion de los guias (%2).';
+      Text016@1103355027 : TextConst 'ENU=Contribution will be calculated automatically;ESP=Ha indicado que la aportacion se calcular  automaticamente.';
+      Text017@1103355028 : TextConst 'ENU=Contribution will be calculated automatically;ESP=Ha indicado que la aportacion se calculara automaticamente.';
+      Text018@1103355029 : TextConst 'ENU=Fixed amount has already been indicated;ESP=Ya ha indicado un importe fijo.';
+      Text019@1103355030 : TextConst 'ENU=Date from cannot be higher than date to;ESP=Fecha Desde No puede ser posterior a Fecha Hasta';
+      rPar@1103355000 : Record 7009700;
+      rBono@1103355001 : Record 7010013;
+      rProv@1103355002 : Record 23;
+      rGrup@1103355003 : Record 93;
+      rHot@1103355004 : Record 7009724;
+      rAport@1103355005 : Record 7010007;
+      rCab@1103355007 : Record 7010014;
+      rLinFra@1103355031 : Record 7009861;
+      rText@1103355037 : Record 7;
+      GestNoSeries@1103355036 : Codeunit 396;
+      cFunGesDoc@1103355044 : Codeunit 7009900;
+      fText@1103355038 : Form 8;
+      ImporteValidado@1103355008 : Decimal;
+      ImporteAportacion@1103355009 : Decimal;
+      ok@1103355010 : Boolean;
+      Text020@1103355032 : TextConst 'ENU=This invoice already has assigned vouchers, unable to modify the field Special HP Validation;ESP=Esta factura ya tiene bonos asignados, no se puede modificar el campo Validacion HP especial.';
+      Text021@1103355033 : TextConst 'ENU=this barcode was already assigned to the invoice %1 of hotel %2, would you like to continue?;ESP=Este codigo de barras ya se asigno a la factura %1 del hotel %2, desea continuar.';
+      Text022@1103355034 : TextConst 'ENU=Wrong Barcode;ESP=Codigo de barras erroneo.';
+      Text023@1103355035 : TextConst 'ENU=To two invoices share PDF they must be from the same supplier;ESP=Para que dos facturas compartan PDF deben ser del mismo proveedor.';
+      Text024@1103355039 : TextConst 'ENU=Invoice %1 %2 is not posted;ESP=La factura %1 %2 No est  contabilizada';
+      Text025@1103355040 : TextConst 'ENU=Would you like to cancel the Hotel Payment invoice %1 %2?;ESP=¨Desea Realmente Anular la Factura Hotel Payment %1 %2?';
+      Text026@1103355041 : TextConst 'ENU=%1 %2 has already been settled;ESP=La %1 %2 ya ha salido liquidada';
+      Text027@1103355042 : TextConst 'ENU=File\ %1 could not be deleted;ESP=No se ha podido eliminar el archivo\ %1';
+      Text028@1103355043 : TextConst 'ENU=Hotel invoice %1 %2 Cancelled;ESP=Factura Hotel %1 %2 Anulada';
+      Text029@1103355046 : TextConst 'ENU=Supplier %1 does not have exchange value for the exportation of REWE.;ESP=El proveedor %1 no tiene valor de conversion para la exportaci¢n de REWE.';
+
+    PROCEDURE nom_hotel@1() : Text[30];
+    VAR
+      rHot@1103355000 : Record 7009724;
+    BEGIN
+      IF NOT rHot.GET("Num. Factura") THEN
+        EXIT('')
+      ELSE
+        EXIT(rHot.Nombre);
+    END;
+
+    PROCEDURE nom_delegacion@2() : Text[30];
+    VAR
+      rDel@1103355000 : Record 7009718;
+    BEGIN
+      IF NOT rDel.GET(Delegacion) THEN
+        EXIT('')
+      ELSE
+        EXIT(rDel.Nombre);
+    END;
+
+    PROCEDURE nom_touroperador@3() : Text[30];
+    VAR
+      rTO@1103355000 : Record 7009717;
+    BEGIN
+      IF NOT rTO.GET("Fecha validacion") THEN
+        EXIT('')
+      ELSE
+        EXIT(rTO.Nombre);
+    END;
+
+    PROCEDURE CompruebaFechas@4();
+    VAR
+      lwFiltroFecha@1103355000 : Text[30];
+    BEGIN
+      // CompruebaFechas
+
+      IF Contabilizada THEN
+        FIELDERROR(Contabilizada);
+
+      IF ("Fecha Desde" > "Fecha Hasta") AND ("Fecha Hasta"<> 0D) THEN
+        ERROR(Text019);
+
+      CompruebaLineas;
+    END;
+
+    PROCEDURE CompruebaLineas@6();
+    VAR
+      lrLin@1103355000 : Record 7009861;
+      lrLin2@1103355001 : Record 7009861;
+      lwFiltroFecha@1103355002 : Text[100];
+    BEGIN
+      // CompruebaLineas
+
+      // Tambien comprobamos las l¡neas que ya podamos tener de validaci¢n como han quedado
+
+      lrLin.RESET;
+      //lrLin.SETRANGE(Hotel        , Hotel);
+      //lrLin.SETRANGE("N§ Factura" , "N§ Factura");
+      lrLin.SETRANGE(No           , ID);
+      IF lrLin.FINDSET THEN BEGIN
+        lwFiltroFecha := MontaFiltroFecha;
+        REPEAT
+          lrLin2 := lrLin;
+
+          lrLin2.CompruebaEstado(lwFiltroFecha);
+          lrLin2.MODIFY;
+        UNTIL lrLin.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MontaFiltroFecha@5() : Text[100];
+    VAR
+      lwFiltroFecha@1103355000 : Text[30];
+    BEGIN
+      // MontaFiltroFecha
+
+      CLEAR(lwFiltroFecha);
+      IF ("Fecha Desde" <> 0D) OR ("Fecha Hasta" <> 0D) THEN BEGIN
+        IF "Fecha Desde"= 0D THEN
+          lwFiltroFecha := '<=%2'
+        ELSE
+          IF "Fecha Hasta" = 0D THEN
+            lwFiltroFecha := '>=%1'
+          ELSE
+            lwFiltroFecha := '%1..%2';
+
+        lwFiltroFecha := STRSUBSTNO(lwFiltroFecha, "Fecha Desde", "Fecha Hasta");
+      END;
+
+      EXIT(lwFiltroFecha);
+    END;
+
+    PROCEDURE NombreHotel@7() : Text[30];
+    VAR
+      lrHotel@1103355000 : Record 7009724;
+    BEGIN
+      // NombreHotel
+
+      IF lrHotel.GET(Hotel) THEN
+        EXIT(lrHotel.Nombre);
+    END;
+
+    PROCEDURE ComprobarFacturaDuplicada@1103355004();
+    BEGIN
+      // ComprobarFacturaDuplicada
+
+      // AJS 24.03.2009
+
+      IF (Hotel = '') OR ("Num. Factura" = '') THEN
+        EXIT;
+
+      rCab.RESET;
+      rCab.SETCURRENTKEY(Hotel,
+                         "Num. Factura",
+                         "Fecha factura");
+      rCab.SETRANGE (Hotel          , Hotel);
+      rCab.SETRANGE ("Num. Factura"   , "Num. Factura");
+
+      // AJS 27.03.2008
+      // Quitamos la fecha del control de repeticion
+      //rCab.SETRANGE ("Fecha factura", "Fecha factura");
+
+      rCab.SETFILTER(ID             , '<>%1', ID);
+      IF rCab.FINDFIRST THEN
+        ERROR(Text013, "Num. Factura", Hotel, "Fecha factura");
+    END;
+
+    PROCEDURE ComprobarPDFDuplicado@1103355000();
+    VAR
+      lrHot@1103355000 : Record 7009724;
+      lrHot2@1103355001 : Record 7009724;
+    BEGIN
+
+      // Hay que hacer un comprobacion de que no este duplicado
+
+      rCab.RESET;
+      rCab.SETRANGE ("Codigo barras PDF", "Codigo barras PDF");
+      rCab.SETFILTER(ID                 , '<>%1', ID);
+      IF rCab.FINDFIRST THEN BEGIN
+
+        // Comprobamos que los hoteles de las 2 facturas tengan el mismo PDF
+
+        lrHot.GET(Hotel);
+        lrHot2.GET(rCab.Hotel);
+        IF lrHot."Proveedor Intermediacion" <> lrHot2."Proveedor Intermediacion" THEN
+          ERROR(Text023);
+
+        // Pedimos confirmacion de la duplicacion al usuario
+
+        IF NOT CONFIRM(Text021, FALSE, rCab."Num. Factura", rCab.Hotel) THEN
+          ERROR(Text022);
+
+        // Vamos a crear un nuevo codigo de barras para esta factura
+
+        rPar.FINDFIRST;
+        rPar.TESTFIELD("Serie Codigos de barra compra");
+        "Codigo barras PDF" := GestNoSeries.GetNextNo(rPar."Serie Codigos de barra compra", TODAY, TRUE);
+
+        // Crear una copia del pdf de la factura ya existente y guardarlo con el nuevo numero de serie
+
+
+      END;
+    END;
+
+    PROCEDURE AnulaFacturaPayment@1103355001();
+    VAR
+      lwTipoDoc@1103355000 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      lwEnc@1103355001 : Boolean;
+      lrCabCpra@1103355002 : Record 38;
+      lrLinCpra@1103355003 : Record 39;
+      lrComCpr@1103355004 : Record 43;
+      lrDims@1103355005 : Record 357;
+      lrDimRec@1103355008 : Record 359;
+      lrCabFra@1103355006 : Record 122;
+      lrLinFra@1103355007 : Record 123;
+      lrCabAbn@1103355009 : Record 124;
+      lrLinAbn@1103355010 : Record 125;
+      lrMovProv@1103355011 : Record 25;
+      lrMovProvDet@1103355015 : Record 380;
+      lrMovCont@1103355012 : Record 17;
+      lrRegMovCont@1103355016 : Record 45;
+      lrMovIva@1103355017 : Record 254;
+      lrMovDim@1103355018 : Record 355;
+      lrVal@1103355020 : Record 7010022;
+      lwNunDoc@1103355013 : Code[20];
+      lwFechaReg@1103355014 : Date;
+      lwNomArch@1103355019 : Text[1024];
+    BEGIN
+      // AnulaFacturaPayment
+
+      IF NOT Contabilizada THEN
+        ERROR(Text024, Hotel, "Num. Factura");
+
+      IF NOT CONFIRM (Text025, FALSE, Hotel, "Num. Factura") THEN
+        EXIT;
+
+      CALCFIELDS("Importe Hotel Validacion");
+      IF "Importe Hotel Validacion" >= 0 THEN
+        lwTipoDoc := lwTipoDoc::Invoice
+      ELSE
+        lwTipoDoc := lwTipoDoc::"Credit Memo";
+
+      // Primero miramos si no est  registrado
+      lwEnc := lrCabCpra.GET(lwTipoDoc, "Num documento NAV");
+      IF lwEnc THEN BEGIN  // Si NO est  registrado
+        CLEAR(lrLinCpra); // Lin Compra
+        lrLinCpra.SETRANGE("Document Type", lrCabCpra."Document Type");
+        lrLinCpra.SETRANGE("Document No." , lrCabCpra."No.");
+        IF lrLinCpra.FINDSET THEN
+          lrLinCpra.DELETEALL;
+
+        CLEAR(lrComCpr); // Lineas Comentario compra
+        lrComCpr.SETRANGE("Document Type", lrCabCpra."Document Type");
+        lrComCpr.SETRANGE("No."          , lrCabCpra."No.");
+        IF lrComCpr.FINDSET THEN
+          lrComCpr.DELETEALL;
+
+        CLEAR(lrDims); // Dimensiones Documento
+        lrDims.SETFILTER("Table ID", '%1|%2', DATABASE::"Purchase Header", DATABASE::"Purchase Line");
+        lrDims.SETRANGE("Document Type", lrCabCpra."Document Type");
+        lrDims.SETRANGE("Document No." , lrCabCpra."No.");
+        lrDims.DELETEALL;
+
+        lrCabCpra.DELETE;
+      END
+      ELSE BEGIN // Si est  registrado
+        CASE lwTipoDoc OF
+          lwTipoDoc::Invoice: BEGIN
+            CLEAR(lrCabFra);
+            lrCabFra.SETCURRENTKEY("Vendor Invoice No.","Posting Date");
+            lrCabFra.SETRANGE("Buy-from Vendor No.", Proveedor);
+            lrCabFra.SETRANGE("Vendor Invoice No." , "Num. Factura");
+            lrCabFra.SETRANGE("Posting Date"       , "Fecha factura");
+            lrCabFra.FINDFIRST;
+            lwNunDoc := lrCabFra."No.";
+
+            CLEAR(lrLinFra);
+            lrLinFra.SETRANGE("Document No.", lrCabFra."No.");
+            IF lrLinFra.FINDSET THEN
+              lrLinFra.DELETEALL;
+
+            CLEAR(lrComCpr); // Lineas Comentario compra
+            lrComCpr.SETRANGE("Document Type", lrComCpr."Document Type"::"Posted Invoice");
+            lrComCpr.SETRANGE("No."          , lrCabFra."No.");
+            IF lrComCpr.FINDSET THEN
+              lrComCpr.DELETEALL;
+
+            // Dimensiones
+            CLEAR(lrDimRec);
+            lrDimRec.SETFILTER("Table ID", '%1|%2', DATABASE::"Purch. Inv. Header",DATABASE::"Purch. Inv. Line");
+            lrDimRec.SETRANGE("Document No.", lrCabFra."No.");
+            IF lrDimRec.FINDSET THEN
+              lrDimRec.DELETEALL;
+
+            lrCabFra.DELETE;
+          END;
+
+          lwTipoDoc::"Credit Memo": BEGIN
+            CLEAR(lrCabAbn);
+            lrCabAbn.SETCURRENTKEY("Vendor Cr. Memo No.","Posting Date");
+            lrCabAbn.SETRANGE("Buy-from Vendor No." , Proveedor);
+            lrCabAbn.SETRANGE("Vendor Cr. Memo No." , "Num. Factura");
+            lrCabAbn.SETRANGE("Posting Date"        , "Fecha factura");
+            lrCabAbn.FINDFIRST;
+            lwNunDoc := lrCabAbn."No.";
+
+            CLEAR(lrLinAbn);
+            lrLinAbn.SETRANGE("Document No.", lrCabAbn."No.");
+            IF lrLinAbn.FINDSET THEN
+              lrLinAbn.DELETEALL;
+
+            CLEAR(lrComCpr); // Lineas Comentario compra
+            lrComCpr.SETRANGE("Document Type", lrComCpr."Document Type"::"Posted Credit Memo");
+            lrComCpr.SETRANGE("No."          , lrCabAbn."No.");
+            IF lrComCpr.FINDSET THEN
+              lrComCpr.DELETEALL;
+
+            // Dimensiones
+            CLEAR(lrDimRec);
+            lrDimRec.SETFILTER("Table ID", '%1|%2', DATABASE::"Purch. Cr. Memo Hdr.",DATABASE::"Purch. Cr. Memo Line");
+            lrDimRec.SETRANGE("Document No.", lrCabAbn."No.");
+            IF lrDimRec.FINDSET THEN
+              lrDimRec.DELETEALL;
+
+            lrCabAbn.DELETE;
+          END;
+        END;
+
+        // Borramos tambien los registros relacionados con lo movimientos de contabilidad
+        // Mov. Proveedor
+        lrMovProv.SETCURRENTKEY("External Document No.","Document Type");
+        lrMovProv.SETRANGE("Document Type"        , lwTipoDoc);
+        lrMovProv.SETRANGE("External Document No.", "Num. Factura");
+        lrMovProv.SETRANGE("Vendor No."           , Proveedor);
+        lrMovProv.SETRANGE("Posting Date"         , "Fecha factura");
+        lrMovProv.FINDSET;
+        lrMovProv.CALCFIELDS(Amount, "Remaining Amount");
+        IF lrMovProv.Amount <> lrMovProv."Remaining Amount" THEN
+          ERROR(Text026, lrMovProv."Document Type", "Num. Factura");
+        REPEAT
+          // Mov proveedor detallado
+          CLEAR(lrMovProvDet);
+          lrMovProvDet.SETCURRENTKEY("Vendor Ledger Entry No.","Posting Date");
+          lrMovProvDet.SETRANGE("Posting Date"           , lrMovProv."Posting Date");
+          lrMovProvDet.SETRANGE("Vendor Ledger Entry No.", lrMovProv."Entry No.");
+          IF lrMovProvDet.FINDSET THEN
+            lrMovProvDet.DELETEALL;
+
+          CLEAR(lrMovDim); // Dimensiones
+          lrMovDim.SETRANGE("Table ID" , DATABASE::"Vendor Ledger Entry");
+          lrMovDim.SETRANGE("Entry No.", lrMovProv."Entry No.");
+          IF lrMovDim.FINDSET THEN
+            lrMovDim.DELETEALL;
+
+        UNTIL lrMovProv.NEXT=0;
+        lrMovProv.DELETEALL;
+
+        // Mov contabilidad
+        CLEAR(lrMovCont);
+        lrMovCont.SETCURRENTKEY("Document No.","Posting Date");
+        lrMovCont.SETRANGE("Document No.", lwNunDoc);
+        lrMovCont.SETRANGE("Posting Date", "Fecha factura");
+        IF lrMovCont.FINDSET THEN BEGIN
+          REPEAT
+            CLEAR(lrRegMovCont); // Registro Movimientos Contabilidad
+            IF lrRegMovCont.GET(lrMovCont."Transaction No.") THEN
+              lrRegMovCont.DELETE;
+
+            CLEAR(lrMovDim); // Dimensiones
+            lrMovDim.SETRANGE("Table ID" , DATABASE::"G/L Entry");
+            lrMovDim.SETRANGE("Entry No.", lrMovCont."Entry No.");
+            IF lrMovDim.FINDSET THEN
+              lrMovDim.DELETEALL;
+
+          UNTIL lrMovCont.NEXT=0;
+          lrMovCont.DELETEALL;
+        END;
+
+        // Mov. IVA
+        CLEAR(lrMovIva);
+        lrMovIva.SETCURRENTKEY("Document No.","Posting Date");
+        lrMovIva.SETRANGE("Document No.", lwNunDoc);
+        lrMovIva.SETRANGE("Posting Date", "Fecha factura");
+        IF lrMovIva.FINDSET THEN
+          lrMovIva.DELETEALL;
+      END;
+
+      // Borramos las lineas de validacion Bono
+      CLEAR(lrVal);
+      lrVal.SETRANGE("N§ Factura"   , "Num. Factura");
+      lrVal.SETRANGE(Delegacion     , Delegacion);
+      lrVal.SETRANGE("Hotel Factura", Hotel);
+      IF lrVal.FINDSET THEN
+        lrVal.DELETEALL;
+
+      // Borramos el Documento PDF asignado
+      lwNomArch := NomArchPDF;
+      IF lwNomArch <> '' THEN BEGIN
+        IF EXISTS(lwNomArch) THEN
+          IF NOT ERASE(lwNomArch) THEN
+            MESSAGE(Text027, lwNomArch);
+      END;
+
+      // Seguidamente modificacmos el registro
+      CLEAR(Contabilizada);
+      CLEAR("Fecha validacion");
+      CLEAR("Importe hotel");
+      CLEAR("Importe calculado");
+      CLEAR("Num documento NAV");
+      CLEAR("Codigo barras PDF");
+      MODIFY;
+
+      MESSAGE(Text028, Hotel, "Num. Factura");
+    END;
+
+    PROCEDURE NomArchPDF@1103355007() : Text[1024];
+    VAR
+      lwNombreFichero@1103355001 : Text[1024];
+      lText001@1103355000 : TextConst 'ENU=Purchase documents;ESP=Documentos Compra';
+    BEGIN
+      // NomArchPDF
+      // Devuelve el nombre del pdf asignado a un documento de compra
+
+      IF "Codigo barras PDF" = '' THEN
+        EXIT;
+
+      rPar.FINDFIRST;
+      rPar.TESTFIELD("Ruta ficheros PDF");
+
+      lwNombreFichero := rPar."Ruta ficheros PDF" + '\' +
+                         lText001 + '\' +
+                         FORMAT("Fecha factura", 0, '<Year4>') + '\' +
+                         FORMAT("Fecha factura", 0, '<Month,2>') + '\' +
+                         "Codigo barras PDF" + '.PDF';
+
+
+      EXIT(lwNombreFichero);
+    END;
+
+    PROCEDURE RefrescarEstadoCtaProveedor@1103355002();
+    BEGIN
+      // RefrescarEstadoCtaProveedor
+
+      // JPT 01/02/08 Gestion Documentarl FTP GOC
+      cFunGesDoc.RefrescarEstadoCta(Proveedor);
+    END;
+
+    PROCEDURE LookupHotel@1103355005();
+    VAR
+      lfHoteles@1103355000 : Form 7009731;
+      lrHoteles@1103355001 : Record 7009724;
+    BEGIN
+      // LookupHotel
+      //: En caso de haber marcado un proveedor previamente solo se muestran los hoteles
+      //: con ese proveedor intermediaci¢n.
+
+      IF Proveedor <> '' THEN BEGIN
+        lrHoteles.SETCURRENTKEY(NoName, "Proveedor Intermediacion", "Proveedor Cuenta Propia");
+        lrHoteles.FILTERGROUP(2);
+        lrHoteles.SETRANGE("Proveedor Intermediacion", Proveedor);
+        lrHoteles.FILTERGROUP(0);
+      END;
+
+      lfHoteles.SETTABLEVIEW(lrHoteles);
+      lfHoteles.LOOKUPMODE := TRUE;
+      lfHoteles.EDITABLE   := FALSE;
+
+      IF lfHoteles.RUNMODAL IN [ACTION::LookupOK, ACTION::OK] THEN BEGIN
+        lrHoteles.RESET;
+        lfHoteles.GETRECORD(lrHoteles);
+        VALIDATE(Hotel, lrHoteles.Hotel);
+      END;
+    END;
+
+    PROCEDURE RellenarContrato@1100253000();
+    VAR
+      lrCon@1100253000 : Record 7009723;
+    BEGIN
+      // RellenarContrato
+
+      IF (Hotel = '') THEN
+        EXIT;
+
+      rLinFra.RESET;
+      rLinFra.SETRANGE(No, ID);
+      IF NOT rLinFra.FINDFIRST THEN
+        EXIT;
+
+      lrCon.RESET;
+      lrCon.SETCURRENTKEY(Hotel, TourOperador, "Fecha inicio contrato");
+      lrCon.SETRANGE (Hotel                  , Hotel);
+      //lrCon.SETRANGE (TourOperador           , TourOperador);
+      lrCon.SETFILTER("Fecha inicio contrato", '<=%1', rLinFra."Fecha Entrada");
+      lrCon.SETFILTER("Fecha final contrato" , '>=%1', rLinFra."Fecha Entrada");
+      lrCon.SETRANGE(Confirmado              , TRUE);
+      IF lrCon.FINDFIRST THEN
+      BEGIN
+        "Num. Contrato"   := lrCon."N§ Contrato compra";
+        "Divisa Contrato" := lrCon."C¢d. divisa";
+        MODIFY;
+      END;
+    END;
+
+    BEGIN
+    {
+      ## AJS 23.01.2008
+
+        .- Incluido un nuevo campo "Factura a prepagar" que vamos a rellenar con el campo "Hotel con Prepago"
+           de la tabla de hoteles
+
+      ## AJS 24.03.2009
+
+        .- He incluido el control de factura duplicada en el OnInsert
+        .- En la funcion ComprobarFacturaDuplicada si Hotel o "N§ Factura" estan en blanco
+           se sale sin comprobar
+
+      $001 AJS 03022012 Nueva funcion RellenarContrato para ser usada desde las lineas de validacion
+
+      $002 AJS 19122013 Cambio el control para dejar mantener esta tabla
+    }
+    END.
+  }
+}

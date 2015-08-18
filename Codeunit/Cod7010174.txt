@@ -1,0 +1,985 @@
+OBJECT Codeunit 7010174 Gestion rellenar ICD
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/06/15;
+    Time=12:18:31;
+    Modified=Yes;
+    Version List=AIC2009,OC-14044,COM;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            TransferNuevoPeriodo(TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1100217000 : TextConst 'ENU=This period already exists.;ESP=Este periodo ya existe.';
+      rExchange@1100217006 : Record 330;
+      rPar@1100217007 : Record 7009700;
+      rParPer@1100217008 : Record 7009701;
+      wTotal@1100217001 : Integer;
+      wActual@1100217002 : Integer;
+      wDialog@1100217003 : Dialog;
+      Text002@1100217004 : TextConst 'ENU=Creating period #1######## - #2########;ESP=Generado periodo #1######## - #2########';
+      Text003@1100217005 : TextConst 'ESP=Progreso @3@@@@@@@@@@@@@';
+      Text004@1100217010 : TextConst 'ENU=Arrival;ESP=Llegada';
+      Text005@1100217009 : TextConst 'ENU=Separated;ESP=Separado';
+
+    PROCEDURE ExcursionNuevoPeriodo@1100217002(pAutomatico@1000000000 : Boolean);
+    VAR
+      lrPeriodo@1100217000 : Record 7010264;
+    BEGIN
+      // ExcursionNuevoPeriodo
+
+      _PedirPeriodo(lrPeriodo, lrPeriodo."Tipo periodo"::Excursiones,pAutomatico);
+
+      IF pAutomatico THEN
+      BEGIN
+        RegenerarPeriodo(lrPeriodo);
+        EXIT;
+      END
+      ELSE
+        _ExcursionGenerarICD(lrPeriodo, pAutomatico);
+
+      lrPeriodo."Fecha proceso" := CURRENTDATETIME;
+      lrPeriodo."Usuario proceso" := USERID;
+      lrPeriodo.MODIFY;
+    END;
+
+    LOCAL PROCEDURE _PedirPeriodo@1100217001(VAR prPeriodo@1100217003 : Record 7010264;pwTipoPeriodo@1100217002 : Integer;pwAutomatico@1000000000 : Boolean);
+    VAR
+      lrPeriodoTMP@1100217001 : Record 7010264;
+      lfPeriodo@1100217000 : Form 7010238;
+    BEGIN
+      // _PedirPeriodo
+
+      // < +$002
+      IF pwAutomatico THEN
+      BEGIN
+        lrPeriodoTMP.RESET;
+        lrPeriodoTMP."Tipo periodo" := pwTipoPeriodo;
+        lrPeriodoTMP."Fecha inicio" := DMY2DATE(1, DATE2DMY(TODAY,2), DATE2DMY(TODAY,3));
+        lrPeriodoTMP."Fecha final"  := CALCDATE('<+1M-1D>',lrPeriodoTMP."Fecha inicio");
+      END
+      ELSE BEGIN// $002 >
+        //. Abrir una ficha para que se pueda introducir el periodo de fechas
+        lrPeriodoTMP.RESET;
+        lrPeriodoTMP.SETRANGE("Tipo periodo", pwTipoPeriodo);
+
+        CLEAR(lfPeriodo);
+        lfPeriodo.PasarTemporal(lrPeriodoTMP);
+        IF lfPeriodo.RUNMODAL <> ACTION::OK THEN
+          EXIT;
+
+        //. Recuperar la informaci¢n introducida
+
+        lfPeriodo.RetornarTemporal(lrPeriodoTMP);
+      END;
+
+      //. Compruebo que los datos obligatorios esten rellenados
+      IF (lrPeriodoTMP."Fecha inicio" = 0D) OR
+         (lrPeriodoTMP."Fecha final" = 0D) THEN
+        EXIT;
+
+      prPeriodo.RESET;
+      prPeriodo.SETRANGE("Tipo periodo", lrPeriodoTMP."Tipo periodo");
+      prPeriodo.SETRANGE("Fecha inicio", lrPeriodoTMP."Fecha inicio");
+      prPeriodo.SETRANGE("Fecha final" , lrPeriodoTMP."Fecha final");
+      IF prPeriodo.FINDFIRST THEN
+      BEGIN
+        IF NOT pwAutomatico THEN
+          ERROR(Text001)
+      END
+      ELSE
+      BEGIN
+        prPeriodo.TRANSFERFIELDS(lrPeriodoTMP);
+        prPeriodo.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE _ExcursionGenerarICD@1100217000(prPeriodo@1100217001 : Record 7010264;pwRegenerar@1100217002 : Boolean);
+    VAR
+      lrRsv@1100217000 : Record 7010162;
+      lrRsvReem@1000000000 : Record 7010266;
+      lrICDIngresoE@1100217003 : Record 7010261;
+      lrICDCosteE@1100217005 : Record 7010262;
+      lrICDHotelE@1100217006 : Record 7010263;
+      lwReembolsoPeriodo@1100217004 : Boolean;
+    BEGIN
+      // _ExcursionesGenerarICD
+
+      rPar.FINDFIRST;
+
+      rParPer.FINDFIRST;
+
+      IF pwRegenerar THEN
+        prPeriodo.DeleteDetail;
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Fecha Excursion");
+      lrRsv.SETRANGE ("Fecha Excursion", prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrRsv.SETFILTER(Producto, '<>%1', '');
+      lrRsv.SETRANGE (Anulada , FALSE);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        IF GUIALLOWED THEN
+        BEGIN
+          wTotal  := lrRsv.COUNTAPPROX;
+          wActual := 0;
+
+          wDialog.OPEN(Text002 + '\' + Text003);
+          wDialog.UPDATE(1, prPeriodo."Fecha inicio");
+          wDialog.UPDATE(2, prPeriodo."Fecha final");
+        END;
+
+        REPEAT
+          IF GUIALLOWED THEN
+          BEGIN
+            wActual += 1;
+            wDialog.UPDATE(3, ROUND(wActual / wTotal * 10000, 1));
+          END;
+
+          lrICDIngresoE.RESET;
+          lrICDIngresoE.SETRANGE("ID Periodo"            , prPeriodo."ID Periodo");
+          lrICDIngresoE.SETRANGE(Excursion               , lrRsv.Producto);
+          lrICDIngresoE.SETRANGE("Fecha excursion"       , lrRsv."Fecha Excursion");
+          lrICDIngresoE.SETRANGE("Oficina venta"         , lrRsv.Oficina);
+          lrICDIngresoE.SETRANGE("Fecha venta"           , lrRsv."Fecha Venta");
+          lrICDIngresoE.SETRANGE("Hotel cliente"         , lrRsv."Hotel Cliente");
+          lrICDIngresoE.SETRANGE("Idioma cliente"        , lrRsv.Idioma);
+          lrICDIngresoE.SETRANGE(Touroperador            , lrRsv.TourOperador);
+          lrICDIngresoE.SETRANGE(Representante           , lrRsv."Guia Venta");
+          lrICDIngresoE.SETRANGE("Fecha liquidacion Rep.", lrRsv."Fecha Liquidacion GV");
+          lrICDIngresoE.SETRANGE("Num. Factura"          , lrRsv."Num. Factura");
+          IF NOT lrICDIngresoE.FINDFIRST THEN
+          BEGIN
+            _CrearIngresoExcursion(prPeriodo, lrRsv, lrICDIngresoE, FALSE);
+
+            //. Buscamos si hay que crear el ICD Coste excursiones
+            lrICDCosteE.RESET;
+            lrICDCosteE.SETRANGE("ID Periodo"    , lrICDIngresoE."ID Periodo");
+            lrICDCosteE.SETRANGE(Excursion       , lrICDIngresoE.Excursion);
+            lrICDCosteE.SETRANGE("Fecha servicio", lrICDIngresoE."Fecha excursion");
+            lrICDCosteE.SETRANGE(Touroperador    , lrICDIngresoE.Touroperador);
+            IF NOT lrICDCosteE.FINDFIRST THEN
+            BEGIN
+              lrICDCosteE.INIT;
+              lrICDCosteE."ID Periodo"     := prPeriodo."ID Periodo";
+              lrICDCosteE.Excursion        := lrRsv.Producto;
+              lrICDCosteE."Fecha servicio" := lrRsv."Fecha Excursion";
+              lrICDCosteE.Touroperador     := lrRsv.TourOperador;
+
+              _ExcursionCoste(lrICDCosteE);
+            END;
+
+            //. Acumulamos las estancias
+            lrICDHotelE.RESET;
+            lrICDHotelE.SETRANGE("ID Periodo", lrICDIngresoE."ID Periodo");
+            lrICDHotelE.SETRANGE(Hotel       , lrICDIngresoE."Hotel cliente");
+            IF NOT lrICDHotelE.FINDFIRST THEN
+            BEGIN
+              lrICDHotelE.INIT;
+              lrICDHotelE."ID Periodo" := prPeriodo."ID Periodo";
+              lrICDHotelE.Hotel        := lrRsv."Hotel Cliente";
+
+              _ExcursionEstancia(prPeriodo, lrICDHotelE);
+            END;
+          END;
+
+          lrICDIngresoE."Ingreso reserva"        += lrRsv."Ingreso reserva";
+          lrICDIngresoE."Ingreso reserva neto"   += lrRsv."Ingreso reserva neto";
+          lrICDIngresoE.Adultos                  += lrRsv.Adultos;
+          lrICDIngresoE.Ni¤os                    += lrRsv.Ni¤os;
+          lrICDIngresoE."Invitados adultos"      += lrRsv."Venta - Invitados Adultos";
+          lrICDIngresoE."Invitados ni¤os"        += lrRsv."Venta - Invitados ni¤os";
+          lrICDIngresoE."Coste previsto"         += lrRsv."Coste Reserva";
+          lrICDIngresoE."Comision Touroperador"  += lrRsv."Comision Touroperador";
+          lrICDIngresoE."Comision Representante" += lrRsv."Comision Guia Venta";
+          lrICDIngresoE.Reservas                 += 1; //. Contador de reservas
+          lrICDIngresoE.MODIFY;
+        UNTIL lrRsv.NEXT = 0;
+
+        //. Reembolsos
+
+        lrRsvReem.RESET;
+        lrRsvReem.SETRANGE("Fecha Reembolso", prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+        IF lrRsvReem.FINDSET THEN
+        BEGIN
+          lrICDIngresoE.RESET;
+          REPEAT
+            lrRsv.GET(lrRsvReem.Delegacion, lrRsvReem."Num Reserva");
+
+            lrICDIngresoE.SETRANGE("ID Periodo"            , prPeriodo."ID Periodo");
+            lrICDIngresoE.SETRANGE(Excursion               , lrRsv.Producto);
+            lrICDIngresoE.SETRANGE("Oficina venta"         , lrRsv.Oficina);
+            lrICDIngresoE.SETRANGE("Fecha venta"           , lrRsvReem."Fecha Reembolso");
+            lrICDIngresoE.SETRANGE("Hotel cliente"         , lrRsv."Hotel Cliente");
+            lrICDIngresoE.SETRANGE("Idioma cliente"        , lrRsv.Idioma);
+            lrICDIngresoE.SETRANGE(Touroperador            , lrRsv.TourOperador);
+            lrICDIngresoE.SETRANGE(Representante           , lrRsv."Guia Venta");
+            lrICDIngresoE.SETRANGE("Fecha liquidacion Rep.", lrRsvReem."Fecha Liquidacion GV");
+            IF lrRsvReem."Num. abono reembolso" = '' THEN
+              lrICDIngresoE.SETRANGE("Num. Abono", lrRsv."Num. abono reembolso")
+            ELSE
+              lrICDIngresoE.SETRANGE("Num. Abono", lrRsvReem."Num. abono reembolso");
+            IF NOT lrICDIngresoE.FINDFIRST THEN
+            BEGIN
+              _CrearIngresoExcursion(prPeriodo, lrRsv, lrICDIngresoE, TRUE);
+
+              IF lrRsvReem."Num. abono reembolso" = '' THEN
+                lrICDIngresoE."Num. Abono" := lrRsv."Num. abono reembolso"
+              ELSE
+                lrICDIngresoE."Num. Abono" := lrRsvReem."Num. abono reembolso";
+
+              lrICDIngresoE."Fecha venta"            := lrRsvReem."Fecha Reembolso";
+              lrICDIngresoE."Fecha liquidacion Rep." := lrRsvReem."Fecha Liquidacion GV";
+            END;
+
+            lrICDIngresoE.Adultos      -= lrRsvReem."Adultos Reembolsados";
+            lrICDIngresoE.Ni¤os        -= lrRsvReem."Ni¤os Reembolsados";
+
+            lrICDIngresoE."Importe reembolsado" -= (lrRsvReem."Importe neto adulto div rsv" + lrRsvReem."Importe neto ni¤os div rsv");
+            IF lrRsvReem."Tipo Reembolso" = lrRsvReem."Tipo Reembolso"::Total THEN
+              lrICDIngresoE."Comision Touroperador" -= (lrRsvReem."Importe neto adulto div rsv" + lrRsvReem."Importe neto ni¤os div rsv");
+            lrICDIngresoE.MODIFY;
+          UNTIL lrRsvReem.NEXT = 0;
+        END;
+
+        IF GUIALLOWED THEN
+          wDialog.CLOSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE _CrearIngresoExcursion@1000000000(prPeriodo@1000000000 : Record 7010264;prRsv@1000000001 : Record 7010162;VAR prICDIngresoE@1000000002 : Record 7010261;pwReembolso@1000000010 : Boolean);
+    VAR
+      lrHotel@1000000009 : Record 7009724;
+      lrZona@1000000008 : Record 7009713;
+      lrTTOO@1000000007 : Record 7009717;
+      lrGuia@1000000006 : Record 7010241;
+      lrExc@1000000005 : Record 7009710;
+      lrCompanyInfo@1000000004 : Record 79;
+      lrContTO@1000000003 : Record 7010142;
+    BEGIN
+      // _CrearIngresoExcursion
+
+      prICDIngresoE.INIT;
+      prICDIngresoE."ID Periodo"      := prPeriodo."ID Periodo";
+      prICDIngresoE.Excursion         := prRsv.Producto;
+      prICDIngresoE."Fecha excursion" := prRsv."Fecha Excursion";
+      prICDIngresoE."Oficina venta"   := prRsv.Oficina;
+      prICDIngresoE."Fecha venta"     := prRsv."Fecha Venta";
+      prICDIngresoE."Hotel cliente"   := prRsv."Hotel Cliente";
+      prICDIngresoE.Touroperador      := prRsv.TourOperador;
+      prICDIngresoE.Representante     := prRsv."Guia Venta";
+      prICDIngresoE."Idioma cliente"  := prRsv.Idioma;
+      IF NOT pwReembolso THEN
+      BEGIN
+        prICDIngresoE."Fecha liquidacion Rep." := prRsv."Fecha Liquidacion GV";
+        prICDIngresoE."Num. Factura"           := prRsv."Num. Factura";
+        prICDIngresoE."Fecha registro"         := _GetFechaRegistroFra(prICDIngresoE."Num. Factura");
+      END;
+      //. Buscamos las tablas maestros
+
+      IF NOT lrHotel.GET(prICDIngresoE."Hotel cliente") THEN
+        CLEAR(lrHotel);
+
+      IF NOT lrZona.GET(lrHotel."Zona Fisica") THEN
+        CLEAR(lrZona);
+
+      IF NOT lrTTOO.GET(prICDIngresoE.Touroperador) THEN
+        CLEAR(lrTTOO);
+
+      IF NOT lrGuia.GET(prICDIngresoE.Representante) THEN
+        CLEAR(lrGuia);
+
+      IF NOT lrExc.GET(prICDIngresoE.Excursion) THEN
+        CLEAR(lrExc);
+
+      lrCompanyInfo.FINDFIRST;
+
+      _GetContratoTO(lrContTO, prICDIngresoE."Fecha venta", prICDIngresoE."Fecha excursion", prICDIngresoE.Touroperador);
+
+      //. Rellenamos los campos informativos
+      prICDIngresoE."Nombre excursion"              := lrExc.Descripcion;
+      prICDIngresoE."Nombre proveedor"              := _NombreProveedor(prICDIngresoE.Excursion, prICDIngresoE.Proveedor);
+      prICDIngresoE."Nombre hotel"                  := lrHotel.Nombre;
+      prICDIngresoE."Zona hotel"                    := lrHotel."Zona Fisica";
+      prICDIngresoE."Nombre zona hotel"             := lrZona.Descripcion;
+      prICDIngresoE."Nombre touroperador"           := lrTTOO.Nombre;
+      prICDIngresoE.Mercado                         := lrTTOO.Mercado;
+      prICDIngresoE."Comision descuenta en factura" := lrContTO."Aplica comision en factura";
+      prICDIngresoE."Nombre representante"          := lrGuia.Nombre;
+      prICDIngresoE."Venta credito"                 := lrGuia."Trabaja a credito";
+      prICDIngresoE."Pais empresa"                  := lrCompanyInfo."Country/Region Code";
+      prICDIngresoE.Empresa                         := COMPANYNAME;
+      prICDIngresoE.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _NombreProveedor@1100217008(pwExcursion@1100217000 : Code[10];VAR pwProveedor@1100217005 : Code[20]) : Text[250];
+    VAR
+      lrVendor@1100217001 : Record 23;
+      lrExc@1100217002 : Record 7009710;
+      lrPrestCont@1100217003 : Record 7010141;
+      lrCont@1100217004 : Record 7010142;
+    BEGIN
+      IF NOT lrExc.GET(pwExcursion) THEN
+        EXIT('');
+
+      IF lrExc."Transporte organizado agencia" THEN
+        EXIT('IN HOUSE');
+
+      lrPrestCont.RESET;
+      lrPrestCont.SETRANGE("Codigo Producto", pwExcursion);
+      IF lrPrestCont.FINDSET THEN
+      BEGIN
+        lrCont.SETRANGE("N§ Contrato compra", lrPrestCont.Contrato);
+        lrCont.SETRANGE("Tipo Contrato"     , lrPrestCont."Tipo Contrato");
+        IF lrCont.FINDFIRST THEN
+        BEGIN
+          IF lrVendor.GET(lrCont.Proveedor) THEN
+          BEGIN
+            pwProveedor := lrCont.Proveedor;
+            EXIT(lrVendor.Name);
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE _ExcursionCoste@1100217005(VAR prICDCosteE@1100217000 : Record 7010262);
+    VAR
+      lwValidado@1100217001 : Decimal;
+      lwAjustes@1100217002 : Decimal;
+    BEGIN
+      // _ExcursionCoste
+
+      prICDCosteE."Coste confirmado" := _CosteConfirmado(prICDCosteE.Excursion, prICDCosteE.Touroperador,
+                                                         prICDCosteE."Fecha servicio", lwValidado, lwAjustes);
+      prICDCosteE."Coste validado"   := lwValidado;
+      prICDCosteE."Ajustes manuales" := lwAjustes;
+      prICDCosteE.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _CosteConfirmado@1100217009(pwProducto@1100217000 : Code[10];pwTouroperador@1100217001 : Code[10];pwFecha@1100217002 : Date;VAR pwValidado@1100217008 : Decimal;VAR pwAjustes@1100217010 : Decimal) : Decimal;
+    VAR
+      lrCoste@1100217003 : Record 7010166;
+      lrCoste2@1100217006 : Record 7010166;
+      lrVendorTMP@1100217005 : TEMPORARY Record 23;
+      lwCoste@1100217004 : Decimal;
+      lwCosteProveedor@1100217007 : Decimal;
+      lwValidadoProveedor@1100217009 : Decimal;
+      lwAjustesProveedor@1100217011 : Decimal;
+      lwDivisa@1100217012 : Code[10];
+    BEGIN
+      // _CosteConfirmado
+
+      pwValidado := 0;
+      pwAjustes  := 0;
+
+      lrCoste.RESET;
+      lrCoste.SETCURRENTKEY(Excursion, TourOperador, Proveedor, "N§ Factura", "Automatico/Manual", Fecha);
+      lrCoste.SETRANGE(TourOperador, pwTouroperador);
+      lrCoste.SETRANGE(Fecha       , pwFecha);
+      lrCoste.SETRANGE(Excursion   , pwProducto);
+      IF NOT lrCoste.FINDSET THEN
+        EXIT(0);
+
+      REPEAT
+        IF NOT lrVendorTMP.GET(lrCoste.Proveedor) THEN
+        BEGIN
+          lrVendorTMP.INIT;
+          lrVendorTMP."No." := lrCoste.Proveedor;
+          lrVendorTMP.INSERT;
+
+          lrCoste2.COPY(lrCoste);
+          lrCoste2.SETRANGE(Proveedor, lrCoste.Proveedor);
+          lrCoste2.FINDFIRST;
+          lwDivisa := lrCoste2."Cod. divisa";
+
+          lrCoste2.CALCSUMS("Importe sin Impuesto");
+          lwCosteProveedor := (-1) * lrCoste2."Importe sin Impuesto";
+
+          //. Buscamos el importe ya validado
+          lrCoste2.SETFILTER("N§ Factura", '<>%1', '');
+          lrCoste2.CALCSUMS("Importe sin Impuesto");
+          lwValidadoProveedor := (-1) * lrCoste2."Importe sin Impuesto";
+
+          lrCoste2.SETRANGE("Automatico/Manual", lrCoste."Automatico/Manual"::Manual);
+          lrCoste2.CALCSUMS("Importe sin Impuesto");
+          lwAjustesProveedor := (-1) * lrCoste2."Importe sin Impuesto";
+
+          //. Hago esta comparacion para evitar convertir la divisa US3 en la divisa de venta ya que ambas con dolares
+          IF COPYSTR(lwDivisa, 1, 2) <> COPYSTR(rPar."Divisa venta excursiones", 1, 2) THEN
+          BEGIN
+            lwCosteProveedor := rExchange.ExchangeAmtFCYToFCY(pwFecha, lwDivisa, rPar."Divisa venta excursiones",
+                                                              lwCosteProveedor);
+            lwCosteProveedor := ROUND(lwCosteProveedor);
+
+            lwValidadoProveedor := rExchange.ExchangeAmtFCYToFCY(pwFecha, lwDivisa, rPar."Divisa venta excursiones",
+                                                                 lwValidadoProveedor);
+            lwValidadoProveedor := ROUND(lwValidadoProveedor);
+
+            lwAjustesProveedor := rExchange.ExchangeAmtFCYToFCY(pwFecha, lwDivisa, rPar."Divisa venta excursiones",
+                                                                lwAjustesProveedor);
+            lwAjustesProveedor := ROUND(lwAjustesProveedor);
+          END;
+
+          lwCoste    += lwCosteProveedor;
+          pwValidado += lwValidadoProveedor;
+          pwAjustes  += lwAjustesProveedor;
+        END;
+      UNTIL lrCoste.NEXT = 0;
+
+      EXIT(lwCoste);
+    END;
+
+    LOCAL PROCEDURE _ExcursionEstancia@1100217006(prPeriodo@1100217001 : Record 7010264;VAR prICDHotelE@1100217000 : Record 7010263);
+    BEGIN
+      // _ExcursionEstancia
+
+      prICDHotelE.Personas := _SumarEstancias(prPeriodo, prICDHotelE.Hotel);
+      prICDHotelE.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _SumarEstancias@1100217024(prPeriodo@1100217006 : Record 7010264;pwHotel@1100217000 : Code[20]) : Integer;
+    VAR
+      lrPer@1100217001 : Record 7009742;
+      lrAco@1100217004 : Record 7009748;
+      lwFecha@1100217002 : Date;
+      lwRsvAnt@1100217003 : Integer;
+      lwPersonas@1100217005 : Integer;
+    BEGIN
+      // _SumarEstancias
+
+      lwPersonas := 0;
+
+      lrPer.RESET;
+      lrPer.SETCURRENTKEY("Hotel Booking", "Fecha entrada");
+      lrPer.SETRANGE("Hotel Booking", pwHotel);
+      lrPer.SETRANGE(Generada       , TRUE);
+
+      FOR lwFecha := prPeriodo."Fecha inicio" TO prPeriodo."Fecha final" DO
+      BEGIN
+        lrPer.SETFILTER("Fecha entrada", '<=%1', lwFecha);
+        lrPer.SETFILTER("Fecha salida" , '>%1', lwFecha);
+        IF lrPer.FINDSET THEN
+        BEGIN
+          REPEAT
+            IF lwRsvAnt <> lrPer."N§ Interno" THEN
+            BEGIN
+              lwRsvAnt := lrPer."N§ Interno";
+
+              lrAco.RESET;
+              lrAco.SETRANGE (Delegacion    , lrPer.Delegacion);
+              lrAco.SETRANGE ("N§ Interno"  , lrPer."N§ Interno");
+              lrAco.SETFILTER("Tipo Persona", '%1|%2', rParPer."Codigo Adulto", rParPer."Codigo Ni¤o");
+              lrAco.SETRANGE (Generado      , TRUE);
+              IF lrAco.FINDSET THEN
+                lwPersonas += lrAco.COUNT;
+            END;
+          UNTIL lrPer.NEXT = 0;
+        END
+      END;
+
+      EXIT(lwPersonas);
+    END;
+
+    LOCAL PROCEDURE _GetContratoTO@1100217003(VAR lrContTO@1100217000 : Record 7010142;pwVenta@1100217001 : Date;pwServicio@1100217002 : Date;pwTouroperador@1100217003 : Code[10]) : Boolean;
+    BEGIN
+      // _GetContratoTO
+
+      lrContTO.RESET;
+      lrContTO.SETRANGE ("Tipo Contrato"        , lrContTO."Tipo Contrato"::TourOperador);
+      IF rPar."Busca tarifa por fecha venta" THEN
+      BEGIN
+        lrContTO.SETFILTER("Fecha inicio contrato", '<=%1', pwVenta);
+        lrContTO.SETFILTER("Fecha final contrato" , '>=%1', pwVenta);
+      END
+      ELSE
+      BEGIN
+        lrContTO.SETFILTER("Fecha inicio contrato", '<=%1', pwServicio);
+        lrContTO.SETFILTER("Fecha final contrato" , '>=%1', pwServicio);
+      END;
+      lrContTO.SETRANGE (TourOperador           , pwTouroperador);
+      lrContTO.SETRANGE (Confirmado             , TRUE);
+      IF NOT lrContTO.FINDFIRST THEN
+        CLEAR(lrContTO);
+    END;
+
+    LOCAL PROCEDURE _GetFechaRegistroFra@1100217016(pwFactura@1100217000 : Code[20]) : Date;
+    VAR
+      lrCabVenta@1100217001 : Record 36;
+      lrHistFra@1100217002 : Record 112;
+    BEGIN
+      // _GetFechaRegistroFra
+
+      IF lrHistFra.GET(pwFactura) THEN
+        EXIT(lrHistFra."Posting Date")
+      ELSE
+      BEGIN
+        IF lrCabVenta.GET(lrCabVenta."Document Type"::Invoice, pwFactura) THEN
+          EXIT(lrCabVenta."Posting Date");
+      END;
+    END;
+
+    PROCEDURE TransferNuevoPeriodo@1100217004(pAutomatico@1000000000 : Boolean);
+    VAR
+      lrPeriodo@1100217000 : Record 7010264;
+    BEGIN
+      // TransferNuevoPeriodo
+
+      _PedirPeriodo(lrPeriodo, lrPeriodo."Tipo periodo"::Transfer, pAutomatico);
+
+      IF pAutomatico THEN
+      BEGIN
+        RegenerarPeriodo(lrPeriodo);
+        EXIT;
+      END
+      ELSE
+        _TransferGenerarICD(lrPeriodo, pAutomatico);
+
+      lrPeriodo."Fecha proceso" := CURRENTDATETIME;
+      lrPeriodo."Usuario proceso" := USERID;
+      lrPeriodo.MODIFY;
+    END;
+
+    LOCAL PROCEDURE _TransferGenerarICD@1100217010(prPeriodo@1100217001 : Record 7010264;pwRegenerar@1100217000 : Boolean);
+    VAR
+      lrRsv@1100217002 : Record 7009744;
+      lrICDPersonasT@1100217003 : Record 7009918;
+    BEGIN
+      // _TransferGenerarICD
+
+      rPar.FINDFIRST;
+
+      rParPer.FINDFIRST;
+
+      IF pwRegenerar THEN
+        prPeriodo.DeleteDetail;
+
+      //. Hacemos primero una pasada para las entradas del periodo
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Fecha entrada");
+      lrRsv.SETRANGE ("Fecha entrada"      , prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrRsv.SETRANGE ("No Show"            , FALSE);
+      lrRsv.SETRANGE (Entrada              , 1);
+      lrRsv.SETRANGE ("Traslado en destino", FALSE);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        IF GUIALLOWED THEN
+        BEGIN
+          wTotal  := lrRsv.COUNTAPPROX;
+          wActual := 0;
+
+          wDialog.OPEN(Text002 + '\' + Text003);
+          wDialog.UPDATE(1, prPeriodo."Fecha inicio");
+          wDialog.UPDATE(2, prPeriodo."Fecha final");
+        END;
+
+        REPEAT
+          IF GUIALLOWED THEN
+          BEGIN
+            wActual += 1;
+            wDialog.UPDATE(3, ROUND(wActual / wTotal * 10000, 1));
+          END;
+
+          lrICDPersonasT.RESET;
+          lrICDPersonasT.SETRANGE("ID Periodo"         , prPeriodo."ID Periodo");
+          lrICDPersonasT.SETRANGE(Touroperador         , lrRsv."TourOperador facturacion");
+          lrICDPersonasT.SETRANGE(Hotel                , lrRsv."Hotel entrada");
+          lrICDPersonasT.SETRANGE(Dia                  , lrRsv."Fecha entrada");
+          lrICDPersonasT.SETRANGE(Aerolinea            , lrRsv."Compa¤ia entrada");
+          lrICDPersonasT.SETRANGE(Vuelo                , lrRsv."Vuelo entrada");
+          lrICDPersonasT.SETRANGE(IATA                 , lrRsv."IATA destino entrada");
+          lrICDPersonasT.SETRANGE("Transfer privado"   , lrRsv."Transfer Privado Llegada");
+          lrICDPersonasT.SETRANGE("Traslado en destino", lrRsv."Traslado en destino");
+          IF NOT lrICDPersonasT.FINDFIRST THEN
+            _CrearICDPersonaT(lrICDPersonasT, prPeriodo, lrRsv, 0);
+
+          _AcumularICDPersonaT(lrICDPersonasT, lrRsv, 0);
+
+          //. Aprovechamos la pasada para acumular tambien esta reserva si su salida esta dentro del periodo
+          IF (lrRsv."Fecha salida" > prPeriodo."Fecha inicio") AND
+             (lrRsv."Fecha salida" <= prPeriodo."Fecha final") AND
+             (lrRsv.Salida = 1) THEN
+          BEGIN
+            lrICDPersonasT.RESET;
+            lrICDPersonasT.SETRANGE("ID Periodo"         , prPeriodo."ID Periodo");
+            lrICDPersonasT.SETRANGE(Touroperador         , lrRsv."TourOperador facturacion");
+            lrICDPersonasT.SETRANGE(Hotel                , lrRsv."Hotel salida");
+            lrICDPersonasT.SETRANGE(Dia                  , lrRsv."Fecha salida");
+            lrICDPersonasT.SETRANGE(Aerolinea            , lrRsv."Compa¤ia salida");
+            lrICDPersonasT.SETRANGE(Vuelo                , lrRsv."Vuelo salida");
+            lrICDPersonasT.SETRANGE(IATA                 , lrRsv."IATA origen salida");
+            lrICDPersonasT.SETRANGE("Transfer privado"   , lrRsv."Transfer Privado Salida");
+            lrICDPersonasT.SETRANGE("Traslado en destino", lrRsv."Traslado en destino");
+            IF NOT lrICDPersonasT.FINDFIRST THEN
+              _CrearICDPersonaT(lrICDPersonasT, prPeriodo, lrRsv, 1);
+
+            _AcumularICDPersonaT(lrICDPersonasT, lrRsv, 1);
+          END;
+        UNTIL lrRsv.NEXT = 0;
+
+        IF GUIALLOWED THEN
+          wDialog.CLOSE;
+      END;
+
+      //. Luego una revision de las salidas del periodo
+      //. Pero que tengan entrada fuera del periodo
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Fecha salida");
+      lrRsv.SETRANGE ("Fecha salida"       , prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrRsv.SETFILTER("Fecha entrada"      , '<%1', prPeriodo."Fecha inicio");
+      lrRsv.SETRANGE ("No Show"            , FALSE);
+      lrRsv.SETRANGE (Salida               , 1);
+      lrRsv.SETRANGE ("Traslado en destino", FALSE);
+      IF lrRsv.FINDSET THEN
+      BEGIN
+        IF GUIALLOWED THEN
+        BEGIN
+          wTotal  := lrRsv.COUNTAPPROX;
+          wActual := 0;
+
+          wDialog.OPEN(Text002 + '\' + Text003);
+          wDialog.UPDATE(1, prPeriodo."Fecha inicio");
+          wDialog.UPDATE(2, prPeriodo."Fecha final");
+        END;
+
+        REPEAT
+          IF GUIALLOWED THEN
+          BEGIN
+            wActual += 1;
+            wDialog.UPDATE(3, ROUND(wActual / wTotal * 10000, 1));
+          END;
+
+          lrICDPersonasT.RESET;
+          lrICDPersonasT.SETRANGE("ID Periodo"         , prPeriodo."ID Periodo");
+          lrICDPersonasT.SETRANGE(Touroperador         , lrRsv."TourOperador facturacion");
+          lrICDPersonasT.SETRANGE(Hotel                , lrRsv."Hotel salida");
+          lrICDPersonasT.SETRANGE(Dia                  , lrRsv."Fecha salida");
+          lrICDPersonasT.SETRANGE(Aerolinea            , lrRsv."Compa¤ia salida");
+          lrICDPersonasT.SETRANGE(Vuelo                , lrRsv."Vuelo salida");
+          lrICDPersonasT.SETRANGE(IATA                 , lrRsv."IATA origen salida");
+          lrICDPersonasT.SETRANGE("Transfer privado"   , lrRsv."Transfer Privado Salida");
+          lrICDPersonasT.SETRANGE("Traslado en destino", lrRsv."Traslado en destino");
+          IF NOT lrICDPersonasT.FINDFIRST THEN
+            _CrearICDPersonaT(lrICDPersonasT, prPeriodo, lrRsv, 1);
+
+          _AcumularICDPersonaT(lrICDPersonasT, lrRsv, 1);
+        UNTIL lrRsv.NEXT = 0;
+
+        IF GUIALLOWED THEN
+          wDialog.CLOSE;
+      END;
+
+      //. Acumulamos los ingresos
+      _AcumularICDIngresoT(prPeriodo);
+
+      //. Acumulamos los costes
+      _AcumularICDCosteT(prPeriodo);
+    END;
+
+    LOCAL PROCEDURE _CrearICDPersonaT@1100217014(VAR prICDPersonasT@1100217000 : Record 7009918;prPeriodo@1100217001 : Record 7010264;prRsv@1100217002 : Record 7009744;pwTipoRegistro@1100217003 : Integer);
+    VAR
+      lrHotel@1100217006 : Record 7009724;
+      lrTTOO@1100217005 : Record 7009717;
+      lrCompanyInfo@1100217004 : Record 79;
+    BEGIN
+      // _CrearICDPersonaT
+
+      prICDPersonasT.INIT;
+      prICDPersonasT."ID Periodo"          := prPeriodo."ID Periodo";
+      prICDPersonasT.Touroperador          := prRsv."TourOperador facturacion";
+      IF pwTipoRegistro = 0 THEN //. Llegada
+      BEGIN
+        prICDPersonasT.Hotel                 := prRsv."Hotel entrada";
+        prICDPersonasT."Zona fisica"         := prRsv."Zona entrada";
+        prICDPersonasT.Dia                   := prRsv."Fecha entrada";
+        prICDPersonasT.Aerolinea             := prRsv."Compa¤ia entrada";
+        prICDPersonasT.Vuelo                 := prRsv."Vuelo entrada";
+        prICDPersonasT.IATA                  := prRsv."IATA destino entrada";
+        prICDPersonasT."Transfer privado"    := prRsv."Transfer Privado Llegada";
+        prICDPersonasT."Zona venta"          := prRsv."Zona venta entrada";
+        prICDPersonasT."Zona compra"         := prRsv."Zona compra entrada";
+        prICDPersonasT."Tipo transfer"       := prICDPersonasT."Tipo transfer"::Llegada; //+$006
+      END
+      ELSE
+      BEGIN //. Salida
+        prICDPersonasT.Hotel                 := prRsv."Hotel salida";
+        prICDPersonasT."Zona fisica"         := prRsv."Zona salida";
+        prICDPersonasT.Dia                   := prRsv."Fecha salida";
+        prICDPersonasT.Aerolinea             := prRsv."Compa¤ia salida";
+        prICDPersonasT.Vuelo                 := prRsv."Vuelo salida";
+        prICDPersonasT.IATA                  := prRsv."IATA origen salida";
+        prICDPersonasT."Transfer privado"    := prRsv."Transfer Privado Salida";
+        prICDPersonasT."Zona venta"          := prRsv."Zona venta salida";
+        prICDPersonasT."Zona compra"         := prRsv."Zona compra salida";
+        prICDPersonasT."Tipo transfer"       := prICDPersonasT."Tipo transfer"::Salida; //+$006
+      END;
+
+      prICDPersonasT."Traslado en destino" := prRsv."Traslado en destino";
+
+      IF NOT lrHotel.GET(prICDPersonasT.Hotel) THEN
+        CLEAR(lrHotel);
+
+      IF NOT lrTTOO.GET(prICDPersonasT.Touroperador) THEN
+        CLEAR(lrTTOO);
+
+      lrCompanyInfo.FINDFIRST;
+
+      prICDPersonasT."Nombre Touroperador" := lrTTOO.Nombre;
+      prICDPersonasT.Mercado               := lrTTOO.Mercado;
+      prICDPersonasT."Tipo facturacion"    := _GetTipoFacturacionTransfer(prICDPersonasT);
+      prICDPersonasT."Nombre hotel"        := lrHotel.Nombre;
+      prICDPersonasT.Empresa               := COMPANYNAME;
+      prICDPersonasT.Pais                  := lrCompanyInfo."Country/Region Code";
+      prICDPersonasT.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE _AcumularICDPersonaT@1100217011(VAR prICDPersonasT@1100217003 : Record 7009918;prRsv@1100217001 : Record 7009744;pwTipoRegistro@1100217000 : Integer);
+    BEGIN
+      // _AcumularICDPersonaT
+
+      IF pwTipoRegistro = 0 THEN
+      BEGIN
+        prICDPersonasT."Adultos llegada" += (prRsv."N§ Personas" - prRsv."N§ Ni¤os");
+        prICDPersonasT."Ni¤os llegada"   += prRsv."N§ Ni¤os";
+      END
+      ELSE
+      BEGIN
+        prICDPersonasT."Adultos salida" += (prRsv."N§ Personas" - prRsv."N§ Ni¤os");
+        prICDPersonasT."Ni¤os salida"   += prRsv."N§ Ni¤os";
+      END;
+      prICDPersonasT.MODIFY;
+    END;
+
+    LOCAL PROCEDURE _AcumularICDIngresoT@1100217007(prPeriodo@1100217000 : Record 7010264);
+    VAR
+      lrIngreso@1100217001 : Record 7009805;
+      lrNoShow@1000000000 : Record 7010252;
+      lrICDIngresoT@1100217003 : Record 7009919;
+      lwImporte@1100217002 : Decimal;
+    BEGIN
+      // _AcumularICDIngresoT
+
+      lrIngreso.RESET;
+      lrIngreso.SETCURRENTKEY(Concepto, Fecha);
+      lrIngreso.SETRANGE(Fecha   , prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrIngreso.SETRANGE(Concepto, 'TRNI');
+      IF lrIngreso.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Acumulamos el ingreso que sera por Touroperador, Zona, Dia, Transfer privado y Traslado en destino
+          lrICDIngresoT.SETRANGE(Touroperador         , lrIngreso.TourOperador);
+          lrICDIngresoT.SETRANGE("Zona venta"         , lrIngreso.Destino);
+          lrICDIngresoT.SETRANGE(Dia                  , lrIngreso.Fecha);
+          lrICDIngresoT.SETRANGE("Transfer privado"   , lrIngreso."Transfer Privado");
+          lrICDIngresoT.SETRANGE("Traslado en destino", lrIngreso."Traslado en destino");
+          lrICDIngresoT.SETRANGE("Tipo transfer"      , lrIngreso."Tipo transfer");
+          IF NOT lrICDIngresoT.FINDFIRST THEN
+          BEGIN
+            lrICDIngresoT.INIT;
+            lrICDIngresoT."ID Periodo"          := prPeriodo."ID Periodo";
+            lrICDIngresoT.Touroperador          := lrIngreso.TourOperador;
+            lrICDIngresoT.Dia                   := lrIngreso.Fecha;
+            lrICDIngresoT."Zona venta"          := lrIngreso.Destino;
+            lrICDIngresoT."Transfer privado"    := lrIngreso."Transfer Privado";
+            lrICDIngresoT."Tipo transfer"       := lrIngreso."Tipo transfer";
+            lrICDIngresoT."Traslado en destino" := lrIngreso."Traslado en destino";
+            lrICDIngresoT.INSERT(TRUE);
+          END;
+
+          lwImporte := lrIngreso."Importe sin impuesto";
+          //. Convertimos desde la divisa del contrato a la divisa parametrizada
+          IF COPYSTR(lrIngreso."Cod. divisa", 1, 2) <> COPYSTR(rPar."Divisa Reporting", 1, 2) THEN
+          BEGIN
+            lwImporte := rExchange.ExchangeAmtFCYToFCY(lrIngreso.Fecha, lrIngreso."Cod. divisa", rPar."Divisa Reporting", lwImporte);
+            lwImporte := ROUND(lwImporte);
+          END;
+
+          lrICDIngresoT.Importe += lwImporte;
+          lrICDIngresoT.MODIFY;
+        UNTIL lrIngreso.NEXT = 0;
+      END;
+
+      //+$003 <
+      //. Agregar los ingresos por reservas No Show con entrada en el periodo
+      lrNoShow.RESET;
+      lrNoShow.SETRANGE ("Fecha entrada", prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrNoShow.SETFILTER("Num. Factura" , '<>%1', '');
+      IF lrNoShow.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrICDIngresoT.SETRANGE(Touroperador         , lrNoShow.Touroperador);
+          lrICDIngresoT.SETRANGE("Zona venta"         , lrNoShow."Zona venta entrada");
+          lrICDIngresoT.SETRANGE(Dia                  , lrNoShow."Fecha entrada");
+          IF lrNoShow."Servicio transfer entrada" IN
+             [lrNoShow."Servicio transfer entrada"::Privado, lrNoShow."Servicio transfer entrada"::Deluxe] THEN
+            lrICDIngresoT.SETRANGE("Transfer privado", TRUE)
+          ELSE
+            lrICDIngresoT.SETRANGE("Transfer privado", FALSE);
+          lrICDIngresoT.SETRANGE("Traslado en destino", FALSE);
+          lrICDIngresoT.SETRANGE("Tipo transfer"      , lrICDIngresoT."Tipo transfer"::Llegada);
+          IF NOT lrICDIngresoT.FINDFIRST THEN
+          BEGIN
+            lrICDIngresoT.Touroperador         := lrNoShow.Touroperador;
+            lrICDIngresoT."Zona venta"         := lrNoShow."Zona venta entrada";
+            lrICDIngresoT.Dia                  := lrNoShow."Fecha entrada";
+            IF lrNoShow."Servicio transfer entrada" IN
+               [lrNoShow."Servicio transfer entrada"::Privado, lrNoShow."Servicio transfer entrada"::Deluxe] THEN
+              lrICDIngresoT."Transfer privado" := TRUE
+            ELSE
+              lrICDIngresoT."Transfer privado" := FALSE;
+            lrICDIngresoT."Traslado en destino" := FALSE;
+            lrICDIngresoT."Tipo transfer"       := lrICDIngresoT."Tipo transfer"::Llegada;
+            lrICDIngresoT.INSERT;
+          END;
+
+          lwImporte := lrNoShow."Importe sin impuestos";
+
+          //. Convertimos desde la divisa del contrato a la divisa parametrizada
+          IF COPYSTR(lrNoShow."Cod. Divisa", 1, 2) <> COPYSTR(rPar."Divisa Reporting", 1, 2) THEN
+          BEGIN
+            lwImporte := rExchange.ExchangeAmtFCYToFCY(lrNoShow."Fecha entrada", lrNoShow."Cod. Divisa",
+                                                       rPar."Divisa Reporting", lwImporte);
+            lwImporte := ROUND(lwImporte);
+          END;
+
+          lrICDIngresoT.Importe += lwImporte;
+          lrICDIngresoT.MODIFY;
+        UNTIL lrNoShow.NEXT = 0;
+      END;
+      //+$003 >
+    END;
+
+    LOCAL PROCEDURE _AcumularICDCosteT@1100217015(prPeriodo@1100217000 : Record 7010264);
+    VAR
+      lrCoste@1100217001 : Record 7009805;
+      lrICDCosteT@1100217003 : Record 7009920;
+      lwImporte@1100217002 : Decimal;
+    BEGIN
+      // _AcumularICDIngresoT
+
+      lrCoste.RESET;
+      lrCoste.SETCURRENTKEY(Concepto, Fecha);
+      lrCoste.SETRANGE(Fecha   , prPeriodo."Fecha inicio", prPeriodo."Fecha final");
+      lrCoste.SETRANGE(Concepto, 'TRNC');
+      IF lrCoste.FINDSET THEN
+      BEGIN
+        REPEAT
+          //. Acumulamos el coste que sera por Proveedor, Touroperador, Zona, Dia, Transfer privado y Traslado en destino
+          lrICDCosteT.SETRANGE(Proveedor            , lrCoste."Proveedor contable");
+          lrICDCosteT.SETRANGE(Touroperador         , lrCoste.TourOperador);
+          lrICDCosteT.SETRANGE("Zona compra"        , lrCoste.Destino);
+          lrICDCosteT.SETRANGE(Dia                  , lrCoste.Fecha);
+          lrICDCosteT.SETRANGE("Transfer privado"   , lrCoste."Transfer Privado");
+          lrICDCosteT.SETRANGE("Traslado en destino", lrCoste."Traslado en destino");
+          lrICDCosteT.SETRANGE("Tipo transfer"      , lrCoste."Tipo transfer");
+          IF NOT lrICDCosteT.FINDFIRST THEN
+          BEGIN
+            lrICDCosteT.INIT;
+            lrICDCosteT."ID Periodo"          := prPeriodo."ID Periodo";
+            lrICDCosteT.Touroperador          := lrCoste.TourOperador;
+            lrICDCosteT.Dia                   := lrCoste.Fecha;
+            lrICDCosteT."Zona compra"         := lrCoste.Destino;
+            lrICDCosteT."Transfer privado"    := lrCoste."Transfer Privado";
+            lrICDCosteT."Tipo transfer"       := lrCoste."Tipo transfer";
+            lrICDCosteT."Traslado en destino" := lrCoste."Traslado en destino";
+            lrICDCosteT.Proveedor             := lrCoste."Proveedor contable";
+            lrICDCosteT.INSERT(TRUE);
+          END;
+
+          lwImporte := lrCoste."Importe sin impuesto";
+          //. Convertimos desde la divisa del contrato a la divisa parametrizada
+          IF COPYSTR(lrCoste."Cod. divisa", 1, 2) <> COPYSTR(rPar."Divisa Reporting", 1, 2) THEN
+          BEGIN
+            lwImporte := rExchange.ExchangeAmtFCYToFCY(lrCoste.Fecha, lrCoste."Cod. divisa", rPar."Divisa Reporting", lwImporte);
+            lwImporte := ROUND(lwImporte);
+          END;
+
+          lrICDCosteT.Importe += lwImporte;
+          lrICDCosteT.MODIFY;
+        UNTIL lrCoste.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GetTipoFacturacionTransfer@1100217012(VAR prRsvTMP@1100217000 : TEMPORARY Record 7009918) : Text[30];
+    VAR
+      lrContrato@1100217001 : Record 7009788;
+    BEGIN
+      // _GetTipoFacturacionTouroperado
+
+      lrContrato.RESET;
+      lrContrato.SETRANGE (TourOperador           , prRsvTMP.Touroperador);
+      lrContrato.SETFILTER("Fecha inicio contrato", '<=%1', prRsvTMP.Dia);
+      lrContrato.SETFILTER("Fecha final contrato" , '>=%1', prRsvTMP.Dia);
+      //-$001lrContrato.SETRANGE ("OLD_Punto Origen/Destino" , prRsvTMP.IATA);
+      lrContrato.SETRANGE (Comercializadora       , FALSE); //+$004
+      lrContrato.SETRANGE (Confirmado             , TRUE);
+      IF NOT lrContrato.FINDFIRST THEN
+      BEGIN
+        //-$001lrContrato.SETRANGE ("OLD_Punto Origen/Destino", '');
+        //-$001IF NOT lrContrato.FINDSET THEN
+        EXIT('');
+      END;
+
+      IF lrContrato."Tipo de Facturacion" = lrContrato."Tipo de Facturacion"::Llegada THEN
+        EXIT(Text004)
+      ELSE
+        EXIT(Text005);
+    END;
+
+    PROCEDURE RegenerarPeriodo@1100217013(prPeriodo@1100217000 : Record 7010264);
+    BEGIN
+      // RegenerarPeriodo
+
+      IF (NOT prPeriodo."Pendiente recalcular") AND (prPeriodo."Fecha proceso" <> 0DT) THEN
+        EXIT;
+
+      //. Volvemos a generar todo el detalle
+      CASE prPeriodo."Tipo periodo" OF
+        prPeriodo."Tipo periodo"::Excursiones:
+        BEGIN
+          _ExcursionGenerarICD(prPeriodo, TRUE);
+
+          prPeriodo."Pendiente recalcular" := FALSE;
+          prPeriodo."Fecha proceso"        := CURRENTDATETIME;
+          prPeriodo."Usuario proceso"      := USERID;
+          prPeriodo.MODIFY;
+        END;
+        prPeriodo."Tipo periodo"::Transfer:
+        BEGIN
+          _TransferGenerarICD(prPeriodo, TRUE);
+
+          prPeriodo."Pendiente recalcular" := FALSE;
+          prPeriodo."Fecha proceso"        := CURRENTDATETIME;
+          prPeriodo."Usuario proceso"      := USERID;
+          prPeriodo.MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      $000 AJS 26052014 CNT-OC-14044, Creada codeunit
+
+      $001 AJS 10062014 CNT-OC-14046, Los contratos de venta Transfer dejan de ir por Aeropuerto
+
+      $002 ARM 24112014 CNT-OC-14052, Creaci¢n desde funciones autom ticas de los periodos
+
+      $003 AJS 12012015 CNT-OC-14072, Incluir los ingresos de No Show en los ingresos de Transfer
+
+      $004 AJS 13032015 CNT-CAR-14096, Esta funcion no trabaja con los contratos de comercializadora
+
+      $005 AJS 25032015 Hago cambios para el lanzamiento automatico de las funciones de generar ICD
+
+      $006 AJS 25032015 Rellenar el campo Tipo transfer en la tabla ICD Personas Transfer
+
+      $007 AJS 18042015 Cambio en el sentido del campo Aplicar comision touroperador
+    }
+    END.
+  }
+}

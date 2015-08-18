@@ -1,0 +1,339 @@
+OBJECT Table 7010170 Prestacion Excursion
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/07/14;
+    Time=11:10:20;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               rPreExc.RESET;
+               rPreExc.SETRANGE(Delegacion   , Delegacion);
+               rPreExc.SETRANGE("N§ Servicio", "N§ Servicio");
+               IF rPreExc.FINDLAST THEN
+                 "Orden Prestacion" := rPreExc."Orden Prestacion" + 10000
+               ELSE
+                 "Orden Prestacion" := 10000;
+
+               _CheckCommissionProvider; //+$001
+
+               // Dejamos el servicio pendiente de recalculo
+
+               rSer.RESET;
+               IF rSer.GET(Delegacion, "N§ Servicio") THEN BEGIN
+                 rSer."Pendiente Recalcular" := TRUE;
+                 rSer.MODIFY;
+               END;
+             END;
+
+    OnModify=BEGIN
+               _CheckCommissionProvider; //+$001
+
+               // Dejamos el servicio pendiente de recalculo
+
+               rSer.RESET;
+               IF rSer.GET(Delegacion, "N§ Servicio") THEN BEGIN
+                 rSer."Pendiente Recalcular" := TRUE;
+                 rSer.MODIFY;
+               END;
+             END;
+
+    OnDelete=BEGIN
+               // Dejamos el servicio pendiente de recalculo
+
+               rSer.RESET;
+               IF rSer.GET(Delegacion, "N§ Servicio") THEN BEGIN
+                 rSer."Pendiente Recalcular" := TRUE;
+                 rSer.MODIFY;
+               END;
+             END;
+
+    CaptionML=[ENU=Excursion feature;
+               ESP=Prestacion Excursion];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Delegacion          ;Code10        ;TableRelation=Delegacion.Codigo;
+                                                   CaptionML=[ENU=Local Office;
+                                                              ESP=Delegacion];
+                                                   Description=PK, FK Delegacion;
+                                                   Editable=No }
+    { 3   ;   ;N§ Servicio         ;Integer       ;TableRelation="Servicio Excursion"."N§ Servicio";
+                                                   CaptionML=[ENU=Service No.;
+                                                              ESP=N§ Servicio];
+                                                   Description=PK, FK Servicio Excursion }
+    { 5   ;   ;Orden Prestacion    ;Integer       ;TableRelation=Prestaciones.Orden;
+                                                   CaptionML=[ENU=Feature order;
+                                                              ESP=Orden Prestacion];
+                                                   Description=PK, FK Prestaciones }
+    { 7   ;   ;Descripcion         ;Text30        ;CaptionML=[ENU=Description;
+                                                              ESP=Descripcion] }
+    { 9   ;   ;N§ Contrato         ;Code10        ;TableRelation="Contrato Compra Excursiones"."N§ Contrato compra";
+                                                   OnLookup=VAR
+                                                              rContrato@1103355000 : Record 7010142;
+                                                              rServicio@1103355001 : Record 7010163;
+                                                            BEGIN
+                                                              IF NOT rServicio.GET(Delegacion, "N§ Servicio") THEN
+                                                                ERROR(Text000);
+
+                                                              rContrato.RESET;
+                                                              rContrato.SETCURRENTKEY("Tipo Contrato",
+                                                                                      TourOperador,
+                                                                                      "Fecha inicio contrato",
+                                                                                      "Fecha final contrato");
+                                                              rContrato.SETRANGE ("Tipo Contrato"        , "Tipo Contrato");
+                                                              rContrato.SETFILTER("Fecha inicio contrato", '<=%1', rServicio.Fecha);
+                                                              rContrato.SETFILTER("Fecha final contrato" , '>=%1', rServicio.Fecha);
+                                                              rContrato.SETRANGE (Confirmado             , TRUE);
+                                                              CASE "Tipo Contrato" OF
+                                                                "Tipo Contrato"::Excursion:
+                                                                BEGIN
+                                                                  rSer.GET(Delegacion, "N§ Servicio");
+                                                                  rContrato.SETRANGE(Excursion, rSer.Excursion);
+                                                                  IF FORM.RUNMODAL(7010163, rContrato) = ACTION::LookupOK THEN
+                                                                  BEGIN
+                                                                    "N§ Contrato" := rContrato."N§ Contrato compra";
+                                                                    Proveedor     := rContrato.Proveedor; //+$005
+                                                                  END;
+                                                                END;
+                                                                "Tipo Contrato"::Transportista:
+                                                                  IF FORM.RUNMODAL(7010145, rContrato) = ACTION::LookupOK THEN
+                                                                  BEGIN
+                                                                    "N§ Contrato" := rContrato."N§ Contrato compra";
+                                                                    Proveedor     := rContrato.Proveedor; //+$005
+                                                                  END;
+                                                                "Tipo Contrato"::"Guia Oficial":
+                                                                  IF FORM.RUNMODAL(7010174, rContrato) = ACTION::LookupOK THEN
+                                                                  BEGIN
+                                                                    "N§ Contrato" := rContrato."N§ Contrato compra";
+                                                                    Proveedor     := rContrato.Proveedor; //+$005
+                                                                  END;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Contract No.;
+                                                              ESP=N§ Contrato];
+                                                   Description=FK Contrato compra }
+    { 11  ;   ;Aplicacion          ;Boolean       ;InitValue=Yes;
+                                                   OnValidate=VAR
+                                                                rServicioExc@1103355000 : Record 7010163;
+                                                                rPrest_Cont@1103355001 : Record 7010141;
+                                                                rContrato@1000000000 : Record 7010142;
+                                                                fExc@1103355003 : Codeunit 7010141;
+                                                              BEGIN
+                                                                // Si aplicacion = S¡, n§ personas no puede quedar en blanco
+                                                                // Si aplicacion = No, no se permite escribir nada en n§ personas
+
+                                                                IF Aplicacion = TRUE THEN
+                                                                BEGIN
+                                                                  rServicioExc.RESET;
+                                                                  IF rServicioExc.GET(Delegacion, "N§ Servicio") THEN
+                                                                  BEGIN
+                                                                    rPrest_Cont.SETRANGE("Codigo Producto", rServicioExc.Excursion);
+                                                                    rPrest_Cont.SETRANGE(Orden            , "Orden Prestacion");
+                                                                    IF rPrest_Cont.FINDFIRST THEN
+                                                                    BEGIN
+                                                                      IF rPrest_Cont.COUNT > 1 THEN
+                                                                        fExc.Inserta_Error(Text001 + Descripcion, "N§ Servicio")
+                                                                      ELSE
+                                                                      BEGIN
+                                                                        "N§ Contrato"   := rPrest_Cont.Contrato;
+                                                                        "Tipo Contrato" := rPrest_Cont."Tipo Contrato";
+                                                                        //+$005 <
+                                                                        rContrato.SETRANGE("N§ Contrato compra", rPrest_Cont.Contrato);
+                                                                        rContrato.SETRANGE("Tipo Contrato"     , rPrest_Cont."Tipo Contrato");
+                                                                        IF rContrato.FINDFIRST THEN
+                                                                          Proveedor := rContrato.Proveedor;
+                                                                        //+$005 >
+                                                                        CASE "Tipo Contrato" OF
+                                                                          "Tipo Contrato"::Excursion:
+                                                                            Busca_Suplemento_Excursion(rServicioExc);
+                                                                          "Tipo Contrato"::"Guia Oficial":
+                                                                            Busca_Suplemento_Guia_Oficial(rServicioExc);
+                                                                        END;
+                                                                      END;
+                                                                    END
+                                                                    ELSE
+                                                                      fExc.Inserta_Error(Text001 + Descripcion, "N§ Servicio");
+                                                                  END;
+                                                                END;
+                                                                MODIFY;
+                                                              END;
+
+                                                   CaptionML=[ENU=Application;
+                                                              ESP=Aplicacion] }
+    { 13  ;   ;N§ Personas         ;Integer       ;InitValue=1;
+                                                   CaptionML=[ENU=People No.;
+                                                              ESP=N§ Personas];
+                                                   Editable=No }
+    { 15  ;   ;N§ Secuencia        ;Integer       ;CaptionML=[ENU=Sequence No.;
+                                                              ESP=N§ Secuencia] }
+    { 17  ;   ;Cantidad            ;Integer       ;InitValue=1;
+                                                   CaptionML=[ENU=Quantity;
+                                                              ESP=Cantidad] }
+    { 19  ;   ;Tipo Contrato       ;Option        ;CaptionML=[ENU=Contract type;
+                                                              ESP=Tipo contrato];
+                                                   OptionCaptionML=[ENU=Excursion,Carrier,,Offical Guide;
+                                                                    ESP=Excursion,Transportista,,Guia Oficial];
+                                                   OptionString=Excursion,Transportista,,Guia Oficial }
+    { 23  ;   ;Coste               ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Margenes Excursion"."Importe con impuestos" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                                       N§ Servicio=FIELD(N§ Servicio),
+                                                                                                                       Concepto=CONST(EXCC),
+                                                                                                                       N§ Contrato Excursion=FIELD(N§ Contrato)));
+                                                   CaptionML=[ENU=Cost;
+                                                              ESP=Coste];
+                                                   Description=Campo calculado sobre lineas de margen;
+                                                   AutoFormatType=1 }
+    { 30  ;   ;Pago Contado        ;Boolean       ;CaptionML=[ENU=Cash Payment;
+                                                              ESP=Pago Contado] }
+    { 32  ;   ;Coste Confirmado    ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Coste Excursiones"."Importe con Impuesto" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                                     N§ Servicio=FIELD(N§ Servicio),
+                                                                                                                     Prestacion=FIELD(Orden Prestacion)));
+                                                   CaptionML=[ENU=Confirmed cost;
+                                                              ESP=Coste Confirmado];
+                                                   Description=Sum("Coste Excursiones"."Importe con Impuesto" WHERE (Delegacion=FIELD(Delegacion),N§ Servicio=FIELD(N§ Servicio),Prestacion=FIELD(Orden Prestacion)));
+                                                   Editable=No }
+    { 34  ;   ;Adultos             ;Decimal       ;CaptionML=[ENU=Adults;
+                                                              ESP=Adultos];
+                                                   DecimalPlaces=0:0;
+                                                   Description=$003;
+                                                   Editable=No }
+    { 36  ;   ;Ni¤os               ;Decimal       ;CaptionML=[ENU=Childs;
+                                                              ESP=Ni¤os];
+                                                   DecimalPlaces=0:0;
+                                                   Description=$003;
+                                                   Editable=No }
+    { 38  ;   ;Proveedor           ;Code20        ;TableRelation=Vendor.No.;
+                                                   CaptionML=[ENU=Vendor;
+                                                              ESP=Proveedor];
+                                                   Description=$003;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Delegacion,N§ Servicio,Orden Prestacion ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355002 : TextConst 'ENU=This provision does not have a service assigned;ESP=Esta prestaci¢n no tiene un servicio asignado';
+      Text001@1103355003 : TextConst 'ENU=Must review the provision;ESP=Debe repasar la prestaci¢n';
+      Text002@1103355004 : TextConst 'ENU=Review the contract of the provisions before doing margins;ESP=Revise los contratos de las prestaciones antes de hacer margenes';
+      rPreExc@1103355000 : Record 7010170;
+      rSer@1103355001 : Record 7010163;
+      Text003@1100253001 : TextConst 'ENU=Only excursion service providers can be used in the trading commission excursions.;ESP=Solo se pueden utilizar proveedores de servicio en las excursiones de comision mercantil.';
+      Text004@1100253000 : TextConst 'ENU=Only one provider can be used in the trading commission excursions.;ESP=Solo puede indicar un proveedor en las excursiones de comision mercantil.';
+
+    PROCEDURE Busca_Suplemento_Excursion@6(rServicioExc@1103355000 : Record 7010163);
+    VAR
+      rPrecios@1103355001 : Record 7010151;
+      rSuplCompra@1103355002 : Record 7010171;
+    BEGIN
+      // Busca_Suplemento_Excursion
+
+      rPrecios.RESET;
+      rPrecios.SETRANGE (Delegacion     , Delegacion);
+      rPrecios.SETRANGE ("N§ Contrato"  , "N§ Contrato");
+      rPrecios.SETRANGE ("Tipo precio", rPrecios."Tipo precio"::Suplemento);
+      rPrecios.SETFILTER("Fecha desde"  , '<=%1', rServicioExc.Fecha);
+      rPrecios.SETFILTER("Fecha hasta"  , '>=%1', rServicioExc.Fecha);
+      IF rPrecios.FINDSET THEN
+        REPEAT
+          CLEAR(rSuplCompra);
+          IF NOT rSuplCompra.GET(Delegacion, rServicioExc."N§ Servicio", rPrecios."Codigo Suplemento") THEN
+          BEGIN
+            rSuplCompra.Delegacion          := Delegacion;
+            rSuplCompra."N§ Servicio"       := rServicioExc."N§ Servicio";
+            rSuplCompra."Codigo Suplemento" := rPrecios."Codigo Suplemento";
+            rSuplCompra."Contrato Compra"   := rPrecios."N§ Contrato";
+            rSuplCompra."N§ Adultos"        := 0;
+            rSuplCompra."N§ Ni¤os"          := 0;
+            rSuplCompra.INSERT;
+          END;
+        UNTIL rPrecios.NEXT = 0;
+    END;
+
+    PROCEDURE Busca_Suplemento_Guia_Oficial@1(rServicioExc@1103355000 : Record 7010163);
+    VAR
+      rSuplCompraGO@1103355001 : Record 7010172;
+      rSuplGO@1103355002 : Record 7010145;
+      rCont@1103355003 : Record 7010142;
+      rPrecios@1103355004 : Record 7010154;
+    BEGIN
+      // Busca_Suplemento_Guia_Oficial
+
+      rPrecios.RESET;
+      rPrecios.SETRANGE (Delegacion     , Delegacion);
+      rPrecios.SETRANGE ("N§ Contrato"  , "N§ Contrato");
+      rPrecios.SETRANGE ("Tipo precio", rPrecios."Tipo precio"::Suplemento);
+      rPrecios.SETFILTER("Fecha desde"  , '<=%1', rServicioExc.Fecha);
+      rPrecios.SETFILTER("Fecha hasta"  , '>=%1', rServicioExc.Fecha);
+      rPrecios.SETFILTER(Excursion      , '%1|%2', rServicioExc.Excursion, '');
+      IF rPrecios.FINDSET THEN
+        REPEAT
+          CLEAR(rSuplCompraGO);
+          IF NOT rSuplCompraGO.GET(Delegacion, rServicioExc."N§ Servicio", rPrecios."Codigo Suplemento", rPrecios."N§ Contrato",
+                                   rPrecios.Zona) THEN
+          BEGIN
+            rSuplCompraGO.Delegacion          := Delegacion;
+            rSuplCompraGO."N§ Servicio"       := rServicioExc."N§ Servicio";
+            rSuplCompraGO."Codigo Suplemento" := rPrecios."Codigo Suplemento";
+            rSuplCompraGO."Contrato Compra"   := rPrecios."N§ Contrato";
+            rSuplCompraGO.Duracion            := rPrecios.Duracion;
+            rSuplCompraGO.Zona                := rPrecios.Zona;
+            rSuplCompraGO.Excursion           := rPrecios.Excursion;
+            rSuplCompraGO.INSERT;
+          END;
+        UNTIL rPrecios.NEXT = 0
+    END;
+
+    LOCAL PROCEDURE _CheckCommissionProvider@1100253000();
+    VAR
+      lrSer@1100253001 : Record 7010163;
+      lrExcursion@1100253000 : Record 7009710;
+      lrPrestacion@1100253002 : Record 7010170;
+    BEGIN
+      // _CheckCommissionProvider
+
+      lrSer.RESET;
+      lrSer.GET(Delegacion, "N§ Servicio");
+
+      lrExcursion.RESET;
+      lrExcursion.GET(lrSer.Excursion);
+      IF NOT lrExcursion."Proveedor comision mercantil" THEN
+        EXIT;
+
+      IF "Tipo Contrato" <> "Tipo Contrato"::Excursion THEN
+        ERROR(Text003);
+
+      lrPrestacion.RESET;
+      lrPrestacion.SETRANGE (Delegacion        , Delegacion);
+      lrPrestacion.SETRANGE ("N§ Servicio"     , "N§ Servicio");
+      lrPrestacion.SETFILTER("Orden Prestacion", '<>%1', "Orden Prestacion");
+      IF lrPrestacion.FINDFIRST THEN
+        ERROR(Text004);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 28082013 Elimino las opciones Guia Venta y Touroperador del campo Tipo contrato
+
+      $002 AJS 28102013 Nuevo campo "Coste Confirmado" calculado sobre la tabla de costes excursiones
+
+      $003 AJS 28102013 Nuevos campos informativos de Adultos, Ni¤os y Proveedor
+
+      $004 AJS 29102013 Propiedad DecimalPlaces en Adultos y Ni¤os
+
+      $005 AJS 17072014 Rellenar el campo Proveedor en la creacion de la prestacion
+    }
+    END.
+  }
+}

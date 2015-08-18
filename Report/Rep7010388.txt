@@ -1,0 +1,776 @@
+OBJECT Report 7010388 Produccion x Vehiculo
+{
+  OBJECT-PROPERTIES
+  {
+    Date=27/01/15;
+    Time=[ 9:59:14];
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    CaptionML=ESP=Produccion x Vehiculo;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+
+                   rPar.FINDFIRST;
+                   //Actualizamos la selecci¢n de Vehiculos.
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7010346;
+        DataItemTableView=SORTING(Vehiculo propio,Tipo vehiculo,Numero,Fecha venta)
+                          WHERE(Vehiculo propio=CONST(Yes),
+                                No Imprimir estadisticas=CONST(No));
+        OnPreDataItem=VAR
+                        lrSelVeh@1103350000 : Record 7010352;
+                        lrCliTO@1103350001 : Record 7010313;
+                        lrSelCliTo@1103350002 : Record 7010324;
+                        lwPrimeraFecha@1100253000 : Date;
+                      BEGIN
+
+                        IF wFiltroFecha='' THEN
+                          ERROR(Text0012);
+
+                        IF wTipoVehiculo <> '' THEN
+                          SETRANGE("Tipo vehiculo", wTipoVehiculo);
+
+                        IF vGaraje <> '' THEN
+                          SETRANGE(Garaje, vGaraje);
+
+                        // Filtramos por todos los vendidos antes de la fecha
+                        lwPrimeraFecha:= PrimeraFecha(wFiltroFecha);
+
+                        IF lwPrimeraFecha <> 0D THEN
+                          SETFILTER("Fecha venta",'>=%1|%2',lwPrimeraFecha,0D);
+
+                        // Si se acude al la selecci¢n de vehiculos creamos un temporal de vehiculos
+                        wSelVeh := vVehiculos=vVehiculos::"Seg£n Selecci¢n";
+                        IF wSelVeh THEN BEGIN
+                          CLEAR(lrSelVeh);
+                          lrSelVeh.SETRANGE(Usuario  , USERID);
+                          lrSelVeh.SETRANGE(Seleccion, TRUE);
+                          IF lrSelVeh.FINDSET THEN BEGIN
+                            REPEAT
+                              rTempVeh.Matricula := lrSelVeh.Matricula;
+                              rTempVeh.INSERT;
+                            UNTIL lrSelVeh.NEXT=0;
+                          END ELSE
+                            ERROR(Text0003);
+
+                          wTotalV := rTempVeh.COUNT;
+                        END
+                        ELSE BEGIN
+                          wTotalV := COUNT;
+                        END;
+                        CLEAR(wContV);
+
+                        // Creamos un temporal Cliente/TTOO
+                        CLEAR(rTempCLITO);
+                        IF wDesglClient THEN BEGIN // Si se desglosa por Cliente/Touroperador
+                          CASE vSelecTTOO OF
+                            vSelecTTOO::"Todos los Clientes" : BEGIN
+                              lrCliTO.RESET;
+                              IF lrCliTO.FINDSET THEN BEGIN
+                                REPEAT
+                                  rTempCLITO:= lrCliTO;
+                                  // Utilizamos Direccion para almacenar el nombre del cliente y Poblacion para el Touroperador
+                                  rTempCLITO.Direcci¢n := NombreCliente(rTempCLITO.Cliente);
+                                  rTempCLITO.Poblacion := NombreTTOO(rTempCLITO.TTOO);
+                                  rTempCLITO.INSERT;
+                                UNTIL lrCliTO.NEXT=0;
+                              END;
+                            END;
+                            vSelecTTOO::"Seg£n Selecci¢n" : BEGIN
+                              lrSelCliTo.RESET;
+                              lrSelCliTo.SETRANGE(Usuario  , USERID);
+                              lrSelCliTo.SETRANGE(Selecci¢n, TRUE);
+                              IF lrSelCliTo.FINDSET THEN BEGIN
+                                REPEAT
+                                  rTempCLITO.Cliente := lrSelCliTo.Cliente;
+                                  rTempCLITO.TTOO    := lrSelCliTo.TTOO;
+                                  rTempCLITO.Direcci¢n := NombreCliente(rTempCLITO.Cliente);
+                                  rTempCLITO.Poblacion := NombreTTOO(rTempCLITO.TTOO);
+                                  rTempCLITO.INSERT;
+                                UNTIL lrSelCliTo.NEXT=0;
+                              END
+                              ELSE
+                                ERROR(Text0011);
+                            END;
+                          END;
+                        END
+                        ELSE BEGIN  // Si no hay desglose creamos un unico registro
+                          CLEAR(rTempCLITO);
+                          rTempCLITO.INSERT;
+                        END;
+
+                        // Limpiamos el temporal de excel
+                        CLEAR(rExcel);
+                        IF rExcel.FINDFIRST THEN
+                          rExcel.DELETEALL;
+
+                        wVentana.OPEN(Text0014);
+                        wFil:=1;
+                        wCol:=1;
+
+                        rExcel.INIT;
+                        rExcel.VALIDATE("Row No."      , wFil);
+                        rExcel.VALIDATE("Column No."   , wCol);
+                        rExcel."Cell Value as Text"   := Text0013;
+                        rExcel."Texto Alineacion Horizontal" :=2; // Izquierda
+                        rExcel.Bold  := TRUE;
+                        rExcel.Width := 5;
+                        rExcel.INSERT;
+
+                        wFil+=1;
+                        wCol :=2;
+                        rExcel.INIT;
+                        rExcel.VALIDATE("Row No."      , wFil);
+                        rExcel.VALIDATE("Column No."   , wCol);
+                        rExcel.Bold  := FALSE;
+                        rExcel."Cell Value as Text"   := Text0015 + wFiltroFecha;
+                        rExcel.Width := 5;
+                        rExcel.INSERT;
+
+                        IF NOT wDesglClient THEN BEGIN
+                          wFil+=2;
+                          CreaCab(4);
+                        END;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+
+
+                           // Si hay selecci¢n de vehiculos lo saltamos si nos se ha incluido
+                           IF wSelVeh THEN BEGIN
+                             IF NOT rTempVeh.GET(Matricula) THEN
+                               CurrReport.SKIP;
+                           END;
+
+                           wContV +=1;
+                           wVentana.UPDATE(2,ROUND(wContV/wTotalV*10000,1));
+
+                           // Si esta marcado vSoloConActividad
+                           IF vSoloConActividad THEN BEGIN
+                             CLEAR(rAux);
+                             rAux.SETFILTER("Filtro Fecha"  , wFiltroFecha);
+                             rAux.SETRANGE("Filtro Vehiculo", Matricula);
+                             //rAux.CALCFIELDS("N§ ViajesTTOOParte");
+                             rAux.CALCFIELDS("N§ Viajes2");
+                             IF rAux."N§ Viajes2" = 0 THEN
+                               CurrReport.SKIP;
+                           END;
+
+                           wVentana.UPDATE(1, STRSUBSTNO('%1 %2',"Tipo vehiculo", Numero));
+                           // Pasamos a excel
+                           PasarVeh(Vehiculo);
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF NOT wDesglClient THEN BEGIN
+                           wFilAnt:=6;
+                           CreaTotal(4);
+                         END;
+
+                         wVentana.CLOSE;
+
+                         rExcel.CreateBook;
+                         rExcel.CreateSheet(Text50000,Text0013,COMPANYNAME,USERID,FALSE,FALSE,'');
+                         rExcel.GiveUserControl;
+                       END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8910;
+      Height=4070;
+      OnOpenForm=BEGIN
+                   cVeh.ActualizarSeleccionVehiculos();
+                   cFunEst.Actualiza_Clientes_Usuario;
+                   cFunEst.Actualizar_Temporal_Clientes;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1103350000;CheckBox;4620;3520 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=ESP=Solo Vehiculo con actividad;
+                                                   NextControl=4;
+                                                   SourceExpr=vSoloConActividad }
+      { 1103350001;Label  ;220  ;3520 ;4290 ;440  ;ParentControl=1103350000;
+                                                   MultiLine=Yes;
+                                                   ToolTipML=ESP=Si se marca s¢lo se considerar n los clientes que han solicitado alg£n servicio. }
+      { 1103350002;CommandButton;7920;1320;440;440;Name=SelecTTOO;
+                                                   HorzGlue=Left;
+                                                   VertGlue=Top;
+                                                   Visible=No;
+                                                   CaptionML=ESP=...;
+                                                   ToolTipML=ESP=Seleccionar Vehiculos;
+                                                   OnPush=VAR
+                                                            rSel@1103350001 : Record 7010324;
+                                                            fSel@1103350002 : Form 7010431;
+                                                          BEGIN
+
+                                                            rSel.RESET;
+                                                            rSel.INIT;
+                                                            rSel.SETCURRENTKEY(Usuario,Cliente,TTOO);
+                                                            rSel.FILTERGROUP(2);
+                                                            rSel.SETRANGE(Usuario,USERID);
+                                                            rSel.FILTERGROUP(0);
+
+                                                            CLEAR(fSel);
+                                                            fSel.SETTABLEVIEW(rSel);
+                                                            fSel.RUN;
+                                                            CLEAR(fSel);
+                                                            rSel.RESET;
+                                                          END;
+                                                           }
+      { 1103350003;TextBox;4620 ;1320 ;3300 ;440  ;Name=SelCliTo1;
+                                                   Enabled=No;
+                                                   BackTransparent=No;
+                                                   SourceExpr=vSelecTTOO;
+                                                   OnValidate=BEGIN
+                                                                IF vSelecTTOO=vSelecTTOO::"Todos los Clientes" THEN
+                                                                  RequestOptionsForm.SelecTTOO.VISIBLE:=FALSE
+                                                                ELSE
+                                                                  RequestOptionsForm.SelecTTOO.VISIBLE:=TRUE;
+                                                              END;
+                                                               }
+      { 1103350004;Label  ;220  ;1320 ;4290 ;440  ;ParentControl=1103350003;
+                                                   CaptionML=ESP=Selecci¢n Clientes/TTOO }
+      { 1103350005;Label  ;220  ;220  ;4290 ;440  ;ParentControl=1103350006;
+                                                   MultiLine=Yes;
+                                                   ToolTipML=ESP=Si se marca s¢lo se considerar n los vehiculos que han tenido actividad }
+      { 1103350006;TextBox;4620 ;220  ;2310 ;440  ;Name=FltGaraje;
+                                                   CaptionML=ESP=Garaje;
+                                                   NextControl=21;
+                                                   SourceExpr=vGaraje;
+                                                   TableRelation=Garaje.Garaje;
+                                                   OnValidate=VAR
+                                                                cfunbas@1103350001 : Codeunit 7010310;
+                                                              BEGIN
+                                                              END;
+                                                               }
+      { 1103350010;TextBox;4620 ;2970 ;3960 ;440  ;Name=ff11;
+                                                   CaptionML=ESP=Rango Fechas;
+                                                   SourceExpr=wFiltroFecha;
+                                                   OnValidate=VAR
+                                                                lcGestApl@1103350001 : Codeunit 1;
+                                                              BEGIN
+                                                                FormatoFiltro(wFiltroFecha);
+                                                              END;
+                                                               }
+      { 1103350012;Label  ;220  ;2970 ;4290 ;440  ;ParentControl=1103350010 }
+      { 1103350018;TextBox;4620 ;1870 ;3300 ;440  ;SourceExpr=vVehiculos;
+                                                   OnValidate=VAR
+                                                                lwSel@1103350001 : Boolean;
+                                                              BEGIN
+                                                                lwSel := vVehiculos=vVehiculos::"Seg£n Selecci¢n";
+                                                                RequestOptionsForm.SelecVeh.VISIBLE:=lwSel;
+                                                                RequestOptionsForm.TipoVeh1.ENABLED:= NOT lwSel;
+
+                                                                IF lwSel THEN BEGIN
+                                                                  CLEAR(wTipoVehiculo);
+                                                                END;
+                                                              END;
+                                                               }
+      { 1103350019;CommandButton;7920;1870;440;440;Name=SelecVeh;
+                                                   HorzGlue=Left;
+                                                   VertGlue=Top;
+                                                   Visible=No;
+                                                   CaptionML=ESP=...;
+                                                   ToolTipML=ESP=Seleccionar Vehiculos;
+                                                   OnPush=VAR
+                                                            rSel@1103350001 : Record 7010352;
+                                                            fSel@1103350002 : Form 7010386;
+                                                            rPar@1103350003 : Record 7010311;
+                                                          BEGIN
+                                                            rPar.FINDFIRST;
+
+                                                            rSel.RESET;
+                                                            rSel.INIT;
+                                                            rSel.SETCURRENTKEY(Usuario,Garaje, Numero);
+                                                            rSel.FILTERGROUP(2);
+                                                            rSel.SETRANGE(Usuario,USERID);
+
+                                                            IF (vGaraje<>'') AND (vGaraje<>rPar."Todos los garajes") THEN
+                                                              rSel.SETRANGE(Garaje, vGaraje);
+
+                                                            rSel.FILTERGROUP(0);
+
+                                                            CLEAR(fSel);
+                                                            fSel.SETTABLEVIEW(rSel);
+                                                            fSel.RUN;
+                                                            CLEAR(fSel);
+                                                            rSel.RESET;
+                                                          END;
+                                                           }
+      { 1103350020;Label  ;220  ;1870 ;4290 ;440  ;ParentControl=1103350018;
+                                                   CaptionML=ESP=Selecci¢n Veh¡culos }
+      { 1103350007;TextBox;4620 ;2420 ;3300 ;440  ;Name=TipoVeh1;
+                                                   CaptionML=ESP=Tipo Vehiculo;
+                                                   SourceExpr=wTipoVehiculo;
+                                                   TableRelation="Tipo Vehiculo" }
+      { 1103350008;Label  ;220  ;2420 ;4290 ;440  ;ParentControl=1103350007 }
+      { 1100253000;CheckBox;4620;770  ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=ESP=Desglosar por Cliente/TTOO;
+                                                   SourceExpr=wDesglClient;
+                                                   OnValidate=BEGIN
+                                                                RequestOptionsForm.SelCliTo1.ENABLED(wDesglClient);
+                                                                IF NOT wDesglClient THEN BEGIN
+                                                                  CLEAR(vSelecTTOO);
+                                                                  RequestOptionsForm.SelecTTOO.VISIBLE(FALSE);
+                                                                END;
+                                                              END;
+                                                               }
+      { 1100253001;Label  ;220  ;770  ;4290 ;440  ;ParentControl=1100253000 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text50000@1103355000 : TextConst 'ESP=Lineas';
+      Text50001@1103355001 : TextConst 'ESP="=SUMA(%1:%2)"';
+      rPar@1103350005 : Record 7010311;
+      rTempVeh@1103350003 : TEMPORARY Record 7010346;
+      rTempCLITO@1103350026 : TEMPORARY Record 7010313;
+      rExcel@1103350008 : TEMPORARY Record 7035385;
+      rAux@1103350025 : Record 7010323;
+      cVeh@1100253003 : Codeunit 7010317;
+      cFunEst@1100253006 : Codeunit 7010312;
+      vVehiculos@1103350016 : 'Todos los Veh¡culos,Seg£n Selecci¢n';
+      vSelecTTOO@1103350015 : 'Todos los Clientes,Seg£n Selecci¢n';
+      vSoloConActividad@1103350013 : Boolean;
+      vDesglosePax@1103350010 : Boolean;
+      wFiltroFecha@1103350009 : Text[250];
+      Text0001@1103350018 : TextConst 'ESP=%1 No es un filtro v lido';
+      Text0002@1103350017 : TextConst 'ESP=%1 no puede ser superior a %2';
+      wTipoVehiculo@1103350000 : Code[10];
+      vGaraje@1103350001 : Code[10];
+      wSelVeh@1103350002 : Boolean;
+      Text0003@1103350004 : TextConst 'ESP=No se ha seleccionado ning£n vehiculo';
+      wTotalV@1103350006 : Integer;
+      wContV@1103350007 : Integer;
+      wFil@1103350011 : Integer;
+      wCol@1103350012 : Integer;
+      Text0004@1103350014 : TextConst 'ESP="   %1 N§ %2 - %3"';
+      Text0005@1103350019 : TextConst 'ESP=PRODUCCION';
+      Text0006@1103350020 : TextConst 'ESP=PAX FACT.';
+      Text0007@1103350021 : TextConst 'ESP=N§ VIAJES';
+      Text0008@1103350022 : TextConst 'ESP=ENTRADAS';
+      Text0009@1103350023 : TextConst 'ESP=SALIDAS';
+      Text0010@1103350024 : TextConst 'ESP=EXCURSIONES';
+      Text0011@1103350027 : TextConst 'ESP=No se ha seleccionado ning£n Cliente-Touroperador';
+      Text0012@1103350028 : TextConst 'ESP=Establezca un filtro de fechas';
+      Text0013@1103350029 : TextConst 'ESP=Producci¢n por Vehiculo';
+      wFilAnt@1100253004 : Integer;
+      wVentana@1103350030 : Dialog;
+      Text0014@1103350031 : TextConst 'ESP=Vehiculo #1############\@2@@@@@@@@@@@@@@@@@@@@@';
+      Text0015@1100253000 : TextConst 'ESP=Periodo :';
+      wTipSer@1100253001 : ',ENTRADAS,SALIDAS,EXCURSION,TOTAL';
+      wDesglClient@1100253002 : Boolean;
+      Text0016@1100253005 : TextConst 'ESP=TOTAL';
+
+    PROCEDURE FormatoFiltro@7(VAR TextFiltroFech@1103350000 : Text[250]);
+    VAR
+      wFecha1@1103350001 : Date;
+      wFecha2@1103350002 : Date;
+      PosicionCadena@1103350003 : Integer;
+      i@1103350004 : Integer;
+      lcGestApl@1103350005 : Codeunit 1;
+      Text1@1103350006 : Text[250];
+      Text2@1103350007 : Text[250];
+    BEGIN
+      lcGestApl.MakeDateFilter(TextFiltroFech);
+
+      PosicionCadena := STRPOS(TextFiltroFech,'..');
+
+      IF PosicionCadena = 0 THEN BEGIN
+        IF EVALUATE(wFecha1,TextFiltroFech) THEN
+          TextFiltroFech := FORMAT(wFecha1)
+        ELSE
+          ERROR(Text0001,TextFiltroFech);
+      END
+      ELSE
+      BEGIN
+        Text1 := COPYSTR(TextFiltroFech,1,PosicionCadena - 1);
+        Text2 := COPYSTR(TextFiltroFech,PosicionCadena + 2, STRLEN(TextFiltroFech));
+        IF (EVALUATE(wFecha1,Text1)) AND (EVALUATE(wFecha2,Text2))   THEN BEGIN
+          TextFiltroFech := FORMAT(wFecha1)+'..'+FORMAT(wFecha2);
+          IF wFecha1 > wFecha2 THEN
+            ERROR(Text0002,wFecha1,wFecha2);
+        END
+        ELSE
+          ERROR(Text0001,TextFiltroFech);
+
+      END;
+    END;
+
+    PROCEDURE PrimeraFecha@1100253003(VAR TextFiltroFech@1103350000 : Text[250]) : Date;
+    VAR
+      wFecha1@1103350001 : Date;
+      wFecha2@1103350002 : Date;
+      PosicionCadena@1103350003 : Integer;
+      i@1103350004 : Integer;
+      lcGestApl@1103350005 : Codeunit 1;
+      Text1@1103350006 : Text[250];
+      Text2@1103350007 : Text[250];
+    BEGIN
+      // PrimeraFecha
+      // Devuelve la primera fecha del rango de fechas
+
+      lcGestApl.MakeDateFilter(TextFiltroFech);
+
+      PosicionCadena := STRPOS(TextFiltroFech,'..');
+
+      IF PosicionCadena = 0 THEN BEGIN
+        EVALUATE(wFecha1,TextFiltroFech)
+      END
+      ELSE
+      BEGIN
+        Text1 := COPYSTR(TextFiltroFech,1,PosicionCadena - 1);
+        IF NOT (EVALUATE(wFecha1,Text1)) THEN
+          CLEAR(wFecha1);
+      END;
+      EXIT(wFecha1);
+    END;
+
+    PROCEDURE PasarVeh@1103350000(prVeh@1103350000 : Record 7010346);
+    VAR
+      lwCont@1103350001 : Integer;
+      lwCont2@1103350005 : Integer;
+      lwPriCol@1103350003 : Integer;
+      lwCliAnt@1103350004 : Code[20];
+      lwOk@1100253000 : Boolean;
+    BEGIN
+      // PasarVeh
+      // Envia al excel el vehiculo pasado como parametro
+
+      lwPriCol:=4; // Margen izquierdo de la informacion
+      WITH prVeh DO BEGIN
+        IF wDesglClient THEN
+          wFil +=2
+        ELSE
+          wFil +=1;
+        wCol:= 1;
+        rExcel.INIT;
+        rExcel.VALIDATE("Row No."      , wFil);
+        rExcel.VALIDATE("Column No."   , wCol);
+        rExcel."Cell Value as Text"   := STRSUBSTNO(Text0004, prVeh."Tipo vehiculo" , prVeh.Numero, prVeh.Matricula);
+        rExcel."Texto Alineacion Horizontal" :=2; // Izquierda
+        IF wDesglClient THEN BEGIN
+          rExcel."Fusionar hasta celda" := rExcel.DevuelveCelda(wFil,wCol+14);
+          rExcel.VALIDATE(Bordes         , 2);
+          rExcel.Bold  := TRUE;
+          wFil +=2;
+        END;
+        rExcel.INSERT;
+
+        IF wDesglClient THEN
+          CreaCab(lwPriCol);
+
+        // Lineas de datos
+        rTempCLITO.RESET;
+        CLEAR(wFilAnt); // Indica la primera fila de un TTOO
+        IF rTempCLITO.FINDSET THEN BEGIN
+          CLEAR(lwCliAnt);
+          REPEAT
+            // No insertamos clientes/TTOOS que no tengan servicios
+            CLEAR(rAux);
+            rAux.SETFILTER("Filtro Fecha"  , wFiltroFecha);
+            rAux.SETRANGE("Filtro Vehiculo", Matricula);
+            lwOk := NOT wDesglClient;
+            IF wDesglClient THEN BEGIN
+              rAux.SETRANGE("Filtro Cliente" , rTempCLITO.Cliente);
+            END;
+
+            IF lwCliAnt <> rTempCLITO.Cliente THEN BEGIN // Si hay cambio de cliente
+              // Comprobamos que para este cliente hay movimiento
+              rAux.CALCFIELDS(rAux."N§ Viajes2");
+              lwOk := rAux."N§ Viajes2" <> 0;
+              IF lwOk THEN BEGIN
+                CreaTotal(lwPriCol);
+                wFil +=2;
+                wCol:= 2;
+                rExcel.INIT;
+                rExcel.VALIDATE("Row No."      , wFil);
+                rExcel.VALIDATE("Column No."   , wCol);
+                rExcel."Cell Value as Text" := rTempCLITO.Direcci¢n;
+                rExcel.INSERT;
+                lwCliAnt := rTempCLITO.Cliente;
+                wFilAnt  := wFil +1;
+              END;
+            END;
+                                    // No dejamos pasar touroperadores sin movimiento
+            IF wDesglClient THEN BEGIN
+              rAux.SETRANGE("Filtro TTOO"    , rTempCLITO.TTOO);
+              rAux.CALCFIELDS(rAux."N§ Viajes2");
+              lwOk := rAux."N§ Viajes2" <> 0;
+            END;
+
+            IF lwOk THEN BEGIN
+              IF wDesglClient THEN //TTOO
+                wFil +=1;
+              wCol:= 3;
+              rExcel.INIT;
+              rExcel.VALIDATE("Row No."      , wFil);
+              rExcel.VALIDATE("Column No."   , wCol);
+              rExcel."Borde Abaj":= 1;
+              rExcel."Cell Value as Text" := rTempCLITO.Poblacion;
+              rExcel.Width := 30;
+              rExcel.INSERT;
+
+              // DATOS
+              wCol:=lwPriCol;
+              rExcel.INIT;
+              rExcel.VALIDATE("Row No."           , wFil);
+              rExcel.VALIDATE("Cell Value as Text", ''); //+$001
+
+              FOR lwCont := 1 TO 3 DO
+              BEGIN // Tipo de Informacion
+                FOR wTipSer := 1 TO 4 DO
+                BEGIN // Tipo de servicio
+                  CASE wTipSer OF
+                    wTipSer::ENTRADAS  : rAux.SETRANGE("Filtro Codigo Servicio" , rPar."Codigo Entradas");
+                    wTipSer::SALIDAS   : rAux.SETRANGE("Filtro Codigo Servicio" , rPar."Codigo Salidas");
+                    wTipSer::EXCURSION :rAux.SETFILTER("Filtro Codigo Servicio",'<>%1&<>%2',rPar."Codigo Entradas",rPar."Codigo Salidas");
+                    wTipSer::TOTAL     :rAux.SETRANGE("Filtro Codigo Servicio");
+                  END;
+
+                  rExcel.VALIDATE("Column No."   , wCol);
+                  CASE lwCont OF
+                    1: BEGIN // IMPORTE
+                         rExcel."Cell Value as Text" := FORMAT(rAux.TotalCantidadFacturada);
+                       END;
+                    2: BEGIN // PAX FACTURADO
+                         {
+                         rExcel."Cell Value as Text" := rAux.TotalPaxFacturado;}
+                         rExcel."Cell Value as Text" := FORMAT(GePaxTrans);
+                       END;
+                    3: BEGIN // VIAJES
+                         // Si no tiene desglose lo miramos por parte que es m s real
+                         IF wDesglClient THEN
+                         BEGIN
+                           rAux.CALCFIELDS(rAux."N§ Viajes2");
+                           rExcel."Cell Value as Text" := FORMAT(rAux."N§ Viajes2");
+                         END
+                         ELSE
+                         //+$002 <
+                         BEGIN
+                           rAux.CALCFIELDS(rAux."N§ ViajesParte");
+                           rExcel."Cell Value as Text" := FORMAT(rAux."N§ ViajesParte");
+                         END;
+                         //+$002 >
+                       END;
+                  END;
+                  rExcel.INSERT;
+                  wCol += 1;
+                END;
+              END;
+            END;
+          UNTIL rTempCLITO.NEXT = 0;
+          IF wDesglClient THEN
+            CreaTotal(lwPriCol);
+        END;
+
+      END;
+    END;
+
+    PROCEDURE CreaCab@1100253000(pwPriCol@1100253000 : Integer);
+    VAR
+      lwCont@1100253001 : Integer;
+    BEGIN
+      // CreaCab
+      // Crea Una Cabecera
+
+      // Crea Los encabezamientos
+      wCol:=pwPriCol;
+
+      rExcel.INIT;
+      rExcel.VALIDATE("Row No."      , wFil);
+      rExcel.VALIDATE(Bordes         , 2);
+      rExcel."Texto Alineacion Horizontal" :=3; // Centro
+
+      FOR lwCont:=1 TO 3 DO BEGIN // Tipo de Informacion
+        CASE lwCont OF
+          1: rExcel."Cell Value as Text" := Text0005; // PRODUCCION
+          2: rExcel."Cell Value as Text" := Text0006; // PAX FACTUADO
+          3: rExcel."Cell Value as Text" := Text0007; // N§ VIAJES
+        END;
+        rExcel.VALIDATE("Column No."   , wCol);
+        rExcel."Fusionar hasta celda" := rExcel.DevuelveCelda(wFil,wCol+3);
+        rExcel.INSERT;
+        wCol+=4;
+      END;
+
+      // Tipos de Servicio
+      wFil +=1;
+      wCol:=pwPriCol;
+      rExcel.INIT;
+      rExcel.VALIDATE("Row No."      , wFil);
+      rExcel.VALIDATE(Bordes         , 2);
+      rExcel."Texto Alineacion Horizontal" :=3; // Centro
+      FOR lwCont:=1 TO 3 DO BEGIN // Tipo de Informacion
+        FOR wTipSer:=1 TO 4 DO BEGIN
+          rExcel.VALIDATE("Column No." , wCol);
+          rExcel."Cell Value as Text" := FORMAT(wTipSer);
+          rExcel.INSERT;
+          wCol+= 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreaTotal@1100253005(pwPriCol@1100253000 : Integer);
+    VAR
+      lwCont@1100253001 : Integer;
+      lwCont2@1100253002 : Integer;
+    BEGIN
+      // CreaTotal
+      // Crea Un Total
+
+
+      IF wFilAnt=0 THEN
+        EXIT;
+
+      wFil +=1;
+      rExcel.INIT;
+      rExcel.VALIDATE("Row No."      , wFil);
+
+      wCol:=3;
+      rExcel.VALIDATE("Column No." , wCol);
+      rExcel."Cell Value as Text" :=Text0016;
+      rExcel.Bold:= TRUE;
+      rExcel.INSERT;
+
+      wCol:=pwPriCol;
+
+      // Tipos de Servicio
+      wCol:=pwPriCol;
+      rExcel.INIT;
+      rExcel.VALIDATE("Row No."      , wFil);
+      FOR lwCont:=1 TO 3 DO BEGIN // Tipo de Informacion
+        FOR wTipSer:=1 TO 4 DO BEGIN
+          rExcel.VALIDATE("Column No." , wCol);
+          rExcel."Cell Value as Text" := STRSUBSTNO(Text50001,rExcel.DevuelveCelda(wFilAnt           ,rExcel."Column No."),
+                                                                   rExcel.DevuelveCelda(rExcel."Row No."-1,rExcel."Column No."));
+          rExcel.INSERT;
+          wCol+= 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE NombreCliente@1100253001(pwCod@1100253000 : Code[20]) : Text[100];
+    VAR
+      lrCli@1100253001 : Record 18;
+    BEGIN
+      // NombreCliente
+
+      IF lrCli.GET(pwCod) THEN
+         EXIT(lrCli.Name)
+      ELSE
+         EXIT(pwCod);
+    END;
+
+    PROCEDURE NombreTTOO@1100253002(pwCod@1100253000 : Code[10]) : Text[100];
+    VAR
+      lrTTOO@1100253001 : Record 7010312;
+    BEGIN
+
+      IF lrTTOO.GET(pwCod) THEN
+        EXIT(lrTTOO.Nombre)
+      ELSE
+        EXIT(pwCod);
+    END;
+
+    PROCEDURE GePaxTrans@1100253004() : Decimal;
+    VAR
+      lwPax@1100253000 : Decimal;
+      lrCI@1100253001 : Record 7010414;
+      lrProd@1103355000 : Record 7035392;
+    BEGIN
+      // GePaxTrans
+      // Devuelve la cantidad de pax transportado seg£n los filtros aplicados en rAux
+      // Este dato no podemos sacarlo de campos calculados ya que no tenemos ning£n filtro que cubra todos los campos + Vehiculo
+      // Para evitar introducir m s filtro optamos por calcularlo manualmente
+
+      CLEAR(lrCI);
+      lrCI.SETCURRENTKEY("Cliente estadistico",Touroperador,Fecha,"Tipo linea","Tipo elemento",Garaje,"Tipo servicio","Codigo servicio");
+      lrCI.SETFILTER("Tipo linea",'%1|%2',lrCI."Tipo linea"::Base,lrCI."Tipo linea"::Manual);
+
+      rAux.COPYFILTER("Filtro TTOO"            , lrCI.Touroperador);
+      rAux.COPYFILTER("Filtro Cliente"         , lrCI."Cliente estadistico");
+      rAux.COPYFILTER("Filtro Vehiculo"        , lrCI.Vehiculo);
+      rAux.COPYFILTER("Filtro Fecha"           , lrCI.Fecha);
+      rAux.COPYFILTER("Filtro Codigo Servicio" , lrCI."Codigo servicio");
+
+      CLEAR(lwPax);
+      IF lrCI.FINDSET THEN BEGIN
+        REPEAT
+          lwPax += lrCI."Pax Facturados";
+        UNTIL lrCI.NEXT=0;
+      END;
+
+      // JPT 16/10/06 Ahora tambien buscamo en la produccion
+
+      CLEAR(lrProd);
+      lrProd.SETCURRENTKEY("Cliente estadistico",Touroperador,Fecha,"Tipo linea","Tipo elemento",Garaje,"Tipo servicio","Codigo servicio",
+                           "Pax Transportados","Zona Precios","Servicio propio");
+
+      lrProd.SETFILTER("Tipo linea",'%1|%2',lrCI."Tipo linea"::Base,lrCI."Tipo linea"::Manual);
+      rAux.COPYFILTER("Filtro TTOO"            , lrProd.Touroperador);
+      rAux.COPYFILTER("Filtro Cliente"         , lrProd."Cliente estadistico");
+      rAux.COPYFILTER("Filtro Vehiculo"        , lrProd.Vehiculo);
+      rAux.COPYFILTER("Filtro Fecha"           , lrProd.Fecha);
+      rAux.COPYFILTER("Filtro Codigo Servicio" , lrProd."Codigo servicio");
+      IF lrProd.FINDSET THEN BEGIN
+        REPEAT
+          lwPax += lrProd."Pax Facturados";
+        UNTIL lrProd.NEXT=0;
+      END;
+
+      EXIT(lwPax);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 27012015 Modifico la funcion PasarVeh para que las celdas en blanco no arrastren el resultado de la anterior
+
+      $002 AJS 27012015 Modifico la funcion PasarVeh para calcular el numero de viajes cuando no se haya marcado el desglose
+                        por cliente
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

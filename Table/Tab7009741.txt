@@ -1,0 +1,1531 @@
+OBJECT Table 7009741 Cabecera reserva
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/03/15;
+    Time=13:46:37;
+    Modified=Yes;
+    Version List=AIC2009,OC-14035,OC-14042;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               "N§ Interno" := cRes.numero_reserva;
+
+               rPer.FINDFIRST;
+               rPar.FINDFIRST;
+
+               //: Campos por defecto
+               //+$012 <
+               IF (rPar."TourOperador Compra" <> '') AND (TourOperador = '') THEN //+$021
+               BEGIN
+                 TourOperador         := rPar."TourOperador Compra";
+                 VALIDATE("TourOperador Venta", rPar."TourOperador Compra"); //+$006
+                 Bono                 := Text002 + STRSUBSTNO('%1', "N§ Interno");
+               END;
+               //+$012 >
+
+               "Fecha recepcion"    := TODAY;
+               Delegacion           := rPar.Delegacion;
+               "Tipo Persona"       := rPer."Codigo Adulto";
+               Usuario              := USERID();
+               Temporada            := FORMAT(DATE2DMY(TODAY, 3));
+               "Fecha venta"        := TODAY;
+
+               "Canal venta"        := rPar."Canal venta x defecto";  // +$016
+
+               //. Generar el acompa¤ante principal de la reserva
+               CLEAR(rAco);
+               rAco.Gestion_Cuadrante_Circuito(GesCuaCircuito);
+               rAco.Delegacion       := Delegacion;
+               rAco."N§ Interno"     := "N§ Interno";
+               rAco."N§ Acompa¤ante" := 1;
+               rAco."Tipo Persona"   := rPer."Codigo Adulto";
+               rAco.Bono             := Bono;
+               rAco.INSERT(TRUE);
+               rAco.Gestion_Cuadrante_Circuito(FALSE);
+
+               //. Insertamos historico
+               cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, Text025, Text026, '');
+             END;
+
+    OnModify=BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text004);
+
+               rAco.RESET;
+               IF rAco.GET(Delegacion, "N§ Interno", 1) THEN BEGIN
+                 rAco.Nombre         := Nombre;
+                 rAco.Edad           := Edad;
+                 rAco."Tipo Persona" := "Tipo Persona";
+                 rAco.Bono           := Bono;
+                 rAco.Touroperador   := "TourOperador Venta";
+                 rAco.MODIFY;
+               END
+               ELSE BEGIN
+                 rAco.Delegacion       := Delegacion;
+                 rAco."N§ Interno"     := "N§ Interno";
+                 rAco."N§ Acompa¤ante" := 1;
+                 rAco.Nombre           := Nombre;
+                 rAco.Edad             := Edad;
+                 rAco."Tipo Persona"   := "Tipo Persona";
+                 rAco.Bono             := Bono;
+                 rAco.Touroperador     := "TourOperador Venta";
+                 rAco.INSERT(INSERT);
+                 COMMIT;
+               END;
+
+               Replicado:= FALSE;
+
+               _CheckEnvioConfirmacion;
+             END;
+
+    OnDelete=VAR
+               rBack@1103355000 : Record 7009845;
+               lcEnviar@1100217000 : Codeunit 7009746;
+             BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text006);
+
+               lcEnviar.GenerarConfTouroperador(Rec, TRUE);
+
+               borrar_sub_reservas;
+
+               // AJS 14.01.2010
+               // Recupero el registro porque se ha modificado en la funcion borrar_sub_reservas
+
+               GET(Delegacion, "N§ Interno");
+
+               IF rPar."Tipo Anulacion reserva" = rPar."Tipo Anulacion reserva"::Backup THEN BEGIN
+                 rBack.TRANSFERFIELDS(Rec);
+                 IF NOT rBack.INSERT THEN
+                   rBack.MODIFY;
+               END;
+
+               cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, Text008, Text009, '');
+             END;
+
+    OnRename=BEGIN
+               rPar.FINDFIRST;
+               IF NOT rPar."Empresa Delegacion" THEN
+                 ERROR(Text010);
+
+               Replicado := FALSE;
+             END;
+
+    CaptionML=[ENU=Booking header;
+               ESP=Cabecera reserva];
+    LookupFormID=Form7009789;
+    DrillDownFormID=Form7009789;
+  }
+  FIELDS
+  {
+    { 1   ;   ;N§ Interno          ;Integer       ;CaptionML=[ENU=Internal No.;
+                                                              ESP=N§ Interno];
+                                                   Description=PK;
+                                                   Editable=No }
+    { 3   ;   ;TourOperador        ;Code10        ;TableRelation=TourOperador.TourOperador;
+                                                   OnValidate=BEGIN
+                                                                //$015-
+                                                                rTTOO.RESET;
+                                                                rTTOO.GET(TourOperador);
+                                                                rTTOO.TESTFIELD(Bloqueado, FALSE);
+                                                                //$015+
+
+                                                                IF (xRec.TourOperador <> TourOperador) AND (NOT "Modificacion importacion") THEN
+                                                                BEGIN
+                                                                  IF comprobar_cerrada THEN
+                                                                    ERROR(Text011);
+
+                                                                  _ComprobarTransferAgrupado; //+$018
+
+                                                                  rPar.FINDFIRST;
+
+                                                                  //. Cuando la reserva esta generada no comprobamos contratos porque se hace en la reserva hotel
+                                                                  IF NOT Generada THEN
+                                                                    buscar_contrato;
+
+                                                                  IF ("TourOperador Venta" = '') OR (Nombre = '') THEN
+                                                                    VALIDATE("TourOperador Venta", TourOperador); //+$006
+
+                                                                  //. Bajar a Reserva hotel
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      rRsvHot.VALIDATE(TourOperador, TourOperador);
+                                                                      rRsvHot."Modificacion critica" := TRUE;
+                                                                      rRsvHot.MODIFY(TRUE);
+                                                                    UNTIL rRsvHot.NEXT = 0;
+                                                                  END;
+
+                                                                  //. Bajar a Reserva Transfer
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      IF rPar."Touroperador operativo" = rPar."Touroperador operativo"::Compra THEN
+                                                                      BEGIN
+                                                                        rRsvTra.VALIDATE(TourOperador, TourOperador);
+                                                                        rRsvTra.MODIFY;
+                                                                      END;
+                                                                    UNTIL rRsvTra.NEXT = 0;
+                                                                  END;
+
+                                                                  //+$011 <
+                                                                  //. Actualizar los servicios de traslado en destino
+                                                                  IF rPar."Touroperador operativo" = rPar."Touroperador operativo"::Compra THEN
+                                                                  BEGIN
+                                                                    rTraDest.RESET;
+                                                                    rTraDest.SETRANGE(Delegacion    , Delegacion);
+                                                                    rTraDest.SETRANGE("Num. Reserva", "N§ Interno");
+                                                                    IF rTraDest.FINDSET(TRUE) THEN
+                                                                    BEGIN
+                                                                      REPEAT
+                                                                        rTraDest.VALIDATE(Touroperador, TourOperador);
+                                                                        rTraDest.MODIFY(TRUE);
+                                                                      UNTIL rTraDest.NEXT = 0;
+                                                                    END;
+                                                                  END;
+                                                                  //+$011 >
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(TourOperador),
+                                                                                      xRec.TourOperador,TourOperador);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=TourOperator;
+                                                              ESP=TourOperador];
+                                                   NotBlank=Yes;
+                                                   Description=FK TourOperador }
+    { 5   ;   ;Bono                ;Code10        ;OnValidate=VAR
+                                                                rCab@1103355000 : Record 7009741;
+                                                              BEGIN
+                                                                IF NOT "Modificacion importacion" THEN
+                                                                BEGIN
+                                                                  //+$013 <
+                                                                  IF xRec.Bono <> '' THEN
+                                                                  BEGIN
+                                                                    IF NOT CONFIRM(Text013) THEN
+                                                                    BEGIN
+                                                                      Bono := xRec.Bono;
+                                                                      EXIT;
+                                                                    END;
+                                                                  END;
+                                                                  //+$013 >
+
+                                                                  rCab.RESET;
+                                                                  rCab.SETCURRENTKEY("TourOperador Venta",
+                                                                                     Bono);
+                                                                  rCab.SETRANGE ("TourOperador Venta", "TourOperador Venta");
+                                                                  rCab.SETRANGE (Bono                , Bono);
+                                                                  rCab.SETFILTER("N§ Interno"        , '<>%1', "N§ Interno");
+                                                                  IF rCab.FINDFIRST THEN BEGIN
+                                                                    IF NOT CONFIRM(Text014, FALSE, rCab."N§ Interno") THEN
+                                                                    BEGIN
+                                                                      Bono := xRec.Bono;
+                                                                      EXIT;
+                                                                    END;
+                                                                  END;
+                                                                END;
+
+                                                                IF xRec.Bono <> Bono THEN
+                                                                BEGIN
+                                                                  IF comprobar_cerrada THEN
+                                                                    ERROR(Text015);
+
+                                                                  // Bajar a Periodo
+
+                                                                  rPerio.RESET;
+                                                                  rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                  rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                    rPerio.MODIFYALL(Bono, Bono);
+
+                                                                  // Bajar a Reserva hotel
+
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      rRsvHot.Bono := Bono;
+                                                                      rRsvHot."Modificacion critica" := TRUE;
+                                                                      rRsvHot.MODIFY(TRUE);
+                                                                    UNTIL rRsvHot.NEXT = 0;
+                                                                  END;
+
+                                                                  //. Bajar a Reserva Transfer
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                    rRsvTra.MODIFYALL(Bono, Bono, TRUE);
+
+                                                                  //. Bajar a Reserva Circuito
+                                                                  rRsvCir.RESET;
+                                                                  rRsvCir.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvCir.SETRANGE("N§ Interno"    , "N§ Interno");
+                                                                  rRsvCir.SETRANGE(Delegacion      , Delegacion);
+                                                                  IF rRsvCir.FINDSET(TRUE) THEN
+                                                                    rRsvCir.MODIFYALL(Bono, Bono);
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Bono),
+                                                                                      xRec.Bono, Bono);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Voucher;
+                                                              ESP=Bono];
+                                                   NotBlank=Yes }
+    { 7   ;   ;Nombre              ;Text50        ;OnValidate=BEGIN
+                                                                IF  (xRec.Nombre <> Nombre) AND (NOT "Modificacion importacion") THEN
+                                                                BEGIN
+                                                                  //. Modificar Periodo Reserva
+                                                                  rPerio.RESET;
+                                                                  rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                  rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                    rPerio.MODIFYALL(Nombre, Nombre);
+
+                                                                  //. Modificamos el registro de acompa¤ante
+                                                                  IF CurrFieldNo = FIELDNO(Nombre) THEN
+                                                                  BEGIN
+                                                                    rAco.RESET;
+                                                                    rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                    rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                    IF rAco.FINDFIRST THEN
+                                                                    BEGIN
+                                                                      rAco.VALIDATE(Nombre, Nombre);
+                                                                      rAco.MODIFY(TRUE); //+$006
+                                                                    END;
+                                                                  END;
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Nombre),
+                                                                                      xRec.Nombre, Nombre);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Name;
+                                                              ESP=Nombre] }
+    { 9   ;   ;Edad                ;Integer       ;OnValidate=BEGIN
+                                                                IF xRec.Edad <> Edad THEN
+                                                                BEGIN
+                                                                  //. Modificamos el registro de acompa¤ante
+                                                                  IF CurrFieldNo = FIELDNO(Edad) THEN
+                                                                  BEGIN
+                                                                    rAco.RESET;
+                                                                    rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                    rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                    IF rAco.FINDFIRST THEN
+                                                                    BEGIN
+                                                                      rAco.VALIDATE(Edad, Edad);
+                                                                      rAco.MODIFY(TRUE); //+$006
+                                                                    END;
+                                                                  END;
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Edad),
+                                                                                      FORMAT(xRec.Edad), FORMAT(Edad));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Age;
+                                                              ESP=Edad];
+                                                   MinValue=0;
+                                                   MaxValue=120 }
+    { 11  ;   ;Tipo Persona        ;Code10        ;TableRelation="Tipo elemento"."Tipo elemento" WHERE (Humano=CONST(Yes));
+                                                   OnValidate=BEGIN
+                                                                IF xRec."Tipo Persona" <> "Tipo Persona" THEN
+                                                                BEGIN
+                                                                  //. Modificamos el registro de acompa¤ante
+                                                                  IF CurrFieldNo = FIELDNO("Tipo Persona") THEN
+                                                                  BEGIN
+                                                                    rAco.RESET;
+                                                                    rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                    rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                    IF rAco.FINDFIRST THEN
+                                                                    BEGIN
+                                                                      rAco.VALIDATE("Tipo Persona", "Tipo Persona");
+                                                                      rAco.MODIFY(TRUE); //+$006
+                                                                    END;
+                                                                  END;
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Tipo Persona"),
+                                                                                      xRec."Tipo Persona", "Tipo Persona");
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lrTipoPer@1100253000 : Record 7009715;
+                                                            BEGIN
+                                                              lrTipoPer.RESET;
+                                                              lrTipoPer.SETRANGE(Humano, TRUE);
+                                                              IF FORM.RUNMODAL(7009712, lrTipoPer) = ACTION::LookupOK THEN
+                                                                VALIDATE("Tipo Persona", lrTipoPer."Tipo elemento");
+                                                            END;
+
+                                                   CaptionML=[ENU=Person type;
+                                                              ESP=Tipo Persona];
+                                                   Description=FK Tipo elemento }
+    { 13  ;   ;Fecha venta         ;Date          ;OnValidate=VAR
+                                                                lwTiene@1103355000 : Boolean;
+                                                              BEGIN
+                                                                IF xRec."Fecha venta" <> "Fecha venta" THEN
+                                                                BEGIN
+
+                                                                  //. Bajar a los acompa¤antes de la reserva
+
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL("Fecha venta", "Fecha venta");
+
+                                                                  // JPT 29/06/01 Lo cambiamos en periodos
+
+                                                                  CLEAR(rPerio);
+                                                                  rPerio.SETRANGE(Delegacion   , Delegacion);
+                                                                  rPerio.SETRANGE("N§ Interno" , "N§ Interno");
+
+                                                                  // Si tiene periodos ya  rellenados se pide permiso para cambiarlos
+                                                                  rPerio.SETFILTER("Fecha venta", '<>%1', 0D);
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    IF CONFIRM(Text017) THEN
+                                                                      REPEAT
+                                                                        rPerio.VALIDATE("Fecha venta","Fecha venta");
+                                                                        rPerio.MODIFY;
+                                                                      UNTIL rPerio.NEXT=0;
+                                                                  END;
+
+                                                                  // Se modifican  los periodos sin fecha de venta
+
+                                                                  rPerio.SETFILTER("Fecha venta",'=%1',0D);
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      rPerio.VALIDATE("Fecha venta","Fecha venta");
+                                                                      rPerio.MODIFY;
+                                                                    UNTIL rPerio.NEXT=0;
+                                                                  END;
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Fecha venta"),
+                                                                                      STRSUBSTNO('%1', xRec."Fecha venta"), STRSUBSTNO('%1', "Fecha venta"));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Sale date;
+                                                              ESP=Fecha venta];
+                                                   NotBlank=Yes }
+    { 15  ;   ;Comentarios         ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist(Comentarios WHERE (Delegacion=FIELD(Delegacion),
+                                                                                        N§ Interno=FIELD(N§ Interno),
+                                                                                        Tipo Reserva=CONST(Cabecera)));
+                                                   CaptionML=[ENU=Comments;
+                                                              ESP=Comentarios];
+                                                   Description=Calculado sobre comentarios;
+                                                   Editable=No }
+    { 17  ;   ;Paxes               ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Acompa¤ante reserva" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                  N§ Interno=FIELD(N§ Interno)));
+                                                   CaptionML=[ENU=Paxes;
+                                                              ESP=Paxes];
+                                                   Description=Calculado sobre acompa¤antes;
+                                                   Editable=No }
+    { 19  ;   ;Generada            ;Boolean       ;CaptionML=[ENU=Generated;
+                                                              ESP=Generada];
+                                                   Editable=No }
+    { 21  ;   ;N§ Fichero          ;Integer       ;OnValidate=BEGIN
+                                                                IF xRec."N§ Fichero" <> "N§ Fichero" THEN
+                                                                BEGIN
+                                                                  // Bajar a acompa¤ante
+
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL("N§ Fichero", "N§ Fichero");
+
+                                                                  // Bajar a Reserva hotel
+
+                                                                  //-$007rRsvHot.RESET;
+                                                                  //-$007rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                  //-$007                      "N§ Interno");
+                                                                  //-$007rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                                                                  //-$007rRsvHot.SETRANGE("N§ Interno"    , "N§ Interno");
+                                                                  //-$007IF rRsvHot.FINDSET(TRUE) THEN BEGIN
+                                                                  //-$007 REPEAT
+                                                                  //-$007    rRsvHot."N§ Fichero" := "N§ Fichero";
+                                                                  //-$007    rRsvHot.MODIFY(TRUE);
+                                                                  //-$007  UNTIL rRsvHot.NEXT = 0;
+                                                                  //-$007END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=File No.;
+                                                              ESP=N§ Fichero];
+                                                   Editable=No }
+    { 23  ;   ;N§ Linea            ;Integer       ;OnValidate=BEGIN
+                                                                IF xRec."N§ Linea" <> "N§ Linea" THEN BEGIN
+                                                                  // Bajar a acompa¤ante
+
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL("N§ Linea", "N§ Linea");
+
+                                                                  // Bajar a Reserva hotel
+
+                                                                  //-$007rRsvHot.RESET;
+                                                                  //-$007rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                  //-$007                      "N§ Interno");
+                                                                  //-$007rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                                                                  //-$007rRsvHot.SETRANGE("N§ Interno"    , "N§ Interno");
+                                                                  //-$007IF rRsvHot.FINDSET(TRUE) THEN BEGIN
+                                                                  //-$007  REPEAT
+                                                                  //-$007    rRsvHot."N§ Fichero" := "N§ Fichero";
+                                                                  //-$007    rRsvHot.MODIFY(TRUE);
+                                                                  //-$007  UNTIL rRsvHot.NEXT = 0;
+                                                                  //-$007END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Line No.;
+                                                              ESP=N§ Linea];
+                                                   Editable=No }
+    { 25  ;   ;Calculo unico       ;Boolean       ;OnValidate=BEGIN
+                                                                //: Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Calculo unico"),
+                                                                                    FORMAT(xRec."Calculo unico"), FORMAT("Calculo unico"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Unique calculation;
+                                                              ESP=Calculo unico];
+                                                   Editable=No }
+    { 27  ;   ;Fecha recepcion     ;Date          ;CaptionML=[ENU=Receipt date;
+                                                              ESP=Fecha recepcion];
+                                                   Editable=No }
+    { 29  ;   ;Idioma              ;Code10        ;TableRelation=Language.Code;
+                                                   OnValidate=BEGIN
+                                                                IF xRec.Idioma <> Idioma THEN
+                                                                BEGIN
+                                                                  //. Bajar a Reserva hotel
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion      , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno"    , "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN BEGIN
+                                                                    REPEAT
+                                                                      rRsvHot.Idioma := Idioma;
+                                                                      rRsvHot.MODIFY(TRUE);
+                                                                    UNTIL rRsvHot.NEXT = 0;
+                                                                  END;
+
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Idioma),
+                                                                                      xRec.Idioma, Idioma);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Language;
+                                                              ESP=Idioma] }
+    { 31  ;   ;Mantenimiento       ;Boolean       ;InitValue=Yes;
+                                                   OnValidate=BEGIN
+                                                                IF xRec.Mantenimiento <> Mantenimiento THEN BEGIN
+                                                                  {* Bajar a Periodo *}
+                                                                  {*******************}
+                                                                  rPerio.RESET;
+                                                                  rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                  rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                    rPerio.MODIFYALL(Mantenimiento, Mantenimiento, TRUE);
+
+                                                                  {***********************}
+                                                                  {* Bajar a Acompa¤ante *}
+                                                                  {***********************}
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL(Mantenimiento, Mantenimiento);
+
+                                                                  {*************************}
+                                                                  {* Bajar a Reserva hotel *}
+                                                                  {*************************}
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                    rRsvHot.MODIFYALL(Mantenimiento, NOT(Mantenimiento), TRUE);
+
+                                                                  {****************************}
+                                                                  {* Bajar a Reserva Transfer *}
+                                                                  {****************************}
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                    rRsvTra.MODIFYALL(Mantenimiento, NOT(Mantenimiento), TRUE);
+
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Mantenimiento),
+                                                                                      STRSUBSTNO('%1', xRec.Mantenimiento), STRSUBSTNO('%1',Mantenimiento));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Maintenance;
+                                                              ESP=Mantenimiento] }
+    { 33  ;   ;Editable            ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=[ENU=Editable;
+                                                              ESP=Editable];
+                                                   Editable=No }
+    { 35  ;   ;Delegacion          ;Code10        ;TableRelation=Delegacion.Codigo;
+                                                   CaptionML=[ENU=Local Office;
+                                                              ESP=Delegacion];
+                                                   Description=PK, FK Delegacion;
+                                                   Editable=No }
+    { 37  ;   ;Codigo Grupo        ;Code10        ;OnValidate=BEGIN
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Codigo Grupo"),
+                                                                                    FORMAT(xRec."Codigo Grupo"), FORMAT("Codigo Grupo"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Group code;
+                                                              ESP=Codigo Grupo] }
+    { 39  ;   ;Adultos             ;Integer       ;OnValidate=VAR
+                                                                x@1103355000 : Integer;
+                                                              BEGIN
+                                                                rPer.FINDFIRST;
+                                                                IF Adultos > 200 THEN
+                                                                  ERROR(Text019);
+
+                                                                //. Buscamos el primer acompa¤ante para no borrarlo
+
+                                                                rAco2.RESET;
+                                                                rAco2.RESET;
+                                                                rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                IF rAco2.FINDFIRST THEN
+                                                                BEGIN
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                  rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                  rAco2.SETFILTER("N§ Acompa¤ante", '<>%1', rAco2."N§ Acompa¤ante");
+                                                                  rAco2.SETRANGE ("Tipo Persona"  , rPer."Codigo Adulto");
+                                                                  IF rAco2.FINDSET(TRUE) THEN
+                                                                    rAco2.DELETEALL;
+                                                                END;
+                                                                COMMIT;
+
+                                                                FOR x := 1 TO Adultos DO
+                                                                BEGIN
+                                                                  rAco.INIT;
+
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco2.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco2.FINDLAST THEN
+                                                                    rAco."N§ Acompa¤ante" := rAco2."N§ Acompa¤ante" + 1
+                                                                  ELSE
+                                                                    rAco."N§ Acompa¤ante" := 1;
+
+                                                                  rAco.Delegacion     := Delegacion;
+                                                                  rAco."N§ Interno"   := "N§ Interno";
+                                                                  rAco.Nombre         := Nombre;
+                                                                  rAco.Edad           := 0;
+                                                                  rAco."Tipo Persona" := rPer."Codigo Adulto";
+                                                                  rAco.INSERT(TRUE);
+                                                                END;
+
+                                                                buscar_habitacion;
+
+                                                                //: Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Adultos), FORMAT(xRec.Adultos), FORMAT(Adultos));
+                                                              END;
+
+                                                   CaptionML=[ENU=Adults;
+                                                              ESP=Adultos] }
+    { 41  ;   ;Ni¤os               ;Integer       ;OnValidate=VAR
+                                                                x@1103355000 : Integer;
+                                                              BEGIN
+                                                                rPer.FINDFIRST;
+
+                                                                IF Ni¤os > 200 THEN
+                                                                  ERROR(Text019);
+
+                                                                rAco2.RESET;
+                                                                rAco2.RESET;
+                                                                rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                IF rAco2.FINDFIRST THEN
+                                                                BEGIN
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                  rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                  rAco2.SETFILTER("N§ Acompa¤ante", '<>%1', rAco2."N§ Acompa¤ante");
+                                                                  rAco2.SETRANGE ("Tipo Persona"  , rPer."Codigo Ni¤o");
+                                                                  IF rAco2.FINDSET(TRUE) THEN
+                                                                    rAco2.DELETEALL;
+                                                                END;
+                                                                COMMIT;
+
+                                                                FOR x := 1 TO Ni¤os DO
+                                                                BEGIN
+                                                                  rAco.INIT;
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco2.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco2.FINDLAST THEN
+                                                                    rAco."N§ Acompa¤ante" := rAco2."N§ Acompa¤ante" + 1
+                                                                  ELSE
+                                                                    rAco."N§ Acompa¤ante" := 1;
+
+                                                                  rAco.Delegacion     := Delegacion;
+                                                                  rAco."N§ Interno"   := "N§ Interno";
+                                                                  rAco.Nombre         := Nombre;
+                                                                  rAco.Edad           := 0;
+                                                                  rAco."Tipo Persona" := rPer."Codigo Ni¤o";
+                                                                  rAco.INSERT(TRUE);
+                                                                END;
+
+                                                                buscar_habitacion;
+
+                                                                //: Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Ni¤os), FORMAT(xRec.Ni¤os), FORMAT(Ni¤os));
+                                                              END;
+
+                                                   CaptionML=[ENU=Children;
+                                                              ESP=Ni¤os] }
+    { 43  ;   ;Infants             ;Integer       ;OnValidate=VAR
+                                                                x@1103355000 : Integer;
+                                                              BEGIN
+                                                                rPer.FINDFIRST;
+
+                                                                IF Infants > 200 THEN
+                                                                  ERROR(Text019);
+
+                                                                rAco2.RESET;
+                                                                rAco2.RESET;
+                                                                rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                IF rAco2.FINDFIRST THEN
+                                                                BEGIN
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE (Delegacion      , Delegacion);
+                                                                  rAco2.SETRANGE ("N§ Interno"    , "N§ Interno");
+                                                                  rAco2.SETFILTER("N§ Acompa¤ante", '<>%1', rAco2."N§ Acompa¤ante");
+                                                                  rAco2.SETRANGE ("Tipo Persona"  , rPer."Codigo Infant");
+                                                                  IF rAco2.FINDSET(TRUE) THEN
+                                                                    rAco2.DELETEALL;
+                                                                END;
+
+                                                                COMMIT;
+
+                                                                FOR x := 1 TO Infants DO
+                                                                BEGIN
+                                                                  rAco.INIT;
+                                                                  rAco2.RESET;
+                                                                  rAco2.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco2.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco2.FINDLAST THEN
+                                                                    rAco."N§ Acompa¤ante" := rAco2."N§ Acompa¤ante" + 1
+                                                                  ELSE
+                                                                    rAco."N§ Acompa¤ante" := 1;
+
+                                                                  rAco.Delegacion     := Delegacion;
+                                                                  rAco."N§ Interno"   := "N§ Interno";
+                                                                  rAco.Nombre         := Nombre;
+                                                                  rAco.Edad           := 0;
+                                                                  rAco."Tipo Persona" := rPer."Codigo Infant";
+                                                                  rAco.INSERT(TRUE);
+                                                                END;
+
+                                                                //buscar_habitacion;
+
+                                                                //. Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Adultos), FORMAT(xRec.Adultos), FORMAT(Adultos));
+                                                              END;
+
+                                                   CaptionML=[ENU=Infants;
+                                                              ESP=Infants] }
+    { 45  ;   ;TourOperador Venta  ;Code10        ;TableRelation=TourOperador.TourOperador;
+                                                   OnValidate=VAR
+                                                                lrTO@1100217000 : Record 7009717;
+                                                              BEGIN
+                                                                IF xRec."TourOperador Venta" <> "TourOperador Venta" THEN
+                                                                BEGIN
+                                                                  rPar.FINDFIRST;
+
+                                                                  IF comprobar_cerrada THEN
+                                                                    ERROR(Text020);
+
+                                                                  _ComprobarTransferAgrupado; //+$018
+
+                                                                  lrTO.GET("TourOperador Venta");
+                                                                  lrTO.TESTFIELD(Bloqueado, FALSE); //+015
+                                                                  Idioma := lrTO.Idioma;
+
+                                                                  "Confirmacion servicios enviada" := NOT lrTO."Requiere confirmaci¢n por rsv";
+
+                                                                  //+$022 <
+                                                                  IF (lrTO."Canal venta x defecto" <> '') AND
+                                                                     (lrTO."Canal venta x defecto" <> "Canal venta") THEN
+                                                                    VALIDATE("Canal venta", lrTO."Canal venta x defecto");
+                                                                  //+$022 >
+
+                                                                  //. Cuando la cabecera esta generado ya no hay que mirar los contratos aqui porque
+                                                                  //. se revisan a nivel de la reserva hotel
+                                                                  IF NOT Generada THEN
+                                                                    buscar_contrato;
+
+                                                                  //. Bajar a Periodo
+                                                                  rPerio.RESET;
+                                                                  rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                  rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rPerio.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      rPerio.VALIDATE("TourOperador Venta", "TourOperador Venta");
+                                                                      rPerio.MODIFY;
+
+                                                                      //rPerio.MODIFYALL(TourOperador, "TourOperador Venta");
+                                                                    UNTIL rPerio.NEXT = 0;
+                                                                  END;
+
+                                                                  //. Bajar a acompa¤ante
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL(Touroperador, "TourOperador Venta");
+
+                                                                  //. Bajar a Reserva hotel
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      rRsvHot.VALIDATE("TourOperador Venta", "TourOperador Venta");
+                                                                      rRsvHot."Modificacion critica" := TRUE;
+                                                                      rRsvHot.MODIFY(TRUE);
+                                                                    UNTIL rRsvHot.NEXT = 0;
+                                                                  END;
+
+                                                                  //. Bajar a Reserva Transfer
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    REPEAT
+                                                                      IF rPar."Touroperador operativo" = rPar."Touroperador operativo"::Venta THEN
+                                                                        rRsvTra.VALIDATE(TourOperador, "TourOperador Venta");
+                                                                      rRsvTra."TourOperador facturacion" := "TourOperador Venta";
+                                                                      rRsvTra.MODIFY;
+                                                                    UNTIL rRsvTra.NEXT = 0;
+                                                                  END;
+
+                                                                  //+$011 <
+                                                                  //. Actualizar los servicios de traslado en destino
+                                                                  IF rPar."Touroperador operativo" = rPar."Touroperador operativo"::Venta THEN
+                                                                  BEGIN
+                                                                    rTraDest.RESET;
+                                                                    rTraDest.SETRANGE(Delegacion    , Delegacion);
+                                                                    rTraDest.SETRANGE("Num. Reserva", "N§ Interno");
+                                                                    IF rTraDest.FINDSET(TRUE) THEN
+                                                                    BEGIN
+                                                                      REPEAT
+                                                                        rTraDest.VALIDATE(Touroperador, "TourOperador Venta");
+                                                                        rTraDest.MODIFY(TRUE);
+                                                                      UNTIL rTraDest.NEXT = 0;
+                                                                    END;
+                                                                  END;
+                                                                  //+$011 >
+
+                                                                  //. Bajar a Reserva Circuito
+                                                                  IF (NOT GesCuaCircuito) AND (rPar."Activar m¢dulo circuitos") THEN
+                                                                  BEGIN
+                                                                    rPaxTOcir.RESET;
+                                                                    rPaxTOcir.SETCURRENTKEY("N§ Interno");
+                                                                    rPaxTOcir.SETRANGE("N§ Interno", "N§ Interno");
+                                                                    rPaxTOcir.SETRANGE(Delegacion  , Delegacion);
+                                                                    IF rPaxTOcir.FINDSET(TRUE) THEN
+                                                                    BEGIN
+                                                                      rPaxTOcir.Establecer_Gestion_Cabecera(TRUE);
+                                                                      rPaxTOcir.VALIDATE(TourOperador, "TourOperador Venta");
+                                                                      rPaxTOcir.MODIFY;
+                                                                      rPaxTOcir.Establecer_Gestion_Cabecera(FALSE);
+                                                                    END;
+                                                                    rPaxTOcir.RESET;
+                                                                  END;
+
+                                                                  // Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("TourOperador Venta"),
+                                                                                      xRec."TourOperador Venta", "TourOperador Venta");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Sale touroperator;
+                                                              ESP=Touroperador venta];
+                                                   NotBlank=Yes;
+                                                   Description=FK TourOperador }
+    { 47  ;   ;Usuario             ;Code20        ;CaptionML=[ENU=User;
+                                                              ESP=Usuario];
+                                                   Description=FK Usuario;
+                                                   Editable=No }
+    { 49  ;   ;Modificacion importacion;Boolean   ;OnValidate=BEGIN
+                                                                IF "Modificacion importacion" <> xRec."Modificacion importacion" THEN BEGIN
+
+                                                                  // Bajar a reserva hotel
+
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                    rRsvHot.MODIFYALL("Modificacion importacion", "Modificacion importacion");
+
+                                                                  // Bajar a reserva transfer
+
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                    rRsvTra.MODIFYALL("Modificacion importacion", "Modificacion importacion");
+                                                                  rRsvTra.RESET;
+
+                                                                  // Bajar a Acompa¤antes
+
+                                                                  rAco.RESET;
+                                                                  rAco.SETRANGE(Delegacion  , Delegacion);
+                                                                  rAco.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rAco.FINDSET(TRUE) THEN
+                                                                    rAco.MODIFYALL("Modificacion importacion", "Modificacion importacion");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Importation modification;
+                                                              ESP=Modificacion importacion];
+                                                   Editable=No }
+    { 50  ;   ;Replicado           ;Boolean       ;InitValue=No;
+                                                   CaptionML=[ENU=Replicated;
+                                                              ESP=Replicado];
+                                                   Description=Campo usado por el replicador }
+    { 52  ;   ;Temporada           ;Code10        ;CaptionML=[ENU=Season;
+                                                              ESP=Temporada];
+                                                   Editable=Yes }
+    { 100 ;   ;Circuito            ;Code10        ;TableRelation="Maestro circuitos".Circuito;
+                                                   OnValidate=BEGIN
+                                                                VALIDATE("Contrato Venta Circuito");
+                                                                rPar.FINDFIRST;
+                                                                IF (NOT GesCuaCircuito) AND (rPar."Activar m¢dulo circuitos") THEN
+                                                                  Borrar_datos_circuito;
+
+                                                                // Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION(Circuito),
+                                                                                    xRec.Circuito, Circuito);
+                                                              END;
+
+                                                   CaptionML=[ENU=Circuit;
+                                                              ESP=Circuito];
+                                                   Description=FK Maestro Circuitos }
+    { 102 ;   ;Categoria Circuito  ;Code10        ;TableRelation="Codigo Circuito".Codigo WHERE (Tipo Codigo=CONST(Categoria));
+                                                   OnValidate=VAR
+                                                                rPaxTO@1103355000 : Record 7010188;
+                                                              BEGIN
+                                                                rPar.FINDFIRST;
+                                                                IF (NOT GesCuaCircuito) AND (rPar."Activar m¢dulo circuitos") THEN
+                                                                BEGIN
+                                                                  rPaxTO.SETCURRENTKEY("N§ Interno");
+                                                                  rPaxTO.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  rPaxTO.SETRANGE(Delegacion  , Delegacion);
+                                                                  IF rPaxTO.FINDFIRST THEN
+                                                                  BEGIN
+                                                                    rPaxTO.Establecer_Gestion_Cabecera(TRUE);
+                                                                    rPaxTO.VALIDATE("Cod. Categoria", "Categoria Circuito");
+                                                                    rPaxTO.MODIFY;
+                                                                    rPaxTO.Establecer_Gestion_Cabecera(FALSE);
+                                                                  END;
+                                                                END;
+
+                                                                // Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Categoria Circuito"),
+                                                                                    xRec."Categoria Circuito", "Categoria Circuito");
+                                                              END;
+
+                                                   CaptionML=[ENU=Cicuit category;
+                                                              ESP=Categoria Circuito];
+                                                   Description=FK Categoria Circuito }
+    { 104 ;   ;Fecha Inicio Circuito;Date         ;OnValidate=VAR
+                                                                rHotTOCir@1103355000 : Record 7010193;
+                                                              BEGIN
+                                                                TESTFIELD(Circuito);
+                                                                VALIDATE("Contrato Venta Circuito");
+                                                                IF "Contrato Venta Circuito" <> '' THEN BEGIN
+                                                                  IF NOT rHotTOCir.Buscar_Hoteles_Tarifa(Delegacion, "Contrato Venta Circuito", Circuito,
+                                                                                                         "Categoria Circuito", "Fecha Inicio Circuito", FALSE) THEN
+                                                                    MESSAGE(Text021,
+                                                                            "Contrato Venta Circuito", Circuito, "Categoria Circuito", "Fecha Inicio Circuito");
+                                                                END;
+
+                                                                rPerio.RESET;
+                                                                rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                IF rPerio.FINDFIRST THEN
+                                                                  MESSAGE(Text022);
+
+                                                                rPar.FINDFIRST;
+                                                                IF (NOT GesCuaCircuito) AND (rPar."Activar m¢dulo circuitos") THEN
+                                                                  Borrar_datos_circuito;
+
+                                                                // Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Fecha Inicio Circuito"),
+                                                                                    STRSUBSTNO('%1', xRec."Fecha Inicio Circuito"), STRSUBSTNO('%1', "Fecha Inicio Circuito"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Circuit Beginning date;
+                                                              ESP=Fecha Inicio Circuito] }
+    { 106 ;   ;Habitacion Circuito ;Code10        ;TableRelation="Conversion Habitacion"."Habitacion cupo" WHERE (Delegacion=FIELD(Delegacion),
+                                                                                                                  N§ Contrato=FIELD(Contrato Venta Circuito),
+                                                                                                                  Tipo contrato=CONST(Circuito));
+                                                   OnValidate=VAR
+                                                                rResCir@1103355000 : Record 7010186;
+                                                                cFunCuaCir@1103355001 : Codeunit 7010242;
+                                                              BEGIN
+                                                                TESTFIELD(Circuito);
+                                                                TESTFIELD("Fecha Inicio Circuito");
+                                                                TESTFIELD("Contrato Venta Circuito");
+
+                                                                rHab.RESET;
+                                                                rHab.SETRANGE(Delegacion       , Delegacion);
+                                                                rHab.SETRANGE("N§ Contrato"    , "Contrato Venta Circuito");
+                                                                rHab.SETRANGE("Tipo contrato"  , rHab."Tipo contrato"::Circuito);
+                                                                rHab.SETRANGE("Habitacion cupo", "Habitacion Circuito");
+                                                                IF NOT rHab.FINDFIRST THEN
+                                                                  ERROR(Text023, "Habitacion Circuito", "Contrato Venta Circuito");
+
+                                                                // Bajar a Periodo Reserva
+
+                                                                rPerio.RESET;
+                                                                rPerio.SETRANGE(Delegacion  , Delegacion);
+                                                                rPerio.SETRANGE("N§ Interno", "N§ Interno");
+                                                                IF rPerio.FINDSET(TRUE) THEN
+                                                                  REPEAT
+                                                                    rPerio.Gestion_Cuadrante_Circuito(TRUE);
+                                                                    rPerio.VALIDATE(Habitacion       , "Habitacion Circuito");
+                                                                    rPerio.VALIDATE("N§ Habitaciones", cFunCuaCir.Num_Habitaciones(rPerio, Rec));
+                                                                    rPerio.Gestion_Cuadrante_Circuito(GesCuaCircuito);
+                                                                    rPerio.MODIFY(TRUE);
+                                                                    rPerio.Gestion_Cuadrante_Circuito(FALSE);
+                                                                  UNTIL rPerio.NEXT = 0;
+
+                                                                // Bajar a Pax TO-Circuito
+
+                                                                rPar.FINDFIRST;
+                                                                IF (NOT GesCuaCircuito) AND (rPar."Activar m¢dulo circuitos") THEN
+                                                                BEGIN
+                                                                  rPaxTOcir.RESET;
+                                                                  rPaxTOcir.SETCURRENTKEY("N§ Interno");
+                                                                  rPaxTOcir.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  rPaxTOcir.SETRANGE(Delegacion  , Delegacion);
+                                                                  IF rPaxTOcir.FINDSET(TRUE) THEN
+                                                                  BEGIN
+                                                                    rPaxTOcir.Establecer_Gestion_Cabecera(TRUE);
+                                                                    rPaxTOcir.VALIDATE("Tipo Habitacion", "Habitacion Circuito");
+                                                                    rPaxTOcir.MODIFY(TRUE);
+                                                                    rPaxTOcir.Establecer_Gestion_Cabecera(FALSE);
+                                                                  END;
+                                                                  rPaxTOcir.RESET;
+                                                                END;
+
+                                                                // Historico
+
+                                                                cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Habitacion Circuito"),
+                                                                                    xRec."Habitacion Circuito", "Habitacion Circuito");
+                                                              END;
+
+                                                   CaptionML=[ENU=Circuit Room;
+                                                              ESP=Habitacion Circuito];
+                                                   Description=FK Conversion Habitacion }
+    { 108 ;   ;Contrato Venta Circuito;Code10     ;TableRelation="Tarifa Venta Circuito"."N§ Tarifa";
+                                                   OnValidate=VAR
+                                                                rConVCir@1103355000 : Record 7010191;
+                                                              BEGIN
+                                                                IF ("TourOperador Venta" = '') OR ("Fecha Inicio Circuito" = 0D) THEN BEGIN
+                                                                  "Contrato Venta Circuito" := '';
+                                                                  EXIT;
+                                                                END;
+
+                                                                rConVCir.RESET;
+                                                                rConVCir.SETRANGE (Delegacion    , Delegacion);
+                                                                rConVCir.SETRANGE (TourOperador  , "TourOperador Venta");
+                                                                rConVCir.SETFILTER("Fecha inicio", '<=%1', "Fecha Inicio Circuito");
+                                                                rConVCir.SETFILTER("Fecha final" , '>=%1', "Fecha Inicio Circuito");
+                                                                rConVCir.SETRANGE (Confirmado    , TRUE);
+                                                                IF NOT rConVCir.FINDFIRST THEN
+                                                                  MESSAGE(Text024,
+                                                                          Circuito, "Fecha Inicio Circuito", "TourOperador Venta");
+                                                                "Contrato Venta Circuito" := rConVCir."N§ Tarifa";
+                                                              END;
+
+                                                   CaptionML=[ENU=Circuit sale contract;
+                                                              ESP=Contrato Venta Circuito];
+                                                   Description=FK Tarifa venta circuito }
+    { 110 ;   ;Tipo importacion    ;Option        ;CaptionML=[ENU=Import Type;
+                                                              ESP=Tipo importacion];
+                                                   OptionCaptionML=[ENU=Text,WS;
+                                                                    ESP=Texto,WS];
+                                                   OptionString=Texto,WS;
+                                                   Description=$003 }
+    { 112 ;   ;Confirmacion servicios enviada;Boolean;
+                                                   OnValidate=BEGIN
+                                                                IF "Confirmacion servicios enviada" <> xRec."Confirmacion servicios enviada" THEN
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Confirmacion servicios enviada"),
+                                                                                      FORMAT(xRec."Confirmacion servicios enviada"), FORMAT("Confirmacion servicios enviada"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Service confirmation sent;
+                                                              ESP=Confirmacion servicios enviada] }
+    { 114 ;   ;Texto confirmacion  ;BLOB          ;CaptionML=[ENU=Confirmation Text;
+                                                              ESP=Texto confirmacion];
+                                                   SubType=Memo }
+    { 116 ;   ;Tipo Operacion      ;Option        ;OnValidate=BEGIN
+                                                                IF "Tipo Operacion" <> xRec."Tipo importacion" THEN
+                                                                  //. Historico
+                                                                  cPar.intro_historic(Delegacion, "N§ Interno", 0, 0, 0, FIELDCAPTION("Tipo importacion"),
+                                                                                      FORMAT(xRec."Tipo importacion"), FORMAT("Tipo importacion"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Operation Type;
+                                                              ESP=Tipo Operacion];
+                                                   OptionCaptionML=[ENU=Charter,Regular;
+                                                                    ESP=Charter,Regular];
+                                                   OptionString=Charter,Regular;
+                                                   Description=$014 }
+    { 118 ;   ;Canal venta         ;Code20        ;TableRelation="Canal venta";
+                                                   OnValidate=BEGIN
+                                                                IF "Canal venta" <> xRec."Canal venta" THEN
+                                                                BEGIN
+                                                                  // Bajar a reserva hotel
+
+                                                                  rRsvHot.RESET;
+                                                                  rRsvHot.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvHot.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvHot.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvHot.FINDSET(TRUE) THEN
+                                                                    rRsvHot.MODIFYALL("Canal venta", "Canal venta");
+
+                                                                  // Bajar a reserva transfer
+
+                                                                  rRsvTra.RESET;
+                                                                  rRsvTra.SETCURRENTKEY(Delegacion,
+                                                                                        "N§ Interno");
+                                                                  rRsvTra.SETRANGE(Delegacion  , Delegacion);
+                                                                  rRsvTra.SETRANGE("N§ Interno", "N§ Interno");
+                                                                  IF rRsvTra.FINDSET(TRUE) THEN
+                                                                    rRsvTra.MODIFYALL("Canal venta", "Canal venta");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Sale channel;
+                                                              ESP=Canal venta];
+                                                   NotBlank=Yes;
+                                                   Description=$016 }
+    { 120 ;   ;User Id             ;Text30        ;Description=$019 }
+    { 122 ;   ;User Type           ;Text30        ;Description=$019 }
+    { 126 ;   ;Reserva online      ;Boolean       ;Description=$019 }
+  }
+  KEYS
+  {
+    {    ;Delegacion,N§ Interno                   ;Clustered=Yes }
+    {    ;Generada,TourOperador,Bono              ;KeyGroups=RENUMERING }
+    { No ;Delegacion,Codigo Grupo                  }
+    {    ;TourOperador,Bono,Temporada             ;KeyGroups=RENUMERING }
+    {    ;TourOperador Venta,Bono                 ;KeyGroups=RENUMERING }
+    {    ;N§ Fichero                              ;KeyGroups=RENUMERING }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355020 : TextConst 'ENU=Person parameters folder does not exist;ESP=NO existe el fichero de Parametros de personas.';
+      Text001@1103355021 : TextConst 'ENU=Database parameters folder does not exist;ESP=No existe el fichero de parametros de la B. D.';
+      Text002@1103355022 : TextConst 'ENU=B-;ESP=B-';
+      Text003@1103355023 : TextConst 'ENU=DB parameters folder does not exist;ESP=No existe el fichero de parametros de la B.D.';
+      Text004@1103355024 : TextConst 'ENU=Only modify booking in local offices is possible;ESP=Solo se pueden modificar reservas en las delegaciones.';
+      Text005@1103355025 : TextConst 'ENU=Unable to modify this booking because it is being calculated;ESP=No se puede modificar esta reserva porque se esta calculando.';
+      Text006@1103355026 : TextConst 'ENU=Only to cancel bookings in local offices is possible;ESP=Solo se pueden dar de baja reservas en las delegaciones.';
+      Text007@1103355027 : TextConst 'ENU=Unable to delete this booking because it is being calculated;ESP=No se puede borrar esta reserva porque se esta calculando.';
+      Text008@1103355028 : TextConst 'ENU=Deleted;ESP=Borrado';
+      Text009@1103355029 : TextConst 'ENU=Deleted register;ESP=Borrado registro';
+      Text010@1103355030 : TextConst 'ENU=Only to rename bookings in local offices is possible;ESP=Solo se pueden renombrar reservas en las delegaciones.';
+      Text011@1103355031 : TextConst 'ENU=Unable to change the purchase TourOperator in a closed booking;ESP=No se puede cambiar el TourOperador compra en una reserva cerrada.';
+      Text012@1103355032 : TextConst 'ENU=Local office parameters information does not exist;ESP=No existe informacion de parametros de Delegacion.';
+      Text013@1103355033 : TextConst 'ENU=Are you sure to change the voucher No.;ESP=Esta seguro de que desea cambiar el n§ de bono.';
+      Text014@1103355034 : TextConst 'ENU=This voucher is already in use in the booking number %1;ESP=Este bono ya esta en uso en la reserva numero %1.';
+      Text015@1103355035 : TextConst 'ENU=Unable to change the voucher in a closed booking;ESP=No se puede cambiar el Bono en una reserva cerrada.';
+      Text016@1103355036 : TextConst 'ENU=No valid age;ESP=Edad no valida.';
+      Text017@1103355037 : TextConst 'ENU=There are terms with filled date of sale,\Would you like to modify it?;ESP=Existen Periodos con Fecha de Venta Rellenada,\¨Desea Modificarlos?';
+      Text018@1103355038 : TextConst 'ENU=Person parameters folder does not exist;ESP=No existe el fichero de parametros de la persona.';
+      Text019@1103355039 : TextConst 'ENU=Unable to indicate as many adults;ESP=No se pueden indicar tantos adultos.';
+      Text020@1103355040 : TextConst 'ENU=Unable to change the sale TourOperator in a closed booking;ESP=No se puede cambiar el TourOperador venta en una reserva cerrada.';
+      Text021@1103355041 : TextConst 'ENU=Circuit hotel does not exist for the sale tariff %1, circuit %2, category %3, with starting date %4;ESP=No existe Hotel circuito para la tarifa de venta %1, circuito %2, categoria %3, con fecha de inicio %4';
+      Text022@1103355042 : TextConst 'ENU=Check-in and check-out dates of the term must be changed manually.;ESP=Se tienen que cambiar manualmente las fechas de entrada y salida de los periodos.';
+      Text023@1103355043 : TextConst 'ENU=Room type %1 does notexist in the contract %2;ESP=No existe el tipo de habitacion %1 en el contrato %2.';
+      Text024@1103355044 : TextConst 'ENU=Sale tariff for the circuit %1 does not exist, with starting date %2, TourOperator %3;ESP=No existe tarifa de venta para el circuito %1, con fecha de inicio %2, TourOperador %3';
+      rPar@1103355000 : Record 7009700;
+      rPer@1103355001 : Record 7009701;
+      rHis@1103355002 : Record 7009751;
+      rPerio@1103355003 : Record 7009742;
+      rAco@1103355005 : Record 7009748;
+      rAco2@1103355006 : Record 7009748;
+      rRsvHot@1103355007 : Record 7009743;
+      rRsvTra@1103355008 : Record 7009744;
+      rTraDest@1100217000 : Record 7009916;
+      rCom@1103355009 : Record 7009762;
+      rHab@1103355011 : Record 7009731;
+      rTTOO@1000000000 : Record 7009717;
+      cCon@1103355012 : Codeunit 7009701;
+      cPar@1103355013 : Codeunit 7009700;
+      cRes@1103355014 : Codeunit 7009703;
+      num_interno@1103355015 : Integer;
+      rRsvCir@1103355017 : Record 7010186;
+      rPaxTOcir@1103355018 : Record 7010188;
+      GesCuaCircuito@1103355019 : Boolean;
+      Text025@1103355045 : TextConst 'ENU=Created;ESP=Creada';
+      Text026@1103355046 : TextConst 'ENU=New Booking;ESP=Nueva Reserva';
+      Text027@1000000001 : TextConst 'ENU=You cannot change the touroperator because the reservation has transfer service created;ESP=No puede cambiar el touroperador porque la reserva tiene creado el servicio de transfer';
+
+    PROCEDURE comprobar_cerrada@4() : Boolean;
+    BEGIN
+      // comprobar_cerrada
+
+      rRsvHot.RESET;
+      rRsvHot.SETCURRENTKEY(Delegacion,
+                            "N§ Interno");
+      rRsvHot.SETRANGE(Delegacion       , Delegacion);
+      rRsvHot.SETRANGE("N§ Interno"     , "N§ Interno");
+      rRsvHot.SETRANGE("Llegada cerrada", TRUE);
+      EXIT(rRsvHot.FINDFIRST);
+    END;
+
+    PROCEDURE buscar_contrato@1();
+    VAR
+      rConv@1103355000 : Record 7009731;
+    BEGIN
+      // buscar_contrato
+
+      rPerio.RESET;
+      rPerio.SETRANGE(Delegacion  , Delegacion);
+      rPerio.SETRANGE("N§ Interno", "N§ Interno");
+      IF rPerio.FINDSET THEN
+      BEGIN
+        REPEAT
+          rPerio.buscar_contrato(TourOperador, "TourOperador Venta");
+          rPerio.buscar_habitacion(TourOperador, "TourOperador Venta", TRUE);
+          rPerio.buscar_regimen(TourOperador, "TourOperador Venta");
+          rPerio.MODIFY(TRUE);
+        UNTIL rPerio.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE borrar_sub_reservas@2();
+    VAR
+      lrServTra@1100217000 : Record 7009916;
+    BEGIN
+      // borrar_sub_reservas
+
+      rPerio.RESET;
+      rPerio.SETRANGE(Delegacion  , Delegacion);
+      rPerio.SETRANGE("N§ Interno", "N§ Interno");
+      IF rPerio.FINDSET(TRUE) THEN
+      BEGIN
+        rPerio.Gestion_Cuadrante_Circuito(GesCuaCircuito);
+        rPerio.DELETEALL(TRUE);
+        rPerio.Gestion_Cuadrante_Circuito(FALSE);
+      END;
+
+      rAco.RESET;
+      rAco.SETRANGE(Delegacion  , Delegacion);
+      rAco.SETRANGE("N§ Interno", "N§ Interno");
+      IF rAco.FINDSET(TRUE) THEN
+        rAco.DELETEALL;
+
+      rCom.RESET;
+      rCom.SETRANGE(Delegacion    , Delegacion);
+      rCom.SETRANGE("N§ Interno"  , "N§ Interno");
+      IF rCom.FINDSET(TRUE) THEN
+        rCom.DELETEALL;
+
+      //+$010 <
+      lrServTra.RESET;
+      lrServTra.SETRANGE(Delegacion    , Delegacion);
+      lrServTra.SETRANGE("Num. Reserva", "N§ Interno");
+      IF lrServTra.FINDSET(TRUE) THEN
+        lrServTra.DELETEALL(TRUE);
+      //+$010 >
+    END;
+
+    PROCEDURE buscar_habitacion@3();
+    VAR
+      texto_confirm@1103355000 : Text[80];
+      opcion@1103355001 : 'alta,baja,modificacion';
+    BEGIN
+      // buscar_habitacion
+
+      rPerio.RESET;
+      rPerio.SETRANGE(Delegacion  , Delegacion);
+      rPerio.SETRANGE("N§ Interno", "N§ Interno");
+      IF rPerio.FINDSET THEN
+      BEGIN
+        REPEAT
+          rPerio.comprobar_habitacion(Rec, rPerio, opcion::modificacion);
+        UNTIL rPerio.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE Gestion_Cuadrante_Circuito@7(par_GesCuaCircuito@1103355000 : Boolean);
+    BEGIN
+      // Gestion_cuadrante_circuito
+
+      GesCuaCircuito := par_GesCuaCircuito;
+    END;
+
+    PROCEDURE Borrar_datos_circuito@5();
+    VAR
+      rPaxTO@1103355000 : Record 7010188;
+      rHotCir@1103355001 : Record 7010189;
+      rResCir@1103355002 : Record 7010186;
+      rResCir2@1103355003 : Record 7010186;
+      rCir@1103355004 : Record 7010187;
+    BEGIN
+      // Borrar_datos_circuito
+
+      IF (Circuito = xRec.Circuito) AND ("Fecha Inicio Circuito" = xRec."Fecha Inicio Circuito") THEN
+        EXIT;
+
+      rPaxTO.RESET;
+      rPaxTO.SETCURRENTKEY("N§ Interno");
+      rPaxTO.SETRANGE("N§ Interno", "N§ Interno");
+      rPaxTO.SETRANGE(Delegacion  , Delegacion);
+      IF rPaxTO.FINDFIRST THEN
+      BEGIN
+        IF rCir.GET(rPaxTO.Delegacion, rPaxTO.Circuito, rPaxTO.Orden) THEN
+        BEGIN
+          rCir."Pendiente calcular" := TRUE;
+          rCir.MODIFY;
+        END;
+
+        rResCir.RESET;
+        rResCir.SETCURRENTKEY(Delegacion, Circuito, Orden, "N§ linea");
+        rResCir.SETRANGE(Delegacion, rPaxTO.Delegacion);
+        rResCir.SETRANGE(Circuito  , rPaxTO.Circuito);
+        rResCir.SETRANGE(Orden     , rPaxTO.Orden);
+        rResCir.SETRANGE("N§ linea", rPaxTO."N§ Linea");
+        IF rResCir.FINDSET THEN
+          REPEAT
+            rResCir2 := rResCir;
+            rResCir2.Circuito   := '';
+            rResCir2.Orden      := 0;
+            rResCir2."N§ linea" := 0;
+            rResCir2.MODIFY;
+          UNTIL rResCir.NEXT = 0;
+
+        rHotCir.RESET;
+        rHotCir.SETRANGE(Delegacion, rPaxTO.Delegacion);
+        rHotCir.SETRANGE(Circuito  , rPaxTO.Circuito);
+        rHotCir.SETRANGE(Orden     , rPaxTO.Orden);
+        rHotCir.SETRANGE("N§ linea", rPaxTO."N§ Linea");
+        IF rHotCir.FINDSET(TRUE) THEN
+          rHotCir.DELETEALL;
+
+        rPaxTO.DELETE;
+
+        cRes.reserva_circuito(Rec);
+      END;
+    END;
+
+    PROCEDURE GetNumeroCotizacion@1103355000() : Integer;
+    VAR
+      lrVinculo@1103355000 : Record 7009884;
+    BEGIN
+      // GetNumeroCotizacion
+
+      lrVinculo.SETCURRENTKEY("Id Cotizacion", Delegacion, "N§ Interno", "N§ Periodo", Tipo);
+      lrVinculo.SETRANGE (Delegacion  , Delegacion);
+      lrVinculo.SETRANGE ("N§ Interno", "N§ Interno");
+      lrVinculo.SETRANGE (Tipo        , lrVinculo.Tipo::Cabecera);
+
+      IF lrVinculo.FINDFIRST THEN
+        EXIT(lrVinculo."Id Cotizacion");
+
+      EXIT(0);
+    END;
+
+    PROCEDURE LookUpCotizacion@1103355001();
+    VAR
+      lrCabCot@1103355000 : Record 7009871;
+      lfCabCot@1103355001 : Form 7010038;
+      lwNumCot@1103355002 : Integer;
+    BEGIN
+      // LookUpCotizacion
+
+      lwNumCot := GetNumeroCotizacion;
+      IF lwNumCot = 0 THEN
+        EXIT;
+
+      lrCabCot.FILTERGROUP(2);
+      lrCabCot.SETRANGE (Id, lwNumCot);
+      lrCabCot.FILTERGROUP(0);
+
+      lfCabCot.SETTABLEVIEW(lrCabCot);
+      lfCabCot.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE _CheckEnvioConfirmacion@1100217001();
+    VAR
+      lrCab@1100217000 : Record 7009741;
+      lrTTOO@1100217001 : Record 7009717;
+    BEGIN
+      // _CheckEnvioConfirmacion
+
+      IF NOT Generada THEN
+        EXIT;
+
+      IF "Tipo Persona" = '' THEN
+        EXIT;
+
+      IF NOT "Confirmacion servicios enviada" THEN
+        EXIT;
+
+      IF NOT lrTTOO.GET("TourOperador Venta") THEN
+        EXIT;
+
+      IF NOT lrTTOO."Requiere confirmaci¢n por rsv" THEN
+        EXIT;
+
+      IF ("Tipo Persona" <> xRec."Tipo Persona") OR
+         (Nombre <> xRec.Nombre) OR
+         (Edad <> xRec.Edad) OR
+         ("Tipo Operacion" <> xRec."Tipo Operacion") THEN //+$014
+        VALIDATE("Confirmacion servicios enviada", FALSE);
+    END;
+
+    LOCAL PROCEDURE _ComprobarTransferAgrupado@1000000000();
+    VAR
+      lrRsvTra@1000000000 : Record 7009744;
+    BEGIN
+      // _ComprobarTransferAgrupado
+
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Delegacion, lrRsvTra."N§ Interno");
+      lrRsvTra.SETRANGE (Delegacion          , Delegacion);
+      lrRsvTra.SETRANGE ("N§ Interno"        , "N§ Interno");
+      lrRsvTra.SETFILTER("Agrupacion entrada", '<>%1', 0);
+      IF lrRsvTra.FINDFIRST THEN
+        ERROR(Text027);
+
+      lrRsvTra.RESET;
+      lrRsvTra.SETCURRENTKEY(Delegacion, lrRsvTra."N§ Interno");
+      lrRsvTra.SETRANGE (Delegacion         , Delegacion);
+      lrRsvTra.SETRANGE ("N§ Interno"       , "N§ Interno");
+      lrRsvTra.SETFILTER("Agrupacion salida", '<>%1', 0);
+      IF lrRsvTra.FINDFIRST THEN
+        ERROR(Text027);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 26102011 Rellenar la temporada como el a¤o de la fecha de creacion de la reserva
+
+      $002 AJS 08112012 Rellenar el idioma a partir del idioma definido en el touroperador
+
+      $003 AJS 08022013 Nuevo campo Tipo importacion para identificar las que entraron a traves de Web Services
+
+      $004 AJS 20062013 El campo Tipo Persona de la tabla periodo no es util, elimino su mantenimiento
+
+      $005 AJS 26022014 Elimino la referencia a la tabla Bloqueo (obsoleta)
+
+      $006 AJS 17032014 CNT-OC-14035, Nuevo campo "Confirmacion servicios enviado" para controlar si hemos enviado la confirmacion a los
+                        touroperadores
+
+      $007 AJS 17032014 No es necesario pasar los campos "N§ Fichero" y "N§ Linea" a la reserva de hotel
+
+      $008 AJS 18032014 CNT-OC-14035, Nuevo campo "Texto confirmacion" para almacenar el texto completo que se enviar al Touroperador
+
+      $009 AJS 18032014 CNT-OC-14035, Cuando se borra la cabecera volvemos a generar el fichero de confirmacion
+
+      $010 AJS 07042014 CNT-OC-14042, Cuando se borra la cabecera borramos todos los servicios de traslado en destino asociados
+
+      $011 AJS 23042014 Los cambios de touroperador tienen que afectar a Traslados en destino
+
+      $012 AJS 28042014 CNT pide que la reserva se cree sin Touroperador ni bono x defecto
+
+      $013 AJS 28042014 La confirmacion por cambio de Bono solo se hace si el bono estaba rellenado
+
+      $014 AJS 09062014 CNT-OC-14046, Nuevo campo Tipo Operacion para marcar las operaciones segun sean charter o regular, puede afectar
+                        al precio transfer
+
+      $015 MNC 22072014 CNT-LP-14054 No se pueden usar TTOO bloqueados
+
+      $016 ARM 16092014 CNT-CAR-14082 Nuevo campo canal venta
+
+      $017 AJS 29090214 Traducciones
+
+      $018 AJS 29092014 No dejamos cambiar el touroperador si la reserva est  agrupada de llegada o de salida
+
+      $019 ARM 01102014 CNT-CAR-14063 Nuevos campos User Id, User Type y Reserva online para API transfer
+
+      $020 AJS 28102014 Amplio el campo Nombre a Text50
+
+      $021 AJS 13022015 En ocasiones el campo Touroperador me vendr  rellenado desde un proceso
+
+      $022 AJS 04032015 Traer el canal de venta del touroperador de venta
+    }
+    END.
+  }
+}

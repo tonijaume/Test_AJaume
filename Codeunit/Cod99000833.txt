@@ -1,0 +1,757 @@
+OBJECT Codeunit 99000833 Req. Line-Reserve
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 337=rimd,
+                TableData 99000849=rmd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Reserved quantity cannot be greater than %1;ESP=La cantidad reservada no puede ser mayor que %1';
+      Text002@1001 : TextConst 'ENU=must be filled in when a quantity is reserved;ESP=se debe rellenar cuando se ha reservado una cantidad';
+      Text003@1002 : TextConst 'ENU=must not be filled in when a quantity is reserved;ESP=no se debe rellenar cuando se ha reservado una cantidad';
+      Text004@1003 : TextConst 'ENU=must not be changed when a quantity is reserved;ESP=no se debe modificar cuando se ha reservado una cantidad';
+      Text005@1004 : TextConst 'ENU=Codeunit is not initialized correctly.;ESP=Codeunit no iniciada correctamente.';
+      CalcReservEntry@1005 : Record 337;
+      CreateReservEntry@1006 : Codeunit 99000830;
+      ReservEngineMgt@1007 : Codeunit 99000831;
+      ReservMgt@1008 : Codeunit 99000845;
+      Blocked@1009 : Boolean;
+      SetFromType@1010 : ' ,Sales,Requisition Line,Purchase,Item Journal,BOM Journal,Item Ledger Entry';
+      SetFromSubtype@1011 : Integer;
+      SetFromID@1012 : Code[20];
+      SetFromBatchName@1013 : Code[10];
+      SetFromProdOrderLine@1014 : Integer;
+      SetFromRefNo@1015 : Integer;
+      SetFromVariantCode@1016 : Code[10];
+      SetFromLocationCode@1017 : Code[10];
+      SetFromBinNo@1018 : Code[20];
+      SetFromSerialNo@1019 : Code[20];
+      SetFromLotNo@1020 : Code[20];
+      SetFromQtyPerUOM@1021 : Decimal;
+
+    PROCEDURE CreateReservation@2(VAR ReqLine@1000 : Record 246;Description@1001 : Text[50];ExpectedReceiptDate@1002 : Date;Quantity@1003 : Decimal;ForSerialNo@1004 : Code[20];ForLotNo@1005 : Code[20]);
+    VAR
+      ShipmentDate@1007 : Date;
+    BEGIN
+      IF SetFromType = 0 THEN
+        ERROR(Text005);
+
+      ReqLine.TESTFIELD(Type,ReqLine.Type::Item);
+      ReqLine.TESTFIELD("No.");
+      ReqLine.TESTFIELD("Due Date");
+      ReqLine.CALCFIELDS("Reserved Qty. (Base)");
+      IF ABS(ReqLine."Quantity (Base)") < ABS(ReqLine."Reserved Qty. (Base)") + Quantity THEN
+        ERROR(
+          Text000,
+          ABS(ReqLine."Quantity (Base)") - ABS(ReqLine."Reserved Qty. (Base)"));
+
+      ReqLine.TESTFIELD("Variant Code",SetFromVariantCode);
+      ReqLine.TESTFIELD("Location Code",SetFromLocationCode);
+
+      IF Quantity < 0 THEN
+        ShipmentDate := ReqLine."Due Date"
+      ELSE BEGIN
+        ShipmentDate := ExpectedReceiptDate;
+        ExpectedReceiptDate := ReqLine."Due Date";
+      END;
+
+      IF ReqLine."Planning Flexibility" <> ReqLine."Planning Flexibility"::Unlimited THEN
+        CreateReservEntry.SetPlanningFlexibility(ReqLine."Planning Flexibility");
+
+      CreateReservEntry.CreateReservEntryFor(
+        DATABASE::"Requisition Line",0,
+        ReqLine."Worksheet Template Name",ReqLine."Journal Batch Name",0,ReqLine."Line No.",
+        ReqLine."Qty. per Unit of Measure",Quantity,ForSerialNo,ForLotNo);
+      CreateReservEntry.CreateReservEntryFrom(
+        SetFromType,SetFromSubtype,SetFromID,SetFromBatchName,SetFromProdOrderLine,SetFromRefNo,
+        SetFromQtyPerUOM,SetFromSerialNo,SetFromLotNo);
+      CreateReservEntry.CreateReservEntry(
+        ReqLine."No.",ReqLine."Variant Code",ReqLine."Location Code",
+        Description,ExpectedReceiptDate,ShipmentDate,0);
+
+      SetFromType := 0;
+    END;
+
+    PROCEDURE CreateReservationSetFrom@3(FromType@1000 : ' ,Sales,Requisition Line,Purchase,Item Journal,BOM Journal,Item Ledger Entry';FromSubtype@1001 : Integer;FromID@1002 : Code[20];FromBatchName@1003 : Code[10];FromProdOrderLine@1004 : Integer;FromRefNo@1005 : Integer;FromVariantCode@1006 : Code[10];FromLocationCode@1007 : Code[10];FromSerialNo@1009 : Code[20];FromLotNo@1010 : Code[20];FromQtyPerUOM@1011 : Decimal);
+    BEGIN
+      SetFromType := FromType;
+      SetFromSubtype := FromSubtype;
+      SetFromID := FromID;
+      SetFromBatchName := FromBatchName;
+      SetFromProdOrderLine := FromProdOrderLine;
+      SetFromRefNo := FromRefNo;
+      SetFromVariantCode := FromVariantCode;
+      SetFromLocationCode := FromLocationCode;
+      SetFromSerialNo := FromSerialNo;
+      SetFromLotNo := FromLotNo;
+      SetFromQtyPerUOM := FromQtyPerUOM;
+    END;
+
+    PROCEDURE FilterReservFor@11(VAR FilterReservEntry@1000 : Record 337;ReqLine@1001 : Record 246);
+    BEGIN
+      FilterReservEntry.SETRANGE("Source Type",DATABASE::"Requisition Line");
+      FilterReservEntry.SETRANGE("Source Subtype",0);
+      FilterReservEntry.SETRANGE("Source ID",ReqLine."Worksheet Template Name");
+      FilterReservEntry.SETRANGE("Source Batch Name",ReqLine."Journal Batch Name");
+      FilterReservEntry.SETRANGE("Source Prod. Order Line",0);
+      FilterReservEntry.SETRANGE("Source Ref. No.",ReqLine."Line No.");
+    END;
+
+    PROCEDURE Caption@29(ReqLine@1001 : Record 246) CaptionText@1000 : Text[80];
+    BEGIN
+      CaptionText :=
+        STRSUBSTNO(
+          '%1 %2 %3',ReqLine."Worksheet Template Name",ReqLine."Journal Batch Name",ReqLine."No.");
+    END;
+
+    PROCEDURE FindReservEntry@4(ReqLine@1000 : Record 246;VAR ReservEntry@1001 : Record 337) : Boolean;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      FilterReservFor(ReservEntry,ReqLine);
+      EXIT(ReservEntry.FINDLAST);
+    END;
+
+    PROCEDURE VerifyChange@60(VAR NewReqLine@1000 : Record 246;VAR OldReqLine@1001 : Record 246);
+    VAR
+      ReqLine@1005 : Record 246;
+      TempReservEntry@1002 : Record 337;
+      ShowError@1003 : Boolean;
+      HasError@1004 : Boolean;
+    BEGIN
+      IF (NewReqLine.Type <> NewReqLine.Type::Item) AND (OldReqLine.Type <> OldReqLine.Type::Item) THEN
+        EXIT;
+      IF Blocked THEN
+        EXIT;
+      IF NewReqLine."Line No." = 0 THEN
+        IF NOT ReqLine.GET(NewReqLine."Worksheet Template Name",NewReqLine."Journal Batch Name",NewReqLine."Line No.")
+        THEN
+          EXIT;
+
+      NewReqLine.CALCFIELDS("Reserved Qty. (Base)");
+      ShowError := NewReqLine."Reserved Qty. (Base)" <> 0;
+
+      IF (NewReqLine."Due Date" = 0D) THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Due Date",Text002)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."Sales Order No." <> '' THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Sales Order No.",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."Sales Order Line No." <> 0 THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Sales Order Line No.",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."Sell-to Customer No." <> '' THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Sell-to Customer No.",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."Variant Code" <> OldReqLine."Variant Code" THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Variant Code",Text004)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."No." <> OldReqLine."No." THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("No.",Text004)
+        ELSE
+          HasError := TRUE;
+
+      IF (NewReqLine."Location Code" <> OldReqLine."Location Code") THEN
+        IF ShowError THEN
+          NewReqLine.FIELDERROR("Location Code",Text004)
+        ELSE
+          HasError := TRUE;
+
+      IF NewReqLine."Line No." <> OldReqLine."Line No." THEN
+        HasError := TRUE;
+
+      IF HasError THEN
+        IF (NewReqLine."No." <> OldReqLine."No.") OR
+           FindReservEntry(NewReqLine,TempReservEntry)
+        THEN BEGIN
+          IF (NewReqLine."No." <> OldReqLine."No.") THEN BEGIN
+            ReservMgt.SetReqLine(OldReqLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+            ReservMgt.SetReqLine(NewReqLine);
+          END ELSE BEGIN
+            ReservMgt.SetReqLine(NewReqLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+          END;
+          ReservMgt.AutoTrack(NewReqLine."Quantity (Base)");
+        END;
+
+      IF HasError OR (NewReqLine."Due Date" <> OldReqLine."Due Date")
+      THEN BEGIN
+        AssignForPlanning(NewReqLine);
+        IF (NewReqLine."No." <> OldReqLine."No.") OR
+           (NewReqLine."Variant Code" <> OldReqLine."Variant Code") OR
+           (NewReqLine."Location Code" <> OldReqLine."Location Code")
+        THEN
+          AssignForPlanning(OldReqLine);
+      END;
+    END;
+
+    PROCEDURE VerifyQuantity@1(VAR NewReqLine@1000 : Record 246;VAR OldReqLine@1001 : Record 246);
+    VAR
+      ReqLine@1002 : Record 246;
+    BEGIN
+      IF Blocked THEN
+        EXIT;
+
+      WITH NewReqLine DO BEGIN
+        IF "Line No." = OldReqLine."Line No." THEN
+          IF "Quantity (Base)" = OldReqLine."Quantity (Base)" THEN
+            EXIT;
+        IF "Line No." = 0 THEN
+          IF NOT ReqLine.GET("Worksheet Template Name","Journal Batch Name","Line No.") THEN
+            EXIT;
+        ReservMgt.SetReqLine(NewReqLine);
+        IF "Qty. per Unit of Measure" <> OldReqLine."Qty. per Unit of Measure" THEN
+          ReservMgt.ModifyUnitOfMeasure;
+        IF "Quantity (Base)" * OldReqLine."Quantity (Base)" < 0 THEN
+          ReservMgt.DeleteReservEntries(TRUE,0)
+        ELSE
+          ReservMgt.DeleteReservEntries(FALSE,"Quantity (Base)");
+        ReservMgt.ClearSurplus;
+        ReservMgt.AutoTrack("Quantity (Base)");
+        AssignForPlanning(NewReqLine);
+      END;
+    END;
+
+    PROCEDURE UpdatePlanningFlexibility@7(VAR ReqLine@1000 : Record 246);
+    VAR
+      ReservEntry@1001 : Record 337;
+    BEGIN
+      IF FindReservEntry(ReqLine,ReservEntry) THEN
+        ReservEntry.MODIFYALL("Planning Flexibility",ReqLine."Planning Flexibility");
+    END;
+
+    PROCEDURE TransferReqLineToReqLine@10(VAR OldReqLine@1000 : Record 246;VAR NewReqLine@1001 : Record 246;TransferQty@1002 : Decimal;TransferAll@1003 : Boolean);
+    VAR
+      OldReservEntry@1004 : Record 337;
+      OldReservEntry2@1005 : Record 337;
+      NewReservEntry@1006 : Record 337;
+      ActionMessageEntry@1007 : Record 99000849;
+      ActionMessageEntry2@1008 : Record 99000849;
+      CurrentSubtype@1011 : Integer;
+      Status@1009 : 'Reservation,Tracking,Surplus,Prospect';
+      NoOfLoops@1010 : Integer;
+      i@1012 : Integer;
+    BEGIN
+      IF NOT FindReservEntry(OldReqLine,OldReservEntry) THEN
+        EXIT;
+
+      OldReservEntry.Lock;
+
+      NewReqLine.TESTFIELD("No.",OldReqLine."No.");
+      NewReqLine.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+      NewReqLine.TESTFIELD("Location Code",OldReqLine."Location Code");
+
+      IF TransferAll THEN BEGIN
+        NoOfLoops := 1;
+        IF OldReqLine."Ref. Order Type" = OldReqLine."Ref. Order Type"::Transfer THEN
+          NoOfLoops := 2;
+
+        FOR i := 1 TO NoOfLoops DO BEGIN
+          CurrentSubtype := i - 1;
+
+          IF CurrentSubtype = 1 THEN BEGIN // Outbound
+            IF NewReqLine."Order Promising ID" <> '' THEN BEGIN
+              OldReservEntry.SETRANGE("Source Batch Name",'');
+              OldReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+              OldReservEntry.SETRANGE("Source Subtype",NewReqLine."Order Promising Line No.");
+              OldReservEntry.SETRANGE("Source ID",NewReqLine."Order Promising ID");
+              OldReservEntry.SETRANGE("Source Ref. No.",NewReqLine."Order Promising Line ID");
+            END;
+          END;
+          OldReservEntry.SETRANGE("Source Subtype",CurrentSubtype);
+
+          IF OldReservEntry.FINDSET THEN BEGIN
+            OldReservEntry.TESTFIELD("Qty. per Unit of Measure",NewReqLine."Qty. per Unit of Measure");
+            REPEAT
+              OldReservEntry.TESTFIELD("Item No.",OldReqLine."No.");
+              OldReservEntry.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+              IF CurrentSubtype = 0 THEN
+                OldReservEntry.TESTFIELD("Location Code",OldReqLine."Location Code")
+              ELSE
+                IF NewReqLine."Order Promising ID" = '' THEN
+                  OldReservEntry.TESTFIELD("Location Code",OldReqLine."Transfer-from Code");
+
+              NewReservEntry := OldReservEntry;
+              NewReservEntry."Source ID" := NewReqLine."Worksheet Template Name";
+              NewReservEntry."Source Batch Name" := NewReqLine."Journal Batch Name";
+              NewReservEntry."Source Prod. Order Line" := 0;
+              NewReservEntry."Source Ref. No." := NewReqLine."Line No.";
+
+              IF OldReservEntry."Reservation Status" = OldReservEntry."Reservation Status"::Surplus THEN BEGIN
+                ActionMessageEntry.FilterFromReservEntry(OldReservEntry);
+                IF ActionMessageEntry.FINDSET THEN REPEAT
+                  ActionMessageEntry2 := ActionMessageEntry;
+                  ActionMessageEntry2.TransferFromReservEntry(NewReservEntry);
+                  ActionMessageEntry2.MODIFY;
+                UNTIL ActionMessageEntry.NEXT = 0;
+                NewReservEntry.MODIFY;
+              END ELSE
+                IF OldReservEntry2.GET(OldReservEntry."Entry No.",NOT OldReservEntry.Positive) THEN BEGIN
+                  IF CreateReservEntry.HasSamePointer(OldReservEntry2,NewReservEntry) THEN BEGIN
+                    OldReservEntry2.DELETE;
+                    NewReservEntry.DELETE;
+                  END ELSE
+                    NewReservEntry.MODIFY;
+                END ELSE
+                  NewReservEntry.MODIFY;
+
+            UNTIL (OldReservEntry.NEXT = 0);
+          END;
+        END;
+      END ELSE
+        FOR Status := Status::Reservation TO Status::Prospect DO BEGIN
+          IF TransferQty = 0 THEN
+            EXIT;
+          OldReservEntry.SETRANGE("Reservation Status",Status);
+
+          IF OldReservEntry.FINDSET THEN
+            REPEAT
+              OldReservEntry.TESTFIELD("Item No.",OldReqLine."No.");
+              OldReservEntry.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+              OldReservEntry.TESTFIELD("Location Code",OldReqLine."Location Code");
+
+              TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Requisition Line",
+                0,NewReqLine."Worksheet Template Name",NewReqLine."Journal Batch Name",0,
+                NewReqLine."Line No.",NewReqLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+            UNTIL (OldReservEntry.NEXT = 0) OR (TransferQty = 0);
+        END;
+    END;
+
+    PROCEDURE TransferReqLineToPurchLine@41(VAR ReqLine@1000 : Record 246;VAR PurchLine@1001 : Record 39;TransferQty@1002 : Decimal;TransferAll@1003 : Boolean);
+    VAR
+      OldReservEntry@1004 : Record 337;
+      OldReservEntry2@1005 : Record 337;
+      NewReservEntry@1006 : Record 337;
+      ActionMessageEntry@1007 : Record 99000849;
+      ActionMessageEntry2@1008 : Record 99000849;
+      Status@1009 : 'Reservation,Tracking,Surplus,Prospect';
+    BEGIN
+      IF NOT FindReservEntry(ReqLine,OldReservEntry) THEN
+        EXIT;
+
+      OldReservEntry.Lock;
+
+      PurchLine.TESTFIELD("No.",ReqLine."No.");
+      PurchLine.TESTFIELD("Variant Code",ReqLine."Variant Code");
+      PurchLine.TESTFIELD("Location Code",ReqLine."Location Code");
+
+      IF TransferAll THEN BEGIN
+        OldReservEntry.FINDSET;
+        OldReservEntry.TESTFIELD("Qty. per Unit of Measure",PurchLine."Qty. per Unit of Measure");
+
+        REPEAT
+          OldReservEntry.TESTFIELD("Item No.",ReqLine."No.");
+          OldReservEntry.TESTFIELD("Variant Code",ReqLine."Variant Code");
+          OldReservEntry.TESTFIELD("Location Code",ReqLine."Location Code");
+
+          NewReservEntry := OldReservEntry;
+          NewReservEntry."Source Type" := DATABASE::"Purchase Line";
+          NewReservEntry."Source Subtype" := PurchLine."Document Type";
+          NewReservEntry."Source ID" := PurchLine."Document No.";
+          NewReservEntry."Source Batch Name" := '';
+          NewReservEntry."Source Prod. Order Line" := 0;
+          NewReservEntry."Source Ref. No." := PurchLine."Line No.";
+
+          IF OldReservEntry."Reservation Status" = OldReservEntry."Reservation Status"::Surplus THEN BEGIN
+            ActionMessageEntry.FilterFromReservEntry(OldReservEntry);
+            IF ActionMessageEntry.FINDSET THEN REPEAT
+              ActionMessageEntry2 := ActionMessageEntry;
+              ActionMessageEntry2.TransferFromReservEntry(NewReservEntry);
+              ActionMessageEntry2.MODIFY;
+            UNTIL ActionMessageEntry.NEXT = 0;
+            NewReservEntry.MODIFY;
+          END ELSE
+            IF OldReservEntry2.GET(OldReservEntry."Entry No.",NOT OldReservEntry.Positive) THEN BEGIN
+              IF CreateReservEntry.HasSamePointer(OldReservEntry2,NewReservEntry) THEN BEGIN
+                OldReservEntry2.DELETE;
+                NewReservEntry.DELETE;
+              END ELSE
+                NewReservEntry.MODIFY;
+            END ELSE
+              NewReservEntry.MODIFY;
+
+        UNTIL OldReservEntry.NEXT = 0;
+      END ELSE
+        FOR Status := Status::Reservation TO Status::Prospect DO BEGIN
+          IF TransferQty = 0 THEN
+            EXIT;
+          OldReservEntry.SETRANGE("Reservation Status",Status);
+
+          IF OldReservEntry.FINDSET THEN
+            REPEAT
+              OldReservEntry.TESTFIELD("Item No.",ReqLine."No.");
+              OldReservEntry.TESTFIELD("Variant Code",ReqLine."Variant Code");
+              OldReservEntry.TESTFIELD("Location Code",ReqLine."Location Code");
+
+              TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Purchase Line",
+                PurchLine."Document Type",PurchLine."Document No.",'',0,
+                PurchLine."Line No.",PurchLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+            UNTIL (OldReservEntry.NEXT = 0) OR (TransferQty = 0);
+        END;
+    END;
+
+    PROCEDURE TransferPlanningLineToPOLine@31(VAR OldReqLine@1000 : Record 246;VAR NewProdOrderLine@1001 : Record 5406;TransferQty@1002 : Decimal;TransferAll@1003 : Boolean);
+    VAR
+      OldReservEntry@1004 : Record 337;
+      OldReservEntry2@1005 : Record 337;
+      NewReservEntry@1006 : Record 337;
+      ActionMessageEntry@1007 : Record 99000849;
+      ActionMessageEntry2@1008 : Record 99000849;
+      Status@1009 : 'Reservation,Tracking,Surplus,Prospect';
+    BEGIN
+      IF NOT FindReservEntry(OldReqLine,OldReservEntry) THEN
+        EXIT;
+
+      OldReservEntry.Lock;
+
+      NewProdOrderLine.TESTFIELD("Item No.",OldReqLine."No.");
+      NewProdOrderLine.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+      NewProdOrderLine.TESTFIELD("Location Code",OldReqLine."Location Code");
+
+      IF TransferAll THEN BEGIN
+        OldReservEntry.FINDSET;
+        OldReservEntry.TESTFIELD("Qty. per Unit of Measure",NewProdOrderLine."Qty. per Unit of Measure");
+
+        REPEAT
+          OldReservEntry.TESTFIELD("Item No.",OldReqLine."No.");
+          OldReservEntry.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+          OldReservEntry.TESTFIELD("Location Code",OldReqLine."Location Code");
+
+          NewReservEntry := OldReservEntry;
+          NewReservEntry."Source Type" := DATABASE::"Prod. Order Line";
+          NewReservEntry."Source Subtype" := NewProdOrderLine.Status;
+          NewReservEntry."Source ID" := NewProdOrderLine."Prod. Order No.";
+          NewReservEntry."Source Batch Name" := '';
+          NewReservEntry."Source Prod. Order Line" := NewProdOrderLine."Line No.";
+          NewReservEntry."Source Ref. No." := 0;
+
+          IF OldReservEntry."Reservation Status" = OldReservEntry."Reservation Status"::Surplus THEN BEGIN
+            ActionMessageEntry.FilterFromReservEntry(OldReservEntry);
+            IF ActionMessageEntry.FINDSET THEN REPEAT
+              ActionMessageEntry2 := ActionMessageEntry;
+              ActionMessageEntry2.TransferFromReservEntry(NewReservEntry);
+              ActionMessageEntry2.MODIFY;
+            UNTIL ActionMessageEntry.NEXT = 0;
+            NewReservEntry.MODIFY;
+          END ELSE
+            IF OldReservEntry2.GET(OldReservEntry."Entry No.",NOT OldReservEntry.Positive) THEN BEGIN
+              IF CreateReservEntry.HasSamePointer(OldReservEntry2,NewReservEntry) THEN BEGIN
+                OldReservEntry2.DELETE;
+                NewReservEntry.DELETE;
+              END ELSE
+                NewReservEntry.MODIFY;
+            END ELSE
+              NewReservEntry.MODIFY;
+
+        UNTIL (OldReservEntry.NEXT = 0);
+      END ELSE
+        FOR Status := Status::Reservation TO Status::Prospect DO BEGIN
+          IF TransferQty = 0 THEN
+            EXIT;
+          OldReservEntry.SETRANGE("Reservation Status",Status);
+
+          IF OldReservEntry.FINDSET THEN
+            REPEAT
+              OldReservEntry.TESTFIELD("Item No.",OldReqLine."No.");
+              OldReservEntry.TESTFIELD("Variant Code",OldReqLine."Variant Code");
+              OldReservEntry.TESTFIELD("Location Code",OldReqLine."Location Code");
+
+              TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Prod. Order Line",
+                NewProdOrderLine.Status,NewProdOrderLine."Prod. Order No.",'',NewProdOrderLine."Line No.",0,
+                NewProdOrderLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+            UNTIL (OldReservEntry.NEXT = 0) OR (TransferQty = 0);
+        END;
+    END;
+
+    PROCEDURE TransferReqLineToTransLine@12(VAR ReqLine@1000 : Record 246;VAR TransLine@1001 : Record 5741;TransferQty@1002 : Decimal;TransferAll@1003 : Boolean);
+    VAR
+      OldReservEntry@1004 : Record 337;
+      OldReservEntry2@1005 : Record 337;
+      NewReservEntry@1006 : Record 337;
+      ActionMessageEntry@1007 : Record 99000849;
+      ActionMessageEntry2@1008 : Record 99000849;
+      OrigTransferQty@1011 : Decimal;
+      Status@1009 : 'Reservation,Tracking,Surplus,Prospect';
+      Direction@1010 : 'Outbound,Inbound';
+      Subtype@1012 : 'Outbound,Inbound';
+    BEGIN
+      IF NOT FindReservEntry(ReqLine,OldReservEntry) THEN
+        EXIT;
+
+      OldReservEntry.Lock;
+
+      TransLine.TESTFIELD("Item No.",ReqLine."No.");
+      TransLine.TESTFIELD("Variant Code",ReqLine."Variant Code");
+      TransLine.TESTFIELD("Transfer-to Code",ReqLine."Location Code");
+      TransLine.TESTFIELD("Transfer-from Code",ReqLine."Transfer-from Code");
+
+      IF TransferAll THEN BEGIN
+        OldReservEntry.FINDSET;
+        OldReservEntry.TESTFIELD("Qty. per Unit of Measure",TransLine."Qty. per Unit of Measure");
+
+        REPEAT
+          Direction := 1 - OldReservEntry."Source Subtype"; // Swap 0/1 (outbound/inbound)
+          OldReservEntry.TESTFIELD("Item No.",ReqLine."No.");
+          OldReservEntry.TESTFIELD("Variant Code",ReqLine."Variant Code");
+          IF (Direction = Direction::Inbound) OR (OldReservEntry."Source Type" <> DATABASE::"Transfer Line") THEN
+            OldReservEntry.TESTFIELD("Location Code",ReqLine."Location Code")
+          ELSE
+            OldReservEntry.TESTFIELD("Location Code",ReqLine."Transfer-from Code");
+
+          NewReservEntry := OldReservEntry;
+          NewReservEntry."Source Type" := DATABASE::"Transfer Line";
+          IF (Direction = Direction::Inbound) THEN
+            NewReservEntry."Source Subtype" := 1
+          ELSE
+            NewReservEntry."Source Subtype" := 0;
+          NewReservEntry."Source ID" := TransLine."Document No.";
+          NewReservEntry."Source Batch Name" := '';
+          NewReservEntry."Source Prod. Order Line" := TransLine."Derived From Line No.";
+          NewReservEntry."Source Ref. No." := TransLine."Line No.";
+
+          IF OldReservEntry."Reservation Status" = OldReservEntry."Reservation Status"::Surplus THEN BEGIN
+            ActionMessageEntry.FilterFromReservEntry(OldReservEntry);
+            IF ActionMessageEntry.FINDSET THEN REPEAT
+              ActionMessageEntry2 := ActionMessageEntry;
+              ActionMessageEntry2.TransferFromReservEntry(NewReservEntry);
+              ActionMessageEntry2.MODIFY;
+            UNTIL ActionMessageEntry.NEXT = 0;
+            NewReservEntry.MODIFY;
+          END ELSE
+            IF OldReservEntry2.GET(OldReservEntry."Entry No.",NOT OldReservEntry.Positive) THEN BEGIN
+              IF CreateReservEntry.HasSamePointer(OldReservEntry2,NewReservEntry) THEN BEGIN
+                OldReservEntry2.DELETE;
+                NewReservEntry.DELETE;
+              END ELSE
+                NewReservEntry.MODIFY;
+            END ELSE
+              NewReservEntry.MODIFY;
+
+        UNTIL (OldReservEntry.NEXT = 0);
+      END ELSE BEGIN
+        OrigTransferQty := TransferQty;
+
+        FOR Subtype := Subtype::Outbound TO Subtype::Inbound DO BEGIN
+          OldReservEntry.SETRANGE("Source Subtype",Subtype);
+          TransferQty := OrigTransferQty;
+          IF TransferQty = 0 THEN
+            EXIT;
+
+          FOR Status := Status::Reservation TO Status::Prospect DO BEGIN
+            OldReservEntry.SETRANGE("Reservation Status",Status);
+
+            IF OldReservEntry.FINDSET THEN
+              REPEAT
+                Direction := 1 - OldReservEntry."Source Subtype";  // Swap 0/1 (outbound/inbound)
+                OldReservEntry.TESTFIELD("Item No.",ReqLine."No.");
+                OldReservEntry.TESTFIELD("Variant Code",ReqLine."Variant Code");
+                IF Direction = Direction::Inbound THEN
+                  OldReservEntry.TESTFIELD("Location Code",ReqLine."Location Code")
+                ELSE
+                  OldReservEntry.TESTFIELD("Location Code",ReqLine."Transfer-from Code");
+
+                TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Transfer Line",
+                  Direction,TransLine."Document No.",'',TransLine."Derived From Line No.",
+                  TransLine."Line No.",TransLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+              UNTIL (OldReservEntry.NEXT = 0) OR (TransferQty = 0);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE AssignForPlanning@5(VAR ReqLine@1000 : Record 246);
+    VAR
+      PlanningAssignment@1001 : Record 99000850;
+    BEGIN
+      WITH ReqLine DO BEGIN
+        IF Type <> Type::Item THEN
+          EXIT;
+        IF ReqLine."No." <> '' THEN
+          PlanningAssignment.ChkAssignOne("No.","Variant Code","Location Code",WORKDATE);
+      END;
+    END;
+
+    PROCEDURE Block@6(SetBlocked@1000 : Boolean);
+    BEGIN
+      Blocked := SetBlocked;
+    END;
+
+    PROCEDURE RenameLine@15(VAR NewReqLine@1001 : Record 246;VAR OldReqLine@1000 : Record 246);
+    BEGIN
+      ReservEngineMgt.RenamePointer(DATABASE::"Requisition Line",
+        0,
+        OldReqLine."Worksheet Template Name",
+        OldReqLine."Journal Batch Name",
+        0,
+        OldReqLine."Line No.",
+        0,
+        NewReqLine."Worksheet Template Name",
+        NewReqLine."Journal Batch Name",
+        0,
+        NewReqLine."Line No.");
+    END;
+
+    PROCEDURE DeleteLine@8(VAR ReqLine@1000 : Record 246);
+    VAR
+      ProdOrderComp@1001 : Record 5407;
+      CalcReservEntry4@1002 : Record 337;
+      ProdOrderCompReserv@1004 : Codeunit 99000838;
+      QtyTracked@1003 : Decimal;
+    BEGIN
+      IF Blocked THEN
+        EXIT;
+
+      WITH ReqLine DO BEGIN
+        ReservMgt.SetReqLine(ReqLine);
+        ReservMgt.SetItemTrackingHandling(1); // Allow Deletion
+        ReservMgt.DeleteReservEntries(TRUE,0);
+        CALCFIELDS("Reserved Qty. (Base)");
+        AssignForPlanning(ReqLine);
+
+        // Retracking of components:
+        IF ("Action Message" = "Action Message"::Cancel) AND
+          ("Planning Line Origin" = "Planning Line Origin"::Planning) AND
+          (ReqLine."Ref. Order Type" = ReqLine."Ref. Order Type"::"Prod. Order")
+        THEN BEGIN
+          ProdOrderComp.SETCURRENTKEY(Status,"Prod. Order No.","Prod. Order Line No.");
+          ProdOrderComp.SETRANGE(Status,ReqLine."Ref. Order Status");
+          ProdOrderComp.SETRANGE("Prod. Order No.","Ref. Order No.");
+          ProdOrderComp.SETRANGE("Prod. Order Line No.","Ref. Line No.");
+          IF ProdOrderComp.FINDSET THEN
+            REPEAT
+              ProdOrderComp.CALCFIELDS("Reserved Qty. (Base)");
+              QtyTracked := ProdOrderComp."Reserved Qty. (Base)";
+              CalcReservEntry4.RESET;
+              CalcReservEntry4.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype");
+              ProdOrderCompReserv.FilterReservFor(CalcReservEntry4,ProdOrderComp);
+              CalcReservEntry4.SETFILTER("Reservation Status",'<>%1',CalcReservEntry4."Reservation Status"::Reservation);
+              IF CalcReservEntry4.FINDSET THEN
+                REPEAT
+                  QtyTracked := QtyTracked - CalcReservEntry4."Quantity (Base)";
+                UNTIL CalcReservEntry4.NEXT = 0;
+              ReservMgt.SetProdOrderComponent(ProdOrderComp);
+              ReservMgt.DeleteReservEntries(QtyTracked = 0,QtyTracked);
+              ReservMgt.AutoTrack(ProdOrderComp."Remaining Qty. (Base)");
+            UNTIL ProdOrderComp.NEXT = 0;
+        END
+      END;
+    END;
+
+    PROCEDURE UpdateDerivedTracking@9(VAR ReqLine@1000 : Record 246);
+    VAR
+      ReservEntry@1001 : Record 337;
+      ReservEntry2@1002 : Record 337;
+      ActionMessageEntry@1003 : Record 99000849;
+      OK@1004 : Boolean;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      ActionMessageEntry.SETCURRENTKEY(ActionMessageEntry."Reservation Entry");
+
+      WITH ReservEntry DO BEGIN
+        SETFILTER("Expected Receipt Date",'<>%1',ReqLine."Due Date");
+        SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype",
+          "Source Batch Name","Source Prod. Order Line");
+        CASE ReqLine."Ref. Order Type" OF
+          ReqLine."Ref. Order Type"::Purchase:
+            BEGIN
+              SETRANGE("Source ID",ReqLine."Ref. Order No.");
+              SETRANGE("Source Ref. No.",ReqLine."Ref. Line No.");
+              SETRANGE("Source Type",DATABASE::"Purchase Line");
+              SETRANGE("Source Subtype",1);
+              OK := FINDSET;
+            END;
+          ReqLine."Ref. Order Type"::"Prod. Order":
+            BEGIN
+              SETRANGE("Source ID",ReqLine."Ref. Order No.");
+              SETRANGE("Source Type",DATABASE::"Prod. Order Line");
+              SETRANGE("Source Subtype",ReqLine."Ref. Order Status");
+              SETRANGE("Source Prod. Order Line",ReqLine."Ref. Line No.");
+              OK := FINDSET;
+            END;
+        END;
+
+        IF OK THEN REPEAT
+          ReservEntry2 := ReservEntry;
+          ReservEntry2."Expected Receipt Date" := ReqLine."Due Date";
+          ReservEntry2.MODIFY;
+          IF ReservEntry2.GET(ReservEntry2."Entry No.",NOT ReservEntry2.Positive) THEN BEGIN
+            ReservEntry2."Expected Receipt Date" := ReqLine."Due Date";
+            ReservEntry2.MODIFY;
+          END;
+          ActionMessageEntry.SETRANGE("Reservation Entry",ReservEntry."Entry No.");
+          ActionMessageEntry.DELETEALL;
+        UNTIL NEXT = 0;
+
+      END;
+    END;
+
+    PROCEDURE CallItemTracking@14(VAR ReqLine@1003 : Record 246);
+    VAR
+      TrackingSpecification@1001 : Record 336;
+      ItemTrackingForm@1002 : Form 6510;
+    BEGIN
+      InitTrackingSpecification(ReqLine,TrackingSpecification);
+      ItemTrackingForm.SetSource(TrackingSpecification,ReqLine."Due Date");
+      ItemTrackingForm.RUNMODAL;
+    END;
+
+    PROCEDURE InitTrackingSpecification@13(VAR ReqLine@1001 : Record 246;VAR TrackingSpecification@1003 : Record 336);
+    BEGIN
+      TrackingSpecification.INIT;
+      TrackingSpecification."Source Type" := DATABASE::"Requisition Line";
+      WITH ReqLine DO BEGIN
+        TrackingSpecification."Item No." := "No.";
+        TrackingSpecification."Location Code" := "Location Code";
+        TrackingSpecification.Description := Description;
+        TrackingSpecification."Variant Code" := "Variant Code";
+        TrackingSpecification."Source Subtype" := 0;
+        TrackingSpecification."Source ID" := "Worksheet Template Name";
+        TrackingSpecification."Source Batch Name" := "Journal Batch Name";
+        TrackingSpecification."Source Prod. Order Line" := 0;
+        TrackingSpecification."Source Ref. No." := "Line No.";
+        TrackingSpecification."Quantity (Base)" := "Quantity (Base)";
+        TrackingSpecification."Qty. to Handle" := Quantity;
+        TrackingSpecification."Qty. to Handle (Base)" := "Quantity (Base)";
+        TrackingSpecification."Qty. to Invoice" := Quantity;
+        TrackingSpecification."Qty. to Invoice (Base)" := "Quantity (Base)";
+        TrackingSpecification."Quantity Handled (Base)" := 0;
+        TrackingSpecification."Quantity Invoiced (Base)" := 0;
+        TrackingSpecification."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

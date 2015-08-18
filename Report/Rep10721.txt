@@ -1,0 +1,3103 @@
+OBJECT Report 10721 Export Electronic Payments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVES6.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Export Electronic Payments;
+               ESP=Exportar pagos electr¢nicos];
+    OnPreReport=BEGIN
+                  CompanyInfo.GET;
+                  FormatAddr.Company(CompanyAddr,CompanyInfo);
+
+                  TotalDoc10Vend := 0;
+                  TotalDoc33Vend := 0;
+                  TotalDoc43Vend := 0;
+                END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table81;
+        DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.)
+                          WHERE(Bank Payment Type=CONST(Electronic Payment),
+                                Elect. Pmts Exported=CONST(No),
+                                Document Type=CONST(Payment));
+        OnPreDataItem=BEGIN
+                        TESTFIELD("Bal. Account No.");
+                        BankAccount.GET("Gen. Journal Line"."Bal. Account No.");
+
+                        ElectPmtMgmt.GetCCCBankInfo("Gen. Journal Line"."Bal. Account No.",CCCBankNo,CCCBankBranchNo,
+                          CCCControlDigits,CCCAccNo);
+
+                        IF NOT CurrReport.PREVIEW THEN BEGIN
+                          BankAccount.CALCFIELDS(Balance);
+                          IF NOT "Gen. Journal Line"."Elect. Pmts Exported" THEN BEGIN
+                            IF BankAccount.Balance < 0 THEN
+                              IF NOT CONFIRM(Text1100004,FALSE,BankAccount."No.",BankAccount.Name,BankAccount.Balance) THEN
+                                CurrReport.QUIT;
+                          END;
+
+                          IF CheckErrors THEN
+                            Relat := '1'
+                          ELSE
+                            Relat := '0';
+
+                          IF MatchSettleDate = MatchSettleDate::SkipNotMatch THEN
+                            SETRANGE("Posting Date",SettleDate);
+
+                          ElectPmtMgmt.GetLastEPayFileCreation(EPayExportFilePath,BankAccount);
+
+                          ElectPmtMgmt.InsertHeaderRecType1(SettleDate,SettleDate,
+                            CCCBankNo + CCCBankBranchNo + CCCControlDigits + CCCAccNo,Relat);
+
+                          ElectPmtMgmt.InsertHeaderRecType2;
+
+                          ElectPmtMgmt.InsertHeaderRecType3;
+
+                          ElectPmtMgmt.InsertHeaderRecType4;
+
+                          IF BankAccount."Last Remittance Advice No." <> '' THEN
+                            BankAccount."Last Remittance Advice No." := INCSTR(BankAccount."Last Remittance Advice No.")
+                          ELSE
+                            BankAccount."Last Remittance Advice No." := Text1100001;
+                          LastRemittanceAdvNo := BankAccount."Last Remittance Advice No.";
+                          BankAccount.MODIFY;
+                        END ELSE BEGIN
+                          IF BankAccount."Last Remittance Advice No." <> '' THEN
+                            LastRemittanceAdvNo := INCSTR(BankAccount."Last Remittance Advice No.")
+                          ELSE
+                            LastRemittanceAdvNo := Text1100001;
+                        END;
+
+                        SETCURRENTKEY("Journal Template Name","Journal Batch Name","Transfer Type");
+                      END;
+
+        OnAfterGetRecord=VAR
+                           DocMisc@1100000 : Codeunit 7000007;
+                           DocType@1100001 : Code[10];
+                         BEGIN
+                           TESTFIELD("Document No.");
+                           TESTFIELD("Account Type","Account Type"::Vendor);
+                           TESTFIELD("Account No.");
+                           TESTFIELD("Bal. Account Type","Bal. Account Type"::"Bank Account");
+                           TESTFIELD("Bal. Account No.");
+                           TESTFIELD("Currency Code",'');
+                           DocType := DocMisc.DocType2("Payment Method Code");
+                           IF "Gen. Journal Line"."Document Type" <> "Gen. Journal Line"."Document Type"::Payment THEN
+                             TESTFIELD("Payment Type",0);
+
+                           IF Amount < 0 THEN
+                             FIELDERROR(Amount,STRSUBSTNO(Text1100002,FIELDCAPTION("Bank Payment Type"),FORMAT("Bank Payment Type")));
+
+                           ElectPmtMgmt.GetPayeeInfo("Account No.",VendorCCCBankNo,VendCCCBankBranchNo,VendCCCControlDigits,
+                             VendCCCAccNo,PayeeAddress,PayeeCCC,IBAN,SwiftCode);
+
+                           Vendor.GET("Account No.");
+                           CalcAmountPaid("Gen. Journal Line");
+
+                           IF NOT CurrReport.PREVIEW THEN BEGIN
+                             VATRegVend := Vendor."VAT Registration No.";
+                             VATRegVend := VATRegVend + PADSTR('',MAXSTRLEN(VATRegVend) - STRLEN(VATRegVend),' ');
+
+                             IF MatchSettleDate = MatchSettleDate::ChangeToMatch THEN
+                               "Posting Date" := SettleDate;
+
+                             IF ActualTransferType <> "Gen. Journal Line"."Transfer Type" THEN
+                               CASE ActualTransferType OF
+                                 ActualTransferType::National:
+                                   //   ElectPmtMgmt.InsertDomesticTrailer(TotalDoc10Vend,TotalDomesticRegs + 1,
+                                   //     ElectPmtMgmt.EuroAmount(TotalAmountNac));
+                                   ElectPmtMgmt.InsertDomesticTrailer(TotalDoc10Vend,ElectPmtMgmt.EuroAmount(TotalAmountNac));
+                                 ActualTransferType::International:
+                                   //   ElectPmtMgmt.InsertInterTransferTrailer(TotalDoc33Vend,TotalInternationalRegs + 1,
+                                   //     ElectPmtMgmt.EuroAmount(TotalAmountInter));
+                                   ElectPmtMgmt.InsertInterTransferTrailer(TotalDoc33Vend,ElectPmtMgmt.EuroAmount(TotalAmountInter));
+                               END;
+
+                             CASE "Transfer Type" OF
+                               "Transfer Type"::National:
+                                 BEGIN
+                                   ActualTransferType := "Transfer Type"::National;
+                                   ElectPmtMgmt.InsertDomesticTransferBlock(DocType,PmtOrderConcept,ExpensesCode,VATRegVend,
+                                     ElectPmtMgmt.EuroAmount(Amount),PayeeCCC,Vendor.Name);
+                                   TotalDoc10Vend := TotalDoc10Vend + 1;
+                                   TotalAmountNac := TotalAmountNac + Amount;
+                                 END;
+                               "Transfer Type"::International:
+                                 BEGIN
+                                   ActualTransferType := "Transfer Type"::International;
+                                   ElectPmtMgmt.InsertInterTransferBlock(PmtOrderConcept,ExpensesCode,ExpensesCodeValueInter,VATRegVend,IBAN,
+                                     ElectPmtMgmt.EuroAmount(Amount),FORMAT(VendorBankAccount."Country/Region Code"),SwiftCode,Vendor.Name);
+                                   TotalDoc33Vend := TotalDoc33Vend + 1;
+                                   TotalAmountInter := TotalAmountInter + Amount;
+                                 END;
+                               "Transfer Type"::Special:
+                                 BEGIN
+                                   TESTFIELD("Payment Type");
+                                   TESTFIELD("Statistical Code");
+                                   ActualTransferType := "Gen. Journal Line"."Transfer Type"::Special;
+                                   ElectPmtMgmt.InsertSpecialTransferBlock(PmtOrderConcept,ExpensesCode,VATRegVend,IBAN,ElectPmtMgmt.EuroAmount(Amount),
+                                     FORMAT(VendorBankAccount."Country/Region Code"),SwiftCode,Vendor.Name,Description,
+                                     "Payment Type","Statistical Code",PADSTR(' ',9,' '),PADSTR(' ',8,' '),PADSTR(' ',12,' '));
+                                   TotalDoc43Vend := TotalDoc43Vend + 1;
+                                   TotalAmountSpecial := TotalAmountSpecial + Amount;
+                                 END;
+                             END;
+
+                             "Elect. Pmts Exported" := TRUE;
+                             "Export File Name" := EPayExportFilePath;
+                             "Document No." := BankAccount."Last Remittance Advice No.";
+                             MODIFY;
+                             IF ("Payment Method Code" <> '') AND (DocMisc.DocType2("Payment Method Code") = '4') THEN
+                               ElectPmtMgmt.InsertIntoCheckLedger(BankAccount."No.",SettleDate,"Document Type","Document No.",
+                                 Description,"Bal. Account No.",-ExportAmount);
+                           END;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF NOT CurrReport.PREVIEW THEN BEGIN
+                           CASE ActualTransferType OF
+                             ActualTransferType::National:
+                               ElectPmtMgmt.InsertDomesticTrailer(TotalDoc10Vend,ElectPmtMgmt.EuroAmount(TotalAmountNac));
+                             ActualTransferType::International:
+                               ElectPmtMgmt.InsertInterTransferTrailer(TotalDoc33Vend,ElectPmtMgmt.EuroAmount(TotalAmountInter));
+                             ActualTransferType::Special:
+                               ElectPmtMgmt.InsertSpecialTransTrailer(TotalDoc43Vend,ElectPmtMgmt.EuroAmount(TotalAmountSpecial));
+                           END;
+                           ElectPmtMgmt.InsertGeneralTrailer(TotalDoc10Vend + TotalDoc33Vend + TotalDoc43Vend,
+                             TotalAmountNac + TotalAmountInter + TotalAmountSpecial);
+                         END;
+                       END;
+
+        ReqFilterFields=Journal Template Name,Journal Batch Name;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        NewPagePerRecord=Yes;
+        DataItemVarName=CopyLoop;
+        OnPreDataItem=BEGIN
+                        SETRANGE(Number,1,NoOfCopies + 1);
+                        IF ISSERVICETIER THEN
+                          OutputNo := 1;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           CurrReport.PAGENO := 1;
+
+                           IF Number = 1 THEN BEGIN// Original
+                             CLEAR(CopyTxt);
+                             IF ISSERVICETIER THEN
+                               CopyTxt := '';
+                           END ELSE BEGIN
+                             CopyTxt := Text1100000;
+                             IF ISSERVICETIER THEN
+                               OutputNo += 1;
+                           END;
+
+                           AmountPaid := 0;
+                           TotalAmountPaid := 0;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table25;
+        DataItemTableView=SORTING(Vendor No.,Open,Positive,Due Date,Currency Code)
+                          ORDER(Descending)
+                          WHERE(Open=CONST(Yes));
+        OnPreDataItem=BEGIN
+                        IF ("Gen. Journal Line"."Applies-to ID" = '') AND ("Gen. Journal Line"."Applies-to Doc. No." = '') THEN
+                          CurrReport.BREAK;
+
+                        IF "Gen. Journal Line"."Account Type" <> "Gen. Journal Line"."Account Type"::Vendor THEN
+                          CurrReport.BREAK;
+                        SETRANGE("Vendor No.","Gen. Journal Line"."Account No.");
+                      END;
+
+        OnAfterGetRecord=VAR
+                           VendorBankAccount1@1100001 : Record 288;
+                         BEGIN
+                           IF "Gen. Journal Line"."Applies-to ID" <> '' THEN BEGIN
+                             CALCFIELDS("Remaining Amt. (LCY)");
+                             IF (-ExportAmount - TotalAmountPaid) > -"Remaining Amt. (LCY)" THEN
+                               AmountPaid := -"Remaining Amt. (LCY)"
+                             ELSE
+                               AmountPaid := -ExportAmount - TotalAmountPaid;
+                             TotalAmountPaid := TotalAmountPaid + AmountPaid;
+                           END ELSE
+                             IF "Gen. Journal Line"."Applies-to Doc. No." <> '' THEN BEGIN
+                               RESET;
+                               SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                               SETRANGE("Document Type","Gen. Journal Line"."Applies-to Doc. Type");
+                               SETRANGE("Document No.","Gen. Journal Line"."Applies-to Doc. No.");
+                               SETRANGE("Bill No.","Gen. Journal Line"."Applies-to Bill No.");
+                               SETRANGE("Vendor No.",Vendor."No.");
+                               SETRANGE(Open,TRUE);
+                               FIND('-');
+                               CALCFIELDS("Remaining Amt. (LCY)");
+                               // AmountPaid := -"Remaining Amt. (LCY)";
+                               IF -ExportAmount > -VendLedgEntry."Remaining Amt. (LCY)" THEN
+                                 AmountPaid := -VendLedgEntry."Remaining Amt. (LCY)"
+                               ELSE
+                                 AmountPaid := -ExportAmount;
+                             END;
+
+                           IF ISSERVICETIER THEN BEGIN
+                             VendorBankAccount1.RESET;
+                             VendorBankAccount1.SETRANGE("Vendor No.","Gen. Journal Line"."Account No.");
+                             VendorBankAccount1.SETRANGE("Use For Electronic Payments",TRUE);
+                             IF VendorBankAccount1.FINDFIRST THEN BEGIN
+                               TempVendCCCControlDigits := VendorBankAccount1."CCC Control Digits";;
+                               TempVendCCCAccNo := VendorBankAccount1."CCC Bank Account No.";
+                               TempUserText :=
+                                 STRSUBSTNO(
+                                   Text1100003,
+                                   FORMAT(VendorBankAccount1."CCC Bank No.") +
+                                   FORMAT(VendorBankAccount1."CCC Bank Branch No.") +
+                                   FORMAT(VendorBankAccount1."CCC Control Digits") +
+                                   FORMAT(VendorBankAccount1."CCC Bank Account No."),
+                                   VendBankAccCode,
+                                   FORMAT(-ExportAmount,0,0));
+                             END;
+                           END;
+                         END;
+
+        DataItemLinkReference=Gen. Journal Line;
+        DataItemLink=Applies-to ID=FIELD(Applies-to ID);
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Header;
+            SectionWidth=19320;
+            SectionHeight=12690;
+          }
+          CONTROLS
+          {
+            { 1101100000;TextBox;840  ;0    ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[1];
+                                                         DataSetFieldName=CompanyAddr_1_ }
+            { 1101100001;TextBox;840  ;423  ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[2];
+                                                         DataSetFieldName=CompanyAddr_2_ }
+            { 1101100002;TextBox;840  ;846  ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[3];
+                                                         DataSetFieldName=CompanyAddr_3_ }
+            { 1101100003;TextBox;840  ;1269 ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[4];
+                                                         DataSetFieldName=CompanyAddr_4_ }
+            { 1101100004;TextBox;840  ;1692 ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[5];
+                                                         DataSetFieldName=CompanyAddr_5_ }
+            { 1101100005;TextBox;840  ;2115 ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[6];
+                                                         DataSetFieldName=CompanyAddr_6_ }
+            { 1101100006;TextBox;840  ;2538 ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[7];
+                                                         DataSetFieldName=CompanyAddr_7_ }
+            { 1101100007;TextBox;840  ;2961 ;7350 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=CompanyAddr[8];
+                                                         DataSetFieldName=CompanyAddr_8_ }
+            { 1101100008;TextBox;840  ;3807 ;2520 ;423  ;FontSize=10;
+                                                         SourceExpr=CopyTxt;
+                                                         DataSetFieldName=CopyTxt }
+            { 1101100009;Label  ;0    ;5076 ;840  ;423  ;FontSize=10;
+                                                         CaptionML=[ENU=To:;
+                                                                    ESP=Hasta:];
+                                                         DataSetFieldName=To_Caption }
+            { 1101100010;TextBox;840  ;5076 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[1];
+                                                         DataSetFieldName=PayeeAddress_1_ }
+            { 1101100011;TextBox;840  ;5499 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[2];
+                                                         DataSetFieldName=PayeeAddress_2_ }
+            { 1101100012;TextBox;840  ;5922 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[3];
+                                                         DataSetFieldName=PayeeAddress_3_ }
+            { 1101100013;TextBox;840  ;6345 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[4];
+                                                         DataSetFieldName=PayeeAddress_4_ }
+            { 1101100014;TextBox;840  ;6768 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[5];
+                                                         DataSetFieldName=PayeeAddress_5_ }
+            { 1101100015;TextBox;840  ;7191 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[6];
+                                                         DataSetFieldName=PayeeAddress_6_ }
+            { 1101100024;Label  ;9660 ;846  ;4500 ;423  ;FontSize=10;
+                                                         CaptionML=[ENU=REMITTANCE ADVICE;
+                                                                    ESP=AVISO PAGO];
+                                                         DataSetFieldName=REMITTANCE_ADVICECaption }
+            { 1101100016;TextBox;840  ;7614 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[7];
+                                                         DataSetFieldName=PayeeAddress_7_ }
+            { 1101100027;Label  ;10650;5922 ;3780 ;423  ;FontSize=10;
+                                                         CaptionML=[ENU=Deposited In:;
+                                                                    ESP=Ingresado en:];
+                                                         DataSetFieldName=Deposited_In_Caption }
+            { 1101100017;TextBox;840  ;8037 ;6300 ;423  ;FontSize=10;
+                                                         SourceExpr=PayeeAddress[8];
+                                                         DataSetFieldName=PayeeAddress_8_ }
+            { 1101100030;Label  ;12000;2538 ;4590 ;423  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         FontBold=No;
+                                                         CaptionML=[ENU=Remittance Advice Number:;
+                                                                    ESP=N£mero aviso pago:];
+                                                         DataSetFieldName=Remittance_Advice_Number_Caption }
+            { 1101100032;Label  ;13650;3384 ;2940 ;423  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Settlement Date:;
+                                                                    ESP=Fecha liquidaci¢n:];
+                                                         DataSetFieldName=Settlement_Date_Caption }
+            { 1101100033;TextBox;450  ;9306 ;17550;1269 ;HorzAlign=Center;
+                                                         FontSize=9;
+                                                         MultiLine=Yes;
+                                                         SourceExpr=STRSUBSTNO(Text1100003,PayeeCCC,VendBankAccCode,-ExportAmount);
+                                                         DataSetFieldName=STRSUBSTNO_Text1100003_PayeeCCC_VendBankAccCode__ExportAmount_ }
+            { 1101100051;TextBox;15840;6345 ;2520 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Bank No.;
+                                                                    ESP=CCC C¢d. banco proveedor];
+                                                         SourceExpr=VendorCCCBankNo;
+                                                         DataSetFieldName=VendorCCCBankNo }
+            { 1101100026;Label  ;10650;6345 ;4950 ;423  ;ParentControl=1101100051;
+                                                         HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Bank No.;
+                                                                    ESP=CCC C¢d. banco proveedor];
+                                                         DataSetFieldName=Vendor_CCC_Bank_No_Caption }
+            { 1101100052;TextBox;15840;6768 ;2520 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Bank Branch No.;
+                                                                    ESP=CCC C¢d. oficina proveedor];
+                                                         SourceExpr=VendCCCBankBranchNo;
+                                                         DataSetFieldName=VendCCCBankBranchNo }
+            { 1101100028;Label  ;10650;6768 ;4950 ;423  ;ParentControl=1101100052;
+                                                         HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Bank Branch No.;
+                                                                    ESP=CCC C¢d. oficina proveedor];
+                                                         DataSetFieldName=Vendor_CCC_Bank_Branch_No_Caption }
+            { 1101100053;TextBox;15840;7191 ;2520 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Control Digits;
+                                                                    ESP=CCC D¡gito control proveedor];
+                                                         SourceExpr=VendCCCControlDigits;
+                                                         DataSetFieldName=VendCCCControlDigits }
+            { 1101100055;Label  ;10650;7191 ;4950 ;423  ;ParentControl=1101100053;
+                                                         HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Control Digits;
+                                                                    ESP=CCC D¡gito control proveedor];
+                                                         DataSetFieldName=Vendor_CCC_Control_DigitsCaption }
+            { 1101100054;TextBox;15840;7614 ;2520 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Account No.;
+                                                                    ESP=CCC N§ cuenta proveedor];
+                                                         SourceExpr=VendCCCAccNo;
+                                                         DataSetFieldName=VendCCCAccNo }
+            { 1101100056;Label  ;10650;7614 ;4950 ;423  ;ParentControl=1101100054;
+                                                         HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Vendor CCC Account No.;
+                                                                    ESP=CCC N§ cuenta proveedor];
+                                                         DataSetFieldName=Vendor_CCC_Account_No_Caption }
+            { 1101100035;TextBox;16800;2538 ;2520 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=LastRemittanceAdvNo;
+                                                         DataSetFieldName=LastRemittanceAdvNo }
+            { 1101100036;TextBox;16800;3384 ;1680 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         SourceExpr=FORMAT(SettleDate);
+                                                         DataSetFieldName=SettleDate }
+            { 1101100018;Label  ;6900 ;11421;3450 ;846  ;ParentControl=1101100046;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Document Number;
+                                                                    ESP=N§ documento];
+                                                         DataSetFieldName=Document_NumberCaption }
+            { 1101100019;Label  ;450  ;11421;6000 ;846  ;ParentControl=1101100038;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Description;
+                                                                    ESP=Descripci¢n];
+                                                         DataSetFieldName=DescriptionCaption }
+            { 1101100040;Label  ;10800;11421;3150 ;846  ;ParentControl=1101100021;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Date;
+                                                                    ESP=Fecha];
+                                                         DataSetFieldName=DateCaption }
+            { 1101100034;Label  ;14400;11421;3600 ;846  ;ParentControl=1101100045;
+                                                         HorzAlign=Right;
+                                                         VertAlign=Bottom;
+                                                         FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Amount;
+                                                                    ESP=Importe];
+                                                         DataSetFieldName=AmountCaption }
+            { 1101100023;Shape  ;6900 ;12267;3450 ;423  ;ShapeStyle=HorzLine }
+            { 1101100025;Shape  ;450  ;12267;6000 ;423  ;ShapeStyle=HorzLine }
+            { 1101100029;Shape  ;10800;12267;3150 ;423  ;ShapeStyle=HorzLine }
+            { 1101100043;Shape  ;14400;12267;3600 ;423  ;ShapeStyle=HorzLine }
+            { 1101100020;Label  ;10950;4653 ;3780 ;423  ;ParentControl=1101100031;
+                                                         HorzAlign=Right;
+                                                         FontSize=10;
+                                                         DataSetFieldName=ExportAmountCaption }
+            { 1101100031;TextBox;15000;4653 ;3570 ;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         CaptionML=[ENU=Deposit Amount:;
+                                                                    ESP=Importe dep¢sito:];
+                                                         SourceExpr=-ExportAmount;
+                                                         DataSetFieldName=ExportAmount }
+            { 1100003;TextBox   ;19200;0    ;150  ;423  ;Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=OutputNo;
+                                                         DataSetFieldName=OutputNo }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=19320;
+            SectionHeight=423;
+          }
+          CONTROLS
+          {
+            { 1101100046;TextBox;6900 ;0    ;3450 ;423  ;HorzAlign=Left;
+                                                         FontSize=9;
+                                                         CaptionML=[ENU=Document Number;
+                                                                    ESP=N§ documento];
+                                                         SourceExpr="Vendor Ledger Entry"."Document No.";
+                                                         DataSetFieldName=Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_No__ }
+            { 1101100038;TextBox;450  ;0    ;6000 ;423  ;FontSize=9;
+                                                         CaptionML=[ENU=Description;
+                                                                    ESP=Descripci¢n];
+                                                         SourceExpr="Vendor Ledger Entry".Description;
+                                                         DataSetFieldName=Vendor_Ledger_Entry__Vendor_Ledger_Entry__Description }
+            { 1101100021;TextBox;10800;0    ;3150 ;423  ;FontSize=9;
+                                                         CaptionML=[ENU=Date;
+                                                                    ESP=Fecha];
+                                                         SourceExpr=FORMAT("Vendor Ledger Entry"."Document Date");
+                                                         DataSetFieldName=Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_Date_ }
+            { 1101100045;TextBox;14400;0    ;3600 ;423  ;FontSize=9;
+                                                         CaptionML=[ENU=Amount;
+                                                                    ESP=Importe];
+                                                         SourceExpr=AmountPaid;
+                                                         DataSetFieldName=AmountPaid }
+            { 1100002;TextBox   ;18900;0    ;150  ;423  ;Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=TempUserText;
+                                                         DataSetFieldName=TempUserText }
+            { 1100001;TextBox   ;19050;0    ;150  ;423  ;Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=TempVendCCCAccNo;
+                                                         DataSetFieldName=TempVendCCCAccNo }
+            { 1100000;TextBox   ;19200;0    ;150  ;423  ;Visible=No;
+                                                         ForeColor=65535;
+                                                         SourceExpr=TempVendCCCControlDigits;
+                                                         DataSetFieldName=TempVendCCCControlDigits }
+          }
+           }
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=19320;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+            { 1101100047;Label  ;450  ;423  ;2250 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         MultiLine=Yes;
+                                                         CaptionML=[ENU=Total Amount;
+                                                                    ESP=Importe total];
+                                                         DataSetFieldName=Total_AmountCaption }
+            { 1101100048;TextBox;14400;423  ;3600 ;423  ;FontSize=9;
+                                                         FontBold=Yes;
+                                                         CaptionML=[ENU=Amount;
+                                                                    ESP=Importe];
+                                                         SourceExpr=-ExportAmount;
+                                                         AutoFormatType=1;
+                                                         DataSetFieldName=ExportAmount_Control1101100048 }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=10340;
+      Height=6820;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF SettleDate = 0D THEN
+                     SettleDate := TODAY;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1100008;TextBox   ;3630 ;2970 ;1700 ;440  ;ParentControl=1100020;
+                                                   InFrame=Yes;
+                                                   CaptionML=[ENU=Expenses Code;
+                                                              ESP=C¢digo gastos];
+                                                   OptionCaptionML=[ENU=Payer,Payee;
+                                                                    ESP=Pagador,Beneficiario];
+                                                   OptionString=Payer,Payee;
+                                                   SourceExpr=ExpensesCode }
+      { 1100009;Label     ;220  ;2970 ;3300 ;440  ;ParentControl=1100008;
+                                                   CaptionML=[ENU=Expenses Code;
+                                                              ESP=C¢digo gastos] }
+      { 1100010;CheckBox  ;8910 ;2970 ;440  ;440  ;ParentControl=1100020;
+                                                   InFrame=Yes;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Shared (Only International Transf.);
+                                                              ESP=Compartido (s¢lo transf. internacionales)];
+                                                   SourceExpr=ExpensesCodeValueInter }
+      { 1100011;Label     ;5500 ;2970 ;3300 ;440  ;ParentControl=1100010;
+                                                   CaptionML=[ENU=Shared (Only International Transf.);
+                                                              ESP=Compartido (s¢lo transf. internacionales)] }
+      { 1100000;TextBox   ;3630 ;220  ;1700 ;440  ;CaptionML=[ENU=Bank Account No.;
+                                                              ESP=C¢d. cuenta banco];
+                                                   SourceExpr="Gen. Journal Line"."Bal. Account No.";
+                                                   TableRelation="Bank Account";
+                                                   LookupFormID=Bank Account List }
+      { 1100001;Label     ;220  ;220  ;3300 ;440  ;ParentControl=1100000;
+                                                   CaptionML=[ENU=Bank Account No.;
+                                                              ESP=C¢d. cuenta banco] }
+      { 1100003;Label     ;220  ;770  ;3300 ;440  ;ParentControl=1100002;
+                                                   CaptionML=[ENU=Settle Date;
+                                                              ESP=Fecha liquidaci¢n] }
+      { 1100002;TextBox   ;3630 ;770  ;1700 ;440  ;CaptionML=[ENU=Settle Date;
+                                                              ESP=Fecha liquidaci¢n];
+                                                   SourceExpr=SettleDate }
+      { 1100005;OptionButton;3630;1760;4730 ;440  ;CaptionML=[ENU=Change Posting Date To Match;
+                                                              ESP=Cambiar Fecha reg. para coincidir];
+                                                   SourceExpr=MatchSettleDate;
+                                                   OptionValue=ChangeToMatch }
+      { 1100007;Label     ;220  ;1430 ;3300 ;880  ;ParentControl=1100005;
+                                                   MultiLine=Yes;
+                                                   CaptionML=[ENU=If Posting Date does not match Delivery Date:;
+                                                              ESP=Si Fecha registro no coincide con Fecha de emisi¢n] }
+      { 1100006;OptionButton;3630;2310;4730 ;440  ;CaptionML=[ENU=Skip Lines Which Do Not Match;
+                                                              ESP=Saltar l¡neas que no coinciden];
+                                                   SourceExpr=MatchSettleDate;
+                                                   OptionValue=SkipNotMatch }
+      { 1100013;OptionButton;3630;3740;3740 ;440  ;CaptionML=[ENU=Payroll;
+                                                              ESP=N¢mina];
+                                                   SourceExpr=PmtOrderConcept;
+                                                   OptionValue=Payroll }
+      { 1100012;Label     ;220  ;3740 ;3300 ;440  ;ParentControl=1100013;
+                                                   CaptionML=[ENU=Payment Order Concept;
+                                                              ESP=Concepto orden pago] }
+      { 1100014;OptionButton;3630;4290;3740 ;440  ;CaptionML=[ENU=Retirement Payroll;
+                                                              ESP=N¢mina pensi¢n];
+                                                   SourceExpr=PmtOrderConcept;
+                                                   OptionValue=RetPayroll }
+      { 1100015;OptionButton;3630;4840;3740 ;440  ;CaptionML=[ENU=Others;
+                                                              ESP=Otros];
+                                                   SourceExpr=PmtOrderConcept;
+                                                   OptionValue=Others }
+      { 1100016;CheckBox  ;3630 ;5500 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Relation;
+                                                              ESP=Relaci¢n];
+                                                   SourceExpr=CheckErrors }
+      { 1100017;Label     ;220  ;5500 ;3300 ;440  ;ParentControl=1100016;
+                                                   CaptionML=[ENU=Relation;
+                                                              ESP=Relaci¢n] }
+      { 1100018;TextBox   ;3630 ;6160 ;1700 ;440  ;CaptionML=[ENU=Number Of Copies;
+                                                              ESP=N£mero copias];
+                                                   SourceExpr=NoOfCopies }
+      { 1100019;Label     ;220  ;6160 ;3300 ;440  ;ParentControl=1100018;
+                                                   CaptionML=[ENU=Number Of Copies;
+                                                              ESP=N£mero copias] }
+      { 1100020;Frame     ;220  ;2970 ;9130 ;440  ;ShowCaption=No;
+                                                   Border=No }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF SettleDate = 0D THEN
+                     SettleDate := TODAY;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1100000;2;Field     ;
+                  CaptionML=[ENU=Bank Account No.;
+                             ESP=N§ cuenta];
+                  SourceExpr="Gen. Journal Line"."Bal. Account No.";
+                  TableRelation="Bank Account";
+                  LookupFormID=Bank Account List }
+
+      { 1100002;2;Field     ;
+                  CaptionML=[ENU=Settle Date;
+                             ESP=Fecha liquidaci¢n];
+                  SourceExpr=SettleDate }
+
+      { 1100005;2;Field     ;
+                  CaptionML=[ENU=If Posting Date does not match Delivery Date:;
+                             ESP=Si Fecha registro no coincide con Fecha de emisi¢n];
+                  OptionCaptionML=[ENU=Change Posting Date To Match,Skip Lines Which Do Not Match;
+                                   ESP=Cambiar Fecha registro para que coincida,Saltar l¡neas que no coinciden];
+                  SourceExpr=MatchSettleDate }
+
+      { 1100020;2;Group      }
+
+      { 1100008;3;Field     ;
+                  CaptionML=[ENU=Expenses Code;
+                             ESP=C¢digo gastos];
+                  OptionCaptionML=[ENU=Payer,Payee;
+                                   ESP=Pagador,Beneficiario];
+                  SourceExpr=ExpensesCode }
+
+      { 1100010;3;Field     ;
+                  CaptionML=[ENU=Shared (Only International Transf.);
+                             ESP=Compartido (s¢lo transf. internacionales)];
+                  SourceExpr=ExpensesCodeValueInter }
+
+      { 1100013;2;Field     ;
+                  CaptionML=[ENU=Payment Order Concept;
+                             ESP=Concepto orden pago];
+                  OptionCaptionML=[ENU=Payroll,Retirement Payroll,Others;
+                                   ESP=N¢mina,N¢mina pensi¢n,Otros];
+                  SourceExpr=PmtOrderConcept }
+
+      { 1100016;2;Field     ;
+                  CaptionML=[ENU=Relation;
+                             ESP=Relaci¢n];
+                  SourceExpr=CheckErrors }
+
+      { 1100018;2;Field     ;
+                  CaptionML=[ENU=Number Of Copies;
+                             ESP=N£mero copias];
+                  SourceExpr=NoOfCopies }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1100000 : Record 270;
+      CompanyInfo@1100001 : Record 79;
+      Vendor@1100002 : Record 23;
+      VendorBankAccount@1100003 : Record 288;
+      VendLedgEntry@1100004 : Record 25;
+      FormatAddr@1100005 : Codeunit 365;
+      ElectPmtMgmt@1100006 : Codeunit 10701;
+      CheckErrors@1100007 : Boolean;
+      ExpensesCodeValueInter@1100008 : Boolean;
+      VendBankAccCode@1100009 : Code[20];
+      CopyTxt@1100010 : Code[10];
+      SettleDate@1100011 : Date;
+      TotalDoc10Vend@1100012 : Decimal;
+      TotalDoc33Vend@1100013 : Decimal;
+      TotalDoc43Vend@1100014 : Decimal;
+      TotalAmountNac@1100015 : Decimal;
+      TotalAmountInter@1100016 : Decimal;
+      TotalAmountSpecial@1100017 : Decimal;
+      AmountPaid@1100018 : Decimal;
+      TotalAmountPaid@1100019 : Decimal;
+      ExportAmount@1100020 : Decimal;
+      NoOfCopies@1100021 : Integer;
+      MatchSettleDate@1100025 : 'ChangeToMatch,SkipNotMatch';
+      ActualTransferType@1100026 : 'National,International,Special';
+      ExpensesCode@1100027 : 'Payer,Payee';
+      PmtOrderConcept@1100028 : 'Payroll,RetPayroll,Others';
+      VATRegVend@1100029 : Text[12];
+      VendCCCBankBranchNo@1100030 : Text[4];
+      VendCCCControlDigits@1100031 : Text[2];
+      VendCCCAccNo@1100032 : Text[10];
+      VendorCCCBankNo@1100033 : Text[4];
+      PayeeCCC@1100034 : Text[20];
+      CCCBankBranchNo@1100035 : Text[4];
+      CCCControlDigits@1100036 : Text[2];
+      CCCAccNo@1100037 : Text[10];
+      CCCBankNo@1100038 : Text[4];
+      Relat@1100039 : Text[1];
+      IBAN@1100040 : Text[34];
+      SwiftCode@1100041 : Text[11];
+      EPayExportFilePath@1100043 : Text[150];
+      PayeeAddress@1100044 : ARRAY [8] OF Text[50];
+      CompanyAddr@1100045 : ARRAY [8] OF Text[50];
+      Text1100000@1100047 : TextConst 'ENU=COPY;ESP=COPIA';
+      Text1100001@1100048 : TextConst 'ENU=REM001;ESP=PAG001';
+      Text1100002@1100049 : TextConst 'ENU=must be positive when %1 is %2;ESP=debe ser positivo cuando %1 es %2';
+      Text1100003@1100050 : TextConst 'ENU=We would like to inform you that your Account Number %1, in %2 Bank was credited for the Amount of %3 to settle these transactions:;ESP=Le informamos de que se ha abonado un importe de %3 en su n£mero de cuenta %1 del banco %2 para liquidar estas transacciones:';
+      LastRemittanceAdvNo@1100046 : Text[20];
+      Text1100004@1100051 : TextConst 'ENU=Bank %1 - %2, has an overdue balance of %3. Do you still want to record the amount?;ESP=El banco %1 - %2, tiene un saldo vencido de %3. ¨Desea registrar el importe de todos modos?';
+      TempVendCCCAccNo@1100052 : Text[30];
+      TempVendCCCControlDigits@1100053 : Text[30];
+      TempUserText@1100054 : Text[1024];
+      OutputNo@1100055 : Integer;
+
+    PROCEDURE CalcAmountPaid@1100000(GenJnlLine@1100000 : Record 81);
+    BEGIN
+      ExportAmount := -GenJnlLine."Amount (LCY)";
+      AmountPaid := 0;
+      // TotalAmountPaid := 0;
+
+      IF GenJnlLine."Applies-to Doc. No." <> '' THEN BEGIN
+        VendLedgEntry.RESET;
+        VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+        VendLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+        VendLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+        VendLedgEntry.SETRANGE("Vendor No.",Vendor."No.");
+        VendLedgEntry.SETRANGE(Open,TRUE);
+        VendLedgEntry.FIND('-');
+        VendLedgEntry.CALCFIELDS("Remaining Amt. (LCY)");
+        IF -ExportAmount > -VendLedgEntry."Remaining Amt. (LCY)" THEN
+          AmountPaid := -VendLedgEntry."Remaining Amt. (LCY)"
+        ELSE
+          AmountPaid := -ExportAmount;
+      END;
+      // TotalAmountPaid := AmountPaid;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+  <Body>
+    <Height>14.20792cm</Height>
+    <ReportItems>
+      <Table Name="Table1">
+        <DataSetName>DataSet_Result</DataSetName>
+        <Details>
+          <TableRows>
+            <TableRow>
+              <Height>0.423cm</Height>
+              <TableCells>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="textbox105">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value />
+                      <ZIndex>8</ZIndex>
+                      <rd:DefaultName>textbox105</rd:DefaultName>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ColSpan>2</ColSpan>
+                  <ReportItems>
+                    <Textbox Name="Vendor_Ledger_Entry__Description">
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value>=Fields!Vendor_Ledger_Entry__Vendor_Ledger_Entry__Description.Value</Value>
+                      <ZIndex>7</ZIndex>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="textbox32">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <TextAlign>Left</TextAlign>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value />
+                      <ZIndex>6</ZIndex>
+                      <rd:DefaultName>textbox32</rd:DefaultName>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ColSpan>2</ColSpan>
+                  <ReportItems>
+                    <Textbox Name="Vendor_Ledger_Entry___Document_No__">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <TextAlign>Left</TextAlign>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value>=Fields!Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_No__.Value</Value>
+                      <ZIndex>5</ZIndex>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="textbox157">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <TextAlign>Left</TextAlign>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value />
+                      <ZIndex>4</ZIndex>
+                      <rd:DefaultName>textbox157</rd:DefaultName>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="Vendor_Ledger_Entry___Document_Date_">
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <Format>d</Format>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value>=Fields!Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_Date_.Value</Value>
+                      <ZIndex>3</ZIndex>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="textbox55">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <TextAlign>Left</TextAlign>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value />
+                      <ZIndex>2</ZIndex>
+                      <rd:DefaultName>textbox55</rd:DefaultName>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ColSpan>4</ColSpan>
+                  <ReportItems>
+                    <Textbox Name="AmountPaid">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <Format>=Fields!AmountPaidFormat.Value</Format>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value>=Fields!AmountPaid.Value</Value>
+                      <ZIndex>1</ZIndex>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+                <TableCell>
+                  <ReportItems>
+                    <Textbox Name="textbox225">
+                      <CanGrow>true</CanGrow>
+                      <Style>
+                        <FontSize>9pt</FontSize>
+                        <Format>=Fields!AmountPaidFormat.Value</Format>
+                        <PaddingBottom>1pt</PaddingBottom>
+                        <PaddingTop>1pt</PaddingTop>
+                        <VerticalAlign>Middle</VerticalAlign>
+                      </Style>
+                      <Value />
+                      <rd:DefaultName>textbox225</rd:DefaultName>
+                    </Textbox>
+                  </ReportItems>
+                </TableCell>
+              </TableCells>
+            </TableRow>
+          </TableRows>
+        </Details>
+        <Height>5.51092in</Height>
+        <TableColumns>
+          <TableColumn>
+            <Width>0.39cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.45cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>5.55cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.5cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>2.76cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.69cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.45cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>3.15cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.45cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.6cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.84cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>0.96cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>1.2cm</Width>
+          </TableColumn>
+          <TableColumn>
+            <Width>1.32cm</Width>
+          </TableColumn>
+        </TableColumns>
+        <TableGroups>
+          <TableGroup>
+            <Footer>
+              <TableRows>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox173">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>9</ZIndex>
+                          <rd:DefaultName>textbox173</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox17">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>14</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox59">
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Total_AmountCaption.Value)</Value>
+                          <ZIndex>13</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>6</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox125">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>12</ZIndex>
+                          <rd:DefaultName>textbox125</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>4</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox328">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <Format>=First(Fields!ExportAmount_Control1101100048Format.Value)</Format>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Last(Fields!ExportAmount.Value)</Value>
+                          <ZIndex>11</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox234">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <Format>=First(Fields!ExportAmount_Control1101100048Format.Value)</Format>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>10</ZIndex>
+                          <rd:DefaultName>textbox234</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+              </TableRows>
+            </Footer>
+            <Grouping Name="Table1_Group1">
+              <Filters>
+                <Filter>
+                  <FilterExpression>=Fields!Total_AmountCaption.Value</FilterExpression>
+                  <FilterValues>
+                    <FilterValue />
+                  </FilterValues>
+                  <Operator>GreaterThan</Operator>
+                </Filter>
+              </Filters>
+              <GroupExpressions>
+                <GroupExpression>=Fields!Gen__Journal_Line_Line_No_.Value</GroupExpression>
+                <GroupExpression>=Fields!OutputNo.Value</GroupExpression>
+              </GroupExpressions>
+              <PageBreakAtEnd>true</PageBreakAtEnd>
+            </Grouping>
+            <Header>
+              <TableRows>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox411">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>107</ZIndex>
+                          <rd:DefaultName>textbox411</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox358">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_1_.Value)</Value>
+                          <ZIndex>106</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox414">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>105</ZIndex>
+                          <rd:DefaultName>textbox414</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox401">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>104</ZIndex>
+                          <rd:DefaultName>textbox401</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox359">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_2_.Value)</Value>
+                          <ZIndex>103</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox404">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>102</ZIndex>
+                          <rd:DefaultName>textbox404</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox391">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>101</ZIndex>
+                          <rd:DefaultName>textbox391</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox360">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_3_.Value)</Value>
+                          <ZIndex>100</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>4</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox392">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>6pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!REMITTANCE_ADVICECaption.Value)</Value>
+                          <ZIndex>99</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox10">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>98</ZIndex>
+                          <rd:DefaultName>textbox10</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox381">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>97</ZIndex>
+                          <rd:DefaultName>textbox381</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox423">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_4_.Value)</Value>
+                          <ZIndex>96</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox384">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>95</ZIndex>
+                          <rd:DefaultName>textbox384</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox371">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>94</ZIndex>
+                          <rd:DefaultName>textbox371</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox424">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_5_.Value)</Value>
+                          <ZIndex>93</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox374">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>92</ZIndex>
+                          <rd:DefaultName>textbox374</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox361">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>91</ZIndex>
+                          <rd:DefaultName>textbox361</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox425">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_6_.Value)</Value>
+                          <ZIndex>90</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox364">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>89</ZIndex>
+                          <rd:DefaultName>textbox364</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox351">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>88</ZIndex>
+                          <rd:DefaultName>textbox351</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox426">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_7_.Value)</Value>
+                          <ZIndex>87</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox354">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>86</ZIndex>
+                          <rd:DefaultName>textbox354</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox422">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingLeft>32pt</PaddingLeft>
+                            <PaddingRight>4pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Remittance_Advice_Number_Caption.Value)</Value>
+                          <ZIndex>85</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox357">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!LastRemittanceAdvNo.Value)</Value>
+                          <ZIndex>84</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox312">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>83</ZIndex>
+                          <rd:DefaultName>textbox312</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox427">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CompanyAddr_8_.Value)</Value>
+                          <ZIndex>82</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox342">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>81</ZIndex>
+                          <rd:DefaultName>textbox342</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>7</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox334">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>80</ZIndex>
+                          <rd:DefaultName>textbox334</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox397">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingLeft>76pt</PaddingLeft>
+                            <PaddingRight>4pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Settlement_Date_Caption.Value)</Value>
+                          <ZIndex>79</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox311">
+                          <Style>
+                            <Format>d</Format>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!SettleDate.Value)</Value>
+                          <ZIndex>78</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox310">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>77</ZIndex>
+                          <rd:DefaultName>textbox310</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox344">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>82pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!CopyTxt.Value)</Value>
+                          <ZIndex>76</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>11</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox33">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>75</ZIndex>
+                          <rd:DefaultName>textbox33</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.423cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox1">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>74</ZIndex>
+                          <rd:DefaultName>textbox1</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>7</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox86">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>73</ZIndex>
+                          <rd:DefaultName>textbox86</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox322">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingLeft>4pt</PaddingLeft>
+                            <PaddingRight>7pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!ExportAmountCaption.Value)</Value>
+                          <ZIndex>72</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>4</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox323">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <Format>=First(Fields!ExportAmountFormat.Value)</Format>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>20pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!ExportAmount.Value)</Value>
+                          <ZIndex>71</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox295">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!To_Caption.Value)</Value>
+                          <ZIndex>70</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox268">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_1_.Value)</Value>
+                          <ZIndex>69</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox272">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>68</ZIndex>
+                          <rd:DefaultName>textbox272</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox286">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>67</ZIndex>
+                          <rd:DefaultName>textbox286</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox296">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_2_.Value)</Value>
+                          <ZIndex>66</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox290">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>65</ZIndex>
+                          <rd:DefaultName>textbox290</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox277">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>64</ZIndex>
+                          <rd:DefaultName>textbox277</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox297">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_3_.Value)</Value>
+                          <ZIndex>63</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox2">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>62</ZIndex>
+                          <rd:DefaultName>textbox2</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox260">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Deposited_In_Caption.Value)</Value>
+                          <ZIndex>61</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox46">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>60</ZIndex>
+                          <rd:DefaultName>textbox46</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox259">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>59</ZIndex>
+                          <rd:DefaultName>textbox259</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox298">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_4_.Value)</Value>
+                          <ZIndex>58</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox4">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>57</ZIndex>
+                          <rd:DefaultName>textbox4</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox267">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>6pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Vendor_CCC_Bank_No_Caption.Value)</Value>
+                          <ZIndex>56</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox247">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>24pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!VendorCCCBankNo.Value)</Value>
+                          <ZIndex>55</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox250">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>54</ZIndex>
+                          <rd:DefaultName>textbox250</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox299">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_5_.Value)</Value>
+                          <ZIndex>53</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox5">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>52</ZIndex>
+                          <rd:DefaultName>textbox5</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox269">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>6pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Vendor_CCC_Bank_Branch_No_Caption.Value)</Value>
+                          <ZIndex>51</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox256">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>24pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!VendCCCBankBranchNo.Value)</Value>
+                          <ZIndex>50</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox241">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>49</ZIndex>
+                          <rd:DefaultName>textbox241</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox300">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_6_.Value)</Value>
+                          <ZIndex>48</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox6">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>47</ZIndex>
+                          <rd:DefaultName>textbox6</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox278">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>6pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Vendor_CCC_Control_DigitsCaption.Value)</Value>
+                          <ZIndex>46</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox265">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>24pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!TempVendCCCControlDigits.Value)</Value>
+                          <ZIndex>45</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox232">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>44</ZIndex>
+                          <rd:DefaultName>textbox232</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox301">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_7_.Value)</Value>
+                          <ZIndex>43</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox7">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>42</ZIndex>
+                          <rd:DefaultName>textbox7</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>5</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox283">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>6pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Vendor_CCC_Account_No_Caption.Value)</Value>
+                          <ZIndex>41</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox318">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingRight>24pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!TempVendCCCAccNo.Value)</Value>
+                          <ZIndex>40</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.425cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox223">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>39</ZIndex>
+                          <rd:DefaultName>textbox223</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>3</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox302">
+                          <Style>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Left</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!PayeeAddress_8_.Value)</Value>
+                          <ZIndex>38</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>9</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox226">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>37</ZIndex>
+                          <rd:DefaultName>textbox226</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.846cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox214">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>36</ZIndex>
+                          <rd:DefaultName>textbox214</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>1.269cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox204">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingLeft>12pt</PaddingLeft>
+                            <PaddingRight>38pt</PaddingRight>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Center</TextAlign>
+                            <VerticalAlign>Middle</VerticalAlign>
+                          </Style>
+                          <Value>=Fields!TempUserText.Value</Value>
+                          <ZIndex>35</ZIndex>
+                          <rd:DefaultName>textbox204</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.846cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox65">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>34</ZIndex>
+                          <rd:DefaultName>textbox65</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.846cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox182">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>33</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox183">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!DescriptionCaption.Value)</Value>
+                          <ZIndex>32</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox184">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>31</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox185">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!Document_NumberCaption.Value)</Value>
+                          <ZIndex>30</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox154">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>29</ZIndex>
+                          <rd:DefaultName>textbox154</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox187">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!DateCaption.Value)</Value>
+                          <ZIndex>28</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox186">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>27</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>4</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox189">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value>=First(Fields!AmountCaption.Value)</Value>
+                          <ZIndex>26</ZIndex>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox221">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>25</ZIndex>
+                          <rd:DefaultName>textbox221</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.211cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox163">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>24</ZIndex>
+                          <rd:DefaultName>textbox163</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox164">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <BorderStyle>
+                              <Bottom>Solid</Bottom>
+                            </BorderStyle>
+                            <BorderWidth>
+                              <Default>0.25pt</Default>
+                            </BorderWidth>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>23</ZIndex>
+                          <rd:DefaultName>textbox164</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox165">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>22</ZIndex>
+                          <rd:DefaultName>textbox165</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>2</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox166">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <BorderStyle>
+                              <Bottom>Solid</Bottom>
+                            </BorderStyle>
+                            <BorderWidth>
+                              <Default>0.25pt</Default>
+                            </BorderWidth>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>21</ZIndex>
+                          <rd:DefaultName>textbox166</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox155">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <BorderWidth>
+                              <Default>0.25pt</Default>
+                            </BorderWidth>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>20</ZIndex>
+                          <rd:DefaultName>textbox155</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox169">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <BorderStyle>
+                              <Bottom>Solid</Bottom>
+                            </BorderStyle>
+                            <BorderWidth>
+                              <Default>0.25pt</Default>
+                            </BorderWidth>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>19</ZIndex>
+                          <rd:DefaultName>textbox169</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox168">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>18</ZIndex>
+                          <rd:DefaultName>textbox168</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ColSpan>4</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox171">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <BorderStyle>
+                              <Bottom>Solid</Bottom>
+                            </BorderStyle>
+                            <BorderWidth>
+                              <Default>0.25pt</Default>
+                            </BorderWidth>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <TextAlign>Right</TextAlign>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>17</ZIndex>
+                          <rd:DefaultName>textbox171</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                    <TableCell>
+                      <ReportItems>
+                        <Textbox Name="textbox222">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                          </Style>
+                          <Value />
+                          <ZIndex>16</ZIndex>
+                          <rd:DefaultName>textbox222</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+                <TableRow>
+                  <Height>0.211cm</Height>
+                  <TableCells>
+                    <TableCell>
+                      <ColSpan>14</ColSpan>
+                      <ReportItems>
+                        <Textbox Name="textbox172">
+                          <CanGrow>true</CanGrow>
+                          <Style>
+                            <FontSize>9pt</FontSize>
+                            <FontWeight>700</FontWeight>
+                            <PaddingBottom>1pt</PaddingBottom>
+                            <PaddingTop>1pt</PaddingTop>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                          </Style>
+                          <Value />
+                          <ZIndex>15</ZIndex>
+                          <rd:DefaultName>textbox172</rd:DefaultName>
+                        </Textbox>
+                      </ReportItems>
+                    </TableCell>
+                  </TableCells>
+                </TableRow>
+              </TableRows>
+            </Header>
+          </TableGroup>
+        </TableGroups>
+      </Table>
+    </ReportItems>
+  </Body>
+  <BottomMargin>2cm</BottomMargin>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <rd:DataSetInfo>
+        <rd:DataSetName>DataSet</rd:DataSetName>
+        <rd:TableName>Result</rd:TableName>
+      </rd:DataSetInfo>
+      <Query>
+        <CommandText />
+        <DataSourceName>DummyDataSource</DataSourceName>
+      </Query>
+      <Fields>
+        <Field Name="Gen__Journal_Line_Journal_Template_Name">
+          <DataField>Gen__Journal_Line_Journal_Template_Name</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line_Journal_Batch_Name">
+          <DataField>Gen__Journal_Line_Journal_Batch_Name</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line_Line_No_">
+          <DataField>Gen__Journal_Line_Line_No_</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line_Applies_to_ID">
+          <DataField>Gen__Journal_Line_Applies_to_ID</DataField>
+        </Field>
+        <Field Name="CompanyAddr_1_">
+          <DataField>CompanyAddr_1_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_2_">
+          <DataField>CompanyAddr_2_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_3_">
+          <DataField>CompanyAddr_3_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_4_">
+          <DataField>CompanyAddr_4_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_5_">
+          <DataField>CompanyAddr_5_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_6_">
+          <DataField>CompanyAddr_6_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_7_">
+          <DataField>CompanyAddr_7_</DataField>
+        </Field>
+        <Field Name="CompanyAddr_8_">
+          <DataField>CompanyAddr_8_</DataField>
+        </Field>
+        <Field Name="CopyTxt">
+          <DataField>CopyTxt</DataField>
+        </Field>
+        <Field Name="To_Caption">
+          <DataField>To_Caption</DataField>
+        </Field>
+        <Field Name="PayeeAddress_1_">
+          <DataField>PayeeAddress_1_</DataField>
+        </Field>
+        <Field Name="PayeeAddress_2_">
+          <DataField>PayeeAddress_2_</DataField>
+        </Field>
+        <Field Name="PayeeAddress_3_">
+          <DataField>PayeeAddress_3_</DataField>
+        </Field>
+        <Field Name="PayeeAddress_4_">
+          <DataField>PayeeAddress_4_</DataField>
+        </Field>
+        <Field Name="PayeeAddress_5_">
+          <DataField>PayeeAddress_5_</DataField>
+        </Field>
+        <Field Name="PayeeAddress_6_">
+          <DataField>PayeeAddress_6_</DataField>
+        </Field>
+        <Field Name="REMITTANCE_ADVICECaption">
+          <DataField>REMITTANCE_ADVICECaption</DataField>
+        </Field>
+        <Field Name="PayeeAddress_7_">
+          <DataField>PayeeAddress_7_</DataField>
+        </Field>
+        <Field Name="Deposited_In_Caption">
+          <DataField>Deposited_In_Caption</DataField>
+        </Field>
+        <Field Name="PayeeAddress_8_">
+          <DataField>PayeeAddress_8_</DataField>
+        </Field>
+        <Field Name="Remittance_Advice_Number_Caption">
+          <DataField>Remittance_Advice_Number_Caption</DataField>
+        </Field>
+        <Field Name="Settlement_Date_Caption">
+          <DataField>Settlement_Date_Caption</DataField>
+        </Field>
+        <Field Name="STRSUBSTNO_Text1100003_PayeeCCC_VendBankAccCode__ExportAmount_">
+          <DataField>STRSUBSTNO_Text1100003_PayeeCCC_VendBankAccCode__ExportAmount_</DataField>
+        </Field>
+        <Field Name="VendorCCCBankNo">
+          <DataField>VendorCCCBankNo</DataField>
+        </Field>
+        <Field Name="Vendor_CCC_Bank_No_Caption">
+          <DataField>Vendor_CCC_Bank_No_Caption</DataField>
+        </Field>
+        <Field Name="VendCCCBankBranchNo">
+          <DataField>VendCCCBankBranchNo</DataField>
+        </Field>
+        <Field Name="Vendor_CCC_Bank_Branch_No_Caption">
+          <DataField>Vendor_CCC_Bank_Branch_No_Caption</DataField>
+        </Field>
+        <Field Name="VendCCCControlDigits">
+          <DataField>VendCCCControlDigits</DataField>
+        </Field>
+        <Field Name="Vendor_CCC_Control_DigitsCaption">
+          <DataField>Vendor_CCC_Control_DigitsCaption</DataField>
+        </Field>
+        <Field Name="VendCCCAccNo">
+          <DataField>VendCCCAccNo</DataField>
+        </Field>
+        <Field Name="Vendor_CCC_Account_No_Caption">
+          <DataField>Vendor_CCC_Account_No_Caption</DataField>
+        </Field>
+        <Field Name="LastRemittanceAdvNo">
+          <DataField>LastRemittanceAdvNo</DataField>
+        </Field>
+        <Field Name="SettleDate">
+          <DataField>SettleDate</DataField>
+        </Field>
+        <Field Name="Document_NumberCaption">
+          <DataField>Document_NumberCaption</DataField>
+        </Field>
+        <Field Name="DescriptionCaption">
+          <DataField>DescriptionCaption</DataField>
+        </Field>
+        <Field Name="DateCaption">
+          <DataField>DateCaption</DataField>
+        </Field>
+        <Field Name="AmountCaption">
+          <DataField>AmountCaption</DataField>
+        </Field>
+        <Field Name="ExportAmountCaption">
+          <DataField>ExportAmountCaption</DataField>
+        </Field>
+        <Field Name="ExportAmount">
+          <DataField>ExportAmount</DataField>
+        </Field>
+        <Field Name="ExportAmountFormat">
+          <DataField>ExportAmountFormat</DataField>
+        </Field>
+        <Field Name="OutputNo">
+          <DataField>OutputNo</DataField>
+        </Field>
+        <Field Name="Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_No__">
+          <DataField>Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_No__</DataField>
+        </Field>
+        <Field Name="Vendor_Ledger_Entry__Vendor_Ledger_Entry__Description">
+          <DataField>Vendor_Ledger_Entry__Vendor_Ledger_Entry__Description</DataField>
+        </Field>
+        <Field Name="Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_Date_">
+          <DataField>Vendor_Ledger_Entry__Vendor_Ledger_Entry___Document_Date_</DataField>
+        </Field>
+        <Field Name="AmountPaid">
+          <DataField>AmountPaid</DataField>
+        </Field>
+        <Field Name="AmountPaidFormat">
+          <DataField>AmountPaidFormat</DataField>
+        </Field>
+        <Field Name="TempUserText">
+          <DataField>TempUserText</DataField>
+        </Field>
+        <Field Name="TempVendCCCAccNo">
+          <DataField>TempVendCCCAccNo</DataField>
+        </Field>
+        <Field Name="TempVendCCCControlDigits">
+          <DataField>TempVendCCCControlDigits</DataField>
+        </Field>
+        <Field Name="Total_AmountCaption">
+          <DataField>Total_AmountCaption</DataField>
+        </Field>
+        <Field Name="ExportAmount_Control1101100048Format">
+          <DataField>ExportAmount_Control1101100048Format</DataField>
+        </Field>
+        <Field Name="Vendor_Ledger_Entry_Entry_No_">
+          <DataField>Vendor_Ledger_Entry_Entry_No_</DataField>
+        </Field>
+        <Field Name="Vendor_Ledger_Entry_Applies_to_ID">
+          <DataField>Vendor_Ledger_Entry_Applies_to_ID</DataField>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <DataSources>
+    <DataSource Name="DummyDataSource">
+      <ConnectionProperties>
+        <ConnectString />
+        <DataProvider>SQL</DataProvider>
+      </ConnectionProperties>
+      <rd:DataSourceID>b8060787-4f7e-4464-bf22-f4ab625d9caa</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <InteractiveHeight>11in</InteractiveHeight>
+  <InteractiveWidth>8.5in</InteractiveWidth>
+  <Language>=User!Language</Language>
+  <LeftMargin>1.5cm</LeftMargin>
+  <PageHeight>29.7cm</PageHeight>
+  <PageWidth>21cm</PageWidth>
+  <TopMargin>2cm</TopMargin>
+  <Width>19.32cm</Width>
+  <rd:DrawGrid>true</rd:DrawGrid>
+  <rd:GridSpacing>0.423cm</rd:GridSpacing>
+  <rd:ReportID>9bd884be-97dc-4d34-aa87-b60d6abff19e</rd:ReportID>
+  <rd:SnapToGrid>true</rd:SnapToGrid>
+</Report>
+    END_OF_RDLDatA
+  }
+}

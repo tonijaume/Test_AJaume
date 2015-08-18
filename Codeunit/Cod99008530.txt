@@ -1,0 +1,496 @@
+OBJECT Codeunit 99008530 Product Catalog Line-Accept
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            ItemNo@1000 : Code[20];
+          BEGIN
+            CLEAR(Item);
+            CLEAR(ItemVend);
+            CheckCurrencyCode;
+
+            IF FindItem THEN
+              ItemExists := TRUE
+            ELSE
+              ItemExists := FALSE;
+
+            CASE BizTalkPartnerSetup."Item Import Action" OF
+
+              BizTalkPartnerSetup."Item Import Action"::"Create New":
+                IF ItemExists THEN
+                  ExistingItemError
+                ELSE
+                  ItemCreate;
+
+              BizTalkPartnerSetup."Item Import Action"::Update:
+                IF ItemExists THEN
+                  ItemUpdate
+                ELSE
+                  MissingItemError;
+
+              BizTalkPartnerSetup."Item Import Action"::"Update or Create New":
+                IF ItemExists THEN
+                  ItemUpdate
+                ELSE
+                  ItemCreate;
+            END;
+
+            InboundProductCatalogLine."Item Imported" := TRUE;
+            InboundProductCatalogLine.MODIFY(TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1012 : TextConst 'ENU=More items matches the %1 with %2.;ESP=Varios productos coinciden en %1 con %2.';
+      Text001@1013 : TextConst 'ENU=More items matches the %1 for %2 %3 and %4 %5.;ESP=Varios productos coinciden en %1 para %2 %3 y %4 %5.';
+      Text002@1014 : TextConst 'ENU=An item already exists with %1 %2.;ESP=Ya existe un producto con %1 %2.';
+      Text003@1015 : TextConst 'ENU=An item already exists with %1 %2 for %3 %4.;ESP=Ya existe un producto con %1 %2 para %3 %4.';
+      Text004@1016 : TextConst 'ENU=The item number with %1 %2 does not exist.;ESP=No existe el n£mero producto con %1 %2.';
+      Text005@1017 : TextConst 'ENU=The item number based on %1 %2 for %3 %4 does not exist.;ESP=No existe el n£mero producto basado en %1 %2 para %3 %4.';
+      Text006@1018 : TextConst 'ENU=The item number based on %1 %2 does not exist.;ESP=No existe el n£mero producto basado en %1 %2.';
+      Text007@1019 : TextConst 'ENU=More items that is based on %1 %2 exists.;ESP=Existen m s productos basados en %1 %2.';
+      Text008@1020 : TextConst 'ENU=More vendor items that is based on %1 %2 exists.;ESP=Existen m s productos proveedor basados en %1 %2.';
+      BizTalkPartnerSetup@1000 : Record 99008513;
+      InboundProductCatalogHdr@1001 : Record 99008504;
+      InboundProductCatalogLine@1002 : Record 99008505;
+      CurrencyExchRate@1003 : Record 330;
+      GeneralLedgerSetup@1004 : Record 98;
+      Item@1005 : Record 27;
+      ItemVend@1006 : Record 99;
+      PurchPrice@1021 : Record 7012;
+      BizTalkManagement@1007 : Codeunit 99008508;
+      CurrencyCode@1008 : Code[10];
+      CurrencyFactor@1009 : Decimal;
+      CurrencyDate@1010 : Date;
+      ItemExists@1011 : Boolean;
+
+    PROCEDURE SetData@1(BizTalkPartnerSetupHdr@1000 : Record 99008513;ParInboundProductCatalogHdr@1001 : Record 99008504;ParInboundProductCatalogLine@1002 : Record 99008505);
+    BEGIN
+      BizTalkPartnerSetup := BizTalkPartnerSetupHdr;
+      InboundProductCatalogHdr := ParInboundProductCatalogHdr;
+      InboundProductCatalogLine := ParInboundProductCatalogLine;
+    END;
+
+    PROCEDURE CheckCurrencyCode@2();
+    BEGIN
+      InboundProductCatalogLine.TESTFIELD("Currency Code");
+      GeneralLedgerSetup.GET;
+      IF InboundProductCatalogLine."Currency Code" <> GeneralLedgerSetup."LCY Code" THEN BEGIN
+        CurrencyCode := InboundProductCatalogLine."Currency Code";
+        CurrencyDate := WORKDATE;
+        CurrencyFactor := CurrencyExchRate.ExchangeRate(CurrencyDate,InboundProductCatalogLine."Currency Code");
+      END ELSE BEGIN
+        CurrencyCode := '';
+        CurrencyFactor := 1;
+      END;
+    END;
+
+    PROCEDURE FindItem@4() : Boolean;
+    VAR
+      ItemNo@1000 : Code[20];
+    BEGIN
+      CASE BizTalkPartnerSetup."Product Item Number Type" OF
+        BizTalkPartnerSetup."Product Item Number Type"::"Internal Item No.":
+          BEGIN
+            InboundProductCatalogLine.TESTFIELD("No.");
+          END;
+        BizTalkPartnerSetup."Product Item Number Type"::"Vendor Item No.":
+          BEGIN
+            InboundProductCatalogLine.TESTFIELD("Vendor Item No.");
+            ItemNo := ConvertVendorItemNo(
+                        InboundProductCatalogLine."Vendor Item No.",
+                        InboundProductCatalogHdr."Vendor No.");
+          END;
+        BizTalkPartnerSetup."Purchase Item Number Type"::"Common Item No.":
+          BEGIN
+            InboundProductCatalogLine.TESTFIELD("Common Item No.");
+            ItemNo := ConvertCommonItemNo(InboundProductCatalogLine."Common Item No.");
+          END;
+      END;
+      IF ItemNo = '' THEN
+        EXIT(FALSE);
+      Item.SETRANGE("No.",ItemNo);
+      IF Item.FIND('-') THEN BEGIN
+        CheckItemCount;
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE ItemUpdate@12();
+    BEGIN
+      CASE BizTalkPartnerSetup."Item Import Destination" OF
+        BizTalkPartnerSetup."Item Import Destination"::"Item Card":
+          ItemUpdateFields;
+
+        BizTalkPartnerSetup."Item Import Destination"::"Item Vendor Catalog":
+          BEGIN
+            IF ItemVendFind THEN BEGIN
+              IF ItemVend.DELETE THEN;
+              IF PurchPrice.DELETE THEN;
+            END;
+            ItemVendCreate;
+          END;
+
+        BizTalkPartnerSetup."Item Import Destination"::Both:
+          BEGIN
+            ItemUpdateFields;
+            IF ItemVendFind THEN BEGIN
+              IF ItemVend.DELETE THEN;
+              IF PurchPrice.DELETE THEN;
+            END;
+            ItemVendCreate;
+          END;
+      END;
+    END;
+
+    PROCEDURE ItemCreate@7();
+    BEGIN
+      Item.INIT;
+      Item.INSERT(TRUE);
+
+      IF BizTalkPartnerSetup."Def. Inv. Posting Group" <> '' THEN
+        Item.VALIDATE("Inventory Posting Group",BizTalkPartnerSetup."Def. Inv. Posting Group");
+      IF BizTalkPartnerSetup."Def. Gen. Prod. Posting Group" <> '' THEN
+        Item.VALIDATE("Gen. Prod. Posting Group",BizTalkPartnerSetup."Def. Gen. Prod. Posting Group");
+      IF BizTalkPartnerSetup."Def. VAT Prod. Posting Group" <> '' THEN
+        Item.VALIDATE("VAT Prod. Posting Group",BizTalkPartnerSetup."Def. VAT Prod. Posting Group");
+
+      ItemUpdateFields;
+
+      CASE BizTalkPartnerSetup."Item Import Destination" OF
+        BizTalkPartnerSetup."Item Import Destination"::"Item Vendor Catalog",
+        BizTalkPartnerSetup."Item Import Destination"::Both:
+          ItemVendCreate
+      END;
+    END;
+
+    PROCEDURE ItemUpdateFields@9();
+    VAR
+      UnitOfMeasure@1000 : Record 204;
+      ItemUnitOfMeasure@1001 : Record 5404;
+    BEGIN
+      Item.VALIDATE("Vendor No.",InboundProductCatalogHdr."Vendor No.");
+      IF InboundProductCatalogLine."Common Item No." <> '' THEN
+        Item.VALIDATE("Common Item No.",InboundProductCatalogLine."Common Item No.");
+      IF InboundProductCatalogLine."Vendor Item No." <> '' THEN
+        Item.VALIDATE("Vendor Item No.",InboundProductCatalogLine."Vendor Item No.");
+      IF InboundProductCatalogLine.Description <> '' THEN
+        Item.VALIDATE(Description,InboundProductCatalogLine.Description);
+      IF InboundProductCatalogLine."Search Description" <> '' THEN
+        Item.VALIDATE("Search Description",InboundProductCatalogLine."Search Description");
+      IF (Item."Base Unit of Measure" <> '') AND (InboundProductCatalogLine."Base Unit of Measure" <> '') THEN
+        InboundProductCatalogLine.TESTFIELD("Base Unit of Measure",Item."Base Unit of Measure")
+      ELSE IF InboundProductCatalogLine."Base Unit of Measure" <> '' THEN BEGIN
+        UnitOfMeasure.INIT;
+        UnitOfMeasure.Code := InboundProductCatalogLine."Base Unit of Measure";
+        UnitOfMeasure.FIND;
+        ItemUnitOfMeasure.INIT;
+        ItemUnitOfMeasure."Item No." := Item."No.";
+        ItemUnitOfMeasure.Code := InboundProductCatalogLine."Base Unit of Measure";
+        IF NOT ItemUnitOfMeasure.FIND THEN
+          ItemUnitOfMeasure.INSERT;
+        Item.VALIDATE("Base Unit of Measure",InboundProductCatalogLine."Base Unit of Measure")
+      END;
+
+      CASE BizTalkPartnerSetup."Item Import Destination" OF
+        BizTalkPartnerSetup."Item Import Destination"::"Item Card",
+        BizTalkPartnerSetup."Item Import Destination"::Both:
+          BEGIN
+            IF InboundProductCatalogLine."No. 2" <> '' THEN
+              Item.VALIDATE("No. 2",InboundProductCatalogLine."No. 2");
+            IF InboundProductCatalogLine."Description 2" <> '' THEN
+              Item.VALIDATE("Description 2",InboundProductCatalogLine."Description 2");
+            IF InboundProductCatalogLine."Unit List Price" <> 0 THEN
+              Item.VALIDATE("Unit List Price",
+                CurrencyExchRate.ExchangeAmtFCYToLCY(
+                  CurrencyDate,CurrencyCode,InboundProductCatalogLine."Unit List Price",CurrencyFactor));
+            IF InboundProductCatalogLine."Gross Weight" <> 0 THEN
+              Item.VALIDATE("Gross Weight",InboundProductCatalogLine."Gross Weight");
+            IF InboundProductCatalogLine."Net Weight" <> 0 THEN
+              Item.VALIDATE("Net Weight",InboundProductCatalogLine."Net Weight");
+            IF InboundProductCatalogLine."Units per Parcel" <> 0 THEN
+              Item.VALIDATE("Units per Parcel",InboundProductCatalogLine."Units per Parcel");
+            IF InboundProductCatalogLine."Unit Volume" <> 0 THEN
+              Item.VALIDATE("Unit Volume",InboundProductCatalogLine."Unit Volume");
+            IF InboundProductCatalogLine."Unit Cost" <> 0 THEN
+              Item.VALIDATE("Last Direct Cost",
+                CurrencyExchRate.ExchangeAmtFCYToLCY(
+                  CurrencyDate,CurrencyCode,InboundProductCatalogLine."Unit Cost",CurrencyFactor));
+            IF InboundProductCatalogLine."Unit Price" <> 0 THEN
+              Item.VALIDATE("Unit Price",
+                CurrencyExchRate.ExchangeAmtFCYToLCY(
+                  CurrencyDate,CurrencyCode,InboundProductCatalogLine."Unit Price",CurrencyFactor));
+            Item.VALIDATE("Price Includes VAT",InboundProductCatalogLine."Price Includes VAT");
+            IF InboundProductCatalogLine."Country/Region of Origin Code" <> '' THEN
+              Item.VALIDATE("Country/Region of Origin Code",InboundProductCatalogLine."Country/Region of Origin Code");
+            IF BizTalkPartnerSetup."Import Item Picture" THEN BEGIN
+              InboundProductCatalogLine.CALCFIELDS(Picture);
+              Item.Picture := InboundProductCatalogLine.Picture;
+            END;
+            IF (InboundProductCatalogLine."Purch. Unit of Measure" <> '') AND
+               (InboundProductCatalogLine."Base Unit of Measure" <> '')
+            THEN
+              IF InboundProductCatalogLine."Purch. Unit of Measure" <> InboundProductCatalogLine."Base Unit of Measure" THEN BEGIN
+                IF InboundProductCatalogLine."Qty. per Unit of Measure" > 0 THEN BEGIN
+                  UnitOfMeasure.RESET;
+                  UnitOfMeasure.INIT;
+                  UnitOfMeasure.Code := InboundProductCatalogLine."Purch. Unit of Measure";
+                  UnitOfMeasure.FIND;
+                  ItemUnitOfMeasure.RESET;
+                  ItemUnitOfMeasure.INIT;
+                  ItemUnitOfMeasure."Item No." := Item."No.";
+                  ItemUnitOfMeasure.Code := InboundProductCatalogLine."Purch. Unit of Measure";
+                  IF NOT ItemUnitOfMeasure.FIND THEN BEGIN
+                    ItemUnitOfMeasure.INSERT;
+                    ItemUnitOfMeasure.VALIDATE("Qty. per Unit of Measure",InboundProductCatalogLine."Qty. per Unit of Measure");
+                    ItemUnitOfMeasure.MODIFY;
+                  END ELSE
+                    InboundProductCatalogLine.TESTFIELD("Qty. per Unit of Measure",ItemUnitOfMeasure."Qty. per Unit of Measure");
+                  Item.VALIDATE("Purch. Unit of Measure",InboundProductCatalogLine."Purch. Unit of Measure");
+                END;
+              END;
+          END;
+      END;
+
+      Item."Last Date Modified" := TODAY;
+      Item.MODIFY;
+    END;
+
+    PROCEDURE ItemVendCreate@8();
+    VAR
+      UnitOfMeasure@1001 : Record 204;
+      ItemUnitOfMeasure@1000 : Record 5404;
+    BEGIN
+      ItemVend.INIT;
+      ItemVend."Item No." := Item."No.";
+      ItemVend.VALIDATE("Vendor No.",InboundProductCatalogHdr."Vendor No.");
+      IF InboundProductCatalogLine."Vendor Item No." <> '' THEN
+        ItemVend.VALIDATE("Vendor Item No.",InboundProductCatalogLine."Vendor Item No.");
+      IF (InboundProductCatalogLine."Purch. Unit of Measure" <> '') AND
+         (InboundProductCatalogLine."Qty. per Unit of Measure" > 0)
+      THEN BEGIN
+        IF (Item."Base Unit of Measure" <> '') AND (InboundProductCatalogLine."Base Unit of Measure" <> '') THEN
+          InboundProductCatalogLine.TESTFIELD("Base Unit of Measure",Item."Base Unit of Measure");
+        Item.TESTFIELD("Base Unit of Measure");
+        IF (InboundProductCatalogLine."Purch. Unit of Measure" <> '') AND
+           (InboundProductCatalogLine."Base Unit of Measure" <> '')
+        THEN
+          IF InboundProductCatalogLine."Qty. per Unit of Measure" > 0 THEN BEGIN
+            UnitOfMeasure.INIT;
+            UnitOfMeasure.VALIDATE(Code,InboundProductCatalogLine."Purch. Unit of Measure");
+            UnitOfMeasure.FIND;
+            ItemUnitOfMeasure.INIT;
+            ItemUnitOfMeasure."Item No." := Item."No.";
+            ItemUnitOfMeasure.VALIDATE(Code,InboundProductCatalogLine."Purch. Unit of Measure");
+            IF NOT ItemUnitOfMeasure.FIND THEN BEGIN
+              ItemUnitOfMeasure.INSERT;
+              ItemUnitOfMeasure.VALIDATE("Qty. per Unit of Measure",InboundProductCatalogLine."Qty. per Unit of Measure");
+              ItemUnitOfMeasure.MODIFY;
+            END ELSE
+              InboundProductCatalogLine.TESTFIELD("Qty. per Unit of Measure",ItemUnitOfMeasure."Qty. per Unit of Measure");
+          END;
+      END;
+
+      ItemVend.INSERT;
+      InsertPurchasePrice;
+    END;
+
+    PROCEDURE InsertPurchasePrice@19();
+    VAR
+      UnitOfMeasure@1001 : Record 204;
+      ItemUnitOfMeasure@1000 : Record 5404;
+    BEGIN
+      PurchPrice.INIT;
+      PurchPrice."Item No." := Item."No.";
+      PurchPrice.VALIDATE("Vendor No.",InboundProductCatalogHdr."Vendor No.");
+      IF InboundProductCatalogLine."Starting Date" <> 0D THEN
+        PurchPrice.VALIDATE("Starting Date",InboundProductCatalogLine."Starting Date");
+      IF (InboundProductCatalogLine."Purch. Unit of Measure" <> '') AND
+        (InboundProductCatalogLine."Qty. per Unit of Measure" > 0)
+        THEN BEGIN
+          IF (Item."Base Unit of Measure" <> '') AND (InboundProductCatalogLine."Base Unit of Measure" <> '') THEN
+            InboundProductCatalogLine.TESTFIELD("Base Unit of Measure",Item."Base Unit of Measure");
+            Item.TESTFIELD("Base Unit of Measure");
+            IF (InboundProductCatalogLine."Purch. Unit of Measure" <> '') AND
+              (InboundProductCatalogLine."Base Unit of Measure" <> '')
+              THEN
+                IF InboundProductCatalogLine."Qty. per Unit of Measure" > 0 THEN BEGIN
+                  UnitOfMeasure.INIT;
+                  UnitOfMeasure.VALIDATE(Code,InboundProductCatalogLine."Purch. Unit of Measure");
+                  UnitOfMeasure.FIND;
+                  ItemUnitOfMeasure.INIT;
+                  ItemUnitOfMeasure."Item No." := Item."No.";
+                  ItemUnitOfMeasure.VALIDATE(Code,InboundProductCatalogLine."Purch. Unit of Measure");
+                  IF NOT ItemUnitOfMeasure.FIND THEN BEGIN
+                    ItemUnitOfMeasure.INSERT;
+                    ItemUnitOfMeasure.VALIDATE("Qty. per Unit of Measure",InboundProductCatalogLine."Qty. per Unit of Measure");
+                    ItemUnitOfMeasure.MODIFY;
+                  END ELSE
+                    InboundProductCatalogLine.TESTFIELD("Qty. per Unit of Measure",ItemUnitOfMeasure."Qty. per Unit of Measure");
+                  PurchPrice.VALIDATE("Unit of Measure Code",InboundProductCatalogLine."Purch. Unit of Measure");
+                END;
+        END;
+
+      PurchPrice.VALIDATE("Currency Code",CurrencyCode);
+      IF InboundProductCatalogLine."Unit Cost" <> 0 THEN
+        PurchPrice.VALIDATE("Direct Unit Cost",InboundProductCatalogLine."Unit Cost");
+      PurchPrice.INSERT;
+    END;
+
+    PROCEDURE ItemVendFind@15() : Boolean;
+    BEGIN
+      ItemVend.RESET;
+      ItemVend.SETCURRENTKEY("Vendor No.","Item No.");
+      ItemVend.SETRANGE("Vendor No.",InboundProductCatalogHdr."Vendor No.");
+      ItemVend.SETRANGE("Item No.",Item."No.");
+
+      PurchPrice.RESET;
+      PurchPrice.SETCURRENTKEY("Vendor No.","Item No.","Starting Date","Currency Code","Variant Code","Unit of Measure Code");
+      PurchPrice.SETRANGE("Vendor No.",InboundProductCatalogHdr."Vendor No.");
+      PurchPrice.SETRANGE("Item No.",Item."No.");
+      PurchPrice.SETRANGE("Starting Date",InboundProductCatalogLine."Starting Date");
+      PurchPrice.SETRANGE("Unit of Measure Code",InboundProductCatalogLine."Purch. Unit of Measure");
+
+      IF ItemVend.FIND('-') OR PurchPrice.FIND('-') THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CheckItemCount@11();
+    VAR
+      Item1@1000 : Record 27;
+    BEGIN
+      Item1 := Item;
+      Item1.COPYFILTERS(Item);
+
+      IF Item1.NEXT <> 0 THEN
+        CASE BizTalkPartnerSetup."Product Item Number Type" OF
+          BizTalkPartnerSetup."Product Item Number Type"::"Internal Item No.":
+            ERROR(
+              Text000,
+              BizTalkPartnerSetup."Product Item Number Type",
+              InboundProductCatalogLine."No.");
+        BizTalkPartnerSetup."Product Item Number Type"::"Vendor Item No.":
+            ERROR(
+              Text001,
+              BizTalkPartnerSetup."Product Item Number Type",
+              InboundProductCatalogHdr.FIELDCAPTION("Vendor No."),
+              InboundProductCatalogHdr."Vendor No.",
+              InboundProductCatalogLine.FIELDCAPTION("Vendor Item No."),
+              InboundProductCatalogLine."Vendor Item No.");
+        BizTalkPartnerSetup."Product Item Number Type"::"Common Item No.":
+            ERROR(
+              Text000,
+              BizTalkPartnerSetup."Product Item Number Type",
+              InboundProductCatalogLine."Common Item No.");
+      END;
+    END;
+
+    PROCEDURE ExistingItemError@16();
+    BEGIN
+      CASE BizTalkPartnerSetup."Product Item Number Type" OF
+        BizTalkPartnerSetup."Product Item Number Type"::"Internal Item No.":
+          ERROR(
+            Text002,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."No.");
+
+        BizTalkPartnerSetup."Product Item Number Type"::"Vendor Item No.":
+          ERROR(
+            Text003,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."Vendor Item No.",
+            InboundProductCatalogHdr.FIELDCAPTION("Vendor No."),
+            InboundProductCatalogHdr."Vendor No.");
+
+        BizTalkPartnerSetup."Product Item Number Type"::"Common Item No.":
+          ERROR(
+            Text002,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."Common Item No.");
+      END;
+    END;
+
+    PROCEDURE MissingItemError@13();
+    BEGIN
+      CASE BizTalkPartnerSetup."Product Item Number Type" OF
+        BizTalkPartnerSetup."Product Item Number Type"::"Internal Item No.":
+          ERROR(
+            Text004,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."No.");
+
+        BizTalkPartnerSetup."Product Item Number Type"::"Vendor Item No.":
+          ERROR(
+            Text005,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."Vendor Item No.",
+            InboundProductCatalogHdr.FIELDCAPTION("Vendor No."),
+            InboundProductCatalogHdr."Vendor No.");
+
+        BizTalkPartnerSetup."Product Item Number Type"::"Common Item No.":
+          ERROR(
+            Text006,
+            BizTalkPartnerSetup."Product Item Number Type",
+            InboundProductCatalogLine."Common Item No.");
+      END;
+    END;
+
+    PROCEDURE ConvertCommonItemNo@6(CommonItemNo@1001 : Code[20]) ItemNo@1000 : Code[20];
+    VAR
+      Item1@1002 : Record 27;
+    BEGIN
+      Item1.SETCURRENTKEY("Common Item No.");
+      Item1.SETRANGE("Common Item No.",CommonItemNo);
+      IF Item1.FIND('-') THEN
+        IF Item1.NEXT <> 0 THEN
+          ERROR(Text007,Item1.FIELDCAPTION("Common Item No."),CommonItemNo)
+        ELSE
+          ItemNo := Item1."No."
+    END;
+
+    PROCEDURE ConvertVendorItemNo@17(VendorItemNo@1001 : Code[20];VendNo@1002 : Code[20]) ItemNo@1000 : Code[20];
+    VAR
+      ItemVend1@1003 : Record 99;
+      Item1@1004 : Record 27;
+    BEGIN
+      ItemVend1.SETCURRENTKEY("Vendor No.","Vendor Item No.");
+      ItemVend1.SETRANGE("Vendor No.",VendNo);
+      ItemVend1.SETRANGE("Vendor Item No.",VendorItemNo);
+      IF ItemVend1.FIND('-') THEN BEGIN
+        ItemNo := ItemVend1."Item No.";
+        REPEAT
+          IF ItemNo <> ItemVend1."Item No." THEN
+            ERROR(Text008,ItemVend1.FIELDCAPTION("Vendor Item No."),
+              VendorItemNo);
+        UNTIL ItemVend1.NEXT = 0;
+        EXIT;
+      END;
+      Item1.SETCURRENTKEY("Vendor Item No.","Vendor No.");
+      Item1.SETRANGE("Vendor Item No.",VendorItemNo);
+      Item1.SETRANGE("Vendor No.",VendNo);
+      IF Item1.FIND('-') THEN BEGIN
+        IF Item1.NEXT <> 0 THEN
+          ERROR(Text008,ItemVend1.FIELDCAPTION("Vendor Item No."),
+            VendorItemNo)
+        ELSE BEGIN
+          ItemNo := Item1."No.";
+          EXIT;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

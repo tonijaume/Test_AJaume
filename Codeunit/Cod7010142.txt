@@ -1,0 +1,346 @@
+OBJECT Codeunit 7010142 Retroceder servicio excursion
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/05/15;
+    Time=10:50:29;
+    Modified=Yes;
+    Version List=AIC2009,OC-14044;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355001 : TextConst 'ENU=&Current,&Filtered;ESP=&Actual,&Filtrado';
+      Text001@1103355002 : TextConst 'ENU=Cancelled service #1######;ESP=Anulado servicio #1######';
+      Text002@1103355003 : TextConst 'ENU=Unable to cancel this grouping,\;ESP=Es imposible volver atras esta agrupacion,\';
+      Text003@1103355004 : TextConst 'ENU=some booking has already been settled;ESP=alguna reserva ya ha sido liquidada.';
+      Text004@1103355005 : TextConst 'ENU=Unable to return this service to previous status.;ESP=Es imposible volver atras esta agrupacion.';
+      Text005@1103355006 : TextConst 'ENU=Some cost lines are already validated;ESP=Algunas l¡neas de coste ya est n validadas';
+      Text006@1100217003 : TextConst 'ENU=Some reservation have been invoiced.;ESP=Alguna reserva esta facturada.';
+      Text007@1103355008 : TextConst 'ENU=Would you like to generate cancellation expenses?;ESP=Desea generar los gastos de anulacion?';
+      Text008@1103355009 : TextConst 'ENU=EXGO;ESP=EXGO';
+      Dialogo@1103355000 : Dialog;
+      Text009@1100217000 : TextConst 'ENU=Do you want to cancel the service %1;ESP=Desea anular el servicio %1';
+      Text010@1100217001 : TextConst 'ENU=Do you want to disconfirm the service %1;ESP=Desea desconfirmar el servicio %1';
+      Text011@1100217002 : TextConst 'ENU=Cancel confirmation service #1######;ESP=Desconfirmando servicio #1######';
+
+    PROCEDURE Deshacer_Excursion@1(VAR rServ@1103355000 : Record 7010163);
+    VAR
+      rServicio@1103355001 : Record 7010163;
+      Opcion@1103355002 : Integer;
+      rReserva@1103355003 : Record 7010162;
+      rCI@1103355004 : Record 7010166;
+    BEGIN
+      // Deshacer_Excursion
+
+      Opcion := STRMENU(Text000);
+      IF Opcion = 0 THEN
+        EXIT;
+      rServicio.COPYFILTERS(rServ);
+      rServicio := rServ;
+
+      IF Opcion = 1 THEN
+        rServicio.SETRANGE("N§ Servicio", rServicio."N§ Servicio");
+      IF rServicio.FINDSET THEN BEGIN
+        Dialogo.OPEN(Text001);
+        REPEAT
+          Dialogo.UPDATE(1, rServicio."N§ Servicio");
+
+          Pedir_Gastos(rServicio);
+        UNTIL rServicio.NEXT = 0;
+        Dialogo.CLOSE;
+      END;
+      rServicio.SETRANGE("N§ Servicio");
+    END;
+
+    PROCEDURE Pedir_Gastos@7(VAR rServicio@1103355000 : Record 7010163);
+    BEGIN
+      // Pedir_Gastos
+
+      IF CONFIRM(Text007, FALSE) THEN
+        PasarAAnulado(rServicio)
+      ELSE
+        QuitarDeConfirmado(rServicio);
+    END;
+
+    PROCEDURE PasarAAnulado@10(VAR prServicio@1103355000 : Record 7010163);
+    VAR
+      lrServicio2@1103355001 : Record 7010163;
+      lrCI@1103355002 : Record 7010166;
+      lrCIAux@1103355003 : Record 7010166;
+      lrPrestacion@1103355004 : Record 7010170;
+      lrPreciosGO@1103355005 : Record 7010154;
+      lrReserva@1103355006 : Record 7010162;
+      lrPar@1100217000 : Record 7009700;
+      lrICD@1100217002 : Record 7010264;
+      lcFacturar@1100217001 : Codeunit 7010140;
+    BEGIN
+      // PasarAAnulado
+
+      IF NOT CONFIRM(Text009, FALSE, prServicio."N§ Servicio") THEN
+        EXIT;
+
+      _CheckFacturado(prServicio);
+
+      _CheckCosteValidado(prServicio); //+$004
+
+      //$003  <
+      lrPar.FINDFIRST;
+      IF lrPar."Facturar tickets x fecha venta" THEN
+      BEGIN
+        COMMIT;
+        lcFacturar.GeneraFPR(prServicio.Delegacion, prServicio."N§ Servicio", '', prServicio.Oficina, TRUE);
+      END
+      ELSE
+        _CheckFacturado(prServicio);
+      //$003  >
+
+      lrServicio2 := prServicio;
+      lrServicio2.Estado := lrServicio2.Estado::Anulada;
+      lrServicio2.MODIFY;
+
+      lrCI.RESET;
+      lrCI.SETRANGE(Delegacion   , lrServicio2.Delegacion);
+      lrCI.SETRANGE("N§ Servicio", lrServicio2."N§ Servicio");
+      lrCI.SETRANGE(Concepto     , Text008);
+      IF lrCI.FINDFIRST THEN
+      BEGIN
+        lrCIAux := lrCI;
+        lrCIAux.CALCSUMS(Importe); //+$005
+      END;
+
+      lrCI.SETRANGE(Concepto);
+      lrCI.DELETEALL(TRUE);
+
+      lrPrestacion.RESET;
+      lrPrestacion.SETRANGE(Delegacion     , lrServicio2.Delegacion);
+      lrPrestacion.SETRANGE("Tipo Contrato", lrPrestacion."Tipo Contrato"::"Guia Oficial");
+      lrPrestacion.SETRANGE("N§ Servicio"  , lrServicio2."N§ Servicio");
+      IF lrPrestacion.FINDSET THEN
+      BEGIN
+        REPEAT
+          lrPreciosGO.RESET;
+          lrPreciosGO.SETRANGE(Delegacion    , lrServicio2.Delegacion);
+          lrPreciosGO.SETRANGE("N§ Contrato" , lrPrestacion."N§ Contrato");
+          lrPreciosGO.SETRANGE("Tipo precio" , lrPreciosGO."Tipo precio"::"Precio Base");
+          lrPreciosGO.SETFILTER("Fecha desde", '<=%1', lrServicio2.Fecha);
+          lrPreciosGO.SETFILTER("Fecha hasta", '>=%1', lrServicio2.Fecha);
+          IF lrPreciosGO.FINDFIRST AND (lrCIAux.Importe <> 0) THEN
+          BEGIN
+            lrCIAux.VALIDATE(Importe, ROUND(lrCIAux.Importe * lrPreciosGO."% Gastos Anulacion" / 100));
+            lrCIAux.INSERT(TRUE);
+
+            //+$006 <
+            IF lrPar."Facturar tickets x fecha venta" THEN
+            BEGIN
+              COMMIT;
+              lcFacturar.GeneraFPR(prServicio.Delegacion, prServicio."N§ Servicio", '', prServicio.Oficina, FALSE);
+            END;
+            //+$006 >
+          END;
+        UNTIL lrPrestacion.NEXT = 0;
+      END;
+
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY("N§ Servicio");
+      lrReserva.SETRANGE("N§ Servicio", lrServicio2."N§ Servicio");
+      IF lrReserva.FINDSET(TRUE) THEN
+      BEGIN
+        lrReserva.MODIFYALL(Confirmada   , FALSE);
+        lrReserva.MODIFYALL("N§ Servicio", 0);
+      END;
+
+      _BorrarFicherosAsociados(prServicio, TRUE);
+
+      //+$007
+      lrICD.MarkPeriodExc(prServicio.Fecha);
+    END;
+
+    PROCEDURE QuitarDeConfirmado@11(VAR prServicio@1103355000 : Record 7010163);
+    VAR
+      lrReserva@1103355001 : Record 7010162;
+      lrCoste@1103355002 : Record 7010166;
+      lrPar@1100217000 : Record 7009700;
+      lrICD@1100217002 : Record 7010264;
+      lcFacturar@1100217001 : Codeunit 7010140;
+    BEGIN
+      // QuitarDeConfirmado
+
+      _CheckCosteValidado(prServicio); //+$004
+
+      prServicio.Estado := prServicio.Estado::Generada;
+      prServicio.MODIFY;
+
+      //$003  <
+      lrPar.FINDFIRST;
+      IF lrPar."Facturar tickets x fecha venta" THEN
+      BEGIN
+        COMMIT;
+        lcFacturar.GeneraFPR(prServicio.Delegacion, prServicio."N§ Servicio", '', prServicio.Oficina, TRUE);
+      END
+      ELSE
+        _CheckFacturado(prServicio);
+      //$003  >
+
+      lrCoste.RESET;
+      lrCoste.SETRANGE(Delegacion   , prServicio.Delegacion);
+      lrCoste.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF lrCoste.FINDSET(TRUE) THEN
+        lrCoste.DELETEALL(TRUE);
+
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY("N§ Servicio");
+      lrReserva.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF lrReserva.FINDSET(TRUE) THEN
+      BEGIN
+        lrReserva.MODIFYALL(Confirmada, FALSE);
+      END;
+
+      _BorrarFicherosAsociados(prServicio, FALSE);
+
+      //+$007
+      lrICD.MarkPeriodExc(prServicio.Fecha);
+    END;
+
+    LOCAL PROCEDURE _CheckFacturado@1100217000(prServicio@1100217000 : Record 7010163);
+    VAR
+      lrReserva@1100217001 : Record 7010162;
+    BEGIN
+      // _CheckFacturado
+
+      lrReserva.RESET;
+      lrReserva.SETCURRENTKEY("N§ Servicio");
+      lrReserva.SETRANGE ("N§ Servicio" , prServicio."N§ Servicio");
+      lrReserva.SETFILTER("Num. Factura", '<>%1', '');
+      IF NOT lrReserva.ISEMPTY THEN
+        ERROR(Text004 + '\' + Text006);
+    END;
+
+    LOCAL PROCEDURE _CheckCosteValidado@1100217002(prServicio@1100217000 : Record 7010163);
+    VAR
+      lrCoste@1100217001 : Record 7010166;
+    BEGIN
+      // _CheckCosteValidado
+
+      lrCoste.RESET;
+      lrCoste.SETRANGE (Delegacion   , prServicio.Delegacion);
+      lrCoste.SETRANGE ("N§ Servicio", prServicio."N§ Servicio");
+      lrCoste.SETFILTER("N§ Factura" , '<>%1', '');
+      IF NOT lrCoste.ISEMPTY THEN
+        ERROR(Text004 + '\' + Text005);
+    END;
+
+    LOCAL PROCEDURE _BorrarFicherosAsociados@1100217006(prServicio@1100217000 : Record 7010163;pwAnulacion@1100217001 : Boolean);
+    VAR
+      rSupl@1100217007 : Record 7010171;
+      rSuplGO@1100217006 : Record 7010172;
+      rZon@1100217005 : Record 7010173;
+      rMar@1100217004 : Record 7010174;
+      rError@1100217003 : Record 7010175;
+      rVer@1100217002 : Record 7010176;
+    BEGIN
+      // _BorrarFicherosAsociados
+
+      //+$001 <
+      IF pwAnulacion THEN
+      BEGIN
+        rSupl.RESET;
+        rSupl.SETRANGE(Delegacion   , prServicio.Delegacion);
+        rSupl.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+        IF rSupl.FINDSET(TRUE) THEN
+          rSupl.DELETEALL;
+
+        rSuplGO.RESET;
+        rSuplGO.SETRANGE(Delegacion   , prServicio.Delegacion);
+        rSuplGO.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+        IF rSuplGO.FINDSET(TRUE) THEN
+          rSuplGO.DELETEALL;
+
+        // $002
+        // Borra registros de servicios de soporte relacionados
+        prServicio.BorraRegistrosSOP;
+      END;
+      //+$001 <
+
+      rZon.RESET;
+      rZon.SETRANGE(Delegacion   , prServicio.Delegacion);
+      rZon.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF rZon.FINDSET(TRUE) THEN
+        rZon.DELETEALL;
+
+      rMar.RESET;
+      rMar.SETRANGE(Delegacion   , prServicio.Delegacion);
+      rMar.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF rMar.FINDSET(TRUE) THEN
+        rMar.DELETEALL;
+
+      rError.RESET;
+      rError.SETRANGE(Servicio, prServicio."N§ Servicio");
+      IF rError.FINDSET(TRUE) THEN
+        rError.DELETEALL;
+
+      rVer.RESET;
+      rVer.SETRANGE(Delegacion   , prServicio.Delegacion);
+      rVer.SETRANGE("N§ Servicio", prServicio."N§ Servicio");
+      IF rVer.FINDSET(TRUE) THEN
+        rVer.DELETEALL;
+    END;
+
+    PROCEDURE RetrocederConfirmados@1100217001(VAR prSer@1100217000 : Record 7010163);
+    VAR
+      lrSer@1100217001 : Record 7010163;
+      opcion@1100217002 : Integer;
+    BEGIN
+      opcion := STRMENU(Text000);
+      IF opcion = 0 THEN
+        EXIT;
+
+      CLEAR(lrSer);
+      lrSer.COPYFILTERS(prSer);
+      lrSer := prSer;
+
+      IF opcion = 1 THEN
+        lrSer.SETRANGE("N§ Servicio", lrSer."N§ Servicio");
+      IF lrSer.FINDSET THEN
+      BEGIN
+        IF NOT CONFIRM(Text010, FALSE, lrSer."N§ Servicio") THEN
+          EXIT;
+
+        Dialogo.OPEN(Text011);
+        REPEAT
+          Dialogo.UPDATE(1, lrSer."N§ Servicio");
+
+          QuitarDeConfirmado(lrSer);
+        UNTIL lrSer.NEXT = 0;
+        Dialogo.CLOSE;
+      END;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 25032011 Al desconfirmar una excursion no hay que borrar los suplementos de compra ni los
+                        suplementos de guia oficial
+
+      $002 JPT 16/05/12 CNT-CAR-12004 / EXC-08 Transport support service. PasaraAnulado. Borra registros relacionados
+
+      $003 AJS 21092012 Cuando desconfirmamos un servicio hay que retroceder el asiento de FPR que se hace al confirmar
+
+      $004 AJS 25092013 Nueva funcion _CheckCosteValidado para controlar si el coste de la agrupacion esta validado
+
+      $005 AJS 08012014 Hay sumar el coste total del guia oficial para conocer los gastos de cancelacion
+
+      $006 AJS 08012014 Si se crea coste de guia hay que generar el asiento de FPR segun configuracion
+
+      $007 AJS 28052014 CNT-OC-14044, Comprobamos si hay que marcar el periodo ICD
+
+      $008 AJS 28052015 Los borrados de coste se tienen que hacer con TRUE
+    }
+    END.
+  }
+}

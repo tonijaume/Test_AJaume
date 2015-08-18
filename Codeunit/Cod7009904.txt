@@ -1,0 +1,324 @@
+OBJECT Codeunit 7009904 Excel-Conciliacion Hotel Pay
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    TableNo=7010070;
+    OnRun=BEGIN
+
+            _GenerarExcel(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      wFil@1100253000 : Integer;
+      wCol@1100253001 : Integer;
+      cExcel@1100253002 : Codeunit 7009755;
+      Text001@1100253003 : TextConst 'ENU=Generating Excel: @1@@@@@@@@@;ESP=Generando Excel: @1@@@@@@@@@';
+      Text002@1100253004 : TextConst 'ENU=Only show vouchers with differences?;ESP=¨Mostrar solo bonos con diferencias?';
+      Text003@1100253005 : TextConst 'ENU=Al filtered lines are about to be exported to excel, continue?;ESP=Se exportaran a excel todas las lineas filtradas en la pantalla, continuar?';
+
+    LOCAL PROCEDURE _GenerarExcel@1100253012(VAR prConc@1100253003 : Record 7010070);
+    VAR
+      lwHPL@1100253002 : Code[10];
+      lwDesde@1100253001 : Date;
+      lwHasta@1100253000 : Date;
+    BEGIN
+      // _GenerarExcel
+
+      //-$004IF _GetFiltros(lwHPL, lwDesde, lwHasta) THEN BEGIN
+
+      //. Utilizo la funcion GetFiltros para que el usuario especifique el periodo de fechas que se muestra en la cabecera
+      //. del libro Excel
+
+      _GetFiltros(lwHPL, lwDesde, lwHasta); //+$004
+
+      IF CONFIRM(Text003) THEN BEGIN //+$004
+        // Se cambia el lenguaje global a ingl‚s para que los valores de los options
+        // salgan en ingl‚s.
+        GLOBALLANGUAGE := 1033;
+        _GenerarExcelConcITS(prConc, lwDesde, lwHasta);
+        GLOBALLANGUAGE := 1034;
+        cExcel.JustificarHoja;
+        cExcel.Mostrar;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GenerarExcelConcITS@1100253001(VAR prConc@1100253000 : Record 7010070;pwDesde@1100253001 : Date;pwHasta@1100253002 : Date);
+    VAR
+      lrConcBono@1100253003 : Record 7010070;
+      lrTotTMP@1100253004 : TEMPORARY Record 88001;
+      lrTipTMP@1100253006 : TEMPORARY Record 88001;
+      lrGranTotTMP@1100253007 : TEMPORARY Record 88001;
+      lwHotelAnt@1100253005 : Code[20];
+      lwDialog@1100253008 : Dialog;
+      lwTot@1100253009 : Integer;
+      lwCont@1100253010 : Integer;
+    BEGIN
+      // GenerarExcelConcITS.
+
+      CLEAR(cExcel);
+      cExcel.Nuevo;
+      _InitCursor;
+
+      CLEAR(lrConcBono);
+
+      //-$004lrConcBono.SETCURRENTKEY("N§ HPL", "Hotel TO BLANK", "Fecha llegada BLANK");
+      //-$004lrConcBono.SETRANGE ("N§ HPL"             , pwHPL);
+
+      //-$003lrConcBono.SETRANGE ("Fecha llegada BLANK", pwDesde, pwHasta);
+
+      //-$004lrConcBono.SETRANGE("No Analisis", FALSE); //$001
+
+      //+$002
+      //-$004IF CONFIRM(Text002) THEN
+      //-$004  lrConcBono.SETFILTER("Tipo conciliacion", '<>%1', lrConcBono."Tipo conciliacion"::Iguales);
+      //+$002
+
+      //-$005lrConcBono.COPYFILTERS(prConc);
+      lrConcBono.COPY(prConc); //+$005
+
+      lwTot := lrConcBono.COUNT;
+      IF lrConcBono.FINDSET THEN BEGIN
+        lwDialog.OPEN(Text001);
+        // Se genera la cabecera general.
+        _GenerarCabecera(lrConcBono, pwDesde, pwHasta); _NuevaLinea; _NuevaLinea;
+
+        CLEAR(lrTotTMP); CLEAR(lrGranTotTMP);
+
+        // se limpia resumen por tipo conciliaci¢n.
+        CLEAR(lrTipTMP); lrTipTMP.DELETEALL;
+
+        REPEAT
+          lwCont += 1;
+          lwDialog.UPDATE(1, ROUND((lwCont/lwTot)*10000, 1));
+          IF lrConcBono."Hotel TO BLANK" <> lwHotelAnt THEN BEGIN
+
+            // Se imprimen los totales x hotel si hay cambio de hotel y no es el primero.
+            IF lwHotelAnt <> '' THEN BEGIN
+              _GenerarTotalesxHotel(lrTotTMP); _NuevaLinea; _NuevaLinea;
+              CLEAR(lrTotTMP);
+            END;
+
+            lwHotelAnt := lrConcBono."Hotel TO BLANK";
+
+            // Se genera la cabecera de hotel si hay cambio de hotel.
+            _GenerarCabHotel(lrConcBono, pwDesde); _NuevaLinea;
+
+          END;
+
+          _GenerarLineaDetalle(lrConcBono, lrTipTMP, lrTotTMP, lrGranTotTMP); _NuevaLinea;
+
+        UNTIL lrConcBono.NEXT = 0;
+
+        _GenerarTotalesxHotel(lrTotTMP); _NuevaLinea; _NuevaLinea;
+        _GenerarResumenTipo  (lrTipTMP); _NuevaLinea;
+        _GenerarGranTotal    (lrGranTotTMP);
+
+        lwDialog.CLOSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GetFiltros@1100253002(VAR pwHPL@1100253000 : Code[10];VAR pwDesde@1100253001 : Date;VAR pwHasta@1100253002 : Date) rvOk : Boolean;
+    VAR
+      lfForm@1100253003 : Form 7010021;
+    BEGIN
+      // _GetFiltros.
+
+      CLEAR(pwHPL);
+      CLEAR(pwDesde);
+      CLEAR(pwHasta);
+
+      CLEAR(lfForm);
+      lfForm.LOOKUPMODE := TRUE;
+      rvOk := (lfForm.RUNMODAL IN [ACTION::OK, ACTION::LookupOK]);
+
+      IF rvOk THEN
+        lfForm.GetDatos(pwHPL, pwDesde, pwHasta);
+    END;
+
+    LOCAL PROCEDURE _InitCursor@1100253000();
+    BEGIN
+      // _InitCursor.
+
+      wFil := 1;
+      wCol := 1;
+    END;
+
+    LOCAL PROCEDURE _GenerarCabecera@1100253003(VAR prConcBono@1100253002 : Record 7010070;pwDesde@1100253000 : Date;pwHasta@1100253001 : Date);
+    BEGIN
+      // _GenerarCabecera.
+
+
+      cExcel.ValorCelda(wFil, wCol, 'DESTINATION ' + prConcBono.Delegacion, TRUE, FALSE, FALSE); _NuevaLinea;
+      cExcel.ValorCelda(wFil, wCol, 'CONCILIATION PERIOD ' + FORMAT(pwDesde) + ' - '  + FORMAT(pwHasta), TRUE, FALSE, FALSE);
+    END;
+
+    LOCAL PROCEDURE _NuevaLinea@1100253004();
+    BEGIN
+      // _NuevaLinea.
+
+      wFil += 1;
+      wCol := 1;
+    END;
+
+    LOCAL PROCEDURE _AvanzaCelda@1100253005();
+    BEGIN
+      // _AvanzaCelda.
+
+      wCol += 1;
+    END;
+
+    LOCAL PROCEDURE _GenerarCabHotel@1100253015(VAR prConcBono@1100253000 : Record 7010070;pwFechaDesde@1100253001 : Date);
+    VAR
+      lrContC@1100253002 : Record 7009723;
+    BEGIN
+      // _GenerarCabHotel.
+
+      CLEAR(lrContC);
+      lrContC.SETCURRENTKEY(Hotel, TourOperador, "Fecha inicio contrato");
+      lrContC.SETRANGE (Delegacion             , prConcBono.Delegacion);
+      lrContC.SETRANGE (Hotel                  , prConcBono."Hotel reservado agencia");
+      lrContC.SETRANGE (TourOperador           , prConcBono.TourOperador);
+      lrContC.SETFILTER("Fecha inicio contrato", '<=%1', prConcBono."Fecha venta");
+      lrContC.SETFILTER("Fecha final contrato" , '>=%1', prConcBono."Fecha venta");
+      IF NOT lrContC.FINDFIRST THEN
+        CLEAR(lrContC);
+
+      cExcel.ValorCelda(wFil, wCol, 'HOTEL ' + prConcBono."Hotel TO BLANK" +
+                                    ' (' + lrContC."C¢d. divisa" + ')', TRUE, FALSE, FALSE);
+      _NuevaLinea;
+      cExcel.ValorCelda(wFil, wCol, 'Booking No'              , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Booked Hotel'            , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Sale date'               , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Arrival date'            , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'TTOO Amount'             , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Go Caribic Amount'       , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Differences TTOO - GC'   , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Result'                  , TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Comments from Go Caribic', TRUE, FALSE, TRUE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'TTOO Comments'           , TRUE, FALSE, TRUE); _AvanzaCelda;
+    END;
+
+    LOCAL PROCEDURE _GenerarLineaDetalle@1100253019(VAR prConcBono@1100253000 : Record 7010070;VAR prTipTMP@1100253001 : TEMPORARY Record 88001;VAR prTotTMP@1100253002 : TEMPORARY Record 88001;VAR prGranTotTMP@1100253003 : TEMPORARY Record 88001);
+    BEGIN
+      // _GenerarLineaDetalle.
+
+      cExcel.ValorCelda(wFil, wCol, prConcBono.Bono                             , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, prConcBono."Hotel reservado agencia"        , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Fecha venta")            , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Fecha llegada BLANK")    , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Importe TTOO")           , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Importe agencia")        , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Diferencia TTOO-Agencia"), FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prConcBono."Tipo conciliacion")      , FALSE, FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, prConcBono."Descripcion diferencia"         , FALSE, FALSE, FALSE); _AvanzaCelda;
+
+      // l¡nea total.
+      prTotTMP."Importe TTOO"    += prConcBono."Importe TTOO";
+      prTotTMP."Importe agencia" += prConcBono."Importe agencia";
+      prTotTMP.Diferencia        += prConcBono."Diferencia TTOO-Agencia";
+
+      prGranTotTMP."Importe TTOO"    += prConcBono."Importe TTOO";
+      prGranTotTMP."Importe agencia" += prConcBono."Importe agencia";
+      prGranTotTMP.Diferencia        += prConcBono."Diferencia TTOO-Agencia";
+
+      // resumen por tipo conciliacion.
+      CLEAR(prTipTMP);
+      prTipTMP.Id := prConcBono."Tipo conciliacion";
+      IF NOT prTipTMP.FIND THEN
+        prTipTMP.INSERT;
+
+      prTipTMP.Diferencia += prConcBono."Diferencia TTOO-Agencia";
+      prTipTMP.MODIFY;
+    END;
+
+    LOCAL PROCEDURE _GenerarTotalesxHotel@1100253009(VAR prTotTMP@1100253000 : TEMPORARY Record 88001);
+    BEGIN
+      // _GenerarTotalesxHotel.
+
+      _AvanzaCelda;
+      _AvanzaCelda;
+      _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Total Hotel'                      , TRUE , FALSE, FALSE); _AvanzaCelda;
+
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP."Importe TTOO")    , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP."Importe agencia") , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP.Diferencia)        , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+    END;
+
+    LOCAL PROCEDURE _GenerarResumenTipo@1100253016(VAR prTipTMP@1100253000 : TEMPORARY Record 88001);
+    VAR
+      lrConcBono@1100253001 : Record 7010070;
+    BEGIN
+      // _GenerarResumenTipo.
+
+      CLEAR(prTipTMP);
+      IF prTipTMP.FINDSET THEN BEGIN
+        _AvanzaCelda;
+        _AvanzaCelda;
+        _AvanzaCelda;
+        _AvanzaCelda;
+        _AvanzaCelda;
+        cExcel.ValorCelda(wFil, wCol, 'Result'     , TRUE, FALSE, FALSE); _AvanzaCelda;
+        cExcel.ValorCelda(wFil, wCol, 'Differences', TRUE, FALSE, FALSE); _AvanzaCelda;
+        _NuevaLinea;
+        REPEAT
+          _AvanzaCelda;
+          _AvanzaCelda;
+          _AvanzaCelda;
+          _AvanzaCelda;
+          _AvanzaCelda;
+          lrConcBono."Tipo conciliacion" := prTipTMP.Id;
+          cExcel.ValorCelda(wFil, wCol, FORMAT(lrConcBono."Tipo conciliacion"), FALSE, FALSE, FALSE); _AvanzaCelda;
+          cExcel.ValorCelda(wFil, wCol, FORMAT(prTipTMP.Diferencia)           , FALSE, FALSE, FALSE); _AvanzaCelda;
+          _NuevaLinea;
+        UNTIL prTipTMP.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE _GenerarGranTotal@1100253021(VAR prTotTMP@1100253000 : TEMPORARY Record 88001);
+    BEGIN
+      // _GenerarGranTotal.
+
+      _AvanzaCelda;
+      _AvanzaCelda;
+      _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, 'Total'                            , TRUE , FALSE, FALSE); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP."Importe TTOO")    , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP."Importe agencia") , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+      cExcel.ValorCelda(wFil, wCol, FORMAT(prTotTMP.Diferencia)        , FALSE, FALSE, FALSE);
+      cExcel.LineaArriba(cExcel.LineaMedia); _AvanzaCelda;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 02052011 Modifico la funcion GenerarExcelConcITS para que las lineas marcadas con No Analisis no se exporten
+
+      $002 AJS 09052011 Modifico la funcion GenerarExcelConcITS para que pida al usuario si hay que exportar las lineas de
+                        conciliacion de tipo IGUAL
+
+      $003 AJS 13052011 El filtro sobre Fecha llegada BLANK no es necesario y provoca ademas que algunas lineas no salgan
+
+      $004 AJS 24052011 La funcion trabajar  a partir de ahora con los filtros establecidos en la pantalla de conciliaciones
+
+      $005 AJS 08062011 Sustituyo la instruccion COPYFILTERS por COPY para que traiga la clave tambien
+    }
+    END.
+  }
+}

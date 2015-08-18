@@ -1,0 +1,1483 @@
+OBJECT Report 7010254 MX-Cheque CNT - Bancomer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/06/13;
+    Time=22:16:44;
+    Modified=Yes;
+    Version List=AIC2009,CNT;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 270=m;
+    CaptionML=[ENU=Check - Bancomer;
+               ESP=Cheque CNT - Bancomer];
+    TopMargin=1000;
+    BottomMargin=3400;
+    LeftMargin=1100;
+    OnInitReport=BEGIN
+                   CLEAR(rTemp);
+                   rTemp.DELETEALL;
+                 END;
+
+    PaperSize=Letter 8 1/2 x 11 in;
+    HorzGrid=105;
+    VertGrid=211;
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table81;
+        DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Posting Date,Document No.);
+        DataItemVarName=VoidGenJnlLine;
+        OnPreDataItem=BEGIN
+                        {* INCOMING
+                        IF CurrReport.PREVIEW THEN
+                          ERROR(Text000);
+                        *}
+
+                        IF UseCheckNo = '' THEN
+                          ERROR(Text001);
+
+                        IF TestPrint THEN
+                          CurrReport.BREAK;
+
+                        IF NOT ReprintChecks THEN
+                          CurrReport.BREAK;
+
+                        IF (GETFILTER("Line No.") <> '') OR (GETFILTER("Document No.") <> '') THEN
+                          ERROR(
+                            Text002,FIELDCAPTION("Line No."),FIELDCAPTION("Document No."));
+                        SETRANGE("Bank Payment Type","Bank Payment Type"::"Computer Check");
+                        SETRANGE("Check Printed",TRUE);
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           CheckManagement.VoidCheck(VoidGenJnlLine);
+                         END;
+
+        ReqFilterFields=Journal Template Name,Journal Batch Name,Posting Date;
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemTable=Table81;
+        DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Posting Date,Document No.);
+        DataItemVarName=GenJnlLine;
+        OnPreDataItem=BEGIN
+                        GenJnlLine.COPY(VoidGenJnlLine);
+                        CompanyInfo.GET;
+                        IF NOT TestPrint THEN BEGIN
+                          FormatAddr.Company(CompanyAddr,CompanyInfo);
+                          BankAcc2.GET(BankAcc2."No.");
+                          BankAcc2.TESTFIELD(Blocked,FALSE);
+                          COPY(VoidGenJnlLine);
+                          SETRANGE("Bank Payment Type","Bank Payment Type"::"Computer Check");
+                          SETRANGE("Check Printed",FALSE);
+                        END ELSE BEGIN
+                          CLEAR(CompanyAddr);
+                          FOR i := 1 TO 5 DO
+                            CompanyAddr[i] := Text003;
+                        END;
+                        ChecksPrinted := 0;
+
+                        SETRANGE("Account Type",GenJnlLine."Account Type"::"Fixed Asset");
+                        IF FIND('-') THEN
+                          GenJnlLine.FIELDERROR("Account Type");
+                        SETRANGE("Account Type");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           // INCOMING
+                           // Rellenamos variables para la impresion
+
+                           wConcepto := Description;
+
+                           IF OneCheckPrVendor AND (GenJnlLine."Currency Code" <> '') AND
+                              (GenJnlLine."Currency Code" <> Currency.Code)
+                           THEN BEGIN
+                             Currency.GET(GenJnlLine."Currency Code");
+                             Currency.TESTFIELD("Conv. LCY Rndg. Debit Acc.");
+                             Currency.TESTFIELD("Conv. LCY Rndg. Credit Acc.");
+                           END;
+
+                           IF NOT TestPrint THEN BEGIN
+                             IF Amount = 0 THEN
+                               CurrReport.SKIP;
+
+                             TESTFIELD("Bal. Account Type","Bal. Account Type"::"Bank Account");
+                             IF "Bal. Account No." <> BankAcc2."No." THEN
+                               CurrReport.SKIP;
+
+                             IF ("Account No." <> '') AND ("Bal. Account No." <> '') THEN BEGIN
+                               BalancingType := "Account Type";
+                               BalancingNo := "Account No.";
+                               RemainingAmount := Amount;
+                               IF OneCheckPrVendor THEN BEGIN
+                                 GenJnlLine2.RESET;
+                                 GenJnlLine2.SETRANGE("Journal Template Name", "Journal Template Name");
+                                 GenJnlLine2.SETRANGE("Journal Batch Name"   , "Journal Batch Name");
+                                 GenJnlLine2.SETRANGE("Posting Date"         , "Posting Date");
+                                 GenJnlLine2.SETRANGE("Account Type"         , "Account Type");
+                                 GenJnlLine2.SETRANGE("Account No."          , "Account No.");
+                                 GenJnlLine2.FIND('-');
+
+                                 ApplyMethod := ApplyMethod::MoreLinesOneEntry;
+                                 GenJnlLine2.RESET;
+                                 GenJnlLine2.SETCURRENTKEY("Journal Template Name","Journal Batch Name","Posting Date","Document No.");
+                                 GenJnlLine2.SETRANGE("Journal Template Name","Journal Template Name");
+                                 GenJnlLine2.SETRANGE("Journal Batch Name","Journal Batch Name");
+                                 GenJnlLine2.SETRANGE("Posting Date","Posting Date");
+                                 GenJnlLine2.SETRANGE("Document No.","Document No.");
+                                 GenJnlLine2.SETRANGE("Account Type","Account Type");
+                                 GenJnlLine2.SETRANGE("Account No.","Account No.");
+                                 GenJnlLine2.SETRANGE("Bal. Account Type","Bal. Account Type");
+                                 GenJnlLine2.SETRANGE("Bal. Account No.","Bal. Account No.");
+                                 GenJnlLine2.SETRANGE("Bank Payment Type","Bank Payment Type");
+                                 GenJnlLine2.FIND('-');
+                                 RemainingAmount := 0;
+                               END ELSE
+                                 IF "Applies-to Doc. No." <> '' THEN
+                                   ApplyMethod := ApplyMethod::OneLineOneEntry
+                                 ELSE
+                                   IF "Applies-to ID" <> '' THEN
+                                     ApplyMethod := ApplyMethod::OneLineID
+                                   ELSE
+                                     ApplyMethod := ApplyMethod::Payment;
+                             END ELSE
+                               IF "Account No." = '' THEN
+                                 FIELDERROR("Account No.",Text004)
+                               ELSE
+                                 FIELDERROR("Bal. Account No.",Text004);
+
+                             CLEAR(CheckToAddr);
+                             ContactText := '';
+                             CLEAR(SalesPurchPerson);
+                             CASE BalancingType OF
+                               BalancingType::"G/L Account":
+                                 BEGIN
+                                   CheckToAddr[1] := GenJnlLine.Description;
+                                 END;
+                               BalancingType::Customer:
+                                 BEGIN
+                                   Cust.GET(BalancingNo);
+                                   IF Cust.Blocked = Cust.Blocked::All THEN
+                                     ERROR(Text1100726,Cust.FIELDCAPTION(Blocked),Cust.Blocked,Cust.TABLECAPTION,Cust."No.");
+                                   Cust.Contact := '';
+                                   FormatAddr.Customer(CheckToAddr,Cust);
+                                   IF BankAcc2."Currency Code" <> "Currency Code" THEN
+                                     ERROR(Text005);
+                                   IF Cust."Salesperson Code" <> '' THEN BEGIN
+                                     ContactText := Text006;
+                                     SalesPurchPerson.GET(Cust."Salesperson Code");
+                                   END;
+                                 END;
+                               BalancingType::Vendor:
+                                 BEGIN
+                                   Vend.GET(BalancingNo);
+                                   IF Vend.Blocked IN [Vend.Blocked::All,Vend.Blocked::Payment] THEN
+                                     ERROR(Text1100726,Vend.FIELDCAPTION(Blocked),Vend.Blocked,Vend.TABLECAPTION,Vend."No.");
+                                   Vend.Contact := '';
+                                   FormatAddr.Vendor(CheckToAddr,Vend);
+                                   IF BankAcc2."Currency Code" <> "Currency Code" THEN
+                                     ERROR(Text005);
+                                   IF Vend."Purchaser Code" <> '' THEN BEGIN
+                                     ContactText := Text007;
+                                     SalesPurchPerson.GET(Vend."Purchaser Code");
+                                   END;
+
+                                   // INCOMING
+                                   // Almacenar el campo Descripcion en una variable de trabajo
+
+                                   wDescripCheque := Description;
+                                 END;
+                               BalancingType::"Bank Account":
+                                 BEGIN
+                                   BankAcc.GET(BalancingNo);
+                                   BankAcc.TESTFIELD(Blocked,FALSE);
+                                   BankAcc.Contact := '';
+                                   FormatAddr.BankAcc(CheckToAddr,BankAcc);
+                                   IF BankAcc2."Currency Code" <> BankAcc."Currency Code" THEN
+                                     ERROR(Text008);
+                                   IF BankAcc."Our Contact Code" <> '' THEN BEGIN
+                                     ContactText := Text009;
+                                     SalesPurchPerson.GET(BankAcc."Our Contact Code");
+                                   END;
+                                 END;
+                             END;
+
+                             // INCOMING
+                             // Almacenar la fecha de registro en una variable de trabajo
+
+                             wFechaCheque   := "Posting Date";
+
+                             CheckDateText  := FORMAT("Posting Date",0,4);
+
+                           END ELSE BEGIN
+                             IF ChecksPrinted > 0 THEN
+                               CurrReport.BREAK;
+                             BalancingType := BalancingType::Vendor;
+                             BalancingNo := Text010;
+                             CLEAR(CheckToAddr);
+                             FOR i := 1 TO 5 DO
+                               CheckToAddr[i] := Text003;
+                             ContactText := '';
+                             CLEAR(SalesPurchPerson);
+                             CheckNoText := Text011;
+                             CheckDateText := Text012;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=1;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        DataItemVarName=CheckPages;
+        OnPreDataItem=BEGIN
+                        FirstPage := TRUE;
+                        FoundLast := FALSE;
+                        TotalLineAmount := 0;
+                        TotalLineDiscount := 0;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF FoundLast THEN
+                             CurrReport.BREAK;
+
+                           UseCheckNo := INCSTR(UseCheckNo);
+                           IF NOT TestPrint THEN
+                             CheckNoText := UseCheckNo
+                           ELSE
+                             CheckNoText := Text011;
+                         END;
+
+        OnPostDataItem=BEGIN
+                         IF NOT TestPrint THEN BEGIN
+                           IF UseCheckNo <> GenJnlLine."Document No." THEN BEGIN
+                             GenJnlLine3.RESET;
+                             GenJnlLine3.SETCURRENTKEY("Journal Template Name","Journal Batch Name","Posting Date","Document No.");
+                             GenJnlLine3.SETRANGE("Journal Template Name",GenJnlLine."Journal Template Name");
+                             GenJnlLine3.SETRANGE("Journal Batch Name",GenJnlLine."Journal Batch Name");
+                             GenJnlLine3.SETRANGE("Posting Date",GenJnlLine."Posting Date");
+                             GenJnlLine3.SETRANGE("Document No.",UseCheckNo);
+                             IF GenJnlLine3.FIND('-') THEN
+                               GenJnlLine3.FIELDERROR("Document No.",STRSUBSTNO(Text013,UseCheckNo));
+                           END;
+
+                           IF ApplyMethod <> ApplyMethod::MoreLinesOneEntry THEN BEGIN
+                             GenJnlLine3 := GenJnlLine;
+                             GenJnlLine3.TESTFIELD("Posting No. Series",'');
+                             GenJnlLine3."Document No." := UseCheckNo;
+                             GenJnlLine3."Check Printed" := TRUE;
+                             GenJnlLine3.MODIFY;
+                           END ELSE BEGIN
+                             IF GenJnlLine2.FIND('-') THEN BEGIN
+                               HighestLineNo := GenJnlLine2."Line No.";
+                               REPEAT
+                                 IF GenJnlLine2."Line No." > HighestLineNo THEN
+                                   HighestLineNo := GenJnlLine2."Line No.";
+                                 GenJnlLine3 := GenJnlLine2;
+                                 GenJnlLine3.TESTFIELD("Posting No. Series",'');
+                                 GenJnlLine3."Bal. Account No." := '';
+                                 GenJnlLine3."Bank Payment Type" := GenJnlLine3."Bank Payment Type"::" ";
+                                 GenJnlLine3."Document No." := UseCheckNo;
+                                 GenJnlLine3."Check Printed" := TRUE;
+                                 GenJnlLine3.VALIDATE(Amount);
+                                 GenJnlLine3.MODIFY;
+                               UNTIL GenJnlLine2.NEXT = 0;
+                             END;
+
+                             GenJnlLine3.RESET;
+                             GenJnlLine3 := GenJnlLine;
+                             GenJnlLine3.SETRANGE("Journal Template Name",GenJnlLine."Journal Template Name");
+                             GenJnlLine3.SETRANGE("Journal Batch Name",GenJnlLine."Journal Batch Name");
+                             GenJnlLine3."Line No." := HighestLineNo;
+                             IF GenJnlLine3.NEXT = 0 THEN
+                               GenJnlLine3."Line No." := HighestLineNo + 10000
+                             ELSE BEGIN
+                               WHILE GenJnlLine3."Line No." = HighestLineNo + 1 DO BEGIN
+                                 HighestLineNo := GenJnlLine3."Line No.";
+                                 IF GenJnlLine3.NEXT = 0 THEN
+                                   GenJnlLine3."Line No." := HighestLineNo + 20000;
+                               END;
+                               GenJnlLine3."Line No." := (GenJnlLine3."Line No." + HighestLineNo) DIV 2;
+                             END;
+                             GenJnlLine3.INIT;
+                             GenJnlLine3.VALIDATE("Posting Date",GenJnlLine."Posting Date");
+                             GenJnlLine3."Document Type" := GenJnlLine."Document Type";
+                             GenJnlLine3."Document No." := UseCheckNo;
+                             GenJnlLine3."Account Type" := GenJnlLine3."Account Type"::"Bank Account";
+                             GenJnlLine3.VALIDATE("Account No.",BankAcc2."No.");
+
+                             // INCOMING
+                             //IF BalancingType <> BalancingType::"G/L Account" THEN
+                             //  GenJnlLine3.Description := STRSUBSTNO(Text014,BalancingType,BalancingNo);
+
+                             IF BalancingType <> BalancingType::"G/L Account" THEN
+                               GenJnlLine3.Description := STRSUBSTNO(Text066, COPYSTR(Vend.Name, 1, 30));
+
+                             GenJnlLine3.VALIDATE(Amount,-TotalLineAmount);
+                             GenJnlLine3."Bank Payment Type" := GenJnlLine3."Bank Payment Type"::"Computer Check";
+                             GenJnlLine3."Check Printed" := TRUE;
+                             GenJnlLine3."Source Code" := GenJnlLine."Source Code";
+                             GenJnlLine3."Reason Code" := GenJnlLine."Reason Code";
+                             GenJnlLine3."Allow Zero-Amount Posting" := TRUE;
+
+                             // INCOMING
+                             // Si el departamento esta en blanco, ponemos el de una de las lineas del diario de pagos
+
+                             IF GenJnlLine3."Shortcut Dimension 1 Code" = '' THEN
+                               GenJnlLine3.VALIDATE("Shortcut Dimension 1 Code", GenJnlLine."Shortcut Dimension 1 Code");
+
+                             GenJnlLine3.INSERT;
+                           END;
+                         END;
+
+                         BankAcc2."Last Check No." := UseCheckNo;
+                         BankAcc2.MODIFY;
+
+                         COMMIT;
+                         CLEAR(CheckManagement);
+                       END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        MaxIteration=28;
+        DataItemVarName=PrintSettledLoop;
+        OnPreDataItem=BEGIN
+                        IF NOT TestPrint THEN
+                          IF FirstPage THEN BEGIN
+                            FoundLast := TRUE;
+                            CASE ApplyMethod OF
+                              ApplyMethod::OneLineOneEntry:
+                                FoundLast := FALSE;
+                              ApplyMethod::OneLineID:
+                                CASE BalancingType OF
+                                  BalancingType::Customer:
+                                    BEGIN
+                                      CustLedgEntry.RESET;
+                                      CustLedgEntry.SETCURRENTKEY("Customer No.",Open,Positive);
+                                      CustLedgEntry.SETRANGE("Customer No.",BalancingNo);
+                                      CustLedgEntry.SETRANGE(Open,TRUE);
+                                      CustLedgEntry.SETRANGE(Positive,TRUE);
+                                      CustLedgEntry.SETRANGE("Applies-to ID",GenJnlLine."Applies-to ID");
+                                      FoundLast := NOT CustLedgEntry.FIND('-');
+                                      IF FoundLast THEN BEGIN
+                                        CustLedgEntry.SETRANGE(Positive,FALSE);
+                                        FoundLast := NOT CustLedgEntry.FIND('-');
+                                        FoundNegative := TRUE;
+                                      END ELSE
+                                        FoundNegative := FALSE;
+                                    END;
+                                  BalancingType::Vendor:
+                                    BEGIN
+                                      VendLedgEntry.RESET;
+                                      VendLedgEntry.SETCURRENTKEY("Vendor No.",Open,Positive);
+                                      VendLedgEntry.SETRANGE("Vendor No.",BalancingNo);
+                                      VendLedgEntry.SETRANGE(Open,TRUE);
+                                      VendLedgEntry.SETRANGE(Positive,TRUE);
+                                      VendLedgEntry.SETRANGE("Applies-to ID",GenJnlLine."Applies-to ID");
+                                      FoundLast := NOT VendLedgEntry.FIND('-');
+                                      IF FoundLast THEN BEGIN
+                                        VendLedgEntry.SETRANGE(Positive,FALSE);
+                                        FoundLast := NOT VendLedgEntry.FIND('-');
+                                        FoundNegative := TRUE;
+                                      END ELSE
+                                        FoundNegative := FALSE;
+                                    END;
+                                END;
+                              ApplyMethod::MoreLinesOneEntry:
+                                FoundLast := FALSE;
+                            END;
+                          END
+                        ELSE
+                          FoundLast := FALSE;
+
+                        // JPT 30/07/12
+                        CLEAR(rTemp);
+                        rTemp.DELETEALL;
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF NOT TestPrint THEN BEGIN
+                             IF FoundLast THEN BEGIN
+                               IF RemainingAmount <> 0 THEN BEGIN
+                                 DocType := Text015;
+                                 DocNo := '';
+                                 ExtDocNo := '';
+                                 LineAmount := RemainingAmount;
+                                 LineAmount2 := RemainingAmount;
+                                 LineDiscount := 0;
+                                 RemainingAmount := 0;
+                               END ELSE
+                                 CurrReport.BREAK;
+                             END ELSE BEGIN
+                               CASE ApplyMethod OF
+                                 ApplyMethod::OneLineOneEntry:
+                                   BEGIN
+                                     CASE BalancingType OF
+                                       BalancingType::Customer:
+                                         BEGIN
+                                           CustLedgEntry.RESET;
+                                           CustLedgEntry.SETCURRENTKEY("Document No.","Document Type","Customer No.");
+                                           CustLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+                                           CustLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+                                           CustLedgEntry.SETRANGE("Customer No.",BalancingNo);
+                                           CustLedgEntry.FIND('-');
+                                           CustUpdateAmounts(CustLedgEntry,RemainingAmount);
+                                         END;
+                                       BalancingType::Vendor:
+                                         BEGIN
+                                           VendLedgEntry.RESET;
+                                           VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                           VendLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+                                           VendLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+                                           VendLedgEntry.SETRANGE("Vendor No.",BalancingNo);
+                                           VendLedgEntry.FIND('-');
+                                           VendUpdateAmounts(VendLedgEntry,RemainingAmount);
+                                         END;
+                                     END;
+                                     RemainingAmount := RemainingAmount - LineAmount2;
+                                     FoundLast := TRUE;
+                                   END;
+                                 ApplyMethod::OneLineID:
+                                   BEGIN
+                                     CASE BalancingType OF
+                                       BalancingType::Customer:
+                                         BEGIN
+                                           CustUpdateAmounts(CustLedgEntry,RemainingAmount);
+                                           FoundLast := (CustLedgEntry.NEXT = 0) OR (RemainingAmount <= 0);
+                                           IF FoundLast AND NOT FoundNegative THEN BEGIN
+                                             CustLedgEntry.SETRANGE(Positive,FALSE);
+                                             FoundLast := NOT CustLedgEntry.FIND('-');
+                                             FoundNegative := TRUE;
+                                           END;
+                                         END;
+                                       BalancingType::Vendor:
+                                         BEGIN
+                                           VendUpdateAmounts(VendLedgEntry,RemainingAmount);
+                                           FoundLast := (VendLedgEntry.NEXT = 0) OR (RemainingAmount <= 0);
+                                           IF FoundLast AND NOT FoundNegative THEN BEGIN
+                                             VendLedgEntry.SETRANGE(Positive,FALSE);
+                                             FoundLast := NOT VendLedgEntry.FIND('-');
+                                             FoundNegative := TRUE;
+                                           END;
+                                         END;
+                                     END;
+                                     RemainingAmount := RemainingAmount - LineAmount2;
+                                   END;
+                                 ApplyMethod::MoreLinesOneEntry:
+                                   BEGIN
+                                     CurrentLineAmount := GenJnlLine2.Amount;
+                                     LineAmount2 := CurrentLineAmount;
+
+                                     IF GenJnlLine2."Applies-to ID" <> '' THEN
+                                       ERROR(
+                                         Text016 +
+                                         Text017);
+                                     GenJnlLine2.TESTFIELD("Check Printed",FALSE);
+                                     GenJnlLine2.TESTFIELD("Bank Payment Type",GenJnlLine2."Bank Payment Type"::"Computer Check");
+
+                                     IF GenJnlLine2."Applies-to Doc. No." = '' THEN BEGIN
+                                       DocType := Text015;
+                                       DocNo := '';
+                                       ExtDocNo := '';
+                                       LineAmount := CurrentLineAmount;
+                                       LineDiscount := 0;
+                                     END ELSE BEGIN
+                                       CASE BalancingType OF
+                                         BalancingType::"G/L Account":
+                                           BEGIN
+                                             DocType := FORMAT(GenJnlLine2."Document Type");
+                                             DocNo := GenJnlLine2."Document No.";
+                                             ExtDocNo := GenJnlLine2."External Document No.";
+                                             LineAmount := CurrentLineAmount;
+                                             LineDiscount := 0;
+                                           END;
+                                         BalancingType::Customer:
+                                           BEGIN
+                                             CustLedgEntry.RESET;
+                                             CustLedgEntry.SETCURRENTKEY("Document No.","Document Type","Customer No.");
+                                             CustLedgEntry.SETRANGE("Document Type",GenJnlLine2."Applies-to Doc. Type");
+                                             CustLedgEntry.SETRANGE("Document No.",GenJnlLine2."Applies-to Doc. No.");
+                                             CustLedgEntry.SETRANGE("Customer No.",BalancingNo);
+                                             CustLedgEntry.FIND('-');
+                                             CustUpdateAmounts(CustLedgEntry,CurrentLineAmount);
+                                             LineAmount := CurrentLineAmount;
+                                           END;
+                                         BalancingType::Vendor:
+                                           BEGIN
+                                             VendLedgEntry.RESET;
+                                             VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+                                             VendLedgEntry.SETRANGE("Document Type",GenJnlLine2."Applies-to Doc. Type");
+                                             VendLedgEntry.SETRANGE("Document No.",GenJnlLine2."Applies-to Doc. No.");
+                                             VendLedgEntry.SETRANGE("Vendor No.",BalancingNo);
+                                             VendLedgEntry.FIND('-');
+                                             VendUpdateAmounts(VendLedgEntry,CurrentLineAmount);
+                                             LineAmount := CurrentLineAmount;
+                                           END;
+                                         BalancingType::"Bank Account":
+                                           BEGIN
+                                             DocType := FORMAT(GenJnlLine2."Document Type");
+                                             DocNo := GenJnlLine2."Document No.";
+                                             ExtDocNo := GenJnlLine2."External Document No.";
+                                             LineAmount := CurrentLineAmount;
+                                             LineDiscount := 0;
+                                           END;
+                                       END;
+                                     END;
+                                     FoundLast := GenJnlLine2.NEXT = 0;
+                                   END;
+                               END;
+                             END;
+
+                             TotalLineAmount := TotalLineAmount + LineAmount2;
+                             TotalLineDiscount := TotalLineDiscount + LineDiscount;
+                           END ELSE BEGIN
+                             IF FoundLast THEN
+                               CurrReport.BREAK;
+                             FoundLast := TRUE;
+                             DocType := Text018;
+                             DocNo := Text010;
+                             ExtDocNo := Text010;
+                             LineAmount := 0;
+                             LineDiscount := 0;
+                           END;
+
+                           // JPT 30/07/12 Lo ponemos en un temporal para imprimirlo al final
+                           CLEAR(rTemp);
+                           rTemp.SetNextId;
+                           CASE BalancingType OF
+                             BalancingType::Vendor: BEGIN
+                               // rTemp.Date01 := VendLedgEntry."Posting Date";
+                               rTemp.Date01 := GenJnlLine."Posting Date";
+                               rTemp.Dec01  := LineAmount;
+                               rTemp.Code01 := VendLedgEntry."External Document No.";
+                               rTemp.Text01 := GenJnlLine.Description;
+                               rTemp.INSERT;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemIndent=2;
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number);
+        MaxIteration=1;
+        DataItemVarName=PrintCheck;
+        OnAfterGetRecord=BEGIN
+                           IF NOT TestPrint THEN BEGIN
+                             WITH GenJnlLine DO BEGIN
+                               CheckLedgEntry.INIT;
+                               CheckLedgEntry."Bank Account No." := BankAcc2."No.";
+                               CheckLedgEntry."Posting Date" := "Posting Date";
+                               CheckLedgEntry."Document Type" := "Document Type";
+                               CheckLedgEntry."Document No." := UseCheckNo;
+                               CheckLedgEntry.Description := Description;
+                               CheckLedgEntry."Bank Payment Type" := "Bank Payment Type";
+                               CheckLedgEntry."Bal. Account Type" := BalancingType;
+                               CheckLedgEntry."Bal. Account No." := BalancingNo;
+                               IF FoundLast THEN BEGIN
+                                 IF TotalLineAmount < 0 THEN
+                                   ERROR(
+                                     Text020,
+                                     UseCheckNo,TotalLineAmount);
+                                 CheckLedgEntry."Entry Status" := CheckLedgEntry."Entry Status"::Printed;
+                                 CheckLedgEntry.Amount := TotalLineAmount;
+
+                               END
+                               ELSE BEGIN
+                                 CheckLedgEntry."Entry Status" := CheckLedgEntry."Entry Status"::Voided;
+                                 CheckLedgEntry.Amount := 0;
+                               END;
+                               CheckLedgEntry."Check Date" := "Posting Date";
+                               CheckLedgEntry."Check No." := UseCheckNo;
+                               CheckManagement.InsertCheck(CheckLedgEntry);
+
+                               IF FoundLast THEN BEGIN
+                                 CheckAmountText := FORMAT(CheckLedgEntry.Amount,0);
+                                 i := STRPOS(CheckAmountText,'.');
+                                 CASE TRUE OF
+                                   i = 0:
+                                     CheckAmountText := CheckAmountText + '.00';
+                                   i = STRLEN(CheckAmountText) - 1:
+                                     CheckAmountText := CheckAmountText + '0';
+                                   i > STRLEN(CheckAmountText) - 2:
+                                     CheckAmountText := COPYSTR(CheckAmountText,1,i + 2);
+                                 END;
+                                 FormatNoText(DescriptionLine,CheckLedgEntry.Amount,BankAcc2."Currency Code");
+                                 VoidText := '';
+                               END ELSE BEGIN
+                                 CLEAR(CheckAmountText);
+                                 CLEAR(DescriptionLine);
+                                 DescriptionLine[1] := Text021;
+                                 DescriptionLine[2] := DescriptionLine[1];
+                                 VoidText := Text022;
+                               END;
+                             END;
+                           END ELSE BEGIN
+                             WITH GenJnlLine DO BEGIN
+                               CheckLedgEntry.INIT;
+                               CheckLedgEntry."Bank Account No." := BankAcc2."No.";
+                               CheckLedgEntry."Posting Date" := "Posting Date";
+                               CheckLedgEntry."Document No." := UseCheckNo;
+                               CheckLedgEntry.Description := Text023;
+                               CheckLedgEntry."Bank Payment Type" := "Bank Payment Type"::"Computer Check";
+                               CheckLedgEntry."Entry Status" := CheckLedgEntry."Entry Status"::"Test Print";
+                               CheckLedgEntry."Check Date" := "Posting Date";
+                               CheckLedgEntry."Check No." := UseCheckNo;
+                               CheckManagement.InsertCheck(CheckLedgEntry);
+
+                               CheckAmountText := Text024;
+                               DescriptionLine[1] := Text025;
+                               DescriptionLine[2] := DescriptionLine[1];
+                               VoidText := Text022;
+                             END;
+                           END;
+
+                           ChecksPrinted := ChecksPrinted + 1;
+                           FirstPage := FALSE;
+                         END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Footer;
+            SectionWidth=19320;
+            SectionHeight=11394;
+          }
+          CONTROLS
+          {
+            { 1100217000;TextBox;105  ;2743 ;10290;423  ;FontSize=10;
+                                                         SourceExpr=Vend.Name }
+            { 1100217004;TextBox;630  ;3587 ;17640;423  ;HorzAlign=Left;
+                                                         FontSize=10;
+                                                         PadChar=*;
+                                                         SourceExpr=DescriptionLine[1] + DescriptionLine[2] }
+            { 1100217005;TextBox;15540;2743 ;2940 ;423  ;HorzAlign=Center;
+                                                         FontSize=10;
+                                                         PadChar=*;
+                                                         SourceExpr=CheckAmountText }
+            { 1100217006;TextBox;13125;844  ;5355 ;422  ;HorzAlign=Right;
+                                                         FontSize=10;
+                                                         SourceExpr=CheckDateText }
+            { 1100217007;TextBox;0    ;9917 ;13230;422  ;FontSize=10;
+                                                         SourceExpr=wConceptoChequeImprimir }
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=14630;
+      Height=5610;
+      SaveValues=Yes;
+      OnOpenForm=BEGIN
+                   IF BankAcc2."No." <> '' THEN BEGIN
+                     IF BankAcc2.GET(BankAcc2."No.") THEN
+                       UseCheckNo := BankAcc2."Last Check No."
+                     ELSE BEGIN
+                       BankAcc2."No." := '';
+                       UseCheckNo := '';
+                     END;
+                   END;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;2200 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Bank Account;
+                                                              ESP=Banco];
+                                                   SourceExpr=BankAcc2."No.";
+                                                   TableRelation="Bank Account";
+                                                   OnValidate=BEGIN
+                                                                IF BankAcc2."No." <> '' THEN BEGIN
+                                                                  BankAcc2.GET(BankAcc2."No.");
+                                                                  BankAcc2.TESTFIELD("Last Check No.");
+                                                                  UseCheckNo := BankAcc2."Last Check No.";
+                                                                END;
+                                                              END;
+                                                               }
+      { 2   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 3   ;TextBox      ;3410 ;660  ;2200 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Last Check No.;
+                                                              ESP=Ult. nß cheque];
+                                                   SourceExpr=UseCheckNo }
+      { 4   ;Label        ;0    ;660  ;3300 ;440  ;ParentControl=3 }
+      { 5   ;CheckBox     ;3410 ;2200 ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Reprint Checks;
+                                                              ESP=Reimprimir cheques];
+                                                   SourceExpr=ReprintChecks }
+      { 6   ;Label        ;0    ;2200 ;3300 ;440  ;ParentControl=5 }
+      { 9   ;CheckBox     ;3410 ;2750 ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Test Print;
+                                                              ESP=Test impresi¢n];
+                                                   SourceExpr=TestPrint }
+      { 10  ;Label        ;0    ;2750 ;3300 ;440  ;ParentControl=9 }
+      { 11  ;CheckBox     ;3410 ;1650 ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=One Check per Vendor per Document No.;
+                                                              ESP=Un cheque por proveedor y nß documento];
+                                                   SourceExpr=OneCheckPrVendor }
+      { 12  ;Label        ;0    ;1320 ;3300 ;770  ;ParentControl=11;
+                                                   VertAlign=Bottom;
+                                                   MultiLine=Yes }
+      { 13  ;CheckBox     ;3410 ;3300 ;440  ;440  ;InPage=-1;
+                                                   ShowCaption=No;
+                                                   CaptionML=[ENU=Preprinted Stub;
+                                                              ESP=Serie preimpresa];
+                                                   SourceExpr=PreprintedStub }
+      { 14  ;Label        ;0    ;3300 ;3300 ;440  ;ParentControl=13 }
+      { 1100217000;Label  ;0    ;3850 ;3300 ;440  ;InPage=-1;
+                                                   CaptionML=[ENU=Payment Concept:;
+                                                              ESP=Concepto del pago:] }
+      { 1100217001;TextBox;3410 ;3850 ;11110;440  ;SourceExpr=wConceptoChequeImprimir }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Preview is not allowed.;ESP=No est† permitida la vista preliminar.';
+      Text001@1001 : TextConst 'ENU=Last Check No. must be filled in.;ESP=Debe rellenar el £lt. nß cheque.';
+      Text002@1002 : TextConst 'ENU=Filters on %1 and %2 are not allowed.;ESP=No est†n permitidos filtros en %1 y %2.';
+      Text003@1003 : TextConst 'ENU=XXXXXXXXXXXXXXXX;ESP=XXXXXXXXXXXXXXXX';
+      Text004@1004 : TextConst 'ENU=must be entered.;ESP=se debe introducir.';
+      Text005@1005 : TextConst 'ENU=The Bank Account and the General Journal Line must have the same currency.;ESP=El banco y la cuenta contable deben tener la misma divisa.';
+      Text006@1006 : TextConst 'ENU=Salesperson;ESP=Vendedor';
+      Text007@1007 : TextConst 'ENU=Purchaser;ESP=Comprador';
+      Text008@1008 : TextConst 'ENU=Both Bank Accounts must have the same currency.;ESP=Ambos bancos deben tener la misma divisa.';
+      Text009@1009 : TextConst 'ENU=Our Contact;ESP=Ntro. contacto';
+      Text010@1010 : TextConst 'ENU=XXXXXXXXXX;ESP=XXXXXXXXXX';
+      Text011@1011 : TextConst 'ENU=XXXX;ESP=XXXX';
+      Text012@1012 : TextConst 'ENU=XX.XXXXXXXXXX.XXXX;ESP=XX.XXXXXXXXXX.XXXX';
+      Text013@1013 : TextConst 'ENU=%1 already exists.;ESP=Ya existe %1.';
+      Text014@1014 : TextConst 'ENU=Check for %1 %2;ESP=Cheque para %1 %2';
+      Text015@1015 : TextConst 'ENU=Payment;ESP=Pago';
+      Text016@1016 : TextConst 'ENU=In the Check report, One Check per Vendor and Document No.\;ESP=En informe de cheques, Un cheque por proveedor y nß documento\';
+      Text017@1017 : TextConst 'ENU=must not be activated when Applies-to ID is specified in the journal lines.;ESP=no se debe activar cuando se ha usado Liquidar por Id en las l°neas de diario.';
+      Text018@1018 : TextConst 'ENU=XXX;ESP=XXX';
+      Text019@1019 : TextConst 'ENU=Total;ESP=Total';
+      Text020@1020 : TextConst 'ENU=The total amount of check %1 is %2. The amount must be positive.;ESP=El importe del cheque %1 es %2. El importe debe ser positivo.';
+      Text021@1021 : TextConst 'ENU=VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID VOID;ESP=ANULADO ANULADO ANULADO ANULADO ANULADO ANULADO ANULADO ANULADO ANULADO ANULADO';
+      Text022@1022 : TextConst 'ENU=NON-NEGOTIABLE;ESP=NO NEGOCIABLE';
+      Text023@1023 : TextConst 'ENU=Test print;ESP=Test impresi¢n';
+      Text024@1024 : TextConst 'ENU=XXXX.XX;ESP=XXXX.XX';
+      Text025@1025 : TextConst 'ENU=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX;ESP=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+      Text026@1026 : TextConst 'ENU=ZERO;ESP=CERO';
+      Text027@1027 : TextConst 'ENU=HUNDRED;ESP=CIEN';
+      Text028@1028 : TextConst 'ENU=AND;ESP=Y';
+      Text029@1029 : TextConst 'ENU=%1 results in a written number that is too long.;ESP=El resultado de %1 es un n£mero escrito demasiado largo.';
+      Text030@1030 : TextConst 'ENU=" is already applied to %1 %2 for customer %3.";ESP=" ya hay sido liquidado por %1 %2 para el cliente %3."';
+      Text031@1031 : TextConst 'ENU=" is already applied to %1 %2 for vendor %3.";ESP=" ya se ha liquidado a %1 %2 para el proveedor %3."';
+      Text032@1032 : TextConst 'ENU=ONE;ESP=UN';
+      Text033@1033 : TextConst 'ENU=TWO;ESP=DOS';
+      Text034@1034 : TextConst 'ENU=THREE;ESP=TRES';
+      Text035@1035 : TextConst 'ENU=FOUR;ESP=CUATRO';
+      Text036@1036 : TextConst 'ENU=FIVE;ESP=CINCO';
+      Text037@1037 : TextConst 'ENU=SIX;ESP=SEIS';
+      Text038@1038 : TextConst 'ENU=SEVEN;ESP=SIETE';
+      Text039@1039 : TextConst 'ENU=EIGHT;ESP=OCHO';
+      Text040@1040 : TextConst 'ENU=NINE;ESP=NUEVE';
+      Text041@1041 : TextConst 'ENU=TEN;ESP=DIEZ';
+      Text042@1042 : TextConst 'ENU=ELEVEN;ESP=ONCE';
+      Text043@1043 : TextConst 'ENU=TWELVE;ESP=DOCE';
+      Text044@1044 : TextConst 'ENU=THIRTEEN;ESP=TRECE';
+      Text045@1045 : TextConst 'ENU=FOURTEEN;ESP=CATORCE';
+      Text046@1046 : TextConst 'ENU=FIFTEEN;ESP=QUINCE';
+      Text047@1047 : TextConst 'ENU=SIXTEEN;ESP=DIECISêIS';
+      Text048@1048 : TextConst 'ENU=SEVENTEEN;ESP=DIECISIETE';
+      Text049@1049 : TextConst 'ENU=EIGHTEEN;ESP=DIECIOCHO';
+      Text050@1050 : TextConst 'ENU=NINETEEN;ESP=DIECINUEVE';
+      Text051@1051 : TextConst 'ENU=TWENTY;ESP=VEINTE';
+      Text052@1052 : TextConst 'ENU=THIRTY;ESP=TREINTA';
+      Text053@1053 : TextConst 'ENU=FORTY;ESP=CUARENTA';
+      Text054@1054 : TextConst 'ENU=FIFTY;ESP=CINCUENTA';
+      Text055@1055 : TextConst 'ENU=SIXTY;ESP=SESENTA';
+      Text056@1056 : TextConst 'ENU=SEVENTY;ESP=SETENTA';
+      Text057@1057 : TextConst 'ENU=EIGHTY;ESP=OCHENTA';
+      Text058@1058 : TextConst 'ENU=NINETY;ESP=NOVENTA';
+      Text059@1059 : TextConst 'ENU=THOUSAND;ESP=MIL';
+      Text060@1060 : TextConst 'ENU=MILLION;ESP=MILLON';
+      Text061@1061 : TextConst 'ENU=BILLION;ESP=MIL MILLONES';
+      CompanyInfo@1062 : Record 79;
+      SalesPurchPerson@1063 : Record 13;
+      GenJnlLine2@1064 : Record 81;
+      GenJnlLine3@1065 : Record 81;
+      Cust@1066 : Record 18;
+      CustLedgEntry@1067 : Record 21;
+      Vend@1068 : Record 23;
+      VendLedgEntry@1069 : Record 25;
+      BankAcc@1070 : Record 270;
+      BankAcc2@1071 : Record 270;
+      CheckLedgEntry@1072 : Record 272;
+      Currency@1073 : Record 4;
+      rTemp@1100217001 : TEMPORARY Record 7010251;
+      FormatAddr@1074 : Codeunit 365;
+      CheckManagement@1075 : Codeunit 367;
+      CompanyAddr@1076 : ARRAY [8] OF Text[50];
+      CheckToAddr@1077 : ARRAY [8] OF Text[50];
+      OnesText@1078 : ARRAY [20] OF Text[30];
+      TensText@1079 : ARRAY [10] OF Text[30];
+      ExponentText@1080 : ARRAY [5] OF Text[30];
+      BalancingType@1081 : 'G/L Account,Customer,Vendor,Bank Account';
+      BalancingNo@1082 : Code[20];
+      ContactText@1083 : Text[30];
+      CheckNoText@1084 : Text[30];
+      CheckDateText@1085 : Text[30];
+      CheckAmountText@1086 : Text[30];
+      DescriptionLine@1087 : ARRAY [2] OF Text[80];
+      DocType@1088 : Text[30];
+      DocNo@1089 : Text[30];
+      ExtDocNo@1119 : Text[30];
+      VoidText@1090 : Text[30];
+      LineAmount@1091 : Decimal;
+      LineDiscount@1092 : Decimal;
+      TotalLineAmount@1093 : Decimal;
+      TotalLineDiscount@1094 : Decimal;
+      RemainingAmount@1095 : Decimal;
+      CurrentLineAmount@1096 : Decimal;
+      UseCheckNo@1097 : Code[20];
+      FoundLast@1098 : Boolean;
+      ReprintChecks@1099 : Boolean;
+      TestPrint@1100 : Boolean;
+      FirstPage@1101 : Boolean;
+      OneCheckPrVendor@1102 : Boolean;
+      FoundNegative@1103 : Boolean;
+      ApplyMethod@1104 : 'Payment,OneLineOneEntry,OneLineID,MoreLinesOneEntry';
+      ChecksPrinted@1105 : Integer;
+      HighestLineNo@1106 : Integer;
+      PreprintedStub@1107 : Boolean;
+      TotalText@1108 : Text[10];
+      DocDate@1109 : Date;
+      i@1110 : Integer;
+      Text062@1111 : TextConst 'ENU=G/L Account,Customer,Vendor,Bank Account;ESP=Cuenta,Cliente,Proveedor,Banco';
+      CurrencyCode2@1112 : Code[10];
+      NetAmount@1114 : Text[30];
+      CurrencyExchangeRate@1115 : Record 330;
+      LineAmount2@1116 : Decimal;
+      Text063@1117 : TextConst 'ENU=Net Amount %1;ESP=Importe neto %1';
+      GLSetup@1118 : Record 98;
+      Text064@1113 : TextConst 'ENU=%1 must not be %2 for %3 %4.;ESP=%1 no debe ser %2 para %3 %4.';
+      Remainder@1100046 : Integer;
+      HundMilion@1100047 : Integer;
+      TenMilion@1100048 : Integer;
+      UnitsMilion@1100049 : Integer;
+      HundThousands@1100050 : Integer;
+      TenThousands@1100051 : Integer;
+      UnitsThousands@1100052 : Integer;
+      Hundreds@1100053 : Integer;
+      Tens@1100054 : Integer;
+      Units@1100055 : Integer;
+      DecimalPlaces@1100056 : Integer;
+      DecimalText@1100057 : ARRAY [2] OF Text[80];
+      DecimalString@1100058 : Text[15];
+      Decimals@1100059 : Integer;
+      Text1100700@1100130 : TextConst 'ENU=<decimals>;ESP=<decimals>';
+      Text1100701@1100131 : TextConst 'ENU="MILLONES ";ESP="MILLONES "';
+      Text1100702@1100132 : TextConst 'ENU="UN MILL‡N ";ESP="UN MILLON "';
+      Text1100703@1100133 : TextConst 'ENU="MIL ";ESP="MIL "';
+      Text1100704@1100135 : TextConst 'ENU="CIEN ";ESP="CIEN "';
+      Text1100705@1100136 : TextConst 'ENU="CIENTO ";ESP="CIENTO "';
+      Text1100706@1100137 : TextConst 'ENU="DOSCIENTOS ";ESP="DOSCIENTOS "';
+      Text1100707@1100138 : TextConst 'ENU="TRESCIENTOS ";ESP="TRESCIENTOS "';
+      Text1100708@1100139 : TextConst 'ENU="CUATROCIENTOS ";ESP="CUATROCIENTOS "';
+      Text1100709@1100140 : TextConst 'ENU="QUINIENTOS ";ESP="QUINIENTOS "';
+      Text1100710@1100141 : TextConst 'ENU="SEISCIENTOS ";ESP="SEISCIENTOS "';
+      Text1100711@1100134 : TextConst 'ENU="SETECIENTOS ";ESP="SETECIENTOS "';
+      Text1100712@1100142 : TextConst 'ENU="OCHOCIENTOS ";ESP="OCHOCIENTOS "';
+      Text1100713@1100143 : TextConst 'ENU="NOVECIENTOS ";ESP="NOVECIENTOS "';
+      Text1100714@1100144 : TextConst 'ENU="DOSCIENTOS ";ESP="DOSCIENTOS "';
+      Text1100715@1100145 : TextConst 'ENU="TRESCIENTOS ";ESP="TRESCIENTOS "';
+      Text1100716@1100146 : TextConst 'ENU="CUATROCIENTOS ";ESP="CUATROCIENTOS "';
+      Text1100717@1100147 : TextConst 'ENU="QUINIENTOS ";ESP="QUINIENTOS "';
+      Text1100718@1100148 : TextConst 'ENU="SEISCIENTOS ";ESP="SEISCIENTOS "';
+      Text1100719@1100149 : TextConst 'ENU="SETECIENTOS ";ESP="SETECIENTOS "';
+      Text1100720@1100150 : TextConst 'ENU="OCHOCIENTOS ";ESP="OCHOCIENTOS "';
+      Text1100721@1100151 : TextConst 'ENU="NOVECIENTOS ";ESP="NOVECIENTOS "';
+      Text1100722@1100152 : TextConst 'ENU="DIEZ ";ESP="DIEZ "';
+      Text1100723@1100153 : TextConst 'ENU="ONCE ";ESP="ONCE "';
+      Text1100724@1100154 : TextConst 'ENU="DOCE ";ESP="DOCE "';
+      Text1100725@1100155 : TextConst 'ENU="TRECE ";ESP="TRECE "';
+      Text1100726@1100156 : TextConst 'ENU="CATORCE ";ESP="CATORCE "';
+      Text1100727@1100157 : TextConst 'ENU="QUINCE ";ESP="QUINCE "';
+      Text1100728@1100158 : TextConst 'ENU=DIECI;ESP=DIECI';
+      Text1100729@1100159 : TextConst 'ENU="VEINTE ";ESP="VEINTE "';
+      Text1100730@1100160 : TextConst 'ENU=VEINTI;ESP=VEINTI';
+      Text1100731@1100161 : TextConst 'ENU="TREINTA ";ESP="TREINTA "';
+      Text1100732@1100162 : TextConst 'ENU="TREINTA Y ";ESP="TREINTA Y "';
+      Text1100733@1100163 : TextConst 'ENU="CUARENTA ";ESP="CUARENTA "';
+      Text1100734@1100164 : TextConst 'ENU="CUARENTA Y ";ESP="CUARENTA Y "';
+      Text1100735@1100165 : TextConst 'ENU="CINCUENTA ";ESP="CINCUENTA "';
+      Text1100736@1100166 : TextConst 'ENU="CINCUENTA Y ";ESP="CINCUENTA Y "';
+      Text1100737@1100167 : TextConst 'ENU="SESENTA ";ESP="SESENTA "';
+      Text1100738@1100168 : TextConst 'ENU="SESENTA Y ";ESP="SESENTA Y "';
+      Text1100739@1100169 : TextConst 'ENU="SETENTA ";ESP="SETENTA "';
+      Text1100740@1100170 : TextConst 'ENU="SETENTA Y ";ESP="SETENTA Y "';
+      Text1100741@1100171 : TextConst 'ENU="OCHENTA ";ESP="OCHENTA "';
+      Text1100742@1100172 : TextConst 'ENU="OCHENTA Y ";ESP="OCHENTA Y "';
+      Text1100743@1100173 : TextConst 'ENU="NOVENTA ";ESP="NOVENTA "';
+      Text1100744@1100174 : TextConst 'ENU="NOVENTA Y ";ESP="NOVENTA Y "';
+      Text1100745@1100175 : TextConst 'ENU="UN ";ESP="UN "';
+      Text1100746@1100176 : TextConst 'ENU="UNO ";ESP="UNO "';
+      Text1100747@1100177 : TextConst 'ENU="DOS ";ESP="DOS "';
+      Text1100748@1100178 : TextConst 'ENU="TRES ";ESP="TRES "';
+      Text1100749@1100179 : TextConst 'ENU="CUATRO ";ESP="CUATRO "';
+      Text1100750@1100180 : TextConst 'ENU="CINCO ";ESP="CINCO "';
+      Text1100751@1100181 : TextConst 'ENU="SEIS ";ESP="SEIS "';
+      Text1100752@1100182 : TextConst 'ENU="SIETE ";ESP="SIETE "';
+      Text1100753@1100183 : TextConst 'ENU="OCHO ";ESP="OCHO "';
+      Text1100754@1100184 : TextConst 'ENU="NUEVE ";ESP="NUEVE "';
+      Text1100755@1100185 : TextConst 'ENU=" CêNTIMOS";ESP=" CENTAVOS"';
+      Text1100756@1100186 : TextConst 'ENU=" CêNTIMOS";ESP=" CêNTIMOS"';
+      Text1100757@1100187 : TextConst 'ENU=MILêSIMAS;ESP=MILêSIMAS';
+      Text1100758@1100188 : TextConst 'ENU=DIEZMILêSIMAS;ESP=DIEZMILêSIMAS';
+      Text1100759@1100189 : TextConst 'ENU=" CêNTIMO";ESP=" CêNTIMO"';
+      Text1100760@1100190 : TextConst 'ENU=" CêNTIMO";ESP=" CêNTIMO"';
+      Text1100761@1100191 : TextConst 'ENU=MILêSIMA;ESP=MILêSIMA';
+      Text1100762@1100192 : TextConst 'ENU=DIEZMILêSIMA;ESP=DIEZMILêSIMA';
+      Text1100764@1100193 : TextConst 'ENU=%1 \results in a written number which is too long.;ESP=%1 \ es un n£mero demasiado largo.';
+      Text1100765@1100194 : TextConst 'ENU=CERO;ESP=CERO';
+      Text1100766@1100195 : TextConst;
+      Text1100767@1100196 : TextConst 'ENU="CON ";ESP="CON "';
+      Text1100768@1100197 : TextConst 'ENU=%1 is too big to be text-formatted;ESP=%1 es demasiado grande para convertir a texto';
+      Text1100769@1100217000 : TextConst 'ESP=M.N';
+      rDivisa@1103355012 : Record 4;
+      wConcepto@1103355001 : Text[80];
+      wDescripCheque@1103355004 : Text[80];
+      wFechaCheque@1103355005 : Date;
+      Text066@1103355007 : TextConst 'ESP=Ck #1############################';
+      wPrecision@1103355013 : Decimal;
+      wLineasImpresas@1103355009 : Integer;
+      wConceptoChequeImprimir@1100217002 : Text[50];
+      Text067@1100217003 : TextConst 'ESP=PESOS';
+
+    PROCEDURE FormatNoText@1(VAR NoText@1000 : ARRAY [2] OF Text[80];No@1001 : Decimal;CurrencyCode@1002 : Code[10]);
+    VAR
+      lrCurrency@1100217001 : Record 4;
+      PrintExponent@1003 : Boolean;
+      Ones@1004 : Integer;
+      Tens@1005 : Integer;
+      Hundreds@1006 : Integer;
+      Exponent@1007 : Integer;
+      NoTextIndex@1008 : Integer;
+      lwTextDecimal@1100217000 : Text[30];
+    BEGIN
+      CLEAR(NoText);
+      NoTextIndex := 1;
+      NoText[1] := '****';
+
+      IF No > 999999999 THEN
+        ERROR(Text1100768,No);
+
+      IF ROUND(No, 1, '<') = 0 THEN
+        AddToNoText(NoText, NoTextIndex, Text1100765);
+
+      HundMilion := ROUND(No,1,'<') DIV 100000000;
+      Remainder := ROUND(No,1,'<') MOD 100000000;
+      TenMilion := Remainder DIV 10000000;
+      Remainder := Remainder MOD 10000000;
+      UnitsMilion := Remainder DIV 1000000;
+      Remainder := Remainder MOD 1000000;
+      HundThousands := Remainder DIV 100000;
+      Remainder := Remainder MOD 100000;
+      TenThousands := Remainder DIV 10000;
+      Remainder := Remainder MOD 10000;
+      UnitsThousands := Remainder DIV 1000;
+      Remainder := Remainder MOD 1000;
+      Hundreds := Remainder DIV 100;
+      Remainder := Remainder MOD 100;
+      Tens := Remainder DIV 10;
+      Units := Remainder MOD 10;
+      DecimalPlaces := STRLEN(FORMAT(No,0,Text1100700));
+
+      IF DecimalPlaces > 0 THEN BEGIN
+        DecimalPlaces := DecimalPlaces - 1;
+        Decimals := (No - ROUND(No,1,'<')) *  POWER(10, DecimalPlaces);
+        IF DecimalPlaces = 1 THEN
+           Decimals := Decimals * 10;
+        DecimalString := TextNoDecimals(DecimalPlaces);
+      END;
+
+      AddToNoText(NoText,NoTextIndex,TextHundMilion(HundMilion,TenMilion,UnitsMilion,TRUE));
+      AddToNoText(NoText,NoTextIndex,TextTenUnitsMilion(HundMilion,TenMilion,UnitsMilion,TRUE));
+      AddToNoText(NoText,NoTextIndex,TextHundThousands(HundThousands,TenThousands,UnitsThousands,FALSE));
+      AddToNoText(NoText,NoTextIndex,TextTenUnitsThousands(HundThousands,TenThousands,UnitsThousands,FALSE));
+      AddToNoText(NoText,NoTextIndex,TextHundreds(Hundreds,Tens,Units,FALSE));
+      AddToNoText(NoText,NoTextIndex,TextTensUnits(Tens,Units,FALSE));
+
+      //+$002 <
+      IF CurrencyCode <> '' THEN
+      BEGIN
+        lrCurrency.GET(CurrencyCode);
+        AddToNoText(NoText,NoTextIndex, lrCurrency.Description);
+      END
+      ELSE
+        AddToNoText(NoText,NoTextIndex, Text067);
+      //+$002 >
+
+      IF DecimalPlaces > 0 THEN BEGIN
+        FormatNoText(DecimalText,Decimals,CurrencyCode);
+
+        lwTextDecimal := '   ';
+        IF Decimals < 10 THEN
+          lwTextDecimal += ' 0';
+        lwTextDecimal += FORMAT(Decimals);
+        IF (CurrencyCode <> '') AND (CurrencyCode <> GLSetup."LCY Code") THEN
+          AddToNoText(NoText, NoTextIndex,  lwTextDecimal + '/100 ')
+        ELSE
+          AddToNoText(NoText, NoTextIndex,  lwTextDecimal + '/100 ' + Text1100769);
+      END
+      ELSE
+        AddToNoText(NoText, NoTextIndex, ' 00/100 '); //$001
+
+      IF CurrencyCode <> '' THEN
+        AddToNoText(NoText, NoTextIndex, CurrencyCode);
+    END;
+
+    LOCAL PROCEDURE AddToNoText@2(VAR NoText@1000 : ARRAY [2] OF Text[80];VAR NoTextIndex@1001 : Integer;AddText@1100002 : Text[80]);
+    BEGIN
+      WHILE STRLEN(NoText[NoTextIndex] + AddText) > MAXSTRLEN(NoText[1]) DO BEGIN
+        NoTextIndex := NoTextIndex + 1;
+        IF NoTextIndex > ARRAYLEN(NoText) THEN
+          ERROR(Text1100764,AddText);
+      END;
+
+      NoText[NoTextIndex] := DELCHR(NoText[NoTextIndex] + AddText,'<');
+    END;
+
+    LOCAL PROCEDURE CustUpdateAmounts@3(VAR CustLedgEntry2@1000 : Record 21;RemainingAmount2@1001 : Decimal);
+    BEGIN
+      IF (ApplyMethod = ApplyMethod::OneLineOneEntry) OR
+         (ApplyMethod = ApplyMethod::MoreLinesOneEntry)
+      THEN BEGIN
+        GenJnlLine3.RESET;
+        GenJnlLine3.SETCURRENTKEY(
+          "Account Type","Account No.","Applies-to Doc. Type","Applies-to Doc. No.");
+        GenJnlLine3.SETRANGE("Account Type",GenJnlLine3."Account Type"::Customer);
+        GenJnlLine3.SETRANGE("Account No.",CustLedgEntry2."Customer No.");
+        GenJnlLine3.SETRANGE("Applies-to Doc. Type",CustLedgEntry2."Document Type");
+        GenJnlLine3.SETRANGE("Applies-to Doc. No.",CustLedgEntry2."Document No.");
+        GenJnlLine3.SETRANGE("Applies-to Bill No.",CustLedgEntry2."Applies-to Bill No.");
+        IF ApplyMethod = ApplyMethod::OneLineOneEntry THEN
+          GenJnlLine3.SETFILTER("Line No.",'<>%1',GenJnlLine."Line No.")
+        ELSE
+          GenJnlLine3.SETFILTER("Line No.",'<>%1',GenJnlLine2."Line No.");
+        IF CustLedgEntry2."Document Type" <> CustLedgEntry2."Document Type"::" " THEN
+          IF GenJnlLine3.FIND('-') THEN
+            GenJnlLine3.FIELDERROR(
+              "Applies-to Doc. No.",
+              STRSUBSTNO(
+                Text030,
+                CustLedgEntry2."Document Type",CustLedgEntry2."Document No.",
+                CustLedgEntry2."Customer No."));
+      END;
+
+      DocType := FORMAT(CustLedgEntry2."Document Type");
+      DocNo := CustLedgEntry2."Document No.";
+      ExtDocNo := CustLedgEntry2."External Document No.";
+      DocDate := CustLedgEntry2."Posting Date";
+      CurrencyCode2 := CustLedgEntry2."Currency Code";
+
+      CustLedgEntry2.CALCFIELDS("Remaining Amount");
+
+      LineAmount := -(CustLedgEntry2."Remaining Amount" - CustLedgEntry2."Remaining Pmt. Disc. Possible"-
+        CustLedgEntry2."Accepted Payment Tolerance");
+      LineAmount2 :=
+        ROUND(
+          ExchangeAmt(CustLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,LineAmount),
+          Currency."Amount Rounding Precision");
+
+      IF ((CustLedgEntry2."Document Type" = CustLedgEntry2."Document Type"::Invoice) AND
+         (GenJnlLine."Posting Date" <= CustLedgEntry2."Pmt. Discount Date") AND
+         (LineAmount2 <= RemainingAmount2)) OR CustLedgEntry2."Accepted Pmt. Disc. Tolerance"
+      THEN BEGIN
+        LineDiscount := -CustLedgEntry2."Remaining Pmt. Disc. Possible";
+        IF CustLedgEntry2."Accepted Payment Tolerance" <> 0 THEN
+          LineDiscount := LineDiscount - CustLedgEntry2."Accepted Payment Tolerance";
+      END ELSE BEGIN
+        IF RemainingAmount2 >=
+           ROUND(
+            -(ExchangeAmt(CustLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,
+              CustLedgEntry2."Remaining Amount")),Currency."Amount Rounding Precision")
+        THEN
+          LineAmount2 :=
+            ROUND(
+              -(ExchangeAmt(CustLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,
+                CustLedgEntry2."Remaining Amount")),Currency."Amount Rounding Precision")
+        ELSE BEGIN
+          LineAmount2 := RemainingAmount2;
+          LineAmount :=
+            ROUND(
+              ExchangeAmt(CustLedgEntry2."Posting Date",CurrencyCode2,GenJnlLine."Currency Code",
+              LineAmount2),Currency."Amount Rounding Precision");
+        END;
+        LineDiscount := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE VendUpdateAmounts@4(VAR VendLedgEntry2@1000 : Record 25;RemainingAmount2@1001 : Decimal);
+    BEGIN
+      IF (ApplyMethod = ApplyMethod::OneLineOneEntry) OR
+         (ApplyMethod = ApplyMethod::MoreLinesOneEntry)
+      THEN BEGIN
+        GenJnlLine3.RESET;
+        GenJnlLine3.SETCURRENTKEY(
+          "Account Type","Account No.","Applies-to Doc. Type","Applies-to Doc. No.");
+        GenJnlLine3.SETRANGE("Account Type",GenJnlLine3."Account Type"::Vendor);
+        GenJnlLine3.SETRANGE("Account No.",VendLedgEntry2."Vendor No.");
+        GenJnlLine3.SETRANGE("Applies-to Doc. Type",VendLedgEntry2."Document Type");
+        GenJnlLine3.SETRANGE("Applies-to Doc. No.",VendLedgEntry2."Document No.");
+        GenJnlLine3.SETRANGE("Applies-to Bill No.",VendLedgEntry2."Applies-to Bill No.");
+        IF ApplyMethod = ApplyMethod::OneLineOneEntry THEN
+          GenJnlLine3.SETFILTER("Line No.",'<>%1',GenJnlLine."Line No.")
+        ELSE
+          GenJnlLine3.SETFILTER("Line No.",'<>%1',GenJnlLine2."Line No.");
+        IF VendLedgEntry2."Document Type" <> VendLedgEntry2."Document Type"::" " THEN
+          IF GenJnlLine3.FIND('-') THEN
+            GenJnlLine3.FIELDERROR(
+              "Applies-to Doc. No.",
+              STRSUBSTNO(
+                Text031,
+                VendLedgEntry2."Document Type",VendLedgEntry2."Document No.",
+                VendLedgEntry2."Vendor No."));
+      END;
+
+      DocType := FORMAT(VendLedgEntry2."Document Type");
+      DocNo := VendLedgEntry2."Document No.";
+      ExtDocNo := VendLedgEntry2."External Document No.";
+      DocDate := VendLedgEntry2."Posting Date";
+      CurrencyCode2 := VendLedgEntry2."Currency Code";
+      VendLedgEntry2.CALCFIELDS("Remaining Amount");
+
+      LineAmount := -(VendLedgEntry2."Remaining Amount" - VendLedgEntry2."Remaining Pmt. Disc. Possible" -
+        VendLedgEntry2."Accepted Payment Tolerance");
+
+      LineAmount2 :=
+        ROUND(
+          ExchangeAmt(VendLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,LineAmount),
+          Currency."Amount Rounding Precision");
+
+      IF (((VendLedgEntry2."Document Type" = VendLedgEntry2."Document Type"::Invoice) OR
+         (VendLedgEntry2."Document Type" = VendLedgEntry2."Document Type"::"Credit Memo")) AND
+         (GenJnlLine."Posting Date" <= VendLedgEntry2."Pmt. Discount Date") AND
+         (LineAmount2 <= RemainingAmount2)) OR VendLedgEntry2."Accepted Pmt. Disc. Tolerance"
+      THEN BEGIN
+        LineDiscount := -VendLedgEntry2."Remaining Pmt. Disc. Possible";
+        IF VendLedgEntry2."Accepted Payment Tolerance" <> 0 THEN
+          LineDiscount := LineDiscount - VendLedgEntry2."Accepted Payment Tolerance";
+      END ELSE BEGIN
+       IF RemainingAmount2 >=
+           ROUND(
+            -(ExchangeAmt(VendLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,
+              VendLedgEntry2."Amount to Apply")),Currency."Amount Rounding Precision")
+        THEN BEGIN
+          LineAmount2 :=
+            ROUND(
+              -(ExchangeAmt(VendLedgEntry2."Posting Date",GenJnlLine."Currency Code",CurrencyCode2,
+                VendLedgEntry2."Amount to Apply")),Currency."Amount Rounding Precision");
+          LineAmount :=
+            ROUND(
+              ExchangeAmt(VendLedgEntry2."Posting Date",CurrencyCode2,GenJnlLine."Currency Code",
+              LineAmount2),Currency."Amount Rounding Precision");
+        END ELSE BEGIN
+          LineAmount2 := RemainingAmount2;
+          LineAmount :=
+            ROUND(
+              ExchangeAmt(VendLedgEntry2."Posting Date",CurrencyCode2,GenJnlLine."Currency Code",
+              LineAmount2),Currency."Amount Rounding Precision");
+        END;
+        LineDiscount := 0;
+      END;
+    END;
+
+    PROCEDURE InitTextVariable@5();
+    BEGIN
+      OnesText[1] := Text032;
+      OnesText[2] := Text033;
+      OnesText[3] := Text034;
+      OnesText[4] := Text035;
+      OnesText[5] := Text036;
+      OnesText[6] := Text037;
+      OnesText[7] := Text038;
+      OnesText[8] := Text039;
+      OnesText[9] := Text040;
+      OnesText[10] := Text041;
+      OnesText[11] := Text042;
+      OnesText[12] := Text043;
+      OnesText[13] := Text044;
+      OnesText[14] := Text045;
+      OnesText[15] := Text046;
+      OnesText[16] := Text047;
+      OnesText[17] := Text048;
+      OnesText[18] := Text049;
+      OnesText[19] := Text050;
+
+      TensText[1] := '';
+      TensText[2] := Text051;
+      TensText[3] := Text052;
+      TensText[4] := Text053;
+      TensText[5] := Text054;
+      TensText[6] := Text055;
+      TensText[7] := Text056;
+      TensText[8] := Text057;
+      TensText[9] := Text058;
+
+      ExponentText[1] := '';
+      ExponentText[2] := Text059;
+      ExponentText[3] := Text060;
+      ExponentText[4] := Text061;
+    END;
+
+    PROCEDURE InitializeRequest@6(BankAcc@1000 : Code[20];LastCheckNo@1001 : Code[20];NewOneCheckPrVend@1002 : Boolean;NewReprintChecks@1003 : Boolean;NewTestPrint@1004 : Boolean;NewPreprintedStub@1005 : Boolean);
+    BEGIN
+      IF BankAcc <> '' THEN
+        IF BankAcc2.GET(BankAcc) THEN BEGIN
+          UseCheckNo := LastCheckNo;
+          OneCheckPrVendor := NewOneCheckPrVend;
+          ReprintChecks := NewReprintChecks;
+          TestPrint := NewTestPrint;
+          PreprintedStub := NewPreprintedStub;
+        END;
+    END;
+
+    PROCEDURE ExchangeAmt@7(PostingDate@1000 : Date;CurrencyCode@1001 : Code[10];CurrencyCode2@1003 : Code[10];Amount@1002 : Decimal) Amount2 : Decimal;
+    BEGIN
+      IF (CurrencyCode <> '')  AND (CurrencyCode2 = '') THEN
+         Amount2 :=
+           CurrencyExchangeRate.ExchangeAmtLCYToFCY(
+             PostingDate,CurrencyCode,Amount,CurrencyExchangeRate.ExchangeRate(PostingDate,CurrencyCode))
+      ELSE IF (CurrencyCode = '') AND (CurrencyCode2 <> '') THEN
+        Amount2 :=
+          CurrencyExchangeRate.ExchangeAmtFCYToLCY(
+            PostingDate,CurrencyCode2,Amount,CurrencyExchangeRate.ExchangeRate(PostingDate,CurrencyCode2))
+      ELSE IF (CurrencyCode <> '') AND (CurrencyCode2 <> '') AND (CurrencyCode <> CurrencyCode2) THEN
+        Amount2 := CurrencyExchangeRate.ExchangeAmtFCYToFCY(PostingDate,CurrencyCode2,CurrencyCode,Amount)
+      ELSE
+        Amount2 := Amount;
+    END;
+
+    PROCEDURE TextHundMilion@1100007(Hundreds@1100000 : Integer;Ten@1100001 : Integer;Units@1100002 : Integer;Masc@1100003 : Boolean) : Text[250];
+    BEGIN
+      IF Hundreds <> 0 THEN
+        EXIT(TextHundreds(Hundreds,Ten,Units,TRUE));
+    END;
+
+    PROCEDURE TextTenUnitsMilion@1100000(Hundreds@1100000 : Integer;Ten@1100001 : Integer;Units@1100002 : Integer;Masc@1100003 : Boolean) : Text[250];
+    BEGIN
+      IF (Hundreds <> 0) AND (Ten = 0) AND (Units = 0) THEN
+        EXIT(Text1100701);
+      IF (Hundreds = 0) AND (Ten = 0) AND (Units = 1) THEN
+        EXIT(Text1100702);
+      IF (Ten <> 0) OR (Units <> 0) THEN
+        EXIT(TextTensUnits(Ten,Units,Masc) + Text1100701);
+    END;
+
+    PROCEDURE TextHundThousands@1100001(Hundreds@1100000 : Integer;Ten@1100001 : Integer;Units@1100002 : Integer;Masc@1100003 : Boolean) : Text[250];
+    BEGIN
+      IF Hundreds <> 0 THEN
+        EXIT(TextHundreds(Hundreds,Ten,Units,Masc))
+    END;
+
+    PROCEDURE TextTenUnitsThousands@1100002(Hundreds@1100000 : Integer;Ten@1100001 : Integer;Units@1100002 : Integer;Masc@1100003 : Boolean) : Text[250];
+    BEGIN
+      IF (Hundreds <> 0) AND (Ten = 0) AND (Units = 0) THEN
+        EXIT(Text1100703);
+      IF (Hundreds = 0) AND (Ten = 0) AND (Units = 1) THEN
+        EXIT(Text1100703);
+      IF (Ten <> 0) OR (Units <> 0) THEN
+        EXIT(TextTensUnits(Ten,Units,Masc) + Text1100703);
+    END;
+
+    PROCEDURE TextHundreds@1100003(Hundreds@1100000 : Integer;Tens@1100001 : Integer;Units@1100002 : Integer;Masc@1100003 : Boolean) : Text[250];
+    BEGIN
+      IF Hundreds = 0 THEN
+        EXIT('');
+      IF Masc THEN
+        CASE Hundreds OF
+          1: IF (Tens = 0) AND (Units = 0) THEN
+               EXIT(Text1100704)
+             ELSE
+               EXIT(Text1100705);
+          2: EXIT(Text1100706);
+          3: EXIT(Text1100707);
+          4: EXIT(Text1100708);
+          5: EXIT(Text1100709);
+          6: EXIT(Text1100710);
+          7: EXIT(Text1100711);
+          8: EXIT(Text1100712);
+          9: EXIT(Text1100713);
+        END
+      ELSE
+        CASE Hundreds OF
+          1: IF (Tens = 0) AND (Units = 0) THEN
+               EXIT(Text1100704)
+             ELSE
+               EXIT(Text1100705);
+          2: EXIT(Text1100714);
+          3: EXIT(Text1100715);
+          4: EXIT(Text1100716);
+          5: EXIT(Text1100717);
+          6: EXIT(Text1100718);
+          7: EXIT(Text1100719);
+          8: EXIT(Text1100720);
+          9: EXIT(Text1100721);
+        END;
+    END;
+
+    PROCEDURE TextTensUnits@1100004(Tens@1100000 : Integer;Units@1100001 : Integer;Masc@1100002 : Boolean) : Text[250];
+    BEGIN
+      CASE Tens OF
+        0: EXIT(TextUnits(Units,Masc));
+        1: CASE Units OF
+              0: EXIT(Text1100722);
+              1: EXIT(Text1100723);
+              2: EXIT(Text1100724);
+              3: EXIT(Text1100725);
+              4: EXIT(Text1100726);
+              5: EXIT(Text1100727);
+            ELSE
+              EXIT(Text1100728 + TextUnits(Units,Masc));
+            END;
+         2: IF Units = 0 THEN
+              EXIT(Text1100729)
+            ELSE
+              EXIT(Text1100730 + TextUnits(Units,Masc));
+         3: IF Units = 0 THEN
+              EXIT(Text1100731)
+            ELSE
+              EXIT(Text1100732 + TextUnits(Units,Masc));
+         4: IF Units = 0 THEN
+              EXIT(Text1100733)
+            ELSE
+              EXIT(Text1100734 + TextUnits(Units,Masc));
+         5: IF Units = 0 THEN
+              EXIT(Text1100735)
+            ELSE
+              EXIT(Text1100736 + TextUnits(Units,Masc));
+         6: IF Units = 0 THEN
+              EXIT(Text1100737)
+            ELSE
+              EXIT(Text1100738 + TextUnits(Units,Masc));
+         7: IF Units = 0 THEN
+              EXIT(Text1100739)
+            ELSE
+              EXIT(Text1100740 + TextUnits(Units,Masc));
+         8: IF Units = 0 THEN
+              EXIT(Text1100741)
+            ELSE
+              EXIT(Text1100742 + TextUnits(Units,Masc));
+         9: IF Units = 0 THEN
+              EXIT(Text1100743)
+            ELSE
+              EXIT(Text1100744 + TextUnits(Units,Masc));
+      END;
+    END;
+
+    PROCEDURE TextUnits@1100005(Units@1100000 : Integer;Masc@1100001 : Boolean) : Text[250];
+    BEGIN
+      CASE Units OF
+        0: EXIT('');
+        1: IF Masc THEN
+             EXIT(Text1100745)
+           ELSE
+             EXIT(Text1100746);
+        2: EXIT(Text1100747);
+        3: EXIT(Text1100748);
+        4: EXIT(Text1100749);
+        5: EXIT(Text1100750);
+        6: EXIT(Text1100751);
+        7: EXIT(Text1100752);
+        8: EXIT(Text1100753);
+        9: EXIT(Text1100754);
+      END;
+    END;
+
+    PROCEDURE TextNoDecimals@1100006(NoDecimals@1100000 : Integer) : Text[15];
+    BEGIN
+      IF Decimals > 1 THEN
+        CASE NoDecimals OF
+          0: EXIT('');
+          1: EXIT(Text1100755);
+          2: EXIT(Text1100756);
+          3: EXIT(Text1100757);
+          4: EXIT(Text1100758);
+        END
+      ELSE
+        CASE NoDecimals OF
+          0: EXIT('');
+          1: EXIT(Text1100759);
+          2: EXIT(Text1100760);
+          3: EXIT(Text1100761);
+          4: EXIT(Text1100762);
+        END;
+    END;
+
+    PROCEDURE GetFechaCasillas@1100253001(pwTipo@1100253002 : Integer;pwNumCAr@1100253003 : Integer) rvText : Text[30];
+    VAR
+      lwIndex@1100253000 : Integer;
+      lwText@1100253001 : Text[30];
+    BEGIN
+      // GetFechaCasillas.
+
+      CASE pwTipo OF
+        1: lwText := FORMAT(wFechaCheque, 0, '<Day,2>');
+        2: lwText := FORMAT(wFechaCheque, 0, '<Month,2>');
+        3: lwText := FORMAT(wFechaCheque, 0, '<Year4>');
+      END;
+
+      rvText := COPYSTR(lwText,pwNumCAr, 1);
+    END;
+
+    BEGIN
+    {
+      $001 AJS 13062013 Los decimales deben salir siempre aunque esten a cero
+
+      $002 AJS 13062013 Debe aparecer siempre el nombre de la divisa
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

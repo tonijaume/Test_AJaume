@@ -1,0 +1,335 @@
+OBJECT Codeunit 33 BOM Jnl.-Post Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/02/07;
+    Time=12:00:00;
+    Version List=NAVW15.00;
+  }
+  PROPERTIES
+  {
+    TableNo=89;
+    Permissions=TableData 234=imd;
+    OnRun=BEGIN
+            BOMJnlLine.COPY(Rec);
+            Code;
+            Rec := BOMJnlLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=cannot exceed %1 characters;ESP=no puede superar %1 caracteres';
+      Text001@1001 : TextConst 'ENU=Journal Batch Name    #1##########\\;ESP=Nombre secci¢n diario #1##########\\';
+      Text002@1002 : TextConst 'ENU=Checking lines        #2######\;ESP=Comprobando l¡neas    #2######\';
+      Text003@1003 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@\;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@\';
+      Text004@1004 : TextConst 'ENU=Updating lines        #5###### @6@@@@@@@@@@@@@;ESP=Actualizando l¡ns.    #5###### @6@@@@@@@@@@@@@';
+      Text005@1005 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@;ESP=Registrando l¡neas    #3###### @4@@@@@@@@@@@@@';
+      Text006@1006 : TextConst 'ENU=A maximum of %1 posting number series can be used in each journal.;ESP=Se puede utilizar un m ximo de %1 n£meros de serie de registro en cada diario.';
+      Text007@1007 : TextConst 'ENU=<Month Text>;ESP=<Month Text>';
+      BOMJnlTemplate@1008 : Record 88;
+      BOMJnlBatch@1009 : Record 234;
+      BOMJnlLine@1010 : Record 89;
+      BOMJnlLine2@1011 : Record 89;
+      BOMJnlLine3@1012 : Record 89;
+      LedgEntryDim@1013 : Record 355;
+      BOMLedgEntry@1014 : Record 238;
+      BOMReg@1015 : Record 239;
+      AccountingPeriod@1016 : Record 50;
+      NoSeries@1017 : TEMPORARY Record 308;
+      InvtSetup@1039 : Record 313;
+      BOMJnlCheckLine@1018 : Codeunit 31;
+      BOMJnlPostLine@1019 : Codeunit 32;
+      NoSeriesMgt@1020 : Codeunit 396;
+      NoSeriesMgt2@1021 : ARRAY [10] OF Codeunit 396;
+      DimMgt@1022 : Codeunit 408;
+      InvtAdjmt@1038 : Codeunit 5895;
+      Window@1023 : Dialog;
+      BOMRegNo@1024 : Integer;
+      StartLineNo@1025 : Integer;
+      Day@1026 : Integer;
+      Week@1027 : Integer;
+      Month@1028 : Integer;
+      MonthText@1029 : Text[30];
+      NoOfRecords@1030 : Integer;
+      LineCount@1031 : Integer;
+      LastDocNo@1032 : Code[20];
+      LastDocNo2@1033 : Code[20];
+      LastPostedDocNo@1034 : Code[20];
+      NoOfPostingNoSeries@1035 : Integer;
+      PostingNoSeriesNo@1036 : Integer;
+      "0DF"@1037 : DateFormula;
+
+    LOCAL PROCEDURE Code@3();
+    VAR
+      JnlLineDim@1000 : Record 356;
+      TempJnlLineDim@1001 : TEMPORARY Record 356;
+      UpdateAnalysisView@1002 : Codeunit 410;
+      UpdateItemAnalysisView@1003 : Codeunit 7150;
+    BEGIN
+      WITH BOMJnlLine DO BEGIN
+        SETRANGE("Journal Template Name","Journal Template Name");
+        SETRANGE("Journal Batch Name","Journal Batch Name");
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+
+        BOMJnlTemplate.GET("Journal Template Name");
+        BOMJnlBatch.GET("Journal Template Name","Journal Batch Name");
+        IF STRLEN(INCSTR(BOMJnlBatch.Name)) > MAXSTRLEN(BOMJnlBatch.Name) THEN
+          BOMJnlBatch.FIELDERROR(
+            Name,
+            STRSUBSTNO(
+              Text000,
+              MAXSTRLEN(BOMJnlBatch.Name)));
+
+        IF BOMJnlTemplate.Recurring THEN BEGIN
+          SETRANGE("Posting Date",0D,WORKDATE);
+          SETFILTER("Expiration Date",'%1 | %2..',0D,WORKDATE);
+        END;
+
+        IF NOT FIND('=><') THEN BEGIN
+          "Line No." := 0;
+          COMMIT;
+          EXIT;
+        END;
+
+        IF BOMJnlTemplate.Recurring THEN
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text003 +
+            Text004)
+        ELSE
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text005);
+
+        Window.UPDATE(1,"Journal Batch Name");
+
+        // Check Lines
+        LineCount := 0;
+        StartLineNo := "Line No.";
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(2,LineCount);
+          CheckRecurringLine(BOMJnlLine);
+          JnlLineDim.SETRANGE("Table ID",DATABASE::"BOM Journal Line");
+          JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+          JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+          JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+          JnlLineDim.SETRANGE("Allocation Line No.",0);
+          TempJnlLineDim.DELETEALL;
+          DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+          BOMJnlCheckLine.RunCheck(BOMJnlLine,TempJnlLineDim);
+          IF NEXT = 0 THEN
+            FIND('-');
+        UNTIL "Line No." = StartLineNo;
+        NoOfRecords := LineCount;
+
+        // Find next register no.
+        LedgEntryDim.LOCKTABLE;
+        BOMLedgEntry.LOCKTABLE;
+        IF RECORDLEVELLOCKING THEN
+          IF BOMLedgEntry.FIND('+') THEN;
+        BOMReg.LOCKTABLE;
+        IF BOMReg.FIND('+') THEN
+          BOMRegNo := BOMReg."No." + 1
+        ELSE
+          BOMRegNo := 1;
+
+        // Post lines
+        LineCount := 0;
+        LastDocNo := '';
+        LastDocNo2 := '';
+        LastPostedDocNo := '';
+        FIND('-');
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(3,LineCount);
+          Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+          IF NOT EmptyLine AND
+             (BOMJnlBatch."No. Series" <> '') AND
+             ("Document No." <> LastDocNo2)
+          THEN
+            TESTFIELD("Document No.",NoSeriesMgt.GetNextNo(BOMJnlBatch."No. Series","Posting Date",FALSE));
+          LastDocNo2 := "Document No.";
+          MakeRecurringTexts(BOMJnlLine);
+          IF "Posting No. Series" = '' THEN
+            "Posting No. Series" := BOMJnlBatch."No. Series"
+          ELSE
+            IF NOT EmptyLine THEN
+              IF "Document No." = LastDocNo THEN
+                "Document No." := LastPostedDocNo
+              ELSE BEGIN
+                IF NOT NoSeries.GET("Posting No. Series") THEN BEGIN
+                  NoOfPostingNoSeries := NoOfPostingNoSeries + 1;
+                  IF NoOfPostingNoSeries > ARRAYLEN(NoSeriesMgt2) THEN
+                    ERROR(
+                      Text006,
+                      ARRAYLEN(NoSeriesMgt2));
+                  NoSeries.Code := "Posting No. Series";
+                  NoSeries.Description := FORMAT(NoOfPostingNoSeries);
+                  NoSeries.INSERT;
+                END;
+                LastDocNo := "Document No.";
+                EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+                "Document No." := NoSeriesMgt2[PostingNoSeriesNo].GetNextNo("Posting No. Series","Posting Date",FALSE);
+                LastPostedDocNo := "Document No.";
+              END;
+          JnlLineDim.SETRANGE("Table ID",DATABASE::"BOM Journal Line");
+          JnlLineDim.SETRANGE("Journal Template Name","Journal Template Name");
+          JnlLineDim.SETRANGE("Journal Batch Name","Journal Batch Name");
+          JnlLineDim.SETRANGE("Journal Line No.","Line No.");
+          JnlLineDim.SETRANGE("Allocation Line No.",0);
+          TempJnlLineDim.DELETEALL;
+          DimMgt.CopyJnlLineDimToJnlLineDim(JnlLineDim,TempJnlLineDim);
+          BOMJnlPostLine.RunWithCheck(BOMJnlLine,TempJnlLineDim);
+        UNTIL NEXT = 0;
+
+        // Copy register no. and current journal batch name to the BOM journal
+        IF NOT BOMReg.FIND('+') OR (BOMReg."No." <> BOMRegNo) THEN
+          BOMRegNo := 0;
+        INIT;
+        "Line No." := BOMRegNo;
+
+        InvtSetup.GET;
+        IF InvtSetup."Automatic Cost Adjustment" <>
+           InvtSetup."Automatic Cost Adjustment"::Never
+        THEN BEGIN
+          InvtAdjmt.SetProperties(TRUE,InvtSetup."Automatic Cost Posting");
+          InvtAdjmt.MakeMultiLevelAdjmt;
+        END;
+
+
+        // Update/delete lines
+        IF BOMRegNo <> 0 THEN BEGIN
+          IF NOT RECORDLEVELLOCKING THEN BEGIN
+            JnlLineDim.LOCKTABLE(TRUE,TRUE);
+            LOCKTABLE(TRUE,TRUE);
+          END;
+          IF BOMJnlTemplate.Recurring THEN BEGIN
+            // Recurring journal
+            LineCount := 0;
+            BOMJnlLine2.COPYFILTERS(BOMJnlLine);
+            BOMJnlLine2.FIND('-');
+            REPEAT
+              LineCount := LineCount + 1;
+              Window.UPDATE(5,LineCount);
+              Window.UPDATE(6,ROUND(LineCount / NoOfRecords * 10000,1));
+              IF BOMJnlLine2."Posting Date" <> 0D THEN
+                BOMJnlLine2.VALIDATE("Posting Date",CALCDATE(BOMJnlLine2."Recurring Frequency",BOMJnlLine2."Posting Date"));
+              IF (BOMJnlLine2."Recurring Method" = BOMJnlLine2."Recurring Method"::Variable) AND
+                 (BOMJnlLine2."Item No." <> '')
+              THEN BEGIN
+                BOMJnlLine2.Quantity := 0;
+                BOMJnlLine2."Total Cost" := 0;
+              END;
+              BOMJnlLine2.MODIFY;
+            UNTIL BOMJnlLine2.NEXT = 0;
+          END ELSE BEGIN
+            // Recurring journal
+            BOMJnlLine2.COPYFILTERS(BOMJnlLine);
+            BOMJnlLine2.SETFILTER("Item No.",'<>%1','');
+            IF BOMJnlLine2.FIND('+') THEN; // Remember the last line
+            JnlLineDim.SETRANGE("Table ID",DATABASE::"BOM Journal Line");
+            JnlLineDim.COPYFILTER("Journal Template Name","Journal Template Name");
+            JnlLineDim.COPYFILTER("Journal Batch Name","Journal Batch Name");
+            JnlLineDim.SETRANGE("Allocation Line No.",0);
+            BOMJnlLine3.COPY(BOMJnlLine);
+            IF BOMJnlLine3.FIND('-') THEN
+              REPEAT
+                JnlLineDim.SETRANGE("Journal Line No.",BOMJnlLine3."Line No.");
+                JnlLineDim.DELETEALL;
+                BOMJnlLine3.DELETE;
+              UNTIL BOMJnlLine3.NEXT = 0;
+            BOMJnlLine3.RESET;
+            BOMJnlLine3.SETRANGE("Journal Template Name","Journal Template Name");
+            BOMJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF NOT BOMJnlLine3.FIND('+') THEN
+              IF INCSTR("Journal Batch Name") <> '' THEN BEGIN
+                BOMJnlBatch.DELETE;
+                BOMJnlBatch.Name := INCSTR("Journal Batch Name");
+                IF BOMJnlBatch.INSERT THEN;
+                "Journal Batch Name" := BOMJnlBatch.Name;
+              END;
+
+            BOMJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF (BOMJnlBatch."No. Series" = '') AND NOT BOMJnlLine3.FIND('+') THEN BEGIN
+              BOMJnlLine3.INIT;
+              BOMJnlLine3."Journal Template Name" := "Journal Template Name";
+              BOMJnlLine3."Journal Batch Name" := "Journal Batch Name";
+              BOMJnlLine3."Line No." := 10000;
+              BOMJnlLine3.INSERT;
+              BOMJnlLine3.SetUpNewLine(BOMJnlLine2);
+              BOMJnlLine3.MODIFY;
+            END;
+          END;
+        END;
+        IF BOMJnlBatch."No. Series" <> '' THEN
+          NoSeriesMgt.SaveNoSeries;
+        IF NoSeries.FIND('-') THEN
+          REPEAT
+            EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+            NoSeriesMgt2[PostingNoSeriesNo].SaveNoSeries;
+          UNTIL NoSeries.NEXT = 0;
+
+        COMMIT;
+        CLEAR(BOMJnlCheckLine);
+        CLEAR(BOMJnlPostLine);
+        CLEAR(InvtAdjmt);
+      END;
+
+      UpdateAnalysisView.UpdateAll(0,TRUE);
+      UpdateItemAnalysisView.UpdateAll(0,TRUE);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE CheckRecurringLine@1(VAR BOMJnlLine2@1000 : Record 89);
+    BEGIN
+      WITH BOMJnlLine2 DO BEGIN
+        IF "Item No." <> '' THEN
+          IF BOMJnlTemplate.Recurring THEN BEGIN
+            TESTFIELD("Recurring Method");
+            TESTFIELD("Recurring Frequency");
+            IF "Recurring Method" = "Recurring Method"::Variable THEN
+              TESTFIELD(Quantity);
+          END ELSE BEGIN
+            TESTFIELD("Recurring Method",0);
+            TESTFIELD("Recurring Frequency","0DF");
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MakeRecurringTexts@2(VAR BOMJnlLine2@1000 : Record 89);
+    BEGIN
+      WITH BOMJnlLine2 DO BEGIN
+        IF ("Item No." <>  '') AND ("Recurring Method" <> 0) THEN BEGIN // Not recurring
+          Day := DATE2DMY("Posting Date",1);
+          Week := DATE2DWY("Posting Date",2);
+          Month := DATE2DMY("Posting Date",2);
+          MonthText := FORMAT("Posting Date",0,Text007);
+          AccountingPeriod.SETRANGE("Starting Date",0D,"Posting Date");
+          IF NOT AccountingPeriod.FIND('+') THEN
+            AccountingPeriod.Name := '';
+          "Document No." :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO("Document No.",Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN("Document No.")),
+              '>');
+          Description :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO(Description,Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN(Description)),
+              '>');
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}

@@ -1,0 +1,254 @@
+OBJECT Codeunit 99994 Macro CNT -Confirmar Excursi¢n
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/02/13;
+    Time=[ 3:10:44];
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            rSer@1100217000 : Record 7010163;
+          BEGIN
+            rSer.RESET;
+            rSer.SETRANGE(Estado, rSer.Estado::Confirmada);
+            ConfirmarExcursion(rSer);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355006 : TextConst 'ENU=This service is already confirmed;ESP=Este servicio ya esta confirmado';
+      Text001@1103355007 : TextConst 'ENU=Confirm Service &Current,Confirm Services &Filtereds;ESP=Confirmar Servicio &Actual,Confirmar Servicios &Filtrados';
+      Text002@1103355008 : TextConst 'ENU="   Confirming service \";ESP="  Confirmando servicio \"';
+      Text003@1103355009 : TextConst 'ENU="   Service: #1######";ESP="   Servicio: #1######"';
+      Text004@1103355010 : TextConst 'ENU=There is a non-settled booking in service %1.;ESP=Existe una reserva sin liquidar en el servicio %1.';
+      Text005@1103355011 : TextConst 'ENU=Unable to confirm the service, it has errors;ESP=No se puede confirmar el servicio, tiene errores';
+      Text006@1103355012 : TextConst 'ENU=This function confirm the excursion after reviewing the margins\;ESP=Esta funci¢n confirma la excursi¢n despu‚s de revisar los margenes\';
+      Text007@1103355013 : TextConst 'ENU=Moreover it also created registrations of Cost/Income                \;ESP=Adem s tambi‚n crea los registros de Coste/Ingreso                \';
+      Text008@1103355014 : TextConst 'ENU=This function will be useful to confirm paxes no. Of excursion     \;ESP=Esta funci¢n servir  para confirmar el n§ pax de la excursi¢n     \';
+      Text009@1103355015 : TextConst 'ENU=(reals) and used suppliers;ESP=(reales) y los proveedores usados';
+      rCI@1100217001 : Record 7010166;
+      rReserva@1103355002 : Record 7010162;
+      codVAL@1103355003 : Codeunit 7010143;
+      Window@1103355004 : Dialog;
+      Opcion@1103355005 : Integer;
+      Text010@1100253000 : TextConst 'ESP=El Servicio %1 Reserva %2 Tiene el Cliente  relacionado %3 en estado Bloqueado.';
+      Text011@1100253001 : TextConst 'ESP=El Servicio %1 Prestacion %2 Tiene el Proveedor de %3  en estado Bloqueado.';
+      Text012@1100253002 : TextConst 'ENU=There''s not provider confirmation in reservation %1;ESP=La reserva %1 No tiene numero de confirmaci¢n de proveedor.';
+      Text013@1100217000 : TextConst 'ESP=Existen reservas de %1 para el dia %2 sin servicio.';
+
+    PROCEDURE ConfirmarExcursion@2(VAR rSer@1103355000 : Record 7010163);
+    VAR
+      rPar@1103355001 : Record 7009700;
+      lrRep@1100253000 : Record 7010241;
+      lrRsv@1100253001 : Record 7010162;
+      lrServ@1100253002 : Record 7010163;
+      rServicio@1100217002 : Record 7010163;
+      locrMargen@1100253003 : Record 7010174;
+      lrCabVta@1100217001 : Record 36;
+      lcFacturar@1100217000 : Codeunit 7010140;
+    BEGIN
+      rPar.FINDFIRST;
+
+      lrServ.COPY(rSer);
+
+      IF lrServ.FINDSET THEN BEGIN
+        Window.OPEN(Text002+
+                    '-----------------------\'+
+                    Text003);
+        REPEAT
+          Window.UPDATE(1, lrServ."N§ Servicio");
+
+          rCI.RESET;
+          rCI.SETRANGE(Delegacion   , lrServ.Delegacion);
+          rCI.SETRANGE("N§ Servicio", lrServ."N§ Servicio");
+          IF rCI.FINDSET(TRUE) THEN
+            rCI.DELETEALL;
+
+          rServicio := lrServ;
+
+          rServicio."Tipo Calculo":= rServicio."Tipo Calculo"::"C/I";;
+          rServicio.MODIFY;
+          COMMIT();
+
+          codVAL.CostesIngresosExcursion(rServicio);
+
+          rServicio.GET(rServicio.Delegacion, rServicio."N§ Servicio");
+          //. Si el servicio tiene errores no se confirma
+
+          rServicio.CALCFIELDS(Errores);
+          IF rServicio.Errores THEN
+            ERROR(Text005);
+
+          rServicio."Tipo Calculo"         := rServicio."Tipo Calculo"::"C/I";
+          rServicio.Estado                 := rServicio.Estado::Confirmada;
+          rServicio."Usuario Confirmacion" := USERID;
+          rServicio."Fecha Confirmacion"   := TODAY;
+          rServicio."Hora Confirmacion"    := TIME;
+          rServicio.MODIFY;
+
+          //+$007
+          locrMargen.RESET;
+          locrMargen.SETRANGE(Delegacion   , rServicio.Delegacion);
+          locrMargen.SETRANGE("N§ Servicio", rServicio."N§ Servicio");
+          IF locrMargen.FINDSET(TRUE) THEN
+            locrMargen.DELETEALL;
+          //+$007
+
+          //$010  <
+          IF rPar."Facturar tickets x fecha venta" THEN
+          BEGIN
+            COMMIT;
+            lcFacturar.GeneraFPR(rServicio.Delegacion, rServicio."N§ Servicio", '', rServicio.Oficina, FALSE);
+          END;
+          //$010  >
+        UNTIL lrServ.NEXT = 0;
+
+        Window.CLOSE;
+      END;
+    END;
+
+    PROCEDURE ConfirmarReservas@4(VAR rSer@1103355000 : Record 7010163);
+    BEGIN
+
+      rReserva.RESET;
+      rReserva.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      rReserva.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+      IF rReserva.FINDFIRST THEN
+        rReserva.MODIFYALL(Confirmada, TRUE);
+
+      rReserva.RESET;
+    END;
+
+    PROCEDURE CompruebaCobros@1100253000(VAR rSer@1103355000 : Record 7010163);
+    VAR
+      lrRep@1100253000 : Record 7010241;
+    BEGIN
+      // CompruebaCobros
+
+      // JPT 01/02/11 Comprobamos que las reservas tienen el cobro introducido
+
+      CLEAR(rReserva);
+      rReserva.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      rReserva.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+      IF rReserva.FINDSET THEN BEGIN
+        REPEAT
+          //$001
+          lrRep.GET(rReserva."Guia Venta");
+          IF (NOT lrRep."Trabaja a credito") AND (rReserva."Ingreso reserva" <> 0) THEN //$007
+            rReserva.CompruebaCobro;
+        UNTIL rReserva.NEXT = 0;
+      END;
+
+      CLEAR(rReserva);
+    END;
+
+    PROCEDURE CompBloqueos@1100253001(PrSer@1100253000 : Record 7010163);
+    VAR
+      lrRes@1100253001 : Record 7010162;
+      lrRep@1100253002 : Record 7010241;
+      lrCli@1100253003 : Record 18;
+      lrPrest@1100253004 : Record 7010170;
+      lrCntC@1100253005 : Record 7010142;
+      lrProv@1100253006 : Record 23;
+    BEGIN
+      // CompBloqueos
+      // $006 JPT 12/03/12 GOC-LP-12015 Prolongar bloqueo de cliente/proveedor en excursiones
+      // Se genera un error si cliente o proveedor de la excursi¢n est n bloqueados
+
+
+      CLEAR(lrPrest);
+      lrPrest.SETRANGE(Delegacion   , PrSer.Delegacion);
+      lrPrest.SETRANGE("N§ Servicio", PrSer."N§ Servicio");
+      IF lrPrest.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(lrCntC);
+          lrCntC.SETRANGE(Delegacion           , lrPrest.Delegacion);
+          lrCntC.SETRANGE("N§ Contrato compra" , lrPrest."N§ Contrato");
+          IF lrCntC.FINDFIRST THEN BEGIN
+            IF lrProv.GET(lrCntC.Proveedor) THEN BEGIN
+              IF lrProv.Blocked = lrProv.Blocked::All THEN
+                ERROR(Text011, PrSer."N§ Servicio", lrPrest.Descripcion, lrProv."No.");
+            END;
+          END;
+        UNTIL lrPrest.NEXT=0;
+      END;
+
+      CLEAR(lrRes);
+      lrRes.SETCURRENTKEY("N§ Servicio");
+
+      lrRes.SETRANGE("N§ Servicio", PrSer."N§ Servicio");
+      lrRes.SETRANGE(Delegacion   , PrSer.Delegacion);
+      IF lrRes.FINDSET THEN BEGIN
+        REPEAT
+          IF lrRep.GET(lrRes."Guia Venta") THEN BEGIN
+            IF lrCli.GET(lrRep."Cliente Facturacion") THEN
+              IF lrCli.Blocked = lrCli.Blocked::All THEN
+                ERROR(Text010, PrSer."N§ Servicio", lrRes."N§ Reserva", lrCli."No.");
+
+
+          END;
+        UNTIL lrRes.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE CompruebaConfExc@1100253003(VAR rSer@1103355000 : Record 7010163);
+    VAR
+      lrRes@1100253003 : Record 7010162;
+      lrRep@1100253000 : Record 7010241;
+      lrExc@1100253001 : Record 7009710;
+      lwConf@1100253002 : Boolean;
+    BEGIN
+      // CompruebaConfExc
+
+      // $009 JPT 29/05/12  CNT-CAR-12004/EXC-15 - Providers confirmations
+
+      lwConf:= TRUE;
+      CLEAR(lrExc);
+      IF NOT lrExc.GET(rSer.Excursion) THEN
+        EXIT;
+
+      IF NOT lrExc."Precisa confirmacion proveedor" THEN
+        EXIT;
+
+      CLEAR(lrRes);
+      lrRes.SETCURRENTKEY("N§ Servicio",
+                             TourOperador,
+                             "Zona Hotel");
+      lrRes.SETRANGE("N§ Servicio", rSer."N§ Servicio");
+      lrRes.SETRANGE(Anulada      , FALSE);
+      lrRes.SETRANGE("Confirmacion proveedor", '');
+      IF lrRes.FINDFIRST THEN
+        ERROR(Text012);
+    END;
+
+    LOCAL PROCEDURE _CompruebaSinServicio@1100217000(prServ@1100217000 : Record 7010163);
+    VAR
+      lrRsv@1100217001 : Record 7010162;
+    BEGIN
+      // _CompruebaSinServicio
+
+      lrRsv.RESET;
+      lrRsv.SETCURRENTKEY("Fecha Excursion", Producto);
+      lrRsv.SETRANGE ("Fecha Excursion", prServ.Fecha);
+      lrRsv.SETRANGE (Producto         , prServ.Excursion);
+      lrRsv.SETRANGE (Anulada          , FALSE);
+      lrRsv.SETRANGE (Reembolsada      , FALSE);
+      lrRsv.SETRANGE ("N§ Servicio"    , 0);
+      lrRsv.SETFILTER("N§ Ticket"      , '<>%1', '');
+      IF lrRsv.FINDFIRST THEN
+        ERROR(Text013, prServ.Excursion, prServ.Fecha);
+    END;
+
+    BEGIN
+    END.
+  }
+}

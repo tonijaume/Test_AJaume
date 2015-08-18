@@ -1,0 +1,457 @@
+OBJECT Codeunit 7010458 Cancel Entries
+{
+  OBJECT-PROPERTIES
+  {
+    Date=25/02/14;
+    Time=17:06:42;
+    Modified=Yes;
+    Version List=AIC2009,AF3.10.01;
+  }
+  PROPERTIES
+  {
+    TableNo=17;
+    Permissions=TableData 17=rimd,
+                TableData 21=rimd,
+                TableData 25=rimd,
+                TableData 45=rimd,
+                TableData 169=rimd,
+                TableData 203=rimd,
+                TableData 240=rimd,
+                TableData 241=rimd,
+                TableData 253=rimd,
+                TableData 254=rimd,
+                TableData 271=rimd,
+                TableData 355=rimd,
+                TableData 379=rimd,
+                TableData 380=rimd,
+                TableData 7000002=rimd,
+                TableData 7000003=rimd,
+                TableData 7000004=rimd,
+                TableData 7010456=rimd,
+                TableData 7010457=rimd,
+                TableData 7010458=rimd,
+                TableData 7010459=rimd,
+                TableData 7010460=rimd,
+                TableData 7010461=rimd,
+                TableData 7010462=rimd,
+                TableData 7010463=rimd,
+                TableData 7010464=rimd,
+                TableData 7010465=rimd,
+                TableData 7010466=rimd;
+    OnRun=BEGIN
+            RegMovsContaAnulado.LOCKTABLE;
+            IF RegMovsContaAnulado.FINDLAST THEN
+              NoAsientoAnulado := RegMovsContaAnulado."Transaction No." + 1
+            ELSE
+              NoAsientoAnulado := 1;
+
+            MovContabilidadAnulado.LOCKTABLE;
+            IF MovContabilidadAnulado.FINDLAST THEN
+              NoMovAnulado := MovContabilidadAnulado."Entry No."
+            ELSE
+              NoMovAnulado := 0;
+
+            MovIVAAnulado.LOCKTABLE;
+            IF MovIVAAnulado.FINDLAST THEN
+              NoMovIVAAnulado := MovIVAAnulado."Entry No."
+            ELSE
+              NoMovIVAAnulado := 0;
+
+            RegMovsConta.SETFILTER(RegMovsConta."From Entry No.",'%1',"Entry No.");
+            RegMovsConta.FINDFIRST;
+
+            RegMovsContaAnulado.INIT;
+            RegMovsContaAnulado."Transaction No." := NoAsientoAnulado;
+            RegMovsContaAnulado."From Entry No." := NoMovAnulado + 1;
+            RegMovsContaAnulado."Creation Date" := RegMovsConta."Creation Date";
+            RegMovsContaAnulado."User ID" := USERID;
+            RegMovsContaAnulado."Source Code" := RegMovsConta."Source Code";
+            RegMovsContaAnulado."Journal Batch Name" := RegMovsConta."Journal Batch Name";
+            RegMovsContaAnulado."Posting Date" := RegMovsConta."Posting Date";
+            RegMovsContaAnulado."Period Trans. No." := RegMovsConta."Period Trans. No.";
+            RegMovsContaAnulado."From VAT Entry No." := NoMovIVAAnulado + 1;
+
+            FOR i := RegMovsConta."From Entry No." TO RegMovsConta."To Entry No." DO BEGIN
+              MovContabilidad.GET(i);
+              MovContabilidadAnulado.INIT;
+              MovContabilidadAnulado.TRANSFERFIELDS(MovContabilidad);
+              NoMovAnulado := NoMovAnulado + 1;
+              MovContabilidadAnulado."Entry No." := NoMovAnulado;
+              MovContabilidadAnulado.INSERT;
+
+            //  MovDimensiones.GET(DATABASE::"G/L Entry",MovContabilidad."Entry No.");
+              MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"G/L Entry");
+              MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovContabilidad."Entry No.");
+              IF MovDimensiones.FINDSET(TRUE) THEN
+                MovDimensiones.DELETEALL;
+              MovContabilidad.DELETE;
+
+              AnulaMovCli(i);
+              AnulaMovProv(i);
+              AnulaMovBanco(i);
+              FOR k := RegMovsConta."From VAT Entry No." TO RegMovsConta."To VAT Entry No." DO BEGIN
+                AnulaMovIVA(k);
+              END;
+
+              CASE RegMovsConta."Source Code" OF
+                'VENTAS' : AnulaEfecto(0,i);
+                'COMPRAS' : AnulaEfecto(1,i);
+              END;
+            END;
+
+            RegMovsContaAnulado."To VAT Entry No." := NoMovIVAAnulado;
+            RegMovsContaAnulado.INSERT;
+
+            MovRecurso.SETCURRENTKEY("Document No.","Posting Date");
+            MovRecurso.SETRANGE("Document No.","Document No.");
+            MovRecurso.SETRANGE("Posting Date","Posting Date");
+            IF MovRecurso.FINDSET THEN
+              AnulaMovRecurso;
+
+            MovProyecto.SETCURRENTKEY("Document No.","Posting Date");
+            MovProyecto.SETRANGE("Document No.","Document No.");
+            MovProyecto.SETRANGE("Posting Date","Posting Date");
+            IF MovProyecto.FINDSET THEN
+              AnulaMovProyecto;
+
+            RegMovsContaAnulado."To Entry No." := NoMovAnulado;
+            RegMovsContaAnulado.MODIFY;
+            RegMovsConta.DELETE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text90000@1100022 : TextConst 'ENU=SALES;ESP=VENTAS';
+      Text90001@1100023 : TextConst 'ENU=PURCHASES;ESP=COMPRAS';
+      MovContabilidad@1100000 : Record 17;
+      MovContabilidadAnulado@1100001 : Record 7010456;
+      RegMovsConta@1100002 : Record 45;
+      RegMovsContaAnulado@1100003 : Record 7010464;
+      MovCliente@1100004 : Record 21;
+      MovClienteAnulado@1100005 : Record 7010457;
+      MovProveedor@1100006 : Record 25;
+      MovProveedorAnulado@1100007 : Record 7010458;
+      MovIVA@1100008 : Record 254;
+      MovIVAAnulado@1100009 : Record 7010461;
+      MovBanco@1100010 : Record 271;
+      MovBancoAnulado@1100011 : Record 7010462;
+      DocCerrado@1100012 : Record 7000004;
+      DocCerradoAnulado@1100013 : Record 7010463;
+      Doc@1100014 : Record 7000002;
+      MovRecurso@1100015 : Record 203;
+      MovProyecto@1100016 : Record 169;
+      NoMovAnulado@1100017 : Integer;
+      NoAsientoAnulado@1100018 : Integer;
+      NoMovIVAAnulado@1100019 : Integer;
+      i@1100020 : Integer;
+      k@1100021 : Integer;
+      MovDimensiones@1100024 : Record 355;
+
+    PROCEDURE AnulaMovCli@7(NoMov@1100000 : Integer);
+    VAR
+      MovCli@1100001 : Record 21;
+      MovCliAnulado@1100002 : Record 7010457;
+      DetMovCliente@1100003 : Record 379;
+      DetMovCliente2@1100253000 : Record 379;
+    BEGIN
+      IF MovCliente.GET(NoMov) THEN BEGIN
+        MovClienteAnulado.INIT;
+        MovClienteAnulado.TRANSFERFIELDS(MovCliente);
+        DetMovCliente.RESET;
+        DetMovCliente.SETCURRENTKEY("Cust. Ledger Entry No.","Posting Date");
+        DetMovCliente.SETRANGE("Cust. Ledger Entry No.",MovCliente."Entry No.");
+        // $001-
+        //DetMovCliente.SETRANGE(DetMovCliente."Posting Date",MovCliente."Posting Date");
+        // $001+
+        IF DetMovCliente.FINDSET(TRUE) THEN
+          REPEAT
+            IF NOT (DetMovCliente."Entry Type" IN [DetMovCliente."Entry Type"::Application,
+            DetMovCliente."Entry Type"::"Appln. Rounding",
+            DetMovCliente."Entry Type"::"Correction of Remaining Amount"]) THEN BEGIN
+              MovClienteAnulado.Amount := MovClienteAnulado.Amount + DetMovCliente.Amount;
+              MovClienteAnulado."Amount (LCY)" := MovClienteAnulado."Amount (LCY)" + DetMovCliente."Amount (LCY)";
+              MovClienteAnulado."Debit Amount" := MovClienteAnulado."Debit Amount" + DetMovCliente."Debit Amount";
+              MovClienteAnulado."Credit Amount" := MovClienteAnulado."Credit Amount" + DetMovCliente."Credit Amount";
+              MovClienteAnulado."Debit Amount (LCY)" := MovClienteAnulado."Debit Amount (LCY)" + DetMovCliente."Debit Amount (LCY)";
+              MovClienteAnulado."Credit Amount (LCY)" := MovClienteAnulado."Credit Amount (LCY)" + DetMovCliente."Credit Amount (LCY)";
+            END;
+            IF DetMovCliente."Entry Type" IN [DetMovCliente."Entry Type"::"Initial Entry",DetMovCliente."Entry Type"::Expenses]
+            THEN BEGIN
+              MovClienteAnulado."Original Amount" := MovClienteAnulado."Original Amount" + DetMovCliente.Amount;
+              MovClienteAnulado."Original Amount (LCY)" := MovClienteAnulado."Original Amount (LCY)" + DetMovCliente."Amount (LCY)";
+            END;
+
+            //+$004
+            DetMovCliente2 := DetMovCliente;
+            DetMovCliente2.DELETE;
+            //+$004
+          UNTIL DetMovCliente.NEXT = 0;
+
+        MovClienteAnulado."Entry No." := NoMovAnulado;
+        MovClienteAnulado.Open :=FALSE;
+        MovClienteAnulado.INSERT;
+
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.");
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Cust. Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovCliente."Entry No.");
+        IF MovDimensiones.FINDSET(TRUE) THEN
+          MovDimensiones.DELETEALL;
+        MovCliente.DELETE;
+      END;
+    END;
+
+    PROCEDURE AnulaMovProv@4(NoMov@1100000 : Integer);
+    VAR
+      DetMovProveedor@1100001 : Record 380;
+      DetMovProveedor2@1100253000 : Record 380;
+    BEGIN
+      IF MovProveedor.GET(NoMov) THEN BEGIN
+        MovProveedorAnulado.INIT;
+        MovProveedorAnulado.TRANSFERFIELDS(MovProveedor);
+
+        DetMovProveedor.RESET;
+        DetMovProveedor.SETCURRENTKEY("Vendor Ledger Entry No.","Posting Date");
+        DetMovProveedor.SETRANGE("Vendor Ledger Entry No.",MovProveedor."Entry No.");
+        // $001-
+        //DetMovProveedor.SETRANGE(DetMovProveedor."Posting Date",MovProveedor."Posting Date");
+        // $001+
+        IF DetMovProveedor.FINDSET(TRUE)  THEN
+          REPEAT
+            IF NOT (DetMovProveedor."Entry Type" IN [DetMovProveedor."Entry Type"::Application,
+            DetMovProveedor."Entry Type"::"Appln. Rounding",DetMovProveedor."Entry Type"::"Correction of Remaining Amount"]) THEN BEGIN
+              MovProveedorAnulado.Amount := MovProveedorAnulado.Amount + DetMovProveedor.Amount;
+              MovProveedorAnulado."Amount (LCY)" := MovProveedorAnulado."Amount (LCY)" + DetMovProveedor."Amount (LCY)";
+              MovProveedorAnulado."Debit Amount" := MovProveedorAnulado."Debit Amount" + DetMovProveedor."Debit Amount";
+              MovProveedorAnulado."Credit Amount" := MovProveedorAnulado."Credit Amount" + DetMovProveedor."Credit Amount";
+              MovProveedorAnulado."Debit Amount (LCY)" := MovProveedorAnulado."Debit Amount (LCY)" + DetMovProveedor.
+      "Debit Amount (LCY)";
+              MovProveedorAnulado."Credit Amount (LCY)" := MovProveedorAnulado."Credit Amount (LCY)" + DetMovProveedor.
+      "Credit Amount (LCY)";
+            END;
+            IF DetMovProveedor."Entry Type" IN [DetMovProveedor."Entry Type"::"Initial Entry",DetMovProveedor."Entry Type"::Expenses]
+            THEN BEGIN
+              MovProveedorAnulado."Original Amount" := MovProveedorAnulado."Original Amount" + DetMovProveedor.Amount;
+              MovProveedorAnulado."Original Amount (LCY)" := MovProveedorAnulado."Original Amount (LCY)" +
+                DetMovProveedor."Amount (LCY)";
+            END;
+
+            //+$004
+            DetMovProveedor2 := DetMovProveedor;
+            DetMovProveedor2.DELETE;
+            //+$004
+          UNTIL DetMovProveedor.NEXT = 0;
+
+        MovProveedorAnulado."Entry No." := NoMovAnulado;
+        MovProveedorAnulado.Open :=FALSE;
+        MovProveedorAnulado.INSERT;
+
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.");
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Vendor Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovProveedor."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          MovDimensiones.DELETEALL;
+
+        MovProveedor.DELETE;
+      END;
+    END;
+
+    PROCEDURE AnulaMovIVA@2(NoMov@1100000 : Integer);
+    VAR
+      MovIVA@1100001 : Record 254;
+      MovIVAAnulado@1100002 : Record 7010461;
+      rMovIVALink@1100253000 : Record 253;
+    BEGIN
+      IF MovIVA.GET(NoMov) THEN BEGIN
+        //+$003
+        CLEAR(rMovIVALink);
+        rMovIVALink.SETRANGE("VAT Entry No.", MovIVA."Entry No.");
+        rMovIVALink.DELETEALL;
+        //+$003
+        MovIVAAnulado.INIT;
+        MovIVAAnulado.TRANSFERFIELDS(MovIVA);
+        NoMovIVAAnulado := NoMovIVAAnulado + 1;
+        MovIVAAnulado."Entry No." := NoMovIVAAnulado;
+        MovIVAAnulado.INSERT;
+        MovIVA.DELETE;
+      END;
+    END;
+
+    PROCEDURE AnulaMovBanco@3(NoMov@1100000 : Integer);
+    VAR
+      MovBanco@1100001 : Record 271;
+      MovBancoAnulado@1100002 : Record 7010462;
+    BEGIN
+      IF MovBanco.GET(NoMov) THEN BEGIN
+        MovBancoAnulado.INIT;
+        MovBancoAnulado.TRANSFERFIELDS(MovBanco);
+        MovBancoAnulado."Entry No." := NoMovAnulado;
+        MovBancoAnulado.INSERT;
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.");
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Bank Account Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",NoMovAnulado);
+        IF MovDimensiones.FIND('-') THEN
+          MovDimensiones.DELETEALL;
+        MovBanco.DELETE;
+      END;
+    END;
+
+    PROCEDURE AnulaMovRecurso@6();
+    VAR
+      MovRecursoAnulado@1100000 : Record 7010460;
+      RegMovRecurso@1100001 : Record 240;
+      RegMovRecursoAnulado@1100002 : Record 7010465;
+      NoMovRecurso@1100003 : Integer;
+    BEGIN
+      MovRecursoAnulado.LOCKTABLE;
+      RegMovRecursoAnulado.LOCKTABLE;
+
+      IF RegMovRecursoAnulado.FINDLAST THEN
+        NoAsientoAnulado := RegMovRecursoAnulado."No." + 1
+      ELSE
+        NoAsientoAnulado := 1;
+
+      RegMovRecursoAnulado.INIT;
+
+      IF MovRecursoAnulado.FINDLAST THEN
+        NoMovRecurso := MovRecursoAnulado."Entry No."
+      ELSE
+        NoMovRecurso := 0;
+
+      RegMovRecursoAnulado."From Entry No." := NoMovRecurso + 1;
+
+      REPEAT
+        MovRecursoAnulado.INIT;
+        MovRecursoAnulado.TRANSFERFIELDS(MovRecurso);
+        NoMovRecurso := NoMovRecurso + 1;
+        MovRecursoAnulado."Entry No." := NoMovRecurso;
+        MovRecursoAnulado.INSERT;
+      UNTIL MovRecurso.NEXT = 0;
+
+      RegMovRecursoAnulado."To Entry No." := NoMovRecurso;
+
+      RegMovRecurso.SETFILTER("From Entry No.",'<=%1',MovRecurso."Entry No.");
+      RegMovRecurso.SETFILTER("To Entry No.",'>=%1',MovRecurso."Entry No.");
+      RegMovRecurso.FINDFIRST;
+      RegMovRecursoAnulado."No." := NoAsientoAnulado;
+      RegMovRecursoAnulado."Creation Date" := RegMovRecurso."Creation Date";
+      RegMovRecursoAnulado."Source Code" := RegMovRecurso."Source Code";
+      RegMovRecursoAnulado."Journal Batch Name" := RegMovRecurso."Journal Batch Name";
+      RegMovRecurso.DELETE;
+      RegMovRecursoAnulado.INSERT;
+
+      MovRecurso.DELETEALL;
+    END;
+
+    PROCEDURE AnulaMovProyecto@8();
+    VAR
+      MovProyectoAnulado@1100000 : Record 7010459;
+      RegMovProyecto@1100001 : Record 241;
+      RegMovProyectoAnulado@1100002 : Record 7010466;
+      NoMovProyecto@1100003 : Integer;
+    BEGIN
+      MovProyectoAnulado.LOCKTABLE;
+      RegMovProyectoAnulado.LOCKTABLE;
+
+      IF RegMovProyectoAnulado.FINDLAST THEN
+        NoAsientoAnulado := RegMovProyectoAnulado."No." + 1
+      ELSE
+        NoAsientoAnulado := 1;
+
+      RegMovProyectoAnulado.INIT;
+
+      IF MovProyectoAnulado.FINDLAST THEN
+        NoMovProyecto := MovProyectoAnulado."Entry No."
+      ELSE
+        NoMovProyecto := 0;
+
+      RegMovProyectoAnulado."From Entry No." := NoMovProyecto + 1;
+
+      REPEAT
+        MovProyectoAnulado.INIT;
+        MovProyectoAnulado.TRANSFERFIELDS(MovProyecto);
+        NoMovProyecto := NoMovProyecto + 1;
+        MovProyectoAnulado."Entry No." := NoMovProyecto;
+        MovProyectoAnulado.INSERT;
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.");
+        MovDimensiones.SETRANGE(MovDimensiones."Table ID",DATABASE::"Job Ledger Entry");
+        MovDimensiones.SETRANGE(MovDimensiones."Entry No.",MovProyecto."Entry No.");
+        IF MovDimensiones.FIND('-') THEN
+          MovDimensiones.DELETEALL;
+      UNTIL MovProyecto.NEXT = 0;
+
+      RegMovProyectoAnulado."To Entry No." := NoMovProyecto;
+
+      RegMovProyecto.SETFILTER("From Entry No.",'<=%1',MovProyecto."Entry No.");
+      RegMovProyecto.SETFILTER("To Entry No.",'>=%1',MovProyecto."Entry No.");
+      RegMovProyecto.FIND('-');
+      RegMovProyectoAnulado."No." := NoAsientoAnulado;
+      RegMovProyectoAnulado."Creation Date" := RegMovProyecto."Creation Date";
+      RegMovProyectoAnulado."Source Code" := RegMovProyecto."Source Code";
+      RegMovProyectoAnulado."Journal Batch Name" := RegMovProyecto."Journal Batch Name";
+      RegMovProyectoAnulado."User ID" := USERID;
+      RegMovProyecto.DELETE;
+      RegMovProyectoAnulado.INSERT;
+
+      MovProyecto.DELETEALL;
+    END;
+
+    PROCEDURE AnulaEfecto@10(Tipo@1100000 : 'Receivable,Payable';NoMov@1100001 : Integer);
+    VAR
+      EfectoAnulado@1100002 : Record 7010463;
+      CabFactVtaAnulado@1103350000 : Record 7010467;
+      NoVersion@1103350001 : Code[20];
+    BEGIN
+      IF Doc.GET(Tipo,NoMov) THEN BEGIN
+
+        // LIS: MODIFICADO PARA QUE SE PUEDA ANULAR DOS VECES LA MISMA FACTURA CON EFECTOS
+        CabFactVtaAnulado.SETFILTER("No.",'>%1&<%2',STRSUBSTNO('%1/',Doc."Document No."),STRSUBSTNO('%1/',INCSTR(Doc."Document No.")));
+        IF CabFactVtaAnulado.FINDLAST THEN
+          NoVersion := INCSTR(CabFactVtaAnulado."No.")
+        ELSE
+        //NoVersion := "No." + '/1';                //FCL-05/10/04. Da error si son m s de 10 anulaciones.
+          NoVersion := Doc."Document No." + '/01';               //FCL-05/10/04.
+        // FIN LIS
+
+        DocCerradoAnulado.INIT;
+        DocCerradoAnulado.TRANSFERFIELDS(Doc);
+        DocCerradoAnulado."Entry No." := NoMovAnulado;
+        DocCerradoAnulado."Document No." := NoVersion;  // LIS
+        DocCerradoAnulado.INSERT;
+        Doc.DELETE;
+      END;
+    END;
+
+    PROCEDURE LiquidationDateNotAllowed@1100217000(pwDate@1100217000 : Date) : Boolean;
+    VAR
+      GLSetup@1100217001 : Record 98;
+    BEGIN
+      // LiquidationDateNotAllowed
+
+      GLSetup.FINDFIRST;
+      EXIT((pwDate < GLSetup."Permite liquidacion desde") OR (pwDate > GLSetup."Permite liquidacion hasta"));
+    END;
+
+    BEGIN
+    {
+      $001 MNC 20/07/09 Se quita este filtro porque si no, no se eliminan todos los mov detalle necesarios (cliente y proveedor)
+
+      $002 AJS 02.03.2007
+         He sustituido los Find('+') por FINDLAST y los Find('-') por FINDFIRST
+
+      $003 AJS 20032012 Modifico la funcion AnulaMovIVA para incluir la nueva tabla G/L Entry - VAT Entry link
+
+      $004 AJS 08052012 En el borrado de los movimientos detallados incluyo una variable distinta para borrar
+
+      $005 AJS 26022013 Nuevo funcion LiquidationDateNotAllowed para controlar el periodo de liquidacion antes de anular
+
+      $006 AJS 25022014 Agrego permisos para la tabla 253 G/L Entry - VAT Entry link
+    }
+    END.
+  }
+}

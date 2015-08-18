@@ -1,0 +1,162 @@
+OBJECT Table 7010338 Periodos Trabajados
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/01/15;
+    Time=12:20:32;
+    Modified=Yes;
+    Version List=TRANSFER;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               vLinea@1100244000 : Integer;
+               rPeriodo@1100244001 : Record 7010338;
+             BEGIN
+               vLinea := 1;
+
+               rPeriodo.RESET;
+               rPeriodo.SETCURRENTKEY(Conductor, Fecha, "N§ Linea");
+               rPeriodo.SETRANGE(Conductor, Conductor);
+               rPeriodo.SETRANGE(Fecha    , Fecha);
+               IF rPeriodo.FINDLAST THEN
+                 vLinea := rPeriodo."N§ Linea" + 1;
+
+               "N§ Linea" := vLinea;
+               IF "Fecha Real" = 0D THEN
+                 "Fecha Real" := Fecha;
+
+               Desvalidar;
+               Auditoria;
+             END;
+
+    OnModify=BEGIN
+               //Desvalidar;
+
+               Auditoria;
+             END;
+
+    OnDelete=BEGIN
+               Desvalidar;
+               GET(Conductor, Fecha, "N§ Linea");
+             END;
+
+    OnRename=BEGIN
+               Desvalidar;
+               Auditoria;
+             END;
+
+    CaptionML=ESP=Periodos Trabajados;
+    LookupFormID=Form7010360;
+    DrillDownFormID=Form7010360;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Fecha               ;Date          ;CaptionML=ESP=Fecha;
+                                                   NotBlank=Yes;
+                                                   Description=PK;
+                                                   Editable=No }
+    { 2   ;   ;Conductor           ;Code10        ;TableRelation=Conductor.Conductor;
+                                                   OnValidate=VAR
+                                                                lrCond@1103350000 : Record 7010327;
+                                                                lwNomb@1103350001 : Text[250];
+                                                              BEGIN
+                                                                CLEAR(lrCond);
+                                                                IF NOT lrCond.GET(Conductor) THEN
+                                                                  CLEAR(lrCond);
+                                                                lwNomb := STRSUBSTNO('%1, %2',lrCond.Nombre, lrCond.Apellidos);
+                                                                "Nombre Conductor" := COPYSTR(lwNomb,1, MAXSTRLEN("Nombre Conductor"));
+                                                              END;
+
+                                                   CaptionML=ESP=Conductor;
+                                                   NotBlank=Yes;
+                                                   Description=PK;
+                                                   Editable=No }
+    { 4   ;   ;Hora Inicio         ;Time          ;CaptionML=ESP=Hora Inicio;
+                                                   NotBlank=Yes }
+    { 5   ;   ;Hora Fin            ;Time          ;CaptionML=ESP=Hora Fin }
+    { 6   ;   ;Fecha Real          ;Date          ;OnValidate=VAR
+                                                                ERROR_FECHA_REAL@1100244000 : TextConst 'ESP=La Fecha real debe ser igual a la fecha de registro de actividad o superior en un d¡a.';
+                                                              BEGIN
+                                                                IF ("Fecha Real" < Fecha) OR ("Fecha Real" > Fecha + 1) THEN
+                                                                  ERROR(ERROR_FECHA_REAL);
+                                                              END;
+
+                                                   CaptionML=ESP=Fecha Real;
+                                                   NotBlank=Yes }
+    { 7   ;   ;N§ Linea            ;Integer       ;CaptionML=ESP=N§ Linea;
+                                                   Description=PK }
+    { 8   ;   ;Validado            ;Boolean       ;CaptionML=ESP=Validado;
+                                                   Description=Para saber si esta validado;
+                                                   Editable=No }
+    { 18  ;   ;Error Generaci¢n    ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Errores Generacion Actividad" WHERE (Conductor=FIELD(Conductor),
+                                                                                                           Fecha Actividad=FIELD(Fecha)));
+                                                   CaptionML=ESP=Error Generaci¢n;
+                                                   Description=Para saber si hay error o aviso asociado;
+                                                   Editable=No }
+    { 20  ;   ;Fecha modificaci¢n  ;Date          ;CaptionML=ESP=Fecha modificaci¢n }
+    { 21  ;   ;Hora modificaci¢n   ;Time          ;CaptionML=ESP=Hora modificaci¢n }
+    { 22  ;   ;Usuario             ;Code20        ;CaptionML=ESP=Usuario }
+    { 30  ;   ;Num Vehiculo        ;Code10        ;CaptionML=ESP=Num Vehiculo;
+                                                   Editable=No }
+    { 31  ;   ;Nombre Conductor    ;Text30        ;CaptionML=ESP=Nombre Conductor;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Conductor,Fecha,N§ Linea                ;Clustered=Yes }
+    {    ;Conductor,Fecha,Fecha Real,Hora Inicio   }
+    {    ;Fecha Real,Hora Inicio,Hora Fin,Conductor }
+    {    ;Conductor,Fecha Real,Hora Inicio         }
+    {    ;Fecha,Conductor,Hora Inicio,Hora Fin     }
+    { No ;Num Vehiculo,Fecha                       }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    PROCEDURE Desvalidar@1();
+    VAR
+      rP@1100244000 : Record 7010338;
+      rReg@1100244001 : Record 7010332;
+      cFunCond@1100244002 : Codeunit 7010313;
+    BEGIN
+      //Desvalidar()
+      //Si modificamos los periodos, borraremos la marca de Calculo Realizado de la tabla
+      //Periodos Trabajados. Eso nos dir  que los periodos trabajados para un d¡a/conductor son
+      //sensibles de estar mal.
+      IF cFunCond.DesvalidarActividad(Conductor, Fecha) THEN BEGIN
+
+        //Tambien desasignaremos los partes de esa fecha para mantener la coherencia.
+        cFunCond.BorrarAsociacionPartes(Fecha, Conductor);
+
+        //Paralelamente tambien desvalidamos todo el grupo de periodos correspondientes al
+        //mismo registro de actividad.
+          cFunCond.DesvalidarPeriodos(Conductor, Fecha);
+
+        //... El registro CURRENT.
+        Validado := FALSE;
+
+        //Aprovecharemos para indicar la necesidad de refresco en la pantalla gr fica.
+        cFunCond.CambioRegistroActividad(TRUE);
+
+      END;
+    END;
+
+    PROCEDURE Auditoria@2();
+    BEGIN
+      "Fecha modificaci¢n" := TODAY;
+      "Hora modificaci¢n"  := TIME;
+      Usuario              := USERID;
+    END;
+
+    BEGIN
+    {
+      $001 AJS 26012015 La funcion desvalidar afecta al registro actual
+    }
+    END.
+  }
+}

@@ -1,0 +1,686 @@
+OBJECT Report 10720 Export Schedules to ASC format
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00;
+    Version List=NAVES6.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Export Schedules to ASC format;
+               ESP=Exp. esq. ctas. a formato ASC];
+    UseReqForm=Yes;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   CompanyInfo.GET;
+                   IF ISSERVICETIER THEN
+                     FileName := RBMgt.EnvironFileName('','asc')
+                   ELSE
+                     FileName := Text1100003;
+                   VATRegNo := COPYSTR(DELCHR(CompanyInfo."VAT Registration No.",'=','.-/'),1,9);
+                 END;
+
+    OnPreReport=BEGIN
+                  // CLEAR(FILE);
+                  OutFile.TEXTMODE := TRUE;
+                  OutFile.WRITEMODE := TRUE;
+                  OutFile.CREATE(FileName);
+                END;
+
+    OnPostReport=BEGIN
+                   OutFile.CLOSE;
+
+                   IF ISSERVICETIER THEN BEGIN
+                     ToFile := Text1100003;
+                     IF NOT DOWNLOAD(FileName,Text1100014,'','Asc Files|*.asc|All Files|*.*',ToFile) THEN
+                       EXIT;
+                   END;
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table2000000026;
+        DataItemTableView=SORTING(Number)
+                          ORDER(Ascending)
+                          WHERE(Number=CONST(1));
+        DataItemVarName=CompanyData;
+        OnAfterGetRecord=BEGIN
+                           IF FormatType = FormatType::Euros THEN
+                             FType := 1 * 100
+                           ELSE
+                             FType := 2 * 100;
+
+                           CLEAR(OutText);
+                           CompanyInfo.Name := CONVERTSTR(UPPERCASE(CompanyInfo.Name),'µ∑ê‘÷ﬁ‡„ÈÎ•ö()"&',Text1100001);
+                           CompanyInfo.Address := CONVERTSTR(UPPERCASE(CompanyInfo.Address),'µ∑ê‘÷ﬁ‡„ÈÎ•ö()"&',Text1100001);
+
+                           OutText := '1' + VATRegNo + FORMAT(DATE2DMY(FromDate,3)) + PADSTR('',6,'0') + '02' + PADSTR('',8,' ') + PADSTR('',8,' ');
+
+                           IF PostCode.GET(CompanyInfo."Post Code",CompanyInfo.City) THEN
+                             CountyCode := PostCode."County Code";
+
+                           OutText := OutText + FORMAT(CountyCode) + UPPERCASE(PADSTR(CompanyInfo.Name,50,' ')) +
+                             UPPERCASE(PADSTR(CompanyInfo.Address,40,' ')) + UPPERCASE(PADSTR(CompanyInfo.City,30,' '));
+
+                           PCode := COPYSTR(FORMAT(CompanyInfo."Post Code"),STRPOS(FORMAT(CompanyInfo."Post Code"), '-') + 1,
+                             STRLEN(FORMAT(CompanyInfo."Post Code")));
+
+                           IF CompanyInfo."Phone No." <> '' THEN BEGIN
+                             Prefix := COPYSTR(FORMAT(CompanyInfo."Phone No."),1,STRPOS(FORMAT(CompanyInfo."Phone No."),'-') - 1);
+                             PhoneNo := DELSTR(FORMAT(CompanyInfo."Phone No."),1,STRPOS(FORMAT(CompanyInfo."Phone No."),'-'));
+                           END ELSE BEGIN
+                             Prefix := PADSTR(FORMAT(CompanyInfo."Phone No."),3,'0');
+                             PhoneNo := PADSTR(FORMAT(CompanyInfo."Phone No."),7,'0');
+                           END;
+
+                           OutText := OutText + (PADSTR('',5 - STRLEN(PCode),'0') + PCode) + (PADSTR('',3 - STRLEN(Prefix),'0') + Prefix) +
+                             (PADSTR('',7 - STRLEN(PhoneNo),'0') + PhoneNo) + PADSTR('',3,'0') + PADSTR('',3,'0');
+
+                           CompanyInfo."CNAE Description" := CONVERTSTR(UPPERCASE(CompanyInfo."CNAE Description"),'µ∑ê‘÷ﬁ‡„ÈÎ•ö()"&',Text1100001);
+
+                           OutText := OutText + PADSTR(CompanyInfo."CNAE Description",80,' ') + PADSTR('',10,'0') + PADSTR('',5,'0');
+                           OutFile.WRITE(OutText);
+
+                           ClosDate := GetClosDate(ToDate);
+                           FixValue := '2' + VATRegNo + FORMAT(DATE2DMY(FromDate,3));
+
+                           OutText := FixValue + Text1100004 + Text1100008 + PADSTR('',5,'0') + ClosDate + Text1100008 + PADSTR('',15,'0');
+                           OutFile.WRITE(OutText);
+
+                           OutText := FixValue + Text1100005 + Text1100008 + PADSTR('',13 - STRLEN(CompanyInfo."Industrial Classification"),'0') +
+                             FORMAT(CompanyInfo."Industrial Classification") + '00' + Text1100008 + PADSTR('',15,'0');
+                           OutFile.WRITE(OutText);
+
+                           OutText := FixValue + Text1100006 + Text1100008 + PADSTR('',12,'0') + FORMAT(FType) + Text1100008 + PADSTR('',15,'0');
+                           OutFile.WRITE(OutText);
+
+                           OutText := FixValue + Text1100007 + Text1100008 + PADSTR('',12,'0') + FORMAT(FType) + Text1100008 + PADSTR('',15,'0');
+                           OutFile.WRITE(OutText);
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemTable=Table85;
+        DataItemTableView=SORTING(Schedule Name,Line No.)
+                          ORDER(Ascending)
+                          WHERE(Show=CONST(Yes));
+        DataItemVarName=AccScheduleLineBalance;
+        OnPreDataItem=BEGIN
+                        IF DepositType = DepositType::Normal THEN BEGIN
+                          SETFILTER("Schedule Name",'%1',Text1100011);
+                          SETRANGE(Show,0);
+                        END ELSE BEGIN
+                          SETFILTER("Schedule Name",'%1',Text1100010);
+                          SETRANGE(Show,0);
+                        END;
+
+                        SETFILTER("Date Filter",'%1..%2',FromDate,ToDate);
+                        ColumnLayout.SETRANGE("Column Layout Name",'BALANCE');
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           ok := FALSE;
+
+                           IF Totaling = '' THEN
+                             ColumnValue := 0
+                           ELSE BEGIN
+                             b := 0;
+                             IF ColumnLayout.FIND('-') THEN
+                               REPEAT
+                                 b := b + 1;
+                                 ColumnValue := 100 *
+                                   AccSchedManagement.CalcCell(AccScheduleLineBalance,ColumnLayout,FALSE);
+
+                                 NoZero := GetValues(ColumnValue,Saldo,Signo,b);
+                                 IF NoZero = TRUE THEN
+                                   ok := NoZero;
+                               UNTIL ColumnLayout.NEXT = 0;
+
+                             IF ok THEN BEGIN
+                               IF ("Row No." <> '') OR (Totaling <> '') THEN BEGIN
+                                 CASE Type OF
+                                   Type::Debit : FCode := '3';
+                                   Type::Credit : FCode := '4';
+                                   Type::Assets : FCode := '1';
+                                   Type::Liabilities : FCode := '2';
+                                 END;
+
+                                 Str := "Row No.";
+                                 Str := DELSTR(Str,1,STRPOS(Str,'.'));
+                                 FCode := FCode + GetFieldCode(Str,AccScheduleLineBalance);
+
+                                 OutText := FixValue + FCode + Signo[1] + Saldo[1] + Signo[2] + Saldo[2];
+                                 OutFile.WRITE(OutText);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+    { PROPERTIES
+      {
+        DataItemTable=Table85;
+        DataItemTableView=SORTING(Schedule Name,Line No.)
+                          ORDER(Ascending)
+                          WHERE(Show=CONST(Yes));
+        DataItemVarName=AccScheduleLinePyg;
+        OnPreDataItem=BEGIN
+                        IF DepositType = DepositType::Normal THEN BEGIN
+                          AccScheduleLinePyg.SETFILTER("Schedule Name",'%1',Text1100013);
+                          AccScheduleLinePyg.SETRANGE(Show,0);
+                        END ELSE BEGIN
+                          AccScheduleLinePyg.SETFILTER("Schedule Name",'%1',Text1100012);
+                          AccScheduleLinePyg.SETRANGE(Show,0);
+                        END;
+
+                        AccScheduleLinePyg.SETFILTER("Date Filter",'%1..%2',FromDate,ToDate);
+                        ColumnLayout.SETRANGE("Column Layout Name",'PYG');
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           ok := FALSE;
+
+                           IF Totaling = '' THEN
+                             ColumnValue := 0
+                           ELSE BEGIN
+                             b := 0;
+                             IF ColumnLayout.FIND('-') THEN
+                               REPEAT
+                                 b := b + 1;
+                                 ColumnValue := 100 *
+                                   AccSchedManagement.CalcCell(AccScheduleLinePyg,ColumnLayout,FALSE);
+
+                                 NoZero := GetValues(ColumnValue,Saldo,Signo,b);
+                                 IF NoZero = TRUE THEN
+                                   ok := NoZero;
+                               UNTIL ColumnLayout.NEXT = 0;
+
+                             IF ok THEN BEGIN
+                               IF ("Row No." <> '') OR (Totaling <> '') THEN BEGIN
+                                 CASE Type OF
+                                   Type::Debit : FCode := '3';
+                                   Type::Credit : FCode := '4';
+                                   Type::Assets : FCode := '1';
+                                   Type::Liabilities : FCode := '2';
+                                 END;
+
+                                 Str := "Row No.";
+                                 Str := DELSTR(Str,1,STRPOS(Str,'.'));
+                                 FCode := FCode + GetFieldCode(Str,AccScheduleLinePyg);
+
+                                 OutText := FixValue + FCode + Signo[1] + Saldo[1] + Signo[2] + Saldo[2];
+                                 OutFile.WRITE(OutText);
+                               END;
+                             END;
+                           END;
+                         END;
+
+      }
+      SECTIONS
+      {
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=8800;
+      Height=3960;
+      OnOpenForm=BEGIN
+                   RequestOptionsForm.FileNameControl.VISIBLE := NOT ISSERVICETIER;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;Label        ;0    ;3300 ;3300 ;440  ;ParentControl=2;
+                                                   CaptionML=[ENU=File Name;
+                                                              ESP=Nombre archivo] }
+      { 2   ;TextBox      ;3410 ;3300 ;5170 ;440  ;Name=FileNameControl;
+                                                   CaptionML=[ENU=File Name;
+                                                              ESP=Nombre archivo];
+                                                   SourceExpr=FileName;
+                                                   OnAssistEdit=VAR
+                                                                  CommonDialogMgt@1100000 : Codeunit 412;
+                                                                BEGIN
+                                                                  FileName := CommonDialogMgt.OpenFile(Text1100014,FileName,4,'Asc Files|*.asc|All Files|*.*',1);
+                                                                END;
+                                                                 }
+      { 3   ;TextBox      ;3410 ;2750 ;1650 ;440  ;CaptionML=[ENU=ToDate;
+                                                              ESP=ToDate];
+                                                   SourceExpr=ToDate }
+      { 4   ;TextBox      ;3410 ;2200 ;1650 ;440  ;CaptionML=[ENU=FromDate;
+                                                              ESP=FromDate];
+                                                   SourceExpr=FromDate }
+      { 5   ;Label        ;0    ;2200 ;3300 ;440  ;ParentControl=4;
+                                                   CaptionML=[ENU=From Date;
+                                                              ESP=Desde fecha] }
+      { 6   ;Label        ;0    ;2750 ;3300 ;440  ;ParentControl=3;
+                                                   CaptionML=[ENU=To Date;
+                                                              ESP=Hasta fecha] }
+      { 10  ;Label        ;0    ;110  ;3300 ;440  ;ParentControl=7;
+                                                   CaptionML=[ENU=Deposit Type;
+                                                              ESP=Tipo dep¢sito] }
+      { 7   ;OptionButton ;3520 ;110  ;3740 ;440  ;Enabled=Yes;
+                                                   Editable=Yes;
+                                                   Focusable=Yes;
+                                                   FocusOnClick=Yes;
+                                                   CaptionML=[ENU=Normal;
+                                                              ESP=Normal];
+                                                   SourceExpr=DepositType;
+                                                   OptionValue=Normal }
+      { 11  ;OptionButton ;3520 ;660  ;3740 ;440  ;Enabled=Yes;
+                                                   Editable=Yes;
+                                                   Focusable=Yes;
+                                                   FocusOnClick=Yes;
+                                                   CaptionML=[ENU=Abbreviated;
+                                                              ESP=Abreviado];
+                                                   SourceExpr=DepositType;
+                                                   OptionValue=Brief }
+      { 14  ;OptionButton ;3520 ;1430 ;3740 ;440  ;Name=Euros;
+                                                   Enabled=Yes;
+                                                   Editable=Yes;
+                                                   Focusable=Yes;
+                                                   FocusOnClick=Yes;
+                                                   CaptionML=[ENU=Euros;
+                                                              ESP=Euros];
+                                                   SourceExpr=FormatType;
+                                                   OptionValue=Euros }
+      { 16  ;Label        ;0    ;1430 ;3300 ;440  ;ParentControl=14;
+                                                   LeaderDots=No;
+                                                   CaptionML=[ENU=Format;
+                                                              ESP=Formato] }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnInit=BEGIN
+               FileNameControlVisible := TRUE;
+             END;
+
+      OnOpenPage=BEGIN
+                   FileNameControlVisible := NOT ISSERVICETIER;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 7   ;2   ;Field     ;
+                  CaptionML=[ENU=Deposit Type;
+                             ESP=Tipo de ingreso];
+                  OptionCaptionML=[ENU=Normal,Abbreviated;
+                                   ESP=Normal,Abreviado];
+                  SourceExpr=DepositType;
+                  Enabled=TRUE;
+                  Editable=TRUE }
+
+      { 14  ;2   ;Field     ;
+                  Name=Euros;
+                  CaptionML=[ENU=Format;
+                             ESP=Formato];
+                  OptionCaptionML=[ENU=Euros;
+                                   ESP=Euros];
+                  SourceExpr=FormatType;
+                  Enabled=TRUE;
+                  Editable=TRUE }
+
+      { 4   ;2   ;Field     ;
+                  CaptionML=[ENU=From Date;
+                             ESP=Desde fecha];
+                  SourceExpr=FromDate }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=To Date;
+                             ESP=Hasta fecha];
+                  SourceExpr=ToDate }
+
+      { 2   ;2   ;Field     ;
+                  Name=FileNameControl;
+                  CaptionML=[ENU=File Name;
+                             ESP=Nombre archivo];
+                  SourceExpr=FileName;
+                  Visible=FileNameControlVisible;
+                  OnAssistEdit=VAR
+                                 CommonDialogMgt@1100000 : Codeunit 412;
+                               BEGIN
+                                 FileName := CommonDialogMgt.OpenFile(Text1100014,FileName,4,'Asc Files|*.asc|All Files|*.*',1);
+                               END;
+                                }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      CompanyInfo@1002 : Record 79;
+      PostCode@1005 : Record 225;
+      ColumnLayout@1046 : Record 334;
+      AccSchedManagement@1047 : Codeunit 8;
+      OutFile@1001 : File;
+      FileName@1000 : Text[1024];
+      VATRegNo@1003 : Text[9];
+      OutText@1004 : Text[300];
+      CountyCode@1006 : Code[10];
+      Text1100001@1010 : TextConst 'ENU="AAEEIIOOUU—U    ";ESP="AAEEIIOOUU—U    "';
+      PhoneNo@1008 : Text[7];
+      Prefix@1009 : Text[3];
+      FromDate@1012 : Date;
+      ToDate@1011 : Date;
+      PCode@1014 : Text[5];
+      Text1100002@1017 : TextConst 'ENU=You must specified a Sch. Account Name;ESP=Debe indicar un Nombre esquema cuenta';
+      Text1100003@1018 : TextConst 'ENU=C:\DATOS.ASC;ESP=C:\DATOS.ASC';
+      Text1100004@1019 : TextConst 'ENU=810190;ESP=810190';
+      Text1100005@1021 : TextConst 'ENU=810010;ESP=810010';
+      Text1100006@1022 : TextConst 'ENU=999024;ESP=999024';
+      Text1100007@1023 : TextConst 'ENU=999114;ESP=999114';
+      Text1100008@1024 : TextConst 'ENU=+;ESP=+';
+      Text1100009@1025 : TextConst 'ENU=-;ESP=-';
+      DepositType@1026 : 'Normal,Brief';
+      Text1100010@1028 : TextConst 'ENU=BAL08-ABR;ESP=BAL-ABR';
+      Text1100011@1029 : TextConst 'ENU=BAL08-NOR;ESP=BAL-NOR';
+      Text1100012@1032 : TextConst 'ENU=PYG08-ABR;ESP=PYG-ABR';
+      Text1100013@1033 : TextConst 'ENU=PYG08-NOR;ESP=PYG-NOR';
+      Row@1037 : Code[100];
+      FCode@1040 : Text[6];
+      Str@1041 : Text[100];
+      ColumnValue@1048 : Decimal;
+      Saldo@1053 : ARRAY [2] OF Text[100];
+      NoZero@1015 : Boolean;
+      ok@1054 : Boolean;
+      b@1055 : Integer;
+      Sign@1056 : Text[1];
+      Signo@1007 : ARRAY [2] OF Text[1];
+      FormatType@1043 : 'Euros';
+      FType@1044 : Integer;
+      ClosDate@1045 : Text[30];
+      FixValue@1013 : Text[14];
+      RBMgt@1100000 : Codeunit 419;
+      Path@1100001 : Text[30];
+      ToFile@1100002 : Text[1024];
+      Text1100014@1100003 : TextConst 'ENU=Path to export Schedules to ASC Format;ESP=Ruta para exportar programas a formato ASC';
+      FileNameControlVisible@19024830 : Boolean INDATASET;
+
+    PROCEDURE GetFieldCode@3(String@1000 : Text[100];AccSchedLine@1005 : Record 85) FCode : Text[5];
+    VAR
+      Position@1004 : Integer;
+      String2@1003 : Text[100];
+      Len@1002 : Integer;
+      FieldCode@1001 : Text[5];
+    BEGIN
+      FieldCode := '';
+
+      WHILE String <> '' DO BEGIN
+        Position := STRPOS(String,'.');
+        IF Position = 0 THEN BEGIN
+          String := String;
+          String2 := DELSTR(String,1,STRLEN(String));
+        END ELSE BEGIN
+          Str := String;
+          String := COPYSTR(String,1,Position);
+          String2 := DELSTR(Str,1,Position);
+        END;
+
+        CASE AccSchedLine."Schedule Name" OF
+          Text1100010, Text1100011: FieldCode := FieldCode + CodeBAL(String,FieldCode);
+          Text1100012: FieldCode := FieldCode + CodePYGABR(String,AccSchedLine);
+          Text1100013: FieldCode := FieldCode + CodePYGNOR(String);
+        END;
+
+        String := String2;
+
+      END;
+
+      Len := STRLEN(FieldCode);
+
+      IF Len < 5 THEN
+        FieldCode := PADSTR(FieldCode,5,'0');
+
+      IF AccSchedLine."Schedule Name" = Text1100012 THEN
+        CheckExceptionsPYG(FieldCode);
+
+      IF AccSchedLine."Schedule Name" = Text1100011 THEN
+        CheckExceptionsBAL(FieldCode);
+
+      EXIT(FieldCode);
+    END;
+
+    PROCEDURE CodeBAL@1(String@1000 : Text[100];FCode@1002 : Text[5]) Result : Text[5];
+    VAR
+      FieldCode@1001 : Text[5];
+    BEGIN
+      CASE String OF
+        'A', 'A.', 'I', 'I.' : FieldCode := FieldCode + '1';
+        'B', 'B.', 'II', 'II.' : FieldCode := FieldCode + '2';
+        'C', 'C.', 'III', 'III.' : FieldCode := FieldCode + '3';
+        'D', 'D.', 'IV', 'IV.' : FieldCode := FieldCode + '4';
+        'E', 'E.', 'V', 'V.' : FieldCode := FieldCode + '5';
+        'F', 'F.', 'VI', 'VI.' : FieldCode := FieldCode + '6';
+        'VII', 'VII.' : FieldCode := FieldCode + '7';
+        'VIII', 'VIII.' : FieldCode := FieldCode + '8';
+        '1' : FieldCode := GetFieldCodeNumeric(FCode,'1',FieldCode);
+        '2' : FieldCode := GetFieldCodeNumeric(FCode,'2',FieldCode);
+        '3' : FieldCode := GetFieldCodeNumeric(FCode,'3',FieldCode);
+        '4' : FieldCode := GetFieldCodeNumeric(FCode,'4',FieldCode);
+        '5' : FieldCode := GetFieldCodeNumeric(FCode,'5',FieldCode);
+        '6' : FieldCode := GetFieldCodeNumeric(FCode,'6',FieldCode);
+        '7' : FieldCode := GetFieldCodeNumeric(FCode,'7',FieldCode);
+        '8' : FieldCode := GetFieldCodeNumeric(FCode,'8',FieldCode);
+        '9' : FieldCode := GetFieldCodeNumeric(FCode,'9',FieldCode);
+      END;
+      EXIT(FieldCode);
+    END;
+
+    PROCEDURE CodePYGABR@10(String@1000 : Text[100];AccSchedLine@1002 : Record 85) Result : Text[5];
+    VAR
+      FieldCode@1001 : Text[5];
+    BEGIN
+      IF AccSchedLine.Type = AccSchedLine.Type::Debit THEN BEGIN
+        CASE String OF
+          '1', '1.' : FieldCode := FieldCode + '01';
+          '2', '2.' : FieldCode := FieldCode + '03';
+          '3' : FieldCode := FieldCode + '04';
+          '4' : FieldCode := FieldCode + '05';
+          '5' : FieldCode := FieldCode + '06';
+          '6', '6.' : FieldCode := FieldCode + '07';
+          '7' : FieldCode := FieldCode + '08';
+          '8' : FieldCode := FieldCode + '09';
+          '9' : FieldCode := FieldCode + '10';
+          '10' : FieldCode := FieldCode + '11';
+          '11' : FieldCode := FieldCode + '12';
+          '12' : FieldCode := FieldCode + '13';
+          '13' : FieldCode := FieldCode + '14';
+          '14' : FieldCode := FieldCode + '15';
+          '15' : FieldCode := FieldCode + '16';
+          'A' : FieldCode := FieldCode + '010';
+          'B' : FieldCode := FieldCode + '020';
+          'C' : FieldCode := FieldCode + '030';
+          'D' : FieldCode := FieldCode + '040';
+          'I' : FieldCode := FieldCode + '019';
+          'II' : FieldCode := FieldCode + '029';
+          'III' : FieldCode := FieldCode + '039';
+          'IV' : FieldCode := FieldCode + '049';
+          'V' : FieldCode := FieldCode + '059';
+          'VI' : FieldCode := FieldCode + '069';
+        END;
+      END ELSE BEGIN
+        CASE String OF
+          '1', '1.' : FieldCode := FieldCode + '01';
+          '2', '2.' : FieldCode := FieldCode + '02';
+          '3' : FieldCode := FieldCode + '08';
+          '4' : FieldCode := FieldCode + '09';
+          '5' : FieldCode := FieldCode + '10';
+          '6' : FieldCode := FieldCode + '11';
+          '7' : FieldCode := FieldCode + '12';
+          '8' : FieldCode := FieldCode + '13';
+          'A' : FieldCode := FieldCode + '019';
+          'B' : FieldCode := FieldCode + '029';
+          'C' : FieldCode := FieldCode + '039';
+          'D' : FieldCode := FieldCode + '040';
+          'I' : FieldCode := FieldCode + '019';
+          'II' : FieldCode := FieldCode + '029';
+          'III' : FieldCode := FieldCode + '039';
+          'IV' : FieldCode := FieldCode + '049';
+          'V' : FieldCode := FieldCode + '059';
+          'VI' : FieldCode := FieldCode + '069';
+        END;
+      END;
+
+      EXIT(FieldCode);
+    END;
+
+    PROCEDURE CodePYGNOR@11(String@1000 : Text[100]) Result : Text[5];
+    VAR
+      FieldCode@1001 : Text[5];
+    BEGIN
+      CASE String OF
+        '1', '1.' : FieldCode := FieldCode + '01';
+        '2', '2.' : FieldCode := FieldCode + '02';
+        '3', '3.' : FieldCode := FieldCode + '03';
+        '4', '4.' : FieldCode := FieldCode + '04';
+        '5', '5.' : FieldCode := FieldCode + '05';
+        '6', '6.' : FieldCode := FieldCode + '06';
+        '7', '7.' : FieldCode := FieldCode + '07';
+        '8' : FieldCode := FieldCode + '08';
+        '9' : FieldCode := FieldCode + '09';
+        '10' : FieldCode := FieldCode + '10';
+        '11' : FieldCode := FieldCode + '11';
+        '12' : FieldCode := FieldCode + '12';
+        '13' : FieldCode := FieldCode + '13';
+        '14' : FieldCode := FieldCode + '14';
+        '15' : FieldCode := FieldCode + '15';
+        '16' : FieldCode := FieldCode + '16';
+        'A' : FieldCode := FieldCode + '010';
+        'B' : FieldCode := FieldCode + '020';
+        'C' : FieldCode := FieldCode + '030';
+        'D' : FieldCode := FieldCode + '040';
+        'I' : FieldCode := FieldCode + '019';
+        'II' : FieldCode := FieldCode + '029';
+        'III' : FieldCode := FieldCode + '039';
+        'IV' : FieldCode := FieldCode + '049';
+        'V' : FieldCode := FieldCode + '059';
+        'VI' : FieldCode := FieldCode + '069';
+      END;
+
+      EXIT(FieldCode);
+    END;
+
+    PROCEDURE CheckExceptionsPYG@2(VAR FCode@1000 : Text[5]);
+    BEGIN
+      CASE FCode OF
+        '01000' : FCode := '01009';
+        '01019' : FCode := '01000';
+        '02000' : FCode := '02009';
+      END;
+    END;
+
+    PROCEDURE CheckExceptionsBAL@5(VAR FCode@1000 : Text[5]);
+    BEGIN
+      CASE FCode OF
+        '24090' : FCode := '24100';
+        '20040' : FCode := '20050';
+        '44040' : FCode := '44050';
+      END;
+    END;
+
+    PROCEDURE CheckSign@7(Value@1000 : Text[100]) : Boolean;
+    VAR
+      Sign@1002 : Boolean;
+    BEGIN
+      IF COPYSTR(Value,1,1) = '-' THEN
+        Sign := TRUE
+      ELSE
+        Sign := FALSE;
+
+      EXIT(Sign);
+    END;
+
+    PROCEDURE GetClosDate@6(ToDate@1000 : Date) : Text[30];
+    VAR
+      CDate@1001 : Text[30];
+      CDay@1002 : Text[2];
+      CMonth@1003 : Text[2];
+      CYear@1004 : Text[4];
+    BEGIN
+      CDay :=  FORMAT(DATE2DMY(ToDate,1));
+      IF STRLEN(CDay) = 1 THEN
+        CDay := '0' + CDay;
+      CMonth := FORMAT(DATE2DMY(ToDate,2));
+      IF STRLEN(CMonth) = 1 THEN
+        CMonth := '0' + CMonth;
+      CYear := FORMAT(DATE2DMY(ToDate,3));
+      CDate := CYear + CMonth + CDay + '00';
+      EXIT(CDate);
+    END;
+
+    PROCEDURE GetValues@4(ColValue@1000 : Decimal;VAR Saldo@1001 : ARRAY [2] OF Text[100];VAR Signo@1002 : ARRAY [2] OF Text[1];b@1003 : Integer) : Boolean;
+    VAR
+      Leng@1007 : Integer;
+      ColumnValue2@1006 : Text[100];
+      Times@1005 : Integer;
+      I@1004 : Integer;
+    BEGIN
+      ColumnValue2 := FORMAT(ColValue);
+
+      IF CheckSign(ColumnValue2) = TRUE THEN BEGIN
+        Sign := '-';
+        ColumnValue2 := DELSTR(ColumnValue2,1,1);
+      END ELSE
+        Sign := '+';
+
+      ColumnValue2 := DELCHR(ColumnValue2,'=','.');
+      ColumnValue2 := DELCHR(ColumnValue2, '=', ',');
+
+      Leng := STRLEN(ColumnValue2);
+      Times := 15 - Leng;
+      FOR I := 1 TO Times DO BEGIN
+        ColumnValue2 := '0' + ColumnValue2;
+      END;
+
+      Saldo[b] := ColumnValue2;
+      Signo[b] := Sign;
+
+      IF ColValue <> 0 THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE GetFieldCodeNumeric@1000000000(Fcode@1000000000 : Text[5];Num@1000000001 : Text[1];FieldCode@1000000002 : Text[5]) : Text[5];
+    BEGIN
+      IF STRLEN(Fcode) = 1 THEN
+        FieldCode := FieldCode + '00' + Num
+      ELSE
+        FieldCode := FieldCode + '0' + Num;
+      EXIT(FieldCode);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

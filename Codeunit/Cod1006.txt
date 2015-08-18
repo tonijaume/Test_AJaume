@@ -1,0 +1,340 @@
+OBJECT Codeunit 1006 Copy Job
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Job@1010 : Record 167;
+      Job2@1009 : Record 167;
+      JobLedgEntry@1006 : Record 169;
+      JobPlanningLine@1005 : Record 1003;
+      JobPlanningLine2@1004 : Record 1003;
+      JT@1008 : Record 1001;
+      JT2@1007 : Record 1001;
+      JT3@1003 : Record 1001;
+      RoundingMethod@1013 : Record 42;
+      JobTransferLine@1002 : Codeunit 1004;
+      FromDate@1019 : Date;
+      ToDate@1017 : Date;
+      FromSource@1022 : 'Job Planning Lines,Job Ledger Entry';
+      LedgerEntryType@1023 : ' ,Usage,Sale';
+      LineType@1018 : ' ,Schedule,Contract';
+      FromJobNo@1021 : Code[20];
+      FromJTNo@1020 : Code[20];
+      ToJTNo@1011 : Code[20];
+      ToJobNo@1016 : Code[20];
+      ToJobTaskNo@1027 : Code[20];
+      AmountAdjustFactor@1015 : Decimal;
+      NextPlanninglineNo@1001 : Integer;
+      SetNextPlanningLineNo@1026 : Integer;
+      Sign@1000 : Integer;
+      NoOfLinesInserted@1030 : Integer;
+      ApplyPrices@1014 : Boolean;
+      CopyQuantity@1028 : Boolean;
+
+    PROCEDURE Code@13();
+    VAR
+      CurrExchRate@1000 : Record 330;
+      Currency@1001 : Record 4;
+    BEGIN
+      CASE FromSource OF
+        FromSource::"Job Planning Lines":
+          BEGIN
+            NextPlanninglineNo := SetNextPlanningLineNo;
+            JobPlanningLine.SETRANGE("Job No.",Job."No.");
+            JobPlanningLine.SETRANGE("Job Task No.",FromJTNo);
+            IF LineType = LineType::Schedule THEN
+              JobPlanningLine.SETRANGE("Schedule Line",TRUE);
+            IF LineType = LineType::Contract THEN
+              JobPlanningLine.SETRANGE("Contract Line",TRUE);
+            JobPlanningLine.SETFILTER("Planning Date",JT3.GETFILTER("Planning Date Filter"));
+            IF JobPlanningLine.FIND('-') THEN
+              REPEAT
+                JobPlanningLine2.VALIDATE("Job No.",Job2."No.");
+                JobPlanningLine2.VALIDATE("Job Task No.",ToJobTaskNo);
+                JobPlanningLine2.VALIDATE("Line No.",NextPlanninglineNo);
+                JobPlanningLine2.TRANSFERFIELDS(JobPlanningLine,FALSE);
+                JobPlanningLine2.INSERT(TRUE);
+                NoOfLinesInserted += 1;
+
+                IF (JobPlanningLine2."Line Type" = JobPlanningLine2."Line Type"::"Both Schedule and Contract") AND
+                   (LineType IN [LineType::Schedule,LineType::Contract])
+                THEN BEGIN
+                  IF LineType = LineType::Schedule THEN
+                    JobPlanningLine2.VALIDATE("Line Type",JobPlanningLine2."Line Type"::Schedule);
+                  IF LineType = LineType::Contract THEN
+                    JobPlanningLine2.VALIDATE("Line Type",JobPlanningLine2."Line Type"::Contract);
+                END;
+
+                IF JobPlanningLine2.Type <> JobPlanningLine2.Type::Text THEN BEGIN
+                  IF Job."Currency Code" <> Job2."Currency Code" THEN BEGIN
+                    JobPlanningLine2."Currency Code" := Job2."Currency Code";
+                    JobPlanningLine2.UpdateCurrencyFactor;
+                    Currency.GET(JobPlanningLine2."Currency Code");
+                    Currency.TESTFIELD("Amount Rounding Precision");
+                    JobPlanningLine2."Unit Cost" := ROUND(
+                        CurrExchRate.ExchangeAmtLCYToFCY(
+                          JobPlanningLine2."Currency Date",JobPlanningLine2."Currency Code",
+                          JobPlanningLine2."Unit Cost (LCY)",JobPlanningLine2."Currency Factor"),
+                        Currency."Unit-Amount Rounding Precision");
+                    JobPlanningLine2."Unit Price" := ROUND(
+                        CurrExchRate.ExchangeAmtLCYToFCY(
+                          JobPlanningLine2."Currency Date",JobPlanningLine2."Currency Code",
+                          JobPlanningLine2."Unit Price (LCY)",JobPlanningLine2."Currency Factor"),
+                        Currency."Unit-Amount Rounding Precision");
+                    JobPlanningLine2.VALIDATE("Currency Date");
+                  END;
+                  IF AmountAdjustFactor <> 1 THEN
+                    AdjustAmounts(JobPlanningLine2."Unit Price");
+                  IF NOT CopyQuantity THEN
+                    JobPlanningLine2.VALIDATE(Quantity,0);
+                END ELSE
+                  JobPlanningLine2."Currency Code" := Job2."Currency Code";
+                NextPlanninglineNo += 10000;
+                JobPlanningLine2.MODIFY;
+              UNTIL JobPlanningLine.NEXT = 0;
+          END;
+        FromSource::"Job Ledger Entry":
+          BEGIN
+            JobLedgEntry.SETRANGE("Job No.",Job."No.");
+            JobLedgEntry.SETRANGE("Job Task No.",FromJTNo);
+            IF LedgerEntryType = LedgerEntryType::Usage THEN
+              JobLedgEntry.SETRANGE("Entry Type",JobLedgEntry."Entry Type"::Usage);
+            IF LedgerEntryType = LedgerEntryType::Sale THEN
+              JobLedgEntry.SETRANGE("Entry Type",JobLedgEntry."Entry Type"::Sale);
+            JobLedgEntry.SETFILTER("Posting Date",JT3.GETFILTER("Planning Date Filter"));
+            IF JobLedgEntry.FIND('-') THEN
+              REPEAT
+                JobTransferLine.FromJobLedgEntryToPlanningLine(JobLedgEntry,JobPlanningLine2);
+                JobPlanningLine2."Job No." := Job2."No.";
+                JobPlanningLine2.VALIDATE("Line No.",NextPlanninglineNo);
+                JobPlanningLine2.INSERT(TRUE);
+                NoOfLinesInserted += 1;
+                IF JobLedgEntry."Entry Type" = JobLedgEntry."Entry Type"::Usage THEN
+                  JobPlanningLine2.VALIDATE("Line Type",JobPlanningLine2."Line Type"::Schedule)
+                ELSE BEGIN
+                  JobPlanningLine2.VALIDATE("Line Type",JobPlanningLine2."Line Type"::Contract);
+                  JobPlanningLine2.VALIDATE(Quantity,-JobLedgEntry.Quantity);
+                  JobPlanningLine2.VALIDATE("Unit Cost (LCY)",JobLedgEntry."Unit Cost (LCY)");
+                  JobPlanningLine2.VALIDATE("Unit Price (LCY)",JobLedgEntry."Unit Price (LCY)");
+                  JobPlanningLine2.VALIDATE("Line Discount %",JobLedgEntry."Line Discount %");
+                END;
+                IF Job."Currency Code" <> Job2."Currency Code" THEN BEGIN
+                  JobPlanningLine2."Currency Code" := Job2."Currency Code";
+                  JobPlanningLine2.UpdateCurrencyFactor;
+                  Currency.GET(JobPlanningLine2."Currency Code");
+                  Currency.TESTFIELD("Amount Rounding Precision");
+                  JobPlanningLine2."Unit Cost" := ROUND(
+                      CurrExchRate.ExchangeAmtLCYToFCY(
+                        JobPlanningLine2."Currency Date",JobPlanningLine2."Currency Code",
+                        JobPlanningLine2."Unit Cost (LCY)",JobPlanningLine2."Currency Factor"),
+                      Currency."Unit-Amount Rounding Precision");
+                  JobPlanningLine2."Unit Price" := ROUND(
+                      CurrExchRate.ExchangeAmtLCYToFCY(
+                        JobPlanningLine2."Currency Date",JobPlanningLine2."Currency Code",
+                        JobPlanningLine2."Unit Price (LCY)",JobPlanningLine2."Currency Factor"),
+                      Currency."Unit-Amount Rounding Precision");
+                  JobPlanningLine2.VALIDATE("Currency Date");
+                END;
+                IF AmountAdjustFactor <> 1 THEN
+                  AdjustAmounts(JobLedgEntry."Unit Price");
+                IF NOT CopyQuantity THEN
+                  JobPlanningLine2.VALIDATE(Quantity,0);
+                NextPlanninglineNo += 10000;
+                JobPlanningLine2.MODIFY;
+              UNTIL JobLedgEntry.NEXT = 0;
+          END;
+      END;
+    END;
+
+    PROCEDURE CopyJob@7() : Integer;
+    BEGIN
+      IF AmountAdjustFactor = 0 THEN
+        AmountAdjustFactor := 1;
+      CopyJobTaskSetfilters;
+      CopyJobSetFilters;
+      IF JT.FIND('-') THEN BEGIN
+        REPEAT
+          JT2."Job No." := Job2."No.";
+          JT2."Job Task No." := JT."Job Task No.";
+          JT2.TRANSFERFIELDS(JT,FALSE);
+          JT2.INSERT(TRUE);
+          NoOfLinesInserted += 1;
+        UNTIL JT.NEXT = 0;
+      END;
+      IF ApplyPrices THEN BEGIN
+        TransferPrices;
+      END;
+      IF JT.FIND('-') THEN
+        REPEAT
+          SetNextPlanningLineNo := 10000;
+          FromJTNo := JT."Job Task No.";
+          ToJobTaskNo := JT."Job Task No.";
+          Code;
+        UNTIL JT.NEXT = 0;
+      EXIT(NoOfLinesInserted);
+    END;
+
+    PROCEDURE CopyJobTask@8() : Integer;
+    BEGIN
+      IF AmountAdjustFactor = 0 THEN
+        AmountAdjustFactor := 1;
+      CopyJobTaskSetfilters;
+      JobPlanningLine2.SETRANGE("Job Task No.",JT."Job Task No.");
+      JobPlanningLine2.SETRANGE("Job Task No.",ToJobTaskNo);
+      IF JobPlanningLine2.FIND('+') THEN
+        SetNextPlanningLineNo := JobPlanningLine2."Line No.";
+      SetNextPlanningLineNo += 10000;
+      IF JT.FIND('-') THEN
+        Code;
+      EXIT(NoOfLinesInserted);
+    END;
+
+    PROCEDURE CopyJobTaskSetfilters@1();
+    BEGIN
+      Job.GET(FromJobNo);
+      Job.TESTFIELD("Bill-to Customer No.");
+      JT.SETRANGE("Job No.",Job."No.");
+      Job2.GET(ToJobNo);
+      Job2.TESTFIELD("Bill-to Customer No.");
+
+      IF FromDate <> 0D THEN BEGIN
+        IF ToDate <> 0D THEN
+          JT3.SETFILTER("Planning Date Filter",'%1..%2',FromDate,ToDate)
+        ELSE
+          JT3.SETFILTER("Planning Date Filter",'%1..',FromDate);
+      END ELSE
+        IF ToDate <> 0D THEN
+          JT3.SETFILTER("Planning Date Filter",'..%1',ToDate)
+        ELSE
+          JT3.SETFILTER("Planning Date Filter",'');
+    END;
+
+    PROCEDURE CopyJobSetFilters@14();
+    BEGIN
+      IF FromJTNo <> '' THEN BEGIN
+        IF ToJTNo <> '' THEN
+          JT.SETFILTER("Job Task No.",'%1..%2',FromJTNo,ToJTNo)
+        ELSE
+          JT.SETFILTER("Job Task No.",'%1..',FromJTNo);
+      END ELSE
+        IF ToJTNo <> '' THEN
+          JT.SETFILTER("Job Task No.",'..%1',ToJTNo);
+    END;
+
+    PROCEDURE TransferPrices@6();
+    VAR
+      JobItemPrices@1000 : Record 1013;
+      JobResPrices@1001 : Record 1012;
+      JobGLPrices@1002 : Record 1014;
+      JobItemPrices2@1005 : Record 1013;
+      JobResPrices2@1004 : Record 1012;
+      JobGLPrices2@1003 : Record 1014;
+    BEGIN
+      JobItemPrices.SETRANGE("Job No.",Job."No.");
+      JobItemPrices.SETRANGE("Currency Code",Job."Currency Code");
+
+      IF JobItemPrices.FIND('-') THEN
+        REPEAT
+          JobItemPrices2.TRANSFERFIELDS(JobItemPrices,TRUE);
+          JobItemPrices2."Job No." := Job2."No.";
+          JobItemPrices2.INSERT(TRUE);
+          NoOfLinesInserted += 1;
+        UNTIL JobItemPrices.NEXT = 0;
+
+      JobResPrices.SETRANGE("Job No.",Job."No.");
+      JobResPrices.SETRANGE("Currency Code",Job."Currency Code");
+      IF JobResPrices.FIND('-') THEN
+        REPEAT
+          JobResPrices2.TRANSFERFIELDS(JobResPrices,TRUE);
+          JobResPrices2."Job No." := Job2."No.";
+          JobResPrices2.INSERT(TRUE);
+          NoOfLinesInserted += 1;
+        UNTIL JobResPrices.NEXT = 0;
+
+      JobGLPrices.SETRANGE("Job No.",Job."No.");
+      JobGLPrices.SETRANGE("Currency Code",Job."Currency Code");
+      IF JobGLPrices.FIND('-') THEN
+        REPEAT
+          JobGLPrices2.TRANSFERFIELDS(JobGLPrices,TRUE);
+          JobGLPrices2."Job No." := Job2."No.";
+          JobGLPrices2.INSERT(TRUE);
+          NoOfLinesInserted += 1;
+        UNTIL JobGLPrices.NEXT = 0;
+    END;
+
+    PROCEDURE AdjustAmounts@12(TempUnitPrice@1000 : Decimal);
+    BEGIN
+      JobPlanningLine2.Quantity := JobPlanningLine2.Quantity * AmountAdjustFactor;
+      IF RoundingMethod.Code <> '' THEN BEGIN
+        IF JobPlanningLine2.Quantity >= 0 THEN
+          Sign := 1
+        ELSE
+          Sign := -1;
+        RoundingMethod."Minimum Amount" := ABS(JobPlanningLine2.Quantity);
+        IF RoundingMethod.FIND('=<') THEN BEGIN
+          JobPlanningLine2.Quantity := JobPlanningLine2.Quantity + Sign * RoundingMethod."Amount Added Before";
+          IF RoundingMethod.Precision > 0 THEN
+            JobPlanningLine2.Quantity :=
+              Sign *
+              ROUND(
+                ABS(JobPlanningLine2.Quantity),RoundingMethod.Precision,COPYSTR('=><',
+                  RoundingMethod.Type + 1,1));
+          JobPlanningLine2.Quantity := JobPlanningLine2.Quantity + Sign * RoundingMethod."Amount Added After";
+        END;
+      END;
+      TempUnitPrice := JobPlanningLine2."Unit Price";
+      JobPlanningLine2.VALIDATE("Unit Cost");
+      JobPlanningLine2.VALIDATE("Unit Price",TempUnitPrice);
+    END;
+
+    PROCEDURE SetCopyJob@3(InitFromSource2@1011 : 'Job Planning Lines,Job Ledger Entry';FromJobNo2@1010 : Code[20];FromJTNo2@1009 : Code[20];FromDate2@1008 : Date;LineType2@1007 : 'Schedule,Contract,Both Schedule and Contract';LedgerEntryType2@1012 : Option;ToDate2@1006 : Date;ToJobNo2@1005 : Code[20];AmountAdjustFactor2@1004 : Decimal;ApplyPrices2@1003 : Boolean;RoundingMethod2@1002 : Record 42;ToJTNo2@1000 : Code[20];CopyQuantity2@1013 : Boolean);
+    BEGIN
+      CLEARALL;
+      FromSource := InitFromSource2;
+      FromJobNo := FromJobNo2;
+      FromJTNo := FromJTNo2;
+      FromDate := FromDate2;
+      LineType := LineType2;
+      LedgerEntryType := LedgerEntryType2;
+      ToDate := ToDate2;
+      ToJobNo := ToJobNo2;
+      AmountAdjustFactor := AmountAdjustFactor2;
+      ApplyPrices := ApplyPrices2;
+      RoundingMethod := RoundingMethod2;
+      ToJTNo := ToJTNo2;
+      CopyQuantity := CopyQuantity2;
+    END;
+
+    PROCEDURE SetCopyJobTask@4(FromJobNo2@1010 : Code[20];FromJTNo2@1009 : Code[20];FromDate2@1008 : Date;LineType2@1007 : 'Schedule,Contract,Both Schedule and Contract';LedgerEntryType2@1012 : Option;ToDate2@1006 : Date;ToJobNo2@1005 : Code[20];AmountAdjustFactor2@1004 : Decimal;ApplyPrices2@1003 : Boolean;RoundingMethod2@1002 : Record 42;ToJTNo2@1000 : Code[20];CopyQuantity2@1011 : Boolean);
+    BEGIN
+      CLEARALL;
+      FromJobNo := FromJobNo2;
+      FromJTNo := FromJTNo2;
+      FromDate := FromDate2;
+      LineType := LineType2;
+      LedgerEntryType := LedgerEntryType2;
+      ToDate := ToDate2;
+      ToJobNo := ToJobNo2;
+      AmountAdjustFactor := AmountAdjustFactor2;
+      ApplyPrices := ApplyPrices2;
+      RoundingMethod := RoundingMethod2;
+      ToJobTaskNo := ToJTNo2;
+      CopyQuantity := CopyQuantity2;
+    END;
+
+    BEGIN
+    END.
+  }
+}

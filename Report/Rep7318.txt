@@ -1,0 +1,356 @@
+OBJECT Report 7318 Whse.-Shipment - Create Pick
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/08/09;
+    Time=12:00:00;
+    Version List=NAVW16.00.01;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Whse.-Shipment - Create Pick;
+               ESP=Alm.-Env¡o - Crear picking];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CLEAR(CreatePick);
+                  EverythingHandled := TRUE;
+                END;
+
+    OnPostReport=VAR
+                   WhseActivHeader@1000 : Record 5766;
+                   TempWhseItemTrkgLine@1001 : TEMPORARY Record 6550;
+                   ItemTrackingMgt@1002 : Codeunit 6500;
+                 BEGIN
+                   CreatePick.CreateWhseDocument(FirstActivityNo,LastActivityNo);
+
+                   CreatePick.ReturnTempItemTrkgLines(TempWhseItemTrkgLine);
+                   ItemTrackingMgt.UpdateWhseItemTrkgLines(TempWhseItemTrkgLine);
+
+                   WhseActivHeader.SETRANGE(Type,WhseActivHeader.Type::Pick);
+                   WhseActivHeader.SETRANGE("No.",FirstActivityNo,LastActivityNo);
+                   IF WhseActivHeader.FIND('-') THEN BEGIN
+                     REPEAT
+                       IF SortActivity > 0 THEN
+                         WhseActivHeader.SortWhseDoc;
+                     UNTIL WhseActivHeader.NEXT = 0;
+
+                     IF PrintDoc THEN
+                       REPORT.RUN(REPORT::"Picking List",FALSE,FALSE,WhseActivHeader);
+                   END ELSE
+                     ERROR(Text003);
+                 END;
+
+  }
+  DATAITEMS
+  {
+    { PROPERTIES
+      {
+        DataItemTable=Table7321;
+        DataItemTableView=SORTING(No.,Line No.);
+        OnPreDataItem=BEGIN
+                        CreatePick.SetValues(
+                          AssignedID,1,SortActivity,1,0,0,FALSE,DoNotFillQtytoHandle,BreakbulkFilter,FALSE);
+
+                        COPYFILTERS(WhseShptLine);
+                        SETFILTER(Quantity,'>0');
+
+                        WhseWkshLine.SETCURRENTKEY(
+                          "Whse. Document Type","Whse. Document No.","Whse. Document Line No.");
+                        WhseWkshLine.SETRANGE(
+                          "Whse. Document Type",WhseWkshLine."Whse. Document Type"::Shipment);
+                        WhseWkshLine.SETRANGE("Whse. Document No.",WhseShptHeader."No.");
+                      END;
+
+        OnAfterGetRecord=BEGIN
+                           IF Location."Directed Put-away and Pick" THEN
+                             CheckBin(0,0);
+
+                           WhseWkshLine.SETRANGE("Whse. Document Line No.","Line No.");
+                           IF NOT WhseWkshLine.FIND('-') THEN BEGIN
+                             TESTFIELD("Qty. per Unit of Measure");
+                             CALCFIELDS("Pick Qty. (Base)");
+                             QtyToPickBase := "Qty. (Base)" - ("Qty. Picked (Base)" + "Pick Qty. (Base)");
+                             QtyToPick := Quantity - ("Qty. Picked" + "Pick Qty.");
+                             IF QtyToPick > 0 THEN BEGIN
+                               IF "Destination Type" = "Destination Type"::Customer THEN BEGIN
+                                 TESTFIELD("Destination No.");
+                                 Cust.GET("Destination No.");
+                                 Cust.CheckBlockedCustOnDocs(Cust,"Source Document",FALSE,FALSE);
+                               END;
+
+                               CreatePick.SetWhseShipment(
+                                 "Warehouse Shipment Line",1,WhseShptHeader."Shipping Agent Code",
+                                 WhseShptHeader."Shipping Agent Service Code",WhseShptHeader."Shipment Method Code");
+                               CreatePick.SetTempWhseItemTrkgLine(
+                                 "No.",DATABASE::"Warehouse Shipment Line",
+                                 '',0,"Line No.","Location Code");
+                               CreatePick.CreateTempLine(
+                                 "Location Code","Item No.","Variant Code","Unit of Measure Code",
+                                 '',"Bin Code","Qty. per Unit of Measure",QtyToPick,QtyToPickBase);
+                               CreatePick.SaveTempItemTrkgLines;
+                             END;
+                           END ELSE
+                             WhseWkshLineFound := TRUE;
+                         END;
+
+        OnPostDataItem=VAR
+                         TempWhseItemTrkgLine@1000 : TEMPORARY Record 6550;
+                         ItemTrackingMgt@1001 : Codeunit 6500;
+                       BEGIN
+                         CreatePick.ReturnTempItemTrkgLines(TempWhseItemTrkgLine);
+                         IF TempWhseItemTrkgLine.FIND('-') THEN
+                           REPEAT
+                             ItemTrackingMgt.CalcWhseItemTrkgLine(TempWhseItemTrkgLine);
+                           UNTIL TempWhseItemTrkgLine.NEXT = 0;
+                       END;
+
+      }
+      SECTIONS
+      {
+        { PROPERTIES
+          {
+            SectionType=Body;
+            SectionWidth=12000;
+            SectionHeight=846;
+          }
+          CONTROLS
+          {
+          }
+           }
+      }
+       }
+  }
+  REQUESTFORM
+  {
+    PROPERTIES
+    {
+      Width=6160;
+      Height=3410;
+      OnOpenForm=BEGIN
+                   IF Location."Use ADCS" THEN
+                     DoNotFillQtytoHandle := TRUE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1   ;TextBox      ;3410 ;0    ;2750 ;440  ;CaptionML=[ENU=Assigned User ID;
+                                                              ESP=Id. usuario asignado];
+                                                   SourceExpr=AssignedID;
+                                                   TableRelation="Warehouse Employee";
+                                                   OnValidate=VAR
+                                                                WhseEmployee@1000 : Record 7301;
+                                                              BEGIN
+                                                                IF AssignedID <> '' THEN
+                                                                  WhseEmployee.GET(AssignedID,Location.Code);
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              WhseEmployee@1001 : Record 7301;
+                                                              LookupWhseEmployee@1000 : Form 7348;
+                                                            BEGIN
+                                                              WhseEmployee.SETCURRENTKEY("Location Code");
+                                                              WhseEmployee.SETRANGE("Location Code",Location.Code);
+                                                              LookupWhseEmployee.LOOKUPMODE(TRUE);
+                                                              LookupWhseEmployee.SETTABLEVIEW(WhseEmployee);
+                                                              IF LookupWhseEmployee.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                                                LookupWhseEmployee.GETRECORD(WhseEmployee);
+                                                                AssignedID := WhseEmployee."User ID";
+                                                              END;
+                                                            END;
+                                                             }
+      { 2   ;TextBox      ;3410 ;990  ;2750 ;440  ;CaptionML=[ENU=Sorting Method for Activity Lines;
+                                                              ESP=M‚todo clasif. para l¡ns. act.];
+                                                   OptionCaptionML=[ENU=" ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type";
+                                                                    ESP=" ,Prod.,Doc.,Estanter¡a o ubic.,Fecha vto.,Destino,Ranking ubic.,Tipo acci¢n"];
+                                                   SourceExpr=SortActivity }
+      { 3   ;CheckBox     ;3410 ;2970 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Print Document;
+                                                              ESP=Imprime documento];
+                                                   SourceExpr=PrintDoc }
+      { 4   ;Label        ;0    ;2970 ;3300 ;440  ;ParentControl=3 }
+      { 5   ;Label        ;0    ;0    ;3300 ;440  ;ParentControl=1 }
+      { 6   ;Label        ;0    ;660  ;3300 ;770  ;ParentControl=2;
+                                                   VertAlign=Bottom;
+                                                   MultiLine=Yes }
+      { 11  ;CheckBox     ;3410 ;2310 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Do Not Fill Qty. to Handle;
+                                                              ESP=No rellene cdad. a manipular];
+                                                   SourceExpr=DoNotFillQtytoHandle }
+      { 12  ;Label        ;0    ;2310 ;3300 ;440  ;ParentControl=11 }
+      { 9   ;CheckBox     ;3410 ;1650 ;440  ;440  ;ShowCaption=No;
+                                                   CaptionML=[ENU=Set Breakbulk Filter;
+                                                              ESP=Define filtro div. bulto];
+                                                   SourceExpr=BreakbulkFilter }
+      { 10  ;Label        ;0    ;1650 ;3300 ;440  ;ParentControl=9 }
+    }
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=BEGIN
+                   IF Location."Use ADCS" THEN
+                     DoNotFillQtytoHandle := TRUE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESP=Opciones] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Assigned User ID;
+                             ESP=Id. usuario asignado];
+                  SourceExpr=AssignedID;
+                  TableRelation="Warehouse Employee";
+                  OnValidate=VAR
+                               WhseEmployee@1000 : Record 7301;
+                             BEGIN
+                               IF AssignedID <> '' THEN
+                                 WhseEmployee.GET(AssignedID,Location.Code);
+                             END;
+
+                  OnLookup=VAR
+                             WhseEmployee@1001 : Record 7301;
+                             LookupWhseEmployee@1000 : Form 7348;
+                           BEGIN
+                             WhseEmployee.SETCURRENTKEY("Location Code");
+                             WhseEmployee.SETRANGE("Location Code",Location.Code);
+                             LookupWhseEmployee.LOOKUPMODE(TRUE);
+                             LookupWhseEmployee.SETTABLEVIEW(WhseEmployee);
+                             IF LookupWhseEmployee.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                               LookupWhseEmployee.GETRECORD(WhseEmployee);
+                               AssignedID := WhseEmployee."User ID";
+                             END;
+                           END;
+                            }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=[ENU=Sorting Method for Activity Lines;
+                             ESP=M‚todo clasif. para l¡ns. act.];
+                  OptionCaptionML=[ENU=" ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type";
+                                   ESP=" ,Prod.,Doc.,Estanter¡a o ubic.,Fecha vto.,Destino,Ranking ubic.,Tipo acci¢n"];
+                  SourceExpr=SortActivity;
+                  MultiLine=Yes }
+
+      { 9   ;2   ;Field     ;
+                  CaptionML=[ENU=Set Breakbulk Filter;
+                             ESP=Define filtro div. bulto];
+                  SourceExpr=BreakbulkFilter }
+
+      { 11  ;2   ;Field     ;
+                  CaptionML=[ENU=Do Not Fill Qty. to Handle;
+                             ESP=No rellene cdad. a manipular];
+                  SourceExpr=DoNotFillQtytoHandle }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Print Document;
+                             ESP=Imprime documento];
+                  SourceExpr=PrintDoc }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Location@1027 : Record 14;
+      WhseShptHeader@1007 : Record 7320;
+      WhseShptLine@1012 : Record 7321;
+      WhseWkshLine@1019 : Record 7326;
+      Cust@1006 : Record 18;
+      CreatePick@1003 : Codeunit 7312;
+      FirstActivityNo@1002 : Code[20];
+      LastActivityNo@1001 : Code[20];
+      AssignedID@1008 : Code[20];
+      SortActivity@1005 : ' ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type';
+      QtyToPick@1000 : Decimal;
+      Text000@1011 : TextConst 'ENU=%1 activity no. %2 has been created.;ESP=Se ha creado %1 actividad n§ %2.';
+      Text001@1010 : TextConst 'ENU=%1 activities no. %2 to %3 have been created.;ESP=Se han creado %1 actividades n§ %2 a %3.';
+      PrintDoc@1004 : Boolean;
+      EverythingHandled@1017 : Boolean;
+      WhseWkshLineFound@1020 : Boolean;
+      Text002@1021 : TextConst 'ENU=For Warehouse Shipment Lines with existing Warehouse Worksheet Lines no %1 lines have been created.;ESP=No se han creado l¡neas %1 para l¡neas de env¡o de almac‚n con l¡neas de hoja de almac‚n existentes.';
+      HideValidationDialog@1022 : Boolean;
+      Text003@1023 : TextConst 'ENU=There is nothing to handle.;ESP=No hay nada que manipular.';
+      DoNotFillQtytoHandle@1014 : Boolean;
+      BreakbulkFilter@1029 : Boolean;
+      QtyToPickBase@1000000000 : Decimal;
+
+    PROCEDURE SetWhseShipmentLine@1(VAR WhseShptLine2@1000 : Record 7321;WhseShptHeader2@1001 : Record 7320);
+    BEGIN
+      WhseShptLine.COPY(WhseShptLine2);
+      WhseShptHeader := WhseShptHeader2;
+      AssignedID := WhseShptHeader2."Assigned User ID";
+      GetLocation(WhseShptLine."Location Code");
+    END;
+
+    PROCEDURE GetResultMessage@3() : Boolean;
+    VAR
+      WhseActivHeader@1000 : Record 5766;
+    BEGIN
+      IF FirstActivityNo = '' THEN
+        EXIT(FALSE)
+      ELSE BEGIN
+        IF NOT HideValidationDialog THEN BEGIN
+          WhseActivHeader.Type := WhseActivHeader.Type::Pick;
+          IF WhseWkshLineFound THEN BEGIN
+            IF FirstActivityNo = LastActivityNo THEN
+              MESSAGE(
+                STRSUBSTNO(
+                  Text000,FORMAT(WhseActivHeader.Type),FirstActivityNo) + '\' +
+                STRSUBSTNO(
+                  Text002,FORMAT(WhseActivHeader.Type)))
+            ELSE
+              MESSAGE(
+                STRSUBSTNO(
+                  Text001,FORMAT(WhseActivHeader.Type),FirstActivityNo,LastActivityNo) + '\' +
+                STRSUBSTNO(
+                  Text002,FORMAT(WhseActivHeader.Type)));
+          END ELSE BEGIN
+            IF FirstActivityNo = LastActivityNo THEN
+              MESSAGE(Text000,FORMAT(WhseActivHeader.Type),FirstActivityNo)
+            ELSE
+              MESSAGE(Text001,FORMAT(WhseActivHeader.Type),FirstActivityNo,LastActivityNo);
+          END;
+        END;
+        EXIT(EverythingHandled);
+      END;
+    END;
+
+    PROCEDURE SetHideValidationDialog@14(NewHideValidationDialog@1000 : Boolean);
+    BEGIN
+      HideValidationDialog := NewHideValidationDialog;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF Location.Code <> LocationCode THEN BEGIN
+        IF LocationCode = '' THEN
+          CLEAR(Location)
+        ELSE
+          Location.GET(LocationCode);
+      END;
+    END;
+
+    PROCEDURE Initialize@9(AssignedID2@1004 : Code[20];SortActivity2@1002 : ' ,Item,Document,Shelf/Bin No.,Due Date,Ship-To,Bin Ranking,Action Type';PrintDoc2@1001 : Boolean;DoNotFillQtytoHandle2@1000 : Boolean;BreakbulkFilter2@1003 : Boolean);
+    BEGIN
+      AssignedID := AssignedID2;
+      SortActivity := SortActivity2;
+      PrintDoc := PrintDoc2;
+      DoNotFillQtytoHandle := DoNotFillQtytoHandle2;
+      BreakbulkFilter := BreakbulkFilter2;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}

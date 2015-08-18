@@ -1,0 +1,1353 @@
+OBJECT Codeunit 7009710 Calculo extras
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/10/12;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1103355028 : TextConst 'ENU=Person parameters folder does not exist;ESP=NO existe el fichero de Parametros de personas.';
+      Text001@1103355029 : TextConst 'ENU=EXTRAFIJOS;ESP=EXTRAFIJOS';
+      Text002@1103355030 : TextConst 'ENU=Person parameters do not exist;ESP=No existe el fichero de Parametros Personas.';
+      Text003@1103355031 : TextConst 'ENU=EXTRAVARIA;ESP=EXTRAVARIA';
+      Text004@1103355032 : TextConst 'ENU=Person parameters do not exist;ESP=No existe el fichero de Parametros Personas.';
+      Text005@1103355033 : TextConst 'ENU=EXTRAFIXEDS;ESP=EXTRAFIJOV';
+      Text006@1103355034 : TextConst 'ENU=EXTRAVARIV;ESP=EXTRAVARIV';
+      w_dia@1103355000 : Date;
+      w_habitaciones@1103355001 : Integer;
+      w_cantidad@1103355002 : Decimal;
+      w_indice@1103355003 : Integer;
+      w_encontrado@1103355004 : Boolean;
+      w_contratos@1103355005 : ARRAY [5] OF Code[10];
+      w_dias@1103355006 : ARRAY [5] OF Integer;
+      w_edad_hasta@1103355007 : Integer;
+      w_dias_estancia@1103355008 : Integer;
+      w_frecuencia@1103355009 : Integer;
+      w_frecuencia_extra@1103355010 : Integer;
+      w_dias_periodo@1103355011 : Integer;
+      w_numero_persona_edad@1103355012 : Integer;
+      w_importe_extra@1103355013 : Decimal;
+      w_importe_supl@1103355014 : Decimal;
+      w_inicio_extra@1103355015 : Date;
+      w_fin_extra@1103355016 : Date;
+      w_habitacion_reserva@1103355017 : Code[10];
+      wHotelFactura@1103355035 : Code[20];
+      ok_extra@1103355018 : Boolean;
+      rLin@1103355019 : Record 7009736;
+      rRsv@1103355020 : Record 7009743;
+      rPreC@1103355021 : Record 7009738;
+      rPreV@1103355022 : Record 7009732;
+      rExtra@1103355023 : Record 7009750;
+      rRsvDia@1103355024 : Record 7009755;
+      rRsvDiaV@1103355025 : Record 7009756;
+      rParPer@1103355026 : Record 7009701;
+      cCalRes@1103355027 : Codeunit 7009707;
+
+    PROCEDURE calculo_extras_fijos@1(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_fijos
+
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text000);
+
+      w_habitaciones := reserva."N§ Habitaciones";
+      w_habitacion_reserva := reserva.Habitacion;
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos(reserva);
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          w_indice := 1;
+          WHILE w_contratos[w_indice] <> '' DO BEGIN
+            rPreC.RESET;
+            rPreC.SETCURRENTKEY(Delegacion,
+                                "N§ Contrato",
+                                "Codigo Precio",
+                                Activo);
+            rPreC.SETRANGE(Delegacion     , reserva.Delegacion);
+            rPreC.SETRANGE("N§ Contrato"  , w_contratos[w_indice]);
+            rPreC.SETRANGE("Codigo Precio", rPreC."Codigo Precio"::Extras);
+            rPreC.SETRANGE(Activo         , TRUE);
+            IF rPreC.FIND('-') THEN BEGIN
+              REPEAT
+                rLin.INIT;
+                comprobacion_extras_fijos(rRsv);
+                IF ok_extra THEN BEGIN
+                  IF rPreC.Frecuencia = 0 THEN
+                    w_cantidad := 1
+                  ELSE
+                    w_cantidad := ROUND(w_dias_periodo / rPreC.Frecuencia, 0.01);
+                  IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Habitaci¢n THEN
+                    w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  IF rPreC.Porcentaje THEN BEGIN
+                    w_importe_extra := 0;
+                    w_frecuencia := 0;
+                    w_cantidad := 1;
+                    FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+                      IF w_frecuencia = 0 THEN BEGIN
+                        w_importe_supl := 0 ;
+                        rRsvDia.RESET;
+                        rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+                        rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+                        rRsvDia.SETRANGE(Dia         , w_dia);
+                        IF NOT rRsvDia.FIND('-') THEN BEGIN
+                          rRsvDia.SETRANGE(Dia);
+                          rRsvDia.FIND('-');
+                        END;
+                        w_importe_supl := cCalRes.hallar_porcentaje_coste(rPreC, rRsv, rRsvDia , w_dia);
+                        w_importe_extra := w_importe_extra + w_importe_supl;
+                        w_frecuencia := rPreC.Frecuencia;
+                      END;
+                      w_frecuencia := w_frecuencia - 1;
+                    END;
+                    IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Habitaci¢n THEN
+                      w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  END
+                  ELSE
+                    w_importe_extra := rPreC.Importe;
+                  cCalRes.inserta_linea_calculo(rLin, USERID(), Text001, w_contratos[w_indice],
+                                                ROUND(w_cantidad * w_importe_extra), rRsv."N§ Reserva", rRsv."Fecha entrada",
+                                                rPreC.Codigo, ROUND(w_cantidad, 1), w_importe_extra, rPreC.Garantizable,
+                                                rPreC."Importe HP");
+
+                  wHotelFactura := reserva."Hotel Factura";
+                  IF rPreC."Hotel Factura" <> '' THEN
+                    wHotelFactura := rPreC."Hotel Factura";
+
+                  cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Coste, reserva.Bono, reserva."N§ Responsable",
+                                              reserva."Hotel reservado", 0, wHotelFactura, reserva.Delegacion,
+                                              rPreC."Validacion HP especial")
+                END;
+              UNTIL rPreC.NEXT = 0;
+            END;
+            w_indice := w_indice + 1;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE comprobacion_extras_fijos@15(reserva@1103355000 : Record 7009743);
+    VAR
+      lrReservas@1103355001 : Record 7009743;
+      lrResMenor@1103355002 : Record 7009743;
+    BEGIN
+      // comprobacion_extras_fijos
+
+      ok_extra := TRUE;
+      IF ok_extra THEN BEGIN
+        IF NOT (rPreC."Aplicacion fija") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del rango de edades del precio
+
+      IF ok_extra THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreC."Edad hasta";
+        IF (rRsv.Edad < rPreC."Edad desde") OR (rRsv.Edad > w_edad_hasta) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion de las fechas de aplicacion
+
+      IF ok_extra THEN BEGIN
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (reserva."Fecha entrada"      > rPreC."Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreC."Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada"      > rPreC."2¦ Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreC."2¦ Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreC."Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobacion del tipo de habitacion
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Habitacion" <> '') AND
+           (rPreC."Tipo Habitacion" <> w_habitacion_reserva) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Regimen" <> '') AND (rPreC."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Persona" <> '') AND
+           (rPreC."Tipo Persona" <> reserva."Tipo Persona Facturacion") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del n§ de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreC."N§ Persona") AND
+             (rPreC."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona(reserva);
+          IF (w_numero_persona_edad <> rPreC."N§ Persona") AND (rPreC."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Calculo de los dias de estancia en el periodo del precio
+
+      w_dias_periodo := 0;
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Fecha desde" <= reserva."Fecha entrada") AND (rPreC."Fecha hasta" >= (reserva."Fin estancia" - 1)) THEN BEGIN
+          w_dias_periodo:= reserva."Fin estancia" - reserva."Fecha entrada";
+        END
+        ELSE BEGIN
+          IF (reserva."Fin estancia" - 1) > rPreC."Fecha hasta" THEN BEGIN
+            IF reserva."Fecha entrada" >= rPreC."Fecha desde" THEN
+              // AJS 27.04.2010, elimino el mas uno para que el ultimo dia de aplicacion del extra no cuente
+              w_dias_periodo := rPreC."Fecha hasta" - reserva."Fecha entrada"
+            ELSE
+              w_dias_periodo := rPreC."Fecha hasta" - rPreC."Fecha desde";
+          END
+          ELSE BEGIN
+            // AJS 14.04.2010, elimino el igual y el mas 1 para que el ultimo dia de la estancia no cuente
+            IF reserva."Fin estancia" < rPreC."Fecha hasta" THEN
+              w_dias_periodo := reserva."Fin estancia" - rPreC."Fecha desde"
+            ELSE
+              w_dias_periodo := rPreC."Fecha hasta" - rPreC."Fecha desde";
+          END;
+        END;
+        IF (rPreC."Tipo Fechas" <> rPreC."Tipo Fechas"::"Fecha estancia")  THEN
+          w_dias_periodo := reserva."Fin estancia" - reserva."Fecha entrada";
+      END;
+
+      // AJS 05.02.2007
+      // Control por hotel oferta especial
+
+      IF ok_extra THEN BEGIN
+        IF rPreC."Hotel oferta especial" <> '' THEN
+          IF reserva."Hotel TO" <> rPreC."Hotel oferta especial" THEN
+            ok_extra := FALSE;
+      END;
+
+      // AJF 14/05/08
+      // Comprobacion de aplicacion solo sobre la primera estancia.
+
+      IF ok_extra THEN BEGIN
+
+        // Miramos si es la primera estancia
+
+        IF rPreC."Aplica sobre primera estancia" THEN BEGIN
+          lrReservas.SETCURRENTKEY(Responsable,
+                                   TourOperador,
+                                   Bono);
+
+          // AJS 29.05.2008
+          // Los extras de primera estancia tienen que aplicarse sobre todas las personas
+          //lrReservas.SETRANGE(Responsable,  TRUE);
+
+          lrReservas.SETRANGE(TourOperador, reserva.TourOperador);
+          lrReservas.SETRANGE(Bono        , reserva.Bono);
+          lrReservas.SETRANGE(Nombre      , reserva.Nombre);
+
+          // AJS 29.05.2008
+          // Este tipo de extras no aplican si la estancia es de un solo dia
+
+          lrReservas.SETFILTER(Estancia   , '<>%1', 1);
+
+          IF lrReservas.FINDSET THEN BEGIN
+            // buscamos la fecha de entrada menor.
+            lrResMenor := lrReservas;
+            REPEAT
+              IF lrReservas."Fecha entrada" < lrResMenor."Fecha entrada" THEN
+                lrResMenor := lrReservas;
+            UNTIL lrReservas.NEXT = 0;
+
+            IF lrResMenor."N§ Reserva" <> reserva."N§ Reserva" THEN
+              ok_extra := FALSE;
+          END
+          ELSE
+            ok_extra := FALSE;
+        END;
+      END;
+    END;
+
+    PROCEDURE buscar_num_persona@13(reserva@1103355000 : Record 7009743);
+    VAR
+      w_salir_bucle@1103355001 : Boolean;
+      rRsv2@1103355002 : Record 7009743;
+    BEGIN
+      // buscar_num_persona
+
+      w_salir_bucle         := FALSE;
+      w_numero_persona_edad := 0;
+
+      rRsv2.SETCURRENTKEY(Delegacion,
+                          "N§ Responsable",
+                          Edad);
+      rRsv2.SETRANGE(Delegacion     , reserva.Delegacion);
+      rRsv2.SETRANGE("N§ Responsable", reserva."N§ Responsable");
+      rRsv2.ASCENDING(FALSE);
+      IF rRsv2.FIND('-') THEN BEGIN
+        REPEAT
+          // AJS 08.01.2008
+          // Error de aplicacion de los extras, buscaba sobre el campo Codigo cuando debia hacerlo sobre Tipo Persona
+          //IF rRsv2."Tipo Persona Facturacion" = rPreC.Codigo THEN BEGIN
+
+          IF rRsv2."Tipo Persona Facturacion" = rPreC."Tipo Persona" THEN BEGIN
+            IF (rRsv2.Edad >= rPreC."Edad desde") AND (rRsv2.Edad <= w_edad_hasta) THEN
+              w_numero_persona_edad := w_numero_persona_edad + 1;
+          END;
+          IF rRsv2."N§ Reserva" = rRsv."N§ Reserva" THEN
+            w_salir_bucle := TRUE;
+        UNTIL (rRsv2.NEXT = 0) OR (w_salir_bucle);
+
+        IF w_cantidad <> 0 THEN
+          w_numero_persona_edad := ROUND(w_numero_persona_edad / w_cantidad, 1);
+
+        IF w_numero_persona_edad = 0 THEN
+          w_numero_persona_edad := 1;
+      END;
+    END;
+
+    PROCEDURE busca_contratos@4(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // busca_contratos
+
+      rRsvDia.RESET;
+      rRsvDia.SETRANGE(Delegacion  , reserva.Delegacion);
+      rRsvDia.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+      IF rRsvDia.FIND('-') THEN BEGIN
+        REPEAT
+          busca_contrato_dia(rRsvDia);
+        UNTIL rRsvDia.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE busca_contrato_dia@6(rRsvDia@1103355000 : Record 7009755);
+    BEGIN
+      // busca_contrato_dia
+
+      w_indice := 1;
+      w_encontrado := FALSE;
+      WHILE NOT w_encontrado DO BEGIN
+        IF w_contratos[w_indice] = '' THEN BEGIN
+          w_contratos[w_indice] := rRsvDia."Contrato compra";
+          w_dias[w_indice] := 1;
+          w_encontrado := TRUE;
+        END
+        ELSE BEGIN
+          IF w_contratos[w_indice] = rRsvDia."Contrato compra" THEN BEGIN
+            w_encontrado := TRUE;
+            w_dias[w_indice] := w_dias[w_indice] + 1;
+          END
+          ELSE
+            w_indice := w_indice + 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE calculo_extras_variables@2(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_variables
+      //
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text002);
+      w_habitaciones := reserva."N§ Habitaciones";
+      w_habitacion_reserva := reserva.Habitacion;
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos(reserva);
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          w_indice := 1;
+          WHILE w_contratos[w_indice] <> '' DO BEGIN
+            rPreC.RESET;
+            rPreC.SETCURRENTKEY(Delegacion,
+                                "N§ Contrato",
+                                "Codigo Precio",
+                                Activo);
+            rPreC.SETRANGE(Delegacion     , reserva.Delegacion);
+            rPreC.SETRANGE("N§ Contrato"  , w_contratos[w_indice]);
+            rPreC.SETRANGE("Codigo Precio", rPreC."Codigo Precio"::Extras);
+            rPreC.SETRANGE(Activo         , TRUE);
+            IF rPreC.FIND('-') THEN BEGIN
+              REPEAT
+                rLin.INIT;
+                comprobacion_extras_variables(rRsv);
+                IF (ok_extra) THEN BEGIN
+                  IF w_dias_estancia = 0 THEN
+                    w_dias_estancia := w_dias[w_indice];
+                  IF w_frecuencia_extra = 0 THEN
+                    w_cantidad := 1
+                  ELSE
+                    w_cantidad := ROUND(w_dias_estancia / w_frecuencia_extra, 0.01);
+                  IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Habitaci¢n THEN
+                     w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  // Comprobar si es un extra de precio fijo
+                  //
+                  w_importe_extra := 0;
+                  IF rExtra."Importe coste" <> 0 THEN
+                    w_importe_extra := rExtra."Importe coste"
+                  ELSE BEGIN
+                    IF rPreC.Porcentaje THEN BEGIN
+                      w_importe_extra := 0;
+                      w_frecuencia := 0;
+                      w_cantidad := 1;
+                      FOR w_dia := w_inicio_extra TO w_fin_extra - 1 DO BEGIN
+                        IF w_frecuencia = 0 THEN BEGIN
+                          rRsvDia.RESET;
+                          rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+                          rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+                          rRsvDia.SETRANGE(Dia         , w_dia);
+                          IF NOT rRsvDia.FIND('-') THEN BEGIN
+                            rRsvDia.SETRANGE(Dia);
+                            rRsvDia.FIND('-');
+                          END;
+                          w_importe_supl := cCalRes.hallar_porcentaje_coste(rPreC, rRsv, rRsvDia, w_dia);
+                          w_importe_extra := w_importe_extra + w_importe_supl;
+                          w_frecuencia := w_frecuencia_extra;
+                        END;
+                        w_frecuencia := w_frecuencia - 1;
+                      END;
+                      IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Habitaci¢n THEN
+                        w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                    END
+                    ELSE
+                      w_importe_extra := rPreC.Importe;
+                  END;
+                  // Insercion de lineas
+                  //
+                  cCalRes.inserta_linea_calculo(rLin, USERID(), Text003, w_contratos[w_indice],
+                                     ROUND(w_cantidad * w_importe_extra), rRsv."N§ Reserva", rRsv."Fecha entrada", rPreC.Codigo,
+                                                ROUND(w_cantidad, 1), w_importe_extra, rPreC.Garantizable, rPreC."Importe HP");
+
+                  wHotelFactura := reserva."Hotel Factura";
+                  IF rPreC."Hotel Factura" <> '' THEN
+                    wHotelFactura := rPreC."Hotel Factura";
+
+                  cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Coste, reserva.Bono, reserva."N§ Responsable",
+                                              reserva."Hotel reservado", 0, wHotelFactura, reserva.Delegacion,
+                                              rPreC."Validacion HP especial")
+                END;
+              UNTIL rPreC.NEXT = 0;
+            END;
+            w_indice := w_indice + 1;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE comprobacion_extras_variables@3(reserva@1103355000 : Record 7009743);
+    VAR
+      lrReservas@1103355001 : Record 7009743;
+      lrResMenor@1103355002 : Record 7009743;
+    BEGIN
+      // comprobacion_extras_variables
+      //
+      w_frecuencia := 0;
+      w_dias_estancia := 0;
+      ok_extra := TRUE;
+      IF ok_extra THEN BEGIN
+        IF rPreC."Aplicacion fija" THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del rango de edades del precio
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreC."Edad hasta";
+        IF (rRsv.Edad < rPreC."Edad desde") OR (rRsv.Edad > w_edad_hasta) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion de las fechas de aplicacion
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (reserva."Fecha entrada"      > rPreC."Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreC."Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada"      > rPreC."2¦ Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreC."2¦ Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreC."Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreC."Fecha desde") OR
+             (reserva."Fecha venta" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreC."Tipo Fechas" = rPreC."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreC."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreC."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobacion del tipo de habitacion
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Habitacion" <> '') AND
+           (rPreC."Tipo Habitacion" <> w_habitacion_reserva) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Regimen" <> '') AND (rPreC."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreC."Tipo Persona" <> '') AND
+           (rPreC."Tipo Persona" <> reserva."Tipo Persona Facturacion") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del n§ de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreC."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreC."N§ Persona") AND (rPreC."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona(reserva);
+          IF (w_numero_persona_edad <> rPreC."N§ Persona") AND (rPreC."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobar si el extra existe en la reserva
+      //
+      IF ok_extra THEN BEGIN
+        CLEAR(rExtra);
+        rExtra.RESET;
+        rExtra.SETRANGE(Delegacion  , reserva.Delegacion);
+        IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Pax THEN
+          rExtra.SETRANGE("N§ Reserva", reserva."N§ Responsable")
+        ELSE
+          rExtra.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+        rExtra.SETRANGE(Extra       , rPreC.Codigo);
+        IF rExtra.FIND('-') THEN BEGIN
+          w_dias_estancia := 0;
+          rRsvDia.RESET;
+          rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+          rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+          IF rRsvDia.FIND('-') THEN BEGIN
+            REPEAT
+              IF (rExtra."Fecha desde" <= rRsvDia.Dia) AND (rRsvDia.Dia <= rExtra."Fecha hasta") THEN
+                w_dias_estancia += 1;
+            UNTIL rRsvDia.NEXT = 0;
+          END;
+          IF rExtra.Frecuencia <> 0 THEN
+            w_frecuencia_extra := rExtra.Frecuencia
+          ELSE
+            w_frecuencia_extra := rPreC.Frecuencia;
+          w_inicio_extra := rExtra."Fecha desde";
+          w_fin_extra    := rExtra."Fecha hasta";
+          IF rExtra."Importe coste" <> 0 THEN
+            ok_extra := FALSE;
+        END
+        ELSE
+          ok_extra := FALSE;
+        rExtra.RESET;
+      END;
+
+      // AJS 05.02.2007
+      // Control por hotel oferta especial
+
+      IF ok_extra THEN BEGIN
+        IF rPreC."Hotel oferta especial" <> '' THEN
+          IF reserva."Hotel TO" <> rPreC."Hotel oferta especial" THEN
+            ok_extra := FALSE;
+      END;
+
+      // AJF 14/05/08
+      // Comprobacion de aplicacion solo sobre la primera estancia.
+
+      IF ok_extra THEN BEGIN
+
+        // Miramos si es la primera estancia
+
+        IF rPreC."Aplica sobre primera estancia" THEN BEGIN
+          lrReservas.RESET;
+          lrReservas.SETCURRENTKEY(Responsable,
+                                   TourOperador,
+                                   Bono);
+
+          // AJS 29.05.2008
+          // Los extras de primera estancia tienen que aplicarse sobre todas las personas
+          //lrReservas.SETRANGE(Responsable,  TRUE);
+
+          lrReservas.SETRANGE(TourOperador, reserva.TourOperador);
+          lrReservas.SETRANGE(Bono        , reserva.Bono);
+          lrReservas.SETRANGE(Nombre      , reserva.Nombre);
+
+          // AJS 29.05.2008
+          // Este tipo de extras no aplican si la estancia es de un solo dia
+
+          lrReservas.SETFILTER(Estancia   , '<>%1', 1);
+
+          IF lrReservas.FINDSET THEN BEGIN
+
+            // buscamos la fecha de entrada menor.
+
+            lrResMenor := lrReservas;
+            REPEAT
+              IF lrReservas."Fecha entrada" < lrResMenor."Fecha entrada" THEN
+                lrResMenor := lrReservas;
+            UNTIL lrReservas.NEXT = 0;
+
+            IF lrResMenor."N§ Reserva" <> reserva."N§ Reserva" THEN
+              ok_extra := FALSE;
+          END
+          ELSE
+            ok_extra := FALSE;
+
+        END;
+      END;
+    END;
+
+    PROCEDURE buscar_num_persona_ingreso@14(reserva@1103355000 : Record 7009743);
+    VAR
+      rRsv2@1103355001 : Record 7009743;
+      w_salir_bucle@1103355002 : Boolean;
+    BEGIN
+      // buscar_num_persona_ingreso
+      //
+      w_salir_bucle := FALSE;
+      w_numero_persona_edad := 0;
+      rRsv2.SETCURRENTKEY(Delegacion,
+                          "N§ Responsable",
+                          Edad);
+      rRsv2.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv2.SETRANGE("N§ Responsable", reserva."N§ Responsable");
+      rRsv2.ASCENDING(FALSE);
+      IF rRsv2.FIND('-') THEN BEGIN
+        REPEAT
+          IF rRsv2."Tipo Persona Facturacion" = rPreV.Codigo THEN BEGIN
+            IF (rRsv2.Edad >= rPreV."Edad desde") AND (rRsv2.Edad <= w_edad_hasta) THEN
+              w_numero_persona_edad := w_numero_persona_edad + 1;
+          END;
+          IF rRsv2."N§ Reserva" = rRsv."N§ Reserva" THEN
+            w_salir_bucle := TRUE;
+        UNTIL (rRsv2.NEXT = 0) OR (w_salir_bucle);
+
+        IF w_cantidad <> 0 THEN
+          w_numero_persona_edad := ROUND(w_numero_persona_edad / w_cantidad, 1);
+
+        IF w_numero_persona_edad = 0 THEN
+          w_numero_persona_edad := 1;
+      END;
+    END;
+
+    PROCEDURE calculo_extras_libres@12(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_libres
+      //
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text004);
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos(reserva);
+      rExtra.RESET;
+      rExtra.SETRANGE(Delegacion  , reserva.Delegacion);
+      rExtra.SETRANGE("N§ Reserva", reserva."N§ Responsable");
+      IF rExtra.FINDSET THEN BEGIN
+        REPEAT
+          IF rExtra."Importe coste" <> 0 THEN BEGIN
+            w_dias_estancia := rExtra."Fecha hasta" - rExtra."Fecha desde";
+            w_frecuencia_extra := rExtra.Frecuencia;
+            w_inicio_extra := rExtra."Fecha desde";
+            w_fin_extra := rExtra."Fecha hasta";
+            IF w_frecuencia_extra = 0 THEN
+              w_cantidad := 1
+            ELSE
+              w_cantidad := ROUND(w_dias_estancia / w_frecuencia_extra, 0.01);
+            w_importe_extra := rExtra."Importe coste";
+            rLin.INIT;
+            cCalRes.inserta_linea_calculo(rLin, USERID, Text003, '', ROUND(w_cantidad * w_importe_extra),
+                                          reserva."N§ Reserva", reserva."Fecha entrada", rExtra.Extra,
+                                          ROUND(w_cantidad, 1), w_importe_extra, FALSE, TRUE);
+
+            wHotelFactura := reserva."Hotel Factura";
+            IF rExtra."Hotel factura" <> '' THEN
+              wHotelFactura := rExtra."Hotel factura";
+
+            cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Coste, reserva.Bono, reserva."N§ Responsable",
+                                        reserva."Hotel reservado", 0, wHotelFactura, reserva.Delegacion,
+                                        rExtra."Validacion especial");
+          END;
+        UNTIL rExtra.NEXT = 0;
+      END;
+      rExtra.RESET;
+    END;
+
+    PROCEDURE calculo_extras_fijos_ingreso@5(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_fijos_ingreso
+      //
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text002);
+      w_habitaciones := reserva."N§ Habitaciones";
+      w_habitacion_reserva := reserva.Habitacion;
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos_ingreso(reserva);
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          w_indice := 1;
+          WHILE w_contratos[w_indice] <> '' DO BEGIN
+            rPreV.RESET;
+            rPreV.SETCURRENTKEY(Delegacion,
+                                "N§ Contrato",
+                                "Codigo Precio",
+                                Activo);
+            rPreV.SETRANGE(Delegacion     , reserva.Delegacion);
+            rPreV.SETRANGE("N§ Contrato"  , w_contratos[w_indice]);
+            rPreV.SETRANGE("Codigo Precio", rPreV."Codigo Precio"::Extras);
+            rPreV.SETRANGE(Activo         , TRUE);
+            IF rPreV.FIND('-') THEN BEGIN
+              REPEAT
+                rLin.INIT;
+                comprobacion_extras_fijos_ing(rRsv);
+                IF ok_extra THEN BEGIN
+                  IF rPreV.Frecuencia = 0 THEN
+                    w_cantidad := 1
+                  ELSE
+                    w_cantidad := ROUND(w_dias_periodo / rPreV.Frecuencia, 0.01);
+                  IF rPreV."Tipo Precio" = rPreV."Tipo Precio"::Habitaci¢n THEN
+                    w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  IF rPreV.Porcentaje THEN BEGIN
+                    w_importe_extra := 0;
+                    w_frecuencia := 0;
+                    w_cantidad := 1;
+                    FOR w_dia := rRsv."Fecha entrada" TO (rRsv."Fin estancia" - 1) DO BEGIN
+                      IF w_frecuencia = 0 THEN BEGIN
+                        rRsvDiaV.RESET;
+                        rRsvDiaV.SETRANGE(Delegacion  , rRsv.Delegacion);
+                        rRsvDiaV.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+                        rRsvDiaV.SETRANGE(Dia         , w_dia);
+                        IF NOT rRsvDiaV.FIND('-') THEN BEGIN
+                          rRsvDiaV.SETRANGE(Dia);
+                          rRsvDiaV.FIND('-');
+                        END;
+                        w_importe_supl := cCalRes.hallar_porcentaje_ingreso(rPreV, rRsv, rRsvDiaV, w_dia);
+                        w_importe_extra := w_importe_extra + w_importe_supl;
+                        w_frecuencia := rPreV.Frecuencia;
+                      END;
+                      w_frecuencia := w_frecuencia - 1;
+                    END;
+                    IF rPreV."Tipo Precio" = rPreV."Tipo Precio"::Habitaci¢n THEN
+                      w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  END
+                  ELSE
+                    w_importe_extra := rPreV.Importe;
+                  cCalRes.inserta_linea_calculo(rLin, USERID(), Text005, w_contratos[w_indice],
+                                    ROUND(w_cantidad * w_importe_extra), rRsv."N§ Reserva", rRsv."Fecha entrada", rPreV.Codigo,
+                                                ROUND(w_cantidad, 1), w_importe_extra, rPreV.Garantizable, rPreV."Importe HP");
+                  cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, reserva.Bono, reserva."N§ Responsable",
+                                              reserva."Hotel reservado", 0, reserva."Hotel Factura", reserva.Delegacion,
+                                              rPreC."Validacion HP especial")
+                END;
+              UNTIL rPreV.NEXT = 0;
+            END;
+            w_indice := w_indice + 1;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE comprobacion_extras_fijos_ing@7(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // comprobacion_extras_fijos_ing
+      //
+      ok_extra := TRUE;
+      IF ok_extra THEN BEGIN
+        IF NOT (rPreV."Aplicacion fija") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del rango de edades del precio
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreV."Edad hasta";
+        IF (rRsv.Edad < rPreV."Edad desde") OR (rRsv.Edad > w_edad_hasta) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion de las fechas de aplicacion
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (reserva."Fecha entrada"      > rPreV."Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreV."Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada"      > rPreV."2¦ Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreV."2¦ Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreC."Fecha desde") OR
+             (reserva."Fin estancia" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreC."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobacion del tipo de habitacion
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Habitacion" <> '') AND
+           (rPreV."Tipo Habitacion" <> w_habitacion_reserva) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Regimen" <> '') AND (rPreV."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Persona" <> '') AND (rPreV."Tipo Persona" <> reserva."Tipo Persona Facturacion") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del n§ de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona_ingreso(reserva);
+          IF (w_numero_persona_edad <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Calculo de los dias de estancia en el periodo del precio
+
+      w_dias_periodo := 0;
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Fecha desde" <= reserva."Fecha entrada") AND (rPreV."Fecha hasta" >= (reserva."Fin estancia" - 1)) THEN BEGIN
+          w_dias_periodo:= reserva."Fin estancia" - reserva."Fecha entrada";
+        END
+        ELSE BEGIN
+          IF (reserva."Fin estancia" - 1) > rPreV."Fecha hasta" THEN BEGIN
+            IF reserva."Fecha entrada" >= rPreV."Fecha desde" THEN
+              // AJS 27.04.2010, elimino el mas 1 para que el ultimo dia de aplicacion no se calcule
+              w_dias_periodo := rPreV."Fecha hasta" - reserva."Fecha entrada"
+            ELSE
+              w_dias_periodo := rPreV."Fecha hasta" - rPreV."Fecha desde";
+          END
+          ELSE BEGIN
+             // AJS 14.04.2010, elimino el igual y el mas 1 para que el ultimo dia de la estancia no se calcule
+             IF reserva."Fin estancia" < rPreV."Fecha hasta" THEN
+              w_dias_periodo := reserva."Fin estancia" - rPreV."Fecha desde"
+            ELSE
+              w_dias_periodo := rPreV."Fecha hasta" - rPreV."Fecha desde";
+          END;
+        END;
+        IF (rPreV."Tipo Fechas" <> rPreV."Tipo Fechas"::"Fecha estancia") THEN
+          w_dias_periodo := reserva."Fin estancia" - reserva."Fecha entrada";
+      END;
+    END;
+
+    PROCEDURE busca_contratos_ingreso@8(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // busca_contratos_ingreso
+      //
+      rRsvDiaV.RESET;
+      rRsvDiaV.SETRANGE(Delegacion  , reserva.Delegacion);
+      rRsvDiaV.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+      IF rRsvDiaV.FIND('-') THEN BEGIN
+        REPEAT
+          busca_contrato_dia_ingreso(rRsvDiaV);
+        UNTIL rRsvDiaV.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE busca_contrato_dia_ingreso@10(rRsvDia@1103355000 : Record 7009756);
+    BEGIN
+      // busca_contrato_dia_ingreso
+      //
+      w_indice := 1;
+      w_encontrado := FALSE;
+      WHILE NOT w_encontrado DO BEGIN
+        IF w_contratos[w_indice] = '' THEN BEGIN
+          w_contratos[w_indice] := rRsvDia."Contrato venta";
+          w_dias[w_indice] := 1;
+          w_encontrado := TRUE;
+        END
+        ELSE BEGIN
+          IF w_contratos[w_indice] = rRsvDia."Contrato venta" THEN BEGIN
+            w_encontrado := TRUE;
+            w_dias[w_indice] := w_dias[w_indice] + 1;
+          END
+          ELSE
+            w_indice := w_indice + 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE calculo_extras_variables_ing@9(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_variables_ing
+      //
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text002);
+      w_habitaciones := reserva."N§ Habitaciones";
+      w_habitacion_reserva := reserva.Habitacion;
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos_ingreso(reserva);
+      rRsv.SETCURRENTKEY(Delegacion,
+                         "N§ Responsable",
+                         "N§ Reserva");
+      rRsv.SETRANGE(Delegacion      , reserva.Delegacion);
+      rRsv.SETRANGE("N§ Responsable", reserva."N§ Reserva");
+      IF rRsv.FIND('-') THEN BEGIN
+        REPEAT
+          w_indice := 1;
+          WHILE w_contratos[w_indice] <> '' DO BEGIN
+            rPreV.RESET;
+            rPreV.SETCURRENTKEY(Delegacion,
+                                "N§ Contrato",
+                                "Codigo Precio",
+                                Activo);
+            rPreV.SETRANGE(Delegacion     , reserva.Delegacion);
+            rPreV.SETRANGE("N§ Contrato"  , w_contratos[w_indice]);
+            rPreV.SETRANGE("Codigo Precio", rPreV."Codigo Precio"::Extras);
+            rPreV.SETRANGE(Activo         , TRUE);
+            IF rPreV.FIND('-') THEN BEGIN
+              REPEAT
+                rLin.INIT;
+                comprobacion_extras_va_ingreso(rRsv);
+                IF (ok_extra) THEN BEGIN
+                  IF w_dias_estancia = 0 THEN
+                    w_dias_estancia := w_dias[w_indice];
+                  IF w_frecuencia_extra = 0 THEN
+                    w_cantidad := 1
+                  ELSE
+                    w_cantidad := ROUND(w_dias_estancia / w_frecuencia_extra, 0.01);
+                  IF rPreV."Tipo Precio" = rPreV."Tipo Precio"::Habitaci¢n THEN
+                    w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                  // Comprobar si es un extra de precio fijo
+                  //
+                  w_importe_extra := 0;
+                  IF rExtra."Importe ingreso" <> 0 THEN
+                    w_importe_extra := rExtra."Importe ingreso"
+                  ELSE BEGIN
+                    IF rPreV.Porcentaje THEN BEGIN
+                      w_importe_extra := 0;
+                      w_frecuencia := 0;
+                      w_cantidad := 1;
+                      FOR w_dia := w_inicio_extra TO (w_fin_extra - 1) DO BEGIN
+                        IF w_frecuencia = 0 THEN BEGIN
+                          rRsvDiaV.RESET;
+                          rRsvDiaV.SETRANGE(Delegacion  , rRsv.Delegacion);
+                          rRsvDiaV.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+                          rRsvDiaV.SETRANGE(Dia         , w_dia);
+                          IF NOT rRsvDiaV.FIND('-') THEN BEGIN
+                            rRsvDiaV.SETRANGE(Dia);
+                            rRsvDiaV.FIND('-');
+                          END;
+                          w_importe_supl := cCalRes.hallar_porcentaje_ingreso(rPreV, rRsv, rRsvDiaV, w_dia);
+                          w_importe_extra := w_importe_extra + w_importe_supl;
+                          w_frecuencia := w_frecuencia_extra;
+                        END;
+                        w_frecuencia := w_frecuencia - 1;
+                      END;
+                      IF rPreC."Tipo Precio" = rPreC."Tipo Precio"::Habitaci¢n THEN
+                        w_cantidad := w_cantidad * rRsv."N§ Habitaciones";
+                    END
+                    ELSE
+                      w_importe_extra := rPreV.Importe;
+                  END;
+                  cCalRes.inserta_linea_calculo(rLin, USERID(), Text006, w_contratos[w_indice],
+                                          ROUND(w_cantidad * w_importe_extra), rRsv."N§ Reserva", rRsv."Fecha entrada", rPreV.Codigo,
+                                                ROUND(w_cantidad, 1), w_importe_extra, rPreV.Garantizable, rPreV."Importe HP");
+                  cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, reserva.Bono, reserva."N§ Responsable",
+                                              reserva."Hotel reservado", 0, reserva."Hotel Factura", reserva.Delegacion,
+                                              rPreC."Validacion HP especial")
+                END;
+              UNTIL rPreV.NEXT = 0;
+            END;
+            w_indice := w_indice + 1;
+          END;
+        UNTIL rRsv.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE comprobacion_extras_va_ingreso@11(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // comprobacion_extras_va_ingreso
+      //
+      w_frecuencia := 0;
+      w_dias_estancia := 0;
+      ok_extra := TRUE;
+      IF ok_extra THEN BEGIN
+        IF rPreV."Aplicacion fija" THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del rango de edades del precio
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN
+          w_edad_hasta := 999
+        ELSE
+          w_edad_hasta := rPreV."Edad hasta";
+        IF (rRsv.Edad < rPreV."Edad desde") OR (rRsv.Edad > w_edad_hasta) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion de las fechas de aplicacion
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha estancia" THEN BEGIN
+          IF (reserva."Fecha entrada"      > rPreV."Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreV."Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+entrada" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+estancia" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fecha entrada"      > rPreV."2¦ Fecha hasta") OR
+             ((reserva."Fin estancia" - 1) < rPreV."2¦ Fecha desde") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha salida" THEN BEGIN
+          IF (reserva."Fin estancia" < rPreV."Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha venta+salida" THEN BEGIN
+          IF (reserva."Fecha venta" < rPreV."Fecha desde") OR
+             (reserva."Fecha venta" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+        IF rPreV."Tipo Fechas" = rPreV."Tipo Fechas"::"Fecha entrada+salida" THEN BEGIN
+          IF (reserva."Fecha entrada" < rPreV."Fecha desde") OR
+             (reserva."Fecha entrada" > rPreV."Fecha hasta") THEN
+            ok_extra := FALSE;
+          IF (reserva."Fin estancia" < rPreV."2¦ Fecha desde") OR
+             (reserva."Fin estancia" > rPreV."2¦ Fecha hasta") THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobacion del tipo de habitacion
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Habitacion" <> '') AND
+           (rPreV."Tipo Habitacion" <> w_habitacion_reserva) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Regimen
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Regimen" <> '') AND (rPreV."Tipo Regimen" <> reserva.Regimen) THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion Tipo de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF (rPreV."Tipo Persona" <> '') AND (rPreV."Tipo Persona" <> reserva."Tipo Persona Facturacion") THEN
+          ok_extra := FALSE;
+      END;
+
+      // Comprobacion del n§ de Persona
+      //
+      IF ok_extra THEN BEGIN
+        IF rPreV."Edad hasta" = 0 THEN BEGIN
+          IF (reserva."N§ persona" <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END
+        ELSE BEGIN
+          buscar_num_persona_ingreso(reserva);
+          IF (w_numero_persona_edad <> rPreV."N§ Persona") AND (rPreV."N§ Persona" <> 0) THEN
+            ok_extra := FALSE;
+        END;
+      END;
+
+      // Comprobar si el extra existe en la reserva
+      //
+      IF ok_extra THEN BEGIN
+        CLEAR(rExtra);
+        rExtra.RESET;
+        rExtra.SETRANGE(Delegacion  , reserva.Delegacion);
+        IF rPreV."Tipo Precio" = rPreV."Tipo Precio"::Pax THEN
+          rExtra.SETRANGE("N§ Reserva", reserva."N§ Responsable")
+        ELSE
+          rExtra.SETRANGE("N§ Reserva", reserva."N§ Reserva");
+        rExtra.SETRANGE(Extra       , rPreV.Codigo);
+        IF rExtra.FIND('-') THEN BEGIN
+          w_dias_estancia := 0;
+          rRsvDia.RESET;
+          rRsvDia.SETRANGE(Delegacion  , rRsv.Delegacion);
+          rRsvDia.SETRANGE("N§ Reserva", rRsv."N§ Responsable");
+          IF rRsvDia.FIND('-') THEN BEGIN
+            REPEAT
+              IF (rExtra."Fecha desde" <= rRsvDia.Dia) AND (rRsvDia.Dia <= rExtra."Fecha hasta") THEN
+                w_dias_estancia += 1;
+            UNTIL rRsvDia.NEXT = 0;
+          END;
+          IF rExtra.Frecuencia <> 0 THEN
+            w_frecuencia_extra := rExtra.Frecuencia
+          ELSE
+            w_frecuencia_extra := rPreV.Frecuencia;
+          w_inicio_extra := rExtra."Fecha desde";
+          w_fin_extra := rExtra."Fecha hasta";
+          IF rExtra."Importe ingreso" <> 0 THEN
+            ok_extra := FALSE;
+        END
+        ELSE
+          ok_extra := FALSE;
+        rExtra.RESET;
+      END;
+    END;
+
+    PROCEDURE calculo_extras_libres_ingreso@22(reserva@1103355000 : Record 7009743);
+    BEGIN
+      // calculo_extras_libres_ingreso
+      //
+      IF NOT rParPer.FIND('-') THEN
+        ERROR(Text004);
+      CLEAR(w_contratos);
+      CLEAR(w_dias);
+      busca_contratos_ingreso(reserva);
+      rExtra.RESET;
+      rExtra.SETRANGE(Delegacion  , reserva.Delegacion);
+      rExtra.SETRANGE("N§ Reserva", reserva."N§ Responsable");
+      IF rExtra.FIND('-') THEN BEGIN
+        REPEAT
+          IF rExtra."Importe ingreso" <> 0 THEN BEGIN
+            w_dias_estancia := rExtra."Fecha hasta" - rExtra."Fecha desde";
+            w_frecuencia_extra := rExtra.Frecuencia;
+            w_inicio_extra := rExtra."Fecha desde";
+            w_fin_extra := rExtra."Fecha hasta";
+            IF w_frecuencia_extra = 0 THEN
+              w_cantidad := 1
+            ELSE
+              w_cantidad := ROUND(w_dias_estancia / w_frecuencia_extra, 0.01);
+            w_importe_extra := rExtra."Importe ingreso";
+            rLin.INIT;
+            cCalRes.inserta_linea_calculo(rLin, USERID, Text006, '', ROUND(w_cantidad * w_importe_extra),
+                                          reserva."N§ Reserva", reserva."Fecha entrada", rExtra.Extra,
+                                          ROUND(w_cantidad, 1), w_importe_extra, FALSE, TRUE);
+            cCalRes.fijos_linea_calculo(rLin, rLin."Coste/Ingreso"::Ingreso, reserva.Bono, reserva."N§ Responsable",
+                                        reserva."Hotel reservado", 0, reserva."Hotel Factura", reserva.Delegacion,
+                                        rExtra."Validacion especial");
+          END;
+        UNTIL rExtra.NEXT = 0;
+      END;
+      rExtra.RESET;
+    END;
+
+    BEGIN
+    {
+
+      ## AJF 29/06/09
+
+        .- (09/00319) cambio c¢digos de hotel de code10 a code20.
+
+      ## AJS 14.04.2010
+
+        .- En el calculo de los dias de aplicacion de un extra, el dia de salida no tiene que contar
+
+      ## AJS 27.04.2010
+
+        .- En el calculo de los dias de aplicacion de un extra, el dia de final del extra no tiene que contar
+    }
+    END.
+  }
+}

@@ -1,0 +1,306 @@
+OBJECT Codeunit 7009730 Decl. ITBIS soport. DGII - 606
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/02/14;
+    Time=16:02:13;
+    Modified=Yes;
+    Version List=AIC2009;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            GenerarDeclaracionITBIS_606;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      rExcelBuf@1103355000 : Record 7009785;
+      CompanyInfo@1103355002 : Record 79;
+      GLSetup@1103355012 : Record 98;
+      rMovProv@1103355005 : Record 25;
+      wFechaInicial@1103355004 : Date;
+      wFechaFinal@1103355006 : Date;
+      wPeriodo@1103355003 : Code[10];
+      wVentana@1103355007 : Dialog;
+      Text001@1103355008 : TextConst 'ENU=Select the initial date of the term to declarate #1######\Include invoices with ITBIS #2#;ESP=Seleccione la fecha inicial del periodo a declarar #1######\Incluir facturas sin ITBIS #2#';
+      Text002@1103355009 : TextConst 'ENU=Registrations does not exist of supplier in the period to declarate;ESP=No existen registros de proveedor en el periodo a declarar.';
+      wNoRegistros@1103355010 : Integer;
+      wNoLinea@1103355001 : Integer;
+      wActual@1103355013 : Integer;
+      wTotal@1103355014 : Integer;
+      wMontoFacturado@1103355011 : Decimal;
+      Text003@1103355015 : TextConst 'ENU=Tracking supplier movements @1@@@@@@@@@@@@@;ESP=Recorriendo movimientos de proveedor @1@@@@@@@@@@@@@';
+      wIncluirSinITBIS@1103355016 : Boolean;
+
+    PROCEDURE GenerarDeclaracionITBIS_606@1103355001();
+    BEGIN
+      // GenerarDeclaracionITBIS_606
+
+      // 1. Solicitar al usuario la fecha de inicio del periodo a declara
+
+      wVentana.OPEN(Text001);
+      wVentana.INPUT(1, wFechaInicial);
+
+      // AJS 12.12.2007
+
+      wVentana.INPUT(2, wIncluirSinITBIS);
+
+      wVentana.CLOSE;
+
+      // 2. Comprobamos que sea correcta, generar el periodo de fechas
+
+      IF (wFechaInicial = 0D) OR (wFechaInicial > TODAY) THEN
+        EXIT;
+
+      wFechaInicial := DMY2DATE(1, DATE2DMY(wFechaInicial, 2), DATE2DMY(wFechaInicial, 3));
+      wFechaFinal   := CALCDATE('<+1M-1D>', wFechaInicial);
+
+      wPeriodo := FORMAT(wFechaInicial, 0, '<Year4>') + FORMAT(wFechaInicial, 0, '<Month,2>');
+
+      // 3. Limpiamos el Excel Buffer e inicializar los registros
+
+      rExcelBuf.RESET;
+      rExcelBuf.DELETEALL;
+
+      wMontoFacturado := 0;
+      wNoRegistros    := 0;
+
+      CompanyInfo.FINDFIRST;
+
+      GLSetup.FINDFIRST;
+      GLSetup.TESTFIELD("Grupo NCF Gastos menores");
+      GLSetup.TESTFIELD("Ruta fichero declaracion 606");
+
+      rMovProv.RESET;
+      rMovProv.SETCURRENTKEY("Document Type",
+                             "Vendor No.",
+                             "Posting Date");
+      rMovProv.SETRANGE("Document Type", rMovProv."Document Type"::Invoice, rMovProv."Document Type"::"Credit Memo");
+      rMovProv.SETRANGE("Posting Date" , wFechaInicial, wFechaFinal);
+      IF NOT rMovProv.FINDFIRST THEN
+        ERROR(Text002);
+
+      // 4. Recorrer los movimientos de proveedor con fecha de registro en el periodo
+
+      wNoLinea := 12;
+
+      wActual := 0;
+      wTotal  := rMovProv.COUNT;
+
+      wVentana.OPEN(Text003);
+      REPEAT
+        wActual += 1;
+        wVentana.UPDATE(1, ROUND(wActual / wTotal * 10000, 1));
+
+        IF MovimientoProveedor THEN
+          wNoLinea += 1;
+      UNTIL rMovProv.NEXT = 0;
+      wVentana.CLOSE;
+
+      // 5. Rellenar los datos de cabecera
+
+      wNoLinea := 4;
+      InsertaCelda(3, CompanyInfo."VAT Registration No.");
+
+      wNoLinea += 1;
+      InsertaCelda(3, wPeriodo);
+
+      // Cantidad de registros
+
+      wNoLinea += 1;
+      InsertaCelda(3, FORMAT(wNoRegistros));
+
+      // Monto facturado
+
+      wNoLinea += 1;
+      InsertaCelda(3, FORMAT(wMontoFacturado));
+
+      // 6. Crear la hoja Excel y mostrarla al usuario
+
+      rExcelBuf.OpenBook(GLSetup."Ruta fichero declaracion 606" + 'Formato 606.xls', 'Formato 606');
+      rExcelBuf.CreateSheet('Formato 606', ' ', ' ', USERID, FALSE, FALSE, '');
+      rExcelBuf.GiveUserControl;
+    END;
+
+    PROCEDURE InsertaCelda@1103355000(pwNoColumna@1103355000 : Integer;pwValor@1103355001 : Text[250]);
+    BEGIN
+      // InsertaCelda
+
+      CLEAR(rExcelBuf);
+      rExcelBuf.VALIDATE("Row No."           , wNoLinea);
+      rExcelBuf.VALIDATE("Column No."        , pwNoColumna);
+      rExcelBuf.VALIDATE("Cell Value as Text", pwValor);
+      rExcelBuf.WrapText := FALSE;
+      rExcelBuf.INSERT;
+    END;
+
+    PROCEDURE MovimientoProveedor@1103355005() : Boolean;
+    VAR
+      lrCabFraCompra@1103355000 : Record 122;
+      lrCabAboCompra@1103355004 : Record 124;
+      lrFacCorregida@1100217002 : Record 122;
+      lrMovIVA@1103355001 : Record 254;
+      lrProv@1103355005 : Record 23;
+      lrTipoFra@1103355006 : Record 7009786;
+      lrMovProv2@1100217000 : Record 25;
+      lwBaseDoc@1103355002 : Decimal;
+      lwImporteIVADoc@1103355003 : Decimal;
+      lwTextoTipoFactura@1103355007 : Text[250];
+      lwFechaPago@1100217001 : Text[30];
+    BEGIN
+      // MovimientoProveedor
+
+      lwBaseDoc       := 0;
+      lwImporteIVADoc := 0;
+
+      // Utilizamos los movimiento de iva para conocer los importes de base IVA e IVA
+
+      lrMovIVA.RESET;
+      lrMovIVA.SETCURRENTKEY("Document No.",
+                             "Posting Date");
+      lrMovIVA.SETRANGE("Document No.", rMovProv."Document No.");
+      lrMovIVA.SETRANGE("Posting Date", rMovProv."Posting Date");
+      IF lrMovIVA.FINDFIRST THEN
+      BEGIN
+        REPEAT
+          lwBaseDoc       := lwBaseDoc + lrMovIVA.Base; //+$007
+          lwImporteIVADoc := lwImporteIVADoc + lrMovIVA.Amount; //+$007
+        UNTIL lrMovIVA.NEXT = 0;
+      END;
+
+      // Las facturas que no tienen IVA no tienen que aparecer en este informe
+
+      // AJS 12.12.2007
+
+      IF NOT wIncluirSinITBIS THEN
+        IF lwImporteIVADoc = 0 THEN
+          EXIT(FALSE);
+
+      // Buscamos el proveedor y la factura o abono
+
+      lrProv.GET(rMovProv."Vendor No.");
+
+      IF rMovProv."Cod. Grupo NCF" = GLSetup."Grupo NCF Gastos menores" THEN BEGIN
+        InsertaCelda(2, CompanyInfo."VAT Registration No.");    // B
+      END
+      ELSE BEGIN
+        IF rMovProv."Document Type" = rMovProv."Document Type"::Invoice THEN BEGIN
+          IF lrCabFraCompra.GET(rMovProv."Document No.") THEN
+            InsertaCelda(2, lrCabFraCompra."VAT Registration No.")  // B
+          ELSE
+            EXIT(FALSE);    // B  //+$003
+        END
+        ELSE BEGIN
+          IF lrCabAboCompra.GET(rMovProv."Document No.") THEN
+            InsertaCelda(2, lrCabAboCompra."VAT Registration No.")    // B
+          ELSE
+            EXIT(FALSE);    // B //+$003
+        END;
+      END;
+
+      // Montar el texto del tipo de factura compra
+
+      IF lrTipoFra.GET(rMovProv."Tipo factura compra") THEN
+        lwTextoTipoFactura := DELCHR(lrTipoFra.Codigo, '<>') + '-' + DELCHR(lrTipoFra.Descripcion, '<>')
+      ELSE
+      BEGIN
+        lrTipoFra.GET(lrProv."Tipo factura x defecto");
+        lwTextoTipoFactura := DELCHR(lrTipoFra.Codigo, '<>') + '-' + DELCHR(lrTipoFra.Descripcion, '<>');
+      END;
+
+      InsertaCelda(4, lwTextoTipoFactura);    // D
+
+      InsertaCelda(5, rMovProv."Comprobante Fiscal");    // E
+
+      IF  rMovProv."Document Type" = rMovProv."Document Type"::Invoice THEN
+        InsertaCelda(6, '')   // F (Comprobante fiscal modificado, para los abonos)
+      ELSE
+      BEGIN
+        IF lrFacCorregida.GET(lrCabAboCompra."Corrected Invoice No.") THEN
+          InsertaCelda(6, lrFacCorregida."Comprobante Fiscal") // F (Comprobante fiscal modificado, para los abonos)
+        ELSE
+          InsertaCelda(6, ''); // F (Comprobante fiscal modificado, para los abonos)
+      END;
+
+      InsertaCelda(8, FORMAT(DATE2DMY(rMovProv."Posting Date", 1) ) );    // H
+
+      // Si el proveedor tiene retencion de ITBIS mostraremos en el listado como si la hubieramos cobrado el mismo
+      // dia en que se registro
+
+      IF lrProv."Retiene ITBIS" THEN
+      BEGIN //+$001
+        //+$006 <
+        lwFechaPago := FORMAT(DATE2DMY(rMovProv."Posting Date", 3)) + FORMAT(rMovProv."Posting Date", 0, '<Month,2>');
+        InsertaCelda(9,  lwFechaPago); //I
+        //+$006 >
+        InsertaCelda(10, FORMAT(DATE2DMY(rMovProv."Posting Date", 1) ) );    // J
+
+        //+$004 <
+        CLEAR(lrMovProv2);
+        lrMovProv2.SETCURRENTKEY("Document No.");
+        lrMovProv2.SETRANGE("Vendor No."  , rMovProv."Vendor No.");
+        lrMovProv2.SETRANGE("Document No.", 'ITBIS-' + rMovProv."Document No.");
+        IF lrMovProv2.FINDFIRST THEN BEGIN
+          lrMovProv2.CALCFIELDS("Amount (LCY)");
+          InsertaCelda(12, FORMAT(ABS(lrMovProv2."Amount (LCY)")));
+        END;
+        //+$004 >
+
+        //-$004InsertaCelda(12, FORMAT(lwImporteIVADoc));   // L
+      END
+      ELSE BEGIN
+        InsertaCelda(10, '');   // J  (Fecha de pago de la factura)
+
+        InsertaCelda(12, '0');   // L
+      END;
+
+      InsertaCelda(11, FORMAT(lwImporteIVADoc));   // K
+
+
+      InsertaCelda(13, FORMAT(lwBaseDoc));   // M
+
+      // $002 JPT 02/10/12 CNT005 CNT-CAR-12002
+      IF lrProv."% IRPF" <> 0 THEN BEGIN
+        CLEAR(lrMovProv2);
+        lrMovProv2.SETCURRENTKEY("Document No.");
+        lrMovProv2.SETRANGE("Vendor No."  , rMovProv."Vendor No.");
+        lrMovProv2.SETRANGE("Document No.", 'ISR-' + rMovProv."Document No.");
+        IF lrMovProv2.FINDFIRST THEN BEGIN
+          lrMovProv2.CALCFIELDS("Amount (LCY)");
+          InsertaCelda(14, FORMAT(ABS(lrMovProv2."Amount (LCY)")));
+        END;
+      END;
+
+      wMontoFacturado += lwBaseDoc;
+      wNoRegistros    += 1;
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      ## AJS 12.12.2007
+         Incluyo un parametro para que pueda escoger si se incluyen las facturas sin ITBIS
+
+      $001 AJS 19042012 La retencion de ITBIS se muestra en funcion del campo Retiene ITBIS de la ficha de proveedor
+
+      $002 JPT 02/10/12 CNT005 CNT-CAR-12002
+
+      $003 AJS 20112012 Modificacion para que las facturas que no hayan pasado por borrador no provoquen error
+
+      $004 AJS 27112012 La retencion de ITBIS la buscamos en el documento de proveedor porque no siempre se corresponde
+                        con el 100 % del impuesto
+
+      $005 AJS 11042013 Los importes de ITBIS e ISR retenidos los tenemos que buscar el DL para cubrir aquellos casos en
+                        se paga en dolares
+
+      $006 AJS 13052013 Incluimos el a¤o/mes de pago en caso de ser necesario
+
+      $007 AJS 16112013 Quitamos el ABS de las instrucciones de acumulacion de importes
+    }
+    END.
+  }
+}
